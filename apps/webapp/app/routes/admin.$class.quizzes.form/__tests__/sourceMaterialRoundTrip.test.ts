@@ -77,6 +77,9 @@ const load = async (quizId?: string) =>
     request: new Request(
       `http://localhost/teacher/${CLASS_SLUG}/quizzes/form${quizId ? `?quizId=${quizId}` : ''}`
     ),
+    url: new URL(
+      `http://localhost/teacher/${CLASS_SLUG}/quizzes/form${quizId ? `?quizId=${quizId}` : ''}`
+    ),
   } as unknown as Parameters<typeof loader>[0])) as Awaited<ReturnType<typeof loader>>;
 
 beforeEach(() => {

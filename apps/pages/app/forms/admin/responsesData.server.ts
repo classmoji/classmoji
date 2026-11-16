@@ -132,10 +132,10 @@ export interface ResponsesContext extends FormAdminContext {
 export async function requireFormForResponses(
   classroomSlug: string,
   formSlug: string,
-  request: Request,
+  args: { request: Request; url: URL },
   action: string
 ): Promise<ResponsesContext> {
-  const access = await assertFormAdmin(classroomSlug, request, { action });
+  const access = await assertFormAdmin(classroomSlug, args, { action });
 
   const form = await ClassmojiService.form.findBySlug(access.classroom.id, formSlug);
   if (!form) {

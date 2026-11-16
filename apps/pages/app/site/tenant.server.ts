@@ -1,10 +1,11 @@
-import { redirect } from 'react-router';
+import { redirect, type RouterContextProvider } from 'react-router';
 import type { Role } from '@prisma/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { highestRole } from '~/utils/classroomRole.ts';
 import { siteHeaders } from './headers.server.ts';
 import { siteOrigin } from './env.server.ts';
+import { siteLoadContext } from '../../server/loadContext.ts';
 // IMPORTED as well as re-exported below. `export { x } from 'y'` forwards a
 // name without binding it locally, so the two loaders further down that CALL
 // these would be a ReferenceError on every class-site page — which is exactly
@@ -112,6 +113,8 @@ const ANONYMOUS: SiteViewer = {
  */
 export type SiteLoaderArgs = {
   request: Request;
+  /** React Router's normalized URL: the page's, also on a `.data` fetch. */
+  url: URL;
   params: Record<string, string | undefined>;
   context?: unknown;
 };
@@ -223,9 +226,9 @@ function siteNotFound(request: Request, kind: 'missing' | 'unavailable'): Respon
 /**
  * The visitor-facing path of the current request, prefix already removed.
  * Query string included — a redirect that drops `?page=2` is a broken link.
+ * `url` is the loader's normalized one, never a `.data` fetch's.
  */
-function publicRequestPath(request: Request, subdomain: string): string {
-  const url = new URL(request.url);
+function publicRequestPath(url: URL, subdomain: string): string {
   return publicPathOf(url.pathname, subdomain) + url.search;
 }
 
@@ -293,6 +296,7 @@ export function lapsedCustomDomainRedirect(
  */
 async function loadCustomDomainContext(
   request: Request,
+  url: URL,
   rawSubdomain: string,
   customDomain: string
 ): Promise<SiteContext> {
@@ -317,7 +321,7 @@ async function loadCustomDomainContext(
     throw lapsedCustomDomainRedirect(
       request,
       canonicalOrigin,
-      publicRequestPath(request, rawSubdomain)
+      publicRequestPath(url, rawSubdomain)
     );
   }
 
@@ -365,10 +369,11 @@ async function loadCustomDomainContext(
 
 async function loadSiteContext(
   request: Request,
+  url: URL,
   rawSubdomain: string,
   customDomain: string | null
 ): Promise<SiteContext> {
-  if (customDomain) return loadCustomDomainContext(request, rawSubdomain, customDomain);
+  if (customDomain) return loadCustomDomainContext(request, url, rawSubdomain, customDomain);
 
   const lookup = await ClassmojiService.site.getSiteBySubdomain(rawSubdomain);
 
@@ -399,11 +404,13 @@ async function loadSiteContext(
  * The context is built by `buildSiteLoadContext` from a property the host
  * middleware stamped on the Express request — it is not derived from anything
  * the client sent, which is the entire reason it is trustworthy enough to flip
- * a canonical URL on a cacheable response.
+ * a canonical URL on a cacheable response. It reaches the loaders inside React
+ * Router's context provider (`siteLoadContext`); without one there is none.
  */
 function customDomainOf(args: SiteLoaderArgs): string | null {
-  const context = args.context as { customDomain?: unknown } | undefined;
-  const value = context?.customDomain;
+  const context = args.context as { get?: unknown } | undefined;
+  if (typeof context?.get !== 'function') return null;
+  const value = (context as Pick<RouterContextProvider, 'get'>).get(siteLoadContext).customDomain;
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
@@ -419,7 +426,12 @@ export function resolveSiteContext(args: SiteLoaderArgs): Promise<SiteContext> {
   const cached = contextCache.get(key);
   if (cached) return cached;
 
-  const pending = loadSiteContext(args.request, args.params.subdomain ?? '', customDomainOf(args));
+  const pending = loadSiteContext(
+    args.request,
+    args.url,
+    args.params.subdomain ?? '',
+    customDomainOf(args)
+  );
   contextCache.set(key, pending);
   // A rejected promise stays cached on purpose: every loader on this request
   // should fail identically, and re-running the lookup would only re-throw.

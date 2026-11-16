@@ -165,9 +165,11 @@ const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
   const pageId = params.pageId!;
@@ -245,7 +247,6 @@ export const loader = async ({
   // `?preview=1` renders the singleton `preview/<content_path>` branch instead
   // of main. Staff-gated: non-staff viewers never pay the GitHub status call
   // and the param is silently ignored for them.
-  const url = new URL(request.url);
   const wantsPreview = url.searchParams.get('preview') === '1';
   // Post-accept/discard success notice, round-tripped via redirect (staff only).
   const rawNotice = url.searchParams.get('notice');
@@ -634,7 +635,7 @@ export const loader = async ({
     // `readerSectionsFor`). Never anyone else's rows.
     readerSections,
     // A signed-out reader's way in: each locked section links here.
-    signInUrl: authData?.userId ? null : signInUrlFor(request.url),
+    signInUrl: authData?.userId ? null : signInUrlFor(url.href),
     // `{ students, unlocks: { blockId: count }, checks: { blockId: count } }`
     // for the staff chips; accepted OWNER/TEACHER only (the same readers the
     // staff lists answer). Null for everyone else, and for a page with no

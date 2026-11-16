@@ -9,9 +9,11 @@ import { loader as parentLoader } from '../$classroomSlug/route.tsx';
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const { view, pages, classroom } = await parentLoader({ params, request });
 
@@ -20,7 +22,6 @@ export const loader = async ({
     // Public users: redirect to login (existing behavior)
     if (view === 'public') {
       const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
-      const url = new URL(request.url);
       return redirect(`${webappUrl}?redirect=${encodeURIComponent(url.href)}`);
     }
     // Admin/student: show "create first page" empty state

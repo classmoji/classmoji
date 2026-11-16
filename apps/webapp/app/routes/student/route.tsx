@@ -7,7 +7,7 @@ import { requireClassroomMember } from '~/utils/routeAuth.server';
 import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
 import { EMPTY_PAGES_NAV, loadPagesNav } from '~/utils/pagesNav.server';
 
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({ params, request, url }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const pagesUrl = process.env.PAGES_URL || 'http://localhost:7100';
 
@@ -39,7 +39,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }[] = [];
 
     // Normalize the current path for view tracking
-    const url = new URL(request.url);
     const resourcePath = ClassmojiService.resourceView.normalizePath(url.pathname);
 
     // Fire-and-forget: record ALL views for analytics (non-blocking)

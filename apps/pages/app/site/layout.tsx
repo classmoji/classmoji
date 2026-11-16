@@ -25,10 +25,9 @@ import { SITE_STYLES } from './styles.ts';
  */
 
 export const loader = async (args: LoaderFunctionArgs) => {
-  const { request, params } = args;
+  const { request, params, url } = args;
   const { site, viewer, memberLinkOrigin } = await resolveSiteContext(args);
 
-  const url = new URL(request.url);
   // The visitor-facing path, not the internal `/_site/...` one the middleware
   // rewrote to — that prefix must never appear in a link or a redirect.
   const publicPath = publicPathOf(url.pathname, params.subdomain!) + url.search;

@@ -1,6 +1,7 @@
 import { createRequestHandler } from '@react-router/express';
 
 import { buildSiteLoadContext } from './siteHost.ts';
+import { siteRouterContext } from './loadContext.ts';
 
 /**
  * The DEV React Router handler (prod builds its own in server.ts).
@@ -19,5 +20,5 @@ import { buildSiteLoadContext } from './siteHost.ts';
 export const app = createRequestHandler({
   // In dev, Vite handles the build via virtual module
   build: () => import('virtual:react-router/server-build'),
-  getLoadContext: req => buildSiteLoadContext(req),
+  getLoadContext: req => siteRouterContext(buildSiteLoadContext(req)),
 });

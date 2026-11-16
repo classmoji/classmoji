@@ -19,7 +19,7 @@ import useStore from '~/store';
  * student leaf runs that leaf's action before this loader, so each action
  * keeps its own gate.
  */
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({ params, request, url }: Route.LoaderArgs) => {
   let access;
   try {
     access = await requireStudentAccess(request, params.class!, {
@@ -27,7 +27,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       action: 'view_balance',
     });
   } catch (error: unknown) {
-    const staffRedirect = await staffRedirectFromStudentRoute(request, params.class!, error);
+    const staffRedirect = await staffRedirectFromStudentRoute(
+      { request, url },
+      params.class!,
+      error
+    );
     if (staffRedirect) throw staffRedirect;
     throw error;
   }

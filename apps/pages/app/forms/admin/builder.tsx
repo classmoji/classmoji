@@ -125,14 +125,20 @@ const descriptionOf = (value: string | null): string | null => value?.trim() || 
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, membership } = await assertFormAdmin(classroomSlug, request, {
-    action: 'edit_form',
-  });
+  const { classroom, membership } = await assertFormAdmin(
+    classroomSlug,
+    { request, url },
+    {
+      action: 'edit_form',
+    }
+  );
 
   const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!, {
     includeCurrentRevision: true,
@@ -196,14 +202,20 @@ export const loader = async ({
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(classroomSlug, request, {
-    action: 'edit_form',
-  });
+  const { classroom, userId, membership } = await assertFormAdmin(
+    classroomSlug,
+    { request, url },
+    {
+      action: 'edit_form',
+    }
+  );
 
   const blocked = formMutationBlocked(classroom, membership.role);
   if (blocked) return blocked;

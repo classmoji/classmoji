@@ -18,9 +18,7 @@ type SlidesAppUser = ReturnType<
   typeof withLogin<Prisma.UserGetPayload<{ include: typeof ROOT_USER_INCLUDE }>>
 >;
 
-const loadRoot = async ({ request }: { request: Request }) => {
-  const url = new URL(request.url);
-
+const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   // Allow public access to /follow routes with valid shareCode
   // These routes handle their own authorization via shareCode validation
   const isFollowRoute = url.pathname.match(/^\/[^/]+\/follow$/);
@@ -84,7 +82,7 @@ const loadRoot = async ({ request }: { request: Request }) => {
   return { user };
 };
 
-export const loader = async (args: { request: Request }) => {
+export const loader = async (args: { request: Request; url: URL }) => {
   const result = await loadRoot(args);
   if (result instanceof Response) return result;
   // Browser error tracking (DSN + environment), read from the server's env at

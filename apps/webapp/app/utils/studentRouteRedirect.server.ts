@@ -20,7 +20,9 @@ import { STAFF_ROLES, staffRedirectPath, staffRoleForStudentRoute } from './stud
  * section chosen is the one those gates will admit.
  */
 export async function staffRedirectFromStudentRoute(
-  request: Request,
+  // The loader's `url`, not `request.url`: on a client-side navigation the
+  // request is the raw `.data` fetch, and the redirect must name the page.
+  { request, url }: { request: Request; url: URL },
   classSlug: string,
   denial: unknown
 ): Promise<Response | null> {
@@ -41,7 +43,6 @@ export async function staffRedirectFromStudentRoute(
   );
   if (!role) return null;
 
-  const url = new URL(request.url);
   return redirect(
     staffRedirectPath({
       role,

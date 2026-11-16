@@ -49,7 +49,7 @@ async function loadImportBanner(classroomId: string): Promise<ImportProgressBann
   };
 }
 
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({ params, request, url }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   // Handle case where class param might not be present yet (e.g., at /admin)
@@ -71,7 +71,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }
 
     // Normalize the current path
-    const url = new URL(request.url);
     const resourcePath = ClassmojiService.resourceView.normalizePath(url.pathname);
 
     // Fire-and-forget: record the view without blocking

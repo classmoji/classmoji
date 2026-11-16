@@ -614,6 +614,7 @@ describe('the loader', () => {
     return (await loader({
       params: { class: CLASS_SLUG },
       request: new Request(`http://localhost/admin/${CLASS_SLUG}/quizzes/form${query}`),
+      url: new URL(`http://localhost/admin/${CLASS_SLUG}/quizzes/form${query}`),
     } as unknown as Parameters<typeof loader>[0])) as Awaited<ReturnType<typeof loader>>;
   };
 

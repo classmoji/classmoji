@@ -196,6 +196,7 @@ const { loader } = await import('../root.tsx');
 const load = async (path: string) =>
   (await loader({
     request: new Request(`http://localhost${path}`),
+    url: new URL(`http://localhost${path}`),
   } as unknown as Parameters<typeof loader>[0])) as Record<string, unknown>;
 
 beforeEach(() => {

@@ -9,6 +9,7 @@ import {
   resolveSiteHostConfig,
 } from './server/siteHost.ts';
 import { createCustomDomainSnapshot } from './server/customDomains.ts';
+import { siteRouterContext } from './server/loadContext.ts';
 
 const app = express();
 
@@ -113,7 +114,12 @@ if (isDev) {
   // wiring — a marker plumbed into only one of the two entry points is a marker
   // that silently does nothing in the other environment.
   const build = await import('./build/server/index.js');
-  app.use(createRequestHandler({ build, getLoadContext: req => buildSiteLoadContext(req) }));
+  app.use(
+    createRequestHandler({
+      build,
+      getLoadContext: req => siteRouterContext(buildSiteLoadContext(req)),
+    })
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

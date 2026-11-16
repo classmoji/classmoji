@@ -51,7 +51,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
   // The query string is carried VERBATIM. `/verify?token=…` is the magic link
   // itself: a bridge that dropped the search would turn every emailed link on a
   // class-site host into an expired-link page.
-  const { search } = new URL(request.url);
+  const { search } = args.url;
 
   return redirect(`${pagesUrl()}/${site.classroom.slug}/forms/${path}${search}`, {
     status: 302,
