@@ -398,6 +398,21 @@ describe('the signed query the consent page checks (verifiedAuthorizationQuery)'
     expect(signed?.get('client_id')).toBe(CLIENT_ID);
   });
 
+  // A client navigation to the consent page fetches `/oauth/consent.data?…&_routes=…`;
+  // the loader checks React Router 8's normalized `url` (`.data` and `_routes`
+  // gone, the query re-serialized). Either spelling checks out as signed.
+  it('checks out from a client navigation, raw or normalized', async () => {
+    const search = await consentSearch();
+    const raw = new URL(`http://localhost:3000/oauth/consent.data${search}&_routes=root`);
+    const url = new URL(raw);
+    url.pathname = url.pathname.replace(/\.data$/, '');
+    url.searchParams.delete('_routes');
+
+    const expected = new URLSearchParams(search).toString();
+    expect((await verifiedAuthorizationQuery(url.search))?.toString()).toBe(expected);
+    expect((await verifiedAuthorizationQuery(raw.search))?.toString()).toBe(expected);
+  });
+
   it('is what the consent endpoint takes as oauth_query', async () => {
     const cookie = await signIn('owner-1');
     const signed = await verifiedAuthorizationQuery(await consentSearch());
