@@ -34,6 +34,13 @@ const location = (result: unknown) =>
 
 type Loader = (args: { request: Request; url: URL }) => Promise<unknown>;
 let loader: Loader;
+const savedWebappUrl = process.env.WEBAPP_URL;
+
+// Later specs in the same worker must see the environment they started with.
+test.afterAll(() => {
+  if (savedWebappUrl === undefined) delete process.env.WEBAPP_URL;
+  else process.env.WEBAPP_URL = savedWebappUrl;
+});
 
 test.beforeAll(async () => {
   process.env.WEBAPP_URL = WEBAPP;

@@ -72,9 +72,22 @@ const thrown = async (run: () => Promise<unknown>): Promise<unknown> => {
   throw new Error('expected a thrown response');
 };
 
+const savedEnv = {
+  WEBAPP_URL: process.env.WEBAPP_URL,
+  SITE_BASE_DOMAIN: process.env.SITE_BASE_DOMAIN,
+};
+
 test.beforeAll(() => {
   process.env.WEBAPP_URL = WEBAPP;
   process.env.SITE_BASE_DOMAIN = 'classmoji.test';
+});
+
+// Later specs in the same worker must see the environment they started with.
+test.afterAll(() => {
+  for (const [name, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 test.beforeEach(() => {
