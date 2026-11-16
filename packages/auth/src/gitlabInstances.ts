@@ -42,7 +42,7 @@ import {
 import type { BetterAuthPlugin } from 'better-auth';
 import * as z from 'zod';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
+import * as gitlabInstanceService from '@classmoji/services/gitlab-instance';
 import { scopeGitlabId } from '@classmoji/utils';
 import { clientIp } from './clientIp.ts';
 import { mapGitLabProfile } from './providerProfile.ts';
@@ -72,7 +72,7 @@ async function exchangeCode(
   client: { host: string; clientId: string; clientSecret: string },
   params: { code: string; codeVerifier: string; redirectURI: string }
 ) {
-  const response = await ClassmojiService.gitlabInstance.gitlabFetch(`${client.host}/oauth/token`, {
+  const response = await gitlabInstanceService.gitlabFetch(`${client.host}/oauth/token`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -127,7 +127,7 @@ const redirectBody = {
   errorCallbackURL: z.string().optional(),
 };
 
-const svc = () => ClassmojiService.gitlabInstance;
+const svc = () => gitlabInstanceService;
 
 /** An authorize URL on `host`, with state saved the way better-auth's own flows do. */
 async function authorizeUrl(

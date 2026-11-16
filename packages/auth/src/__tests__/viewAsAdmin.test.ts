@@ -133,6 +133,16 @@ vi.mock('@classmoji/database', async () => {
   const client = standInClient(mocks.client);
   return { default: () => client };
 });
+// `@classmoji/auth/server` imports these services from their own subpaths:
+// each is the same member of the ClassmojiService fake below.
+const { fromServicesFake } = await vi.hoisted(() => import('./support/servicesFake.ts'));
+vi.mock('@classmoji/services/audit', () => fromServicesFake('audit'));
+vi.mock('@classmoji/services/auth-email', () => fromServicesFake('authEmail'));
+vi.mock('@classmoji/services/classroom', () => fromServicesFake('classroom'));
+vi.mock('@classmoji/services/classroom-membership', () => fromServicesFake('classroomMembership'));
+vi.mock('@classmoji/services/github-user-token', () => fromServicesFake('githubUserToken'));
+vi.mock('@classmoji/services/subscription', () => fromServicesFake('subscription'));
+vi.mock('@classmoji/services/gitlab-instance', () => fromServicesFake('gitlabInstance'));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },

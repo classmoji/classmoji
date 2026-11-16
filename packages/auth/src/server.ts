@@ -10,7 +10,12 @@ import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
-import { ClassmojiService } from '@classmoji/services';
+import * as auditService from '@classmoji/services/audit';
+import * as authEmailService from '@classmoji/services/auth-email';
+import * as classroomService from '@classmoji/services/classroom';
+import * as classroomMembershipService from '@classmoji/services/classroom-membership';
+import * as githubUserTokenService from '@classmoji/services/github-user-token';
+import * as subscriptionService from '@classmoji/services/subscription';
 import { clientIpHeader } from '@classmoji/utils';
 import { noteSeen } from './lastSeen.ts';
 
@@ -661,11 +666,9 @@ interface SlideAccessResult {
   canViewSpeakerNotes: boolean;
 }
 
-type ClassroomRecord = NonNullable<
-  Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>
->;
+type ClassroomRecord = NonNullable<Awaited<ReturnType<typeof classroomService.findBySlug>>>;
 type ClassroomMembershipRecord = Awaited<
-  ReturnType<typeof ClassmojiService.classroomMembership.findByClassroomAndUser>
+  ReturnType<typeof classroomMembershipService.findByClassroomAndUser>
 >;
 type SafeClassroomRecord = Omit<ClassroomRecord, 'settings'> & {
   settings: Record<string, unknown> | null;
@@ -722,7 +725,7 @@ export const resolveHighestMembership = async (
 
   const found = await Promise.all(
     candidates.map(role =>
-      ClassmojiService.classroomMembership.findByClassroomAndUser(classroomId, userId, [role])
+      classroomMembershipService.findByClassroomAndUser(classroomId, userId, [role])
     )
   );
   return found.find(Boolean) ?? null;
@@ -799,7 +802,7 @@ export async function clearRevokedToken(userId: string, refusedToken?: string): 
 
   // DB clear (sets access_token=null, expires_at=epoch so refresh still fires)
   // lives in the shared token service so workers can reuse it.
-  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId, refusedToken);
+  await githubUserTokenService.clearRevokedTokenForUser(userId, refusedToken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -817,7 +820,7 @@ export async function clearRevokedToken(userId: string, refusedToken?: string): 
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | null> {
-  return ClassmojiService.githubUserToken.getGitHubTokenForUser(userId);
+  return githubUserTokenService.getGitHubTokenForUser(userId);
 }
 
 /**
@@ -1834,7 +1837,7 @@ export const auth = betterAuth({
       overrideDefaultEmailVerification: true,
       disableSignUp: true,
       sendVerificationOTP: async ({ email, otp, type }) => {
-        await ClassmojiService.authEmail.sendAuthOtp(email, otp, type);
+        await authEmailService.sendAuthOtp(email, otp, type);
       },
     }),
     // Self-managed GitLab instances (gitlab.com uses socialProviders.gitlab).
@@ -2165,8 +2168,8 @@ export const assertClassroomAccess = async ({
   // caller is acting on. The 404 body is identical either way, so an id probe
   // leaks no more than a slug probe.
   const classroom = classroomId
-    ? await ClassmojiService.classroom.findById(classroomId)
-    : await ClassmojiService.classroom.findBySlug(classroomSlug!);
+    ? await classroomService.findById(classroomId)
+    : await classroomService.findBySlug(classroomSlug!);
 
   if (!classroom) {
     throw new Response('Classroom not found', {
@@ -2254,7 +2257,7 @@ export const assertClassroomAccess = async ({
     }
 
     try {
-      await ClassmojiService.audit.create({
+      await auditService.create({
         classroom_id: classroom.id,
         user_id: authData.userId,
         role: actualMembership?.role || 'NONE',
@@ -2295,9 +2298,7 @@ export const assertClassroomAccess = async ({
 
   // SECURITY: Always sanitize classroom before returning to prevent API key leakage.
   // Routes needing secrets should use ClassmojiService.classroom.getClassroomSettingsForServer()
-  const safeClassroom = ClassmojiService.classroom.getClassroomForUI(
-    classroom
-  ) as SafeClassroomRecord;
+  const safeClassroom = classroomService.getClassroomForUI(classroom) as SafeClassroomRecord;
 
   assertClassroomEntryAllowed({
     status: classroom.status,
@@ -2520,9 +2521,9 @@ export async function requireStudentAccess(
  * — is unchanged.
  */
 export const assertProTier = async (classroomSlug: string) => {
-  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  const classroom = await classroomService.findBySlug(classroomSlug);
   const proState = classroom
-    ? await ClassmojiService.subscription.getProStateForClassroomId(classroom.id)
+    ? await subscriptionService.getProStateForClassroomId(classroom.id)
     : null;
 
   if (!proState?.isPro) {
@@ -2757,7 +2758,7 @@ export async function assertSlideAccess({
     // Log denied access for audit (only if user is authenticated and a member)
     if (membership) {
       try {
-        await ClassmojiService.audit.create({
+        await auditService.create({
           classroom_id: slide.classroom_id,
           user_id: userId!,
           role: role ?? membership.role,

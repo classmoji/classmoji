@@ -523,6 +523,74 @@
       }
     },
     {
+      // The admin app and the auth module import each service on its own
+      // (`@classmoji/services/<name>`): once the ClassmojiService object is
+      // imported, the bundler keeps every service it names, which tripled the
+      // admin Worker. An override replaces the rule's options, so the
+      // content-signing entry above is repeated. Type-only imports are fine.
+      // Tests are switched off by the override below, mediaHttp.ts by the one
+      // after this.
+      "files": ["apps/admin/app/**", "packages/auth/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@classmoji/content-signing",
+                "importNames": [
+                  "signBlobUrl",
+                  "signSrcSet",
+                  "signThemeBase",
+                  "signFilesBase",
+                  "signMediaUrl",
+                  "signRenderToken",
+                  "signCanonical",
+                  "deriveKey"
+                ],
+                "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+              },
+              {
+                "name": "@classmoji/services",
+                "importNames": ["ClassmojiService", "HelperService"],
+                "allowTypeImports": true,
+                "message": "Import the service module itself (e.g. `import * as feedbackService from '@classmoji/services/feedback'`; add a subpath export if it has none). The ClassmojiService object pulls every service into this bundle."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Only the webapp, pages and slides import @classmoji/auth/media-http,
+      // and they load the ClassmojiService object anyway: back to the
+      // content-signing rule alone.
+      "files": ["packages/auth/src/mediaHttp.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@classmoji/content-signing",
+                "importNames": [
+                  "signBlobUrl",
+                  "signSrcSet",
+                  "signThemeBase",
+                  "signFilesBase",
+                  "signMediaUrl",
+                  "signRenderToken",
+                  "signCanonical",
+                  "deriveKey"
+                ],
+                "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       // The other half of the content-signing choke point (see
       // no-restricted-imports above): the files allowed to import the signers.
       "files": [

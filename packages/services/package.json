@@ -31,7 +31,15 @@
     "./slides/runtime-attrs": "./src/slides/deckRuntimeAttrs.ts",
     "./slides/safe-markup": "./src/slides/safeMarkup/index.ts",
     "./slides/safe-markup/server": "./src/slides/safeMarkup/server.ts",
-    "./workers-ai": "./src/helpers/workersAi.ts"
+    "./workers-ai": "./src/helpers/workersAi.ts",
+    "./audit": "./src/classmoji/audit.service.ts",
+    "./auth-email": "./src/classmoji/authEmail.service.ts",
+    "./classroom": "./src/classmoji/classroom.service.ts",
+    "./classroom-membership": "./src/classmoji/classroomMembership.service.ts",
+    "./feedback": "./src/classmoji/feedback.service.ts",
+    "./github-user-token": "./src/classmoji/githubUserToken.service.ts",
+    "./gitlab-instance": "./src/classmoji/gitlabInstance.service.ts",
+    "./subscription": "./src/classmoji/subscription.service.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",

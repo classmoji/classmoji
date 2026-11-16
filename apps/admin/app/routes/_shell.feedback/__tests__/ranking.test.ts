@@ -30,6 +30,10 @@ vi.mock('~/utils/db.server', () => ({
 class FeedbackValidationError extends Error {}
 class FeedbackNotFoundError extends Error {}
 
+// The route imports the feedback service from its own subpath: the same
+// member of the ClassmojiService fake below.
+const { fromServicesFake } = await vi.hoisted(() => import('~/__tests__/support/servicesFake.ts'));
+vi.mock('@classmoji/services/feedback', () => fromServicesFake('feedback'));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     feedback: {

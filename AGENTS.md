@@ -65,6 +65,8 @@ When working on features that span admin/assistant/student routes, avoid duplica
 ### Service Isolation
 Slides and pages are moving toward self-contained services. When working on these, keep code consolidated within each service rather than adding cross-app dependencies. Prefer importing from shared packages (`@classmoji/services`, `@classmoji/utils`, `@classmoji/database`) over reaching into another app's internals.
 
+`packages/auth` (`server.ts`, `gitlabInstances.ts`) and `apps/admin` import each service module on its own (`import * as feedbackService from '@classmoji/services/feedback'`), never the `ClassmojiService` object: once the object is imported the bundler keeps every service it names, and the admin bundle triples. These are the same functions the object holds. New code there does the same, adding a subpath export to `packages/services/package.json` when a service has none; lint enforces it (`no-restricted-imports` in `.oxlintrc.json`).
+
 ### Standard Page Layout
 List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.staff/route.tsx`.
 
