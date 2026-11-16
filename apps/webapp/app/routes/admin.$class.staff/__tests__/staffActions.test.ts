@@ -444,4 +444,21 @@ describe('staff action — an unreadable body', () => {
     expect(created.action).toBe('save-user');
     expect(removed.action).toBe('remove-user');
   });
+
+  it('names it from the fetcher request React Router hands the action', async () => {
+    // The browser posts to `staff.data?/removeStaff`, and React Router 8 passes
+    // that request through as sent (7.x re-encoded the query to
+    // `?%2FremoveStaff=`, so this branch answered save-user).
+    const removed = (await action({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/admin/${CLASS_SLUG}/staff.data?/removeStaff`, {
+        method: 'DELETE',
+        body: '{',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      url: new URL(`http://localhost/admin/${CLASS_SLUG}/staff?%2FremoveStaff=`),
+    } as unknown as Parameters<typeof action>[0])) as { action?: string };
+
+    expect(removed.action).toBe('remove-user');
+  });
 });
