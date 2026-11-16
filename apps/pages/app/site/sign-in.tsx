@@ -62,7 +62,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
 
 export const headers: HeadersFunction = args => routeSiteHeaders(args);
 
-export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => [
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => [
   { title: loaderData ? `Sign in — ${loaderData.courseName}` : 'Sign in' },
   { name: 'robots', content: 'noindex' },
 ];

@@ -124,7 +124,7 @@ export const headers: HeadersFunction = args => routeSiteHeaders(args);
  */
 export const handle = { siteBreadcrumb: true };
 
-export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
   if (!loaderData) return [{ title: 'Page' }];
 
   const title = `${loaderData.title} — ${loaderData.courseName}`;
