@@ -140,7 +140,10 @@ test.describe('/_root.data from a tab opened before React Router 8', () => {
   });
 
   test('leaves a class site alone: its /_root is still a page slug', async () => {
-    // `cs52.classmoji.io/_root.data` reaches React Router as this path.
+    // The site tree's own `_root` path keeps going to the site page route.
+    // (On a real site host the server refuses `.data` requests before React
+    // Router sees them; a document request for `/_root` arrives as
+    // `/_site/cs52/_root`.)
     calls.length = 0;
     const response = await send('/_site/cs52/_root.data', SESSIONS['signed in']);
     expect(response.status).toBe(200);
