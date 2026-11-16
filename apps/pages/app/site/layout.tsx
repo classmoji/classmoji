@@ -25,10 +25,9 @@ import { SITE_STYLES } from './styles.ts';
  */
 
 export const loader = async (args: LoaderFunctionArgs) => {
-  const { request, params } = args;
+  const { request, params, url } = args;
   const { site, viewer, memberLinkOrigin } = await resolveSiteContext(args);
 
-  const url = new URL(request.url);
   // The visitor-facing path, not the internal `/_site/...` one the middleware
   // rewrote to — that prefix must never appear in a link or a redirect.
   const publicPath = publicPathOf(url.pathname, params.subdomain!) + url.search;
@@ -61,8 +60,8 @@ export const loader = async (args: LoaderFunctionArgs) => {
 
 export const headers: HeadersFunction = args => routeSiteHeaders(args);
 
-export const meta: MetaFunction<typeof loader> = ({ data }) => {
-  const courseName = data?.courseName;
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
+  const courseName = loaderData?.courseName;
   return courseName ? [{ title: courseName }] : [{ title: 'Class site' }];
 };
 
@@ -77,7 +76,7 @@ const SiteLayout = () => {
   const pageMatch = matches.find(
     m => (m.handle as { siteBreadcrumb?: boolean } | undefined)?.siteBreadcrumb
   );
-  const pageData = pageMatch?.data as { title?: string; isHomePage?: boolean } | undefined;
+  const pageData = pageMatch?.loaderData as { title?: string; isHomePage?: boolean } | undefined;
   const currentPageTitle = pageData && !pageData.isHomePage ? (pageData.title ?? null) : null;
 
   return (

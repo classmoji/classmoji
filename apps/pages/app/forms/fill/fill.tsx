@@ -271,14 +271,17 @@ export const headers = ({
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const loaded = await loadPublicForm({
     classroomSlug: params.classroomSlug!,
     formSlug: params.formSlug!,
     request,
+    url,
   });
 
   if (loaded.view === 'classroom-fill') {
@@ -528,9 +531,11 @@ async function classroomWrite(
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   // Origin FIRST — before the body is read, before a single query runs. A
   // cross-site post is refused on a header at no cost, and never becomes work
@@ -540,7 +545,7 @@ export const action = async ({
     console.warn('[forms:fill] refused cross-site submission', {
       reason: origin.reason,
       origin: origin.origin,
-      path: new URL(request.url).pathname,
+      path: url.pathname,
     });
     return new Response('Cross-site submissions are not accepted.', { status: 403 });
   }
@@ -570,7 +575,7 @@ export const action = async ({
    */
   if (exceedsMaxDepth(body)) {
     console.warn('[forms:fill] refused a pathologically nested submission', {
-      path: new URL(request.url).pathname,
+      path: url.pathname,
       bytes: raw.length,
     });
     return new Response('Malformed submission.', { status: 400 });
@@ -580,6 +585,7 @@ export const action = async ({
     classroomSlug: params.classroomSlug!,
     formSlug: params.formSlug!,
     request,
+    url,
   });
 
   // The write path re-derives what the read path derived. A form that closed,
@@ -740,7 +746,7 @@ export const action = async ({
     console.warn('[forms:fill] rate-limited an anonymous submission', {
       formId: loaded.form.id,
       intent: body.intent ?? 'submit',
-      path: new URL(request.url).pathname,
+      path: url.pathname,
     });
     return new Response('Too many submissions from this address. Try again shortly.', {
       status: 429,

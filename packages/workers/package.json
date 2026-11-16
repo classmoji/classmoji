@@ -10,6 +10,7 @@
   "exports": {
     "./vite": "./src/vite.ts",
     "./runtime": "./src/runtime.ts",
+    "./context": "./src/context.ts",
     "./entry-server": {
       "workerd": "./src/entry-server.workerd.tsx",
       "default": "./src/entry-server.node.tsx"
@@ -19,11 +20,11 @@
     "@classmoji/database": "*"
   },
   "peerDependencies": {
-    "@react-router/node": "^7.18.5",
+    "@react-router/node": "^8.5.1",
     "isbot": "^5.2.2",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-router": "^7.18.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.5.1",
     "vite": "^8.3.6"
   },
   "devDependencies": {

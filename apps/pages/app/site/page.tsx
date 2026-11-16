@@ -32,11 +32,10 @@ import { ClassmojiService } from '~/utils/db.server.ts';
  * preview drafts in the app where the URL is unmistakably internal.
  */
 export const loader = async (args: LoaderFunctionArgs) => {
-  const { request, params } = args;
+  const { request, params, url } = args;
   const context = await resolveSiteContext(args);
   const { site, viewer, memberLinkOrigin, seoOrigin } = context;
 
-  const url = new URL(request.url);
   const publicPath = publicPathOf(url.pathname, params.subdomain!);
 
   const page = (await ClassmojiService.site.getPageBySlugForSite(
@@ -125,7 +124,7 @@ export const headers: HeadersFunction = args => routeSiteHeaders(args);
  */
 export const handle = { siteBreadcrumb: true };
 
-export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
   if (!loaderData) return [{ title: 'Page' }];
 
   const title = `${loaderData.title} — ${loaderData.courseName}`;

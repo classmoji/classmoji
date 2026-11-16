@@ -183,7 +183,7 @@ export async function renderPageForViewer(
       lockedSectionSignInHref: context.viewer.userId
         ? null
         : `${context.memberLinkOrigin}${signInPathFor(
-            publicPathOf(new URL(request.url).pathname, args.params.subdomain ?? '')
+            publicPathOf(args.url.pathname, args.params.subdomain ?? '')
           )}`,
     });
   } catch (error) {

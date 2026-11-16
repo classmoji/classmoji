@@ -164,8 +164,11 @@ describe('STAFF_TWINS stays in step with the route modules', () => {
 });
 
 describe('staffRedirectFromStudentRoute', () => {
-  const request = (path = '/student/cs52/calendar?view=week') =>
-    new Request(`https://app.classmoji.io${path}`);
+  // What a loader hands over: the request and React Router's normalized `url`.
+  const request = (path = '/student/cs52/calendar?view=week') => ({
+    request: new Request(`https://app.classmoji.io${path}`),
+    url: new URL(`https://app.classmoji.io${path}`),
+  });
 
   const memberships = (roles: string[]) => {
     resolveHighestMembershipMock.mockImplementation(
@@ -245,9 +248,12 @@ describe('staffRedirectFromStudentRoute', () => {
 });
 
 describe('student layout loader', () => {
-  const args = (path: string) =>
+  // `request` is what reached the server (a client-side navigation fetches
+  // `<path>.data`); `url` is React Router's normalized location.
+  const args = (path: string, requestPath = path) =>
     ({
-      request: new Request(`https://app.classmoji.io${path}`),
+      request: new Request(`https://app.classmoji.io${requestPath}`),
+      url: new URL(`https://app.classmoji.io${path}`),
       params: { class: 'cs52' },
     }) as unknown as Parameters<typeof studentLayoutLoader>[0];
 
@@ -280,6 +286,17 @@ describe('student layout loader', () => {
     expect(thrown.headers.get('Location')).toBe('/teacher/cs52/slides');
     expect(requireStudentAccessMock).toHaveBeenCalledTimes(1);
     expect(getBalanceMock).not.toHaveBeenCalled();
+  });
+
+  it('redirects to the page, not the data URL, on a client-side navigation', async () => {
+    requireStudentAccessMock.mockRejectedValue(forbidden());
+    resolveHighestMembershipMock.mockImplementation(async (_c, _u, wanted: string[]) =>
+      wanted.includes('TEACHER') ? { role: 'TEACHER' } : null
+    );
+    const thrown = await studentLayoutLoader(
+      args('/student/cs52/slides', '/student/cs52/slides.data?_routes=routes%2Fstudent.%24class')
+    ).catch(e => e);
+    expect(thrown.headers.get('Location')).toBe('/teacher/cs52/slides');
   });
 
   it('rethrows the original refusal for a non-member', async () => {

@@ -73,14 +73,20 @@ interface FormRow {
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, membership } = await assertFormAdmin(classroomSlug, request, {
-    action: 'list_forms',
-  });
+  const { classroom, membership } = await assertFormAdmin(
+    classroomSlug,
+    { request, url },
+    {
+      action: 'list_forms',
+    }
+  );
 
   const [forms, publicUrlFor] = await Promise.all([
     ClassmojiService.form.findByClassroomId(classroom.id),
@@ -122,14 +128,20 @@ export const loader = async ({
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(classroomSlug, request, {
-    action: 'mutate_form',
-  });
+  const { classroom, userId, membership } = await assertFormAdmin(
+    classroomSlug,
+    { request, url },
+    {
+      action: 'mutate_form',
+    }
+  );
 
   const body = (await request.json()) as { intent?: string; formId?: string; status?: FormStatus };
   const intent = body.intent;

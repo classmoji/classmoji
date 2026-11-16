@@ -9,8 +9,12 @@ import { loadPerson } from './route.server';
 
 export const loader = loadPerson;
 
-export const meta = ({ data }: { data?: { person?: { name: string } } }) => [
-  { title: data?.person ? `${data.person.name} · Classmoji Admin` : 'Person · Classmoji Admin' },
+export const meta = ({ loaderData }: { loaderData?: { person?: { name: string } } }) => [
+  {
+    title: loaderData?.person
+      ? `${loaderData.person.name} · Classmoji Admin`
+      : 'Person · Classmoji Admin',
+  },
 ];
 
 const PROVIDER: Record<string, string> = {

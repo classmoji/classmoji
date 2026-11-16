@@ -93,9 +93,8 @@ const toNumberIfNumeric = (value: unknown) =>
     ? Number(value)
     : value;
 
-export async function loader({ params, request }: Route.LoaderArgs) {
+export async function loader({ params, request, url }: Route.LoaderArgs) {
   const classSlug = params.class!;
-  const url = new URL(request.url);
   const quizId = url.searchParams.get('quizId');
 
   // Dynamic import to keep server-side dependencies on the server only

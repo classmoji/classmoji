@@ -40,13 +40,15 @@ const FORMS_RESOURCE = 'FORMS';
  * and a 401 the client ends up seeing is a framework detail. Answering with the
  * same redirect from both makes an anonymous GET of an admin forms path land on
  * the login page deterministically, which is what the gate spec asserts.
+ *
+ * `url` is the loader's normalized one: on a client-side navigation the request
+ * is the `.data` fetch, which is not a page to come back to.
  */
-const loginRedirect = (request: Request): Response => {
+const loginRedirect = (url: URL): Response => {
   const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
-  const target = new URL(request.url);
   return new Response(null, {
     status: 302,
-    headers: { Location: `${webappUrl}?redirect=${encodeURIComponent(target.href)}` },
+    headers: { Location: `${webappUrl}?redirect=${encodeURIComponent(url.href)}` },
   });
 };
 
@@ -70,7 +72,7 @@ export interface FormAdminContext {
  */
 export async function assertFormAdmin(
   classroomSlug: string,
-  request: Request,
+  { request, url }: { request: Request; url: URL },
   options: { action?: string } = {}
 ): Promise<FormAdminContext> {
   let access;
@@ -80,7 +82,7 @@ export async function assertFormAdmin(
       action: options.action ?? 'access',
     });
   } catch (thrown) {
-    if (thrown instanceof Response && thrown.status === 401) throw loginRedirect(request);
+    if (thrown instanceof Response && thrown.status === 401) throw loginRedirect(url);
     throw thrown;
   }
 

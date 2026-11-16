@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from 'react-router';
+import { cloudflareContext } from '@classmoji/workers/context';
 
 /**
  * Liveness probe for fly.toml's http_service check. Without a check a boot
@@ -10,7 +11,7 @@ import type { LoaderFunctionArgs } from 'react-router';
  * the response is unchanged.
  */
 export const loader = ({ context }: LoaderFunctionArgs) => {
-  const version = context?.cloudflare?.env?.CF_VERSION_METADATA?.id;
+  const version = context.get(cloudflareContext)?.env.CF_VERSION_METADATA?.id;
   return new Response('ok', {
     status: 200,
     headers: version ? { 'x-worker-version': version } : undefined,

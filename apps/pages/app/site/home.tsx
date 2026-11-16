@@ -116,7 +116,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
 
 export const headers: HeadersFunction = args => routeSiteHeaders(args);
 
-export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
   if (!loaderData) return [{ title: 'Class site' }];
 
   const title = loaderData.courseName;

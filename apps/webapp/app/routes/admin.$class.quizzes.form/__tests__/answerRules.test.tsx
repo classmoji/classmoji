@@ -302,6 +302,7 @@ describe('the loader', () => {
     (await loader({
       params: { class: CLASS_SLUG },
       request: new Request(`http://localhost/teacher/${CLASS_SLUG}/quizzes/form?quizId=quiz-1`),
+      url: new URL(`http://localhost/teacher/${CLASS_SLUG}/quizzes/form?quizId=quiz-1`),
     } as unknown as Parameters<typeof loader>[0])) as Awaited<ReturnType<typeof loader>>;
 
   const found = (over: Record<string, unknown>) => ({

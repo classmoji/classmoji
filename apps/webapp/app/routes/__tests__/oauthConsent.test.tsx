@@ -84,6 +84,7 @@ const load = (search = `?${SIGNED}&utm=page`) =>
     request: new Request(`http://localhost:3000/oauth/consent${search}`, {
       headers: { cookie: 'classmoji.session_token=t' },
     }),
+    url: new URL(`http://localhost:3000/oauth/consent${search}`),
   } as never) as Promise<Record<string, unknown> | Response>;
 
 beforeEach(() => {

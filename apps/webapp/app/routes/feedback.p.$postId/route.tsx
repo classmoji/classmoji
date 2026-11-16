@@ -37,7 +37,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   return { post, viewerId, isAdmin, signedIn: Boolean(viewerId) };
 };
 
-export const meta = ({ data: loaderData }: Route.MetaArgs) => [
+export const meta = ({ loaderData }: Route.MetaArgs) => [
   { title: loaderData ? `${loaderData.post.title} - Classmoji feedback` : 'Feedback - Classmoji' },
 ];
 

@@ -9,7 +9,7 @@ import type { SurveyQuestion } from '@classmoji/utils';
  */
 export const useSurveyPending = (): boolean =>
   useMatches().some(m => {
-    const questions = (m.data as { surveyQuestions?: SurveyQuestion[] } | undefined)
+    const questions = (m.loaderData as { surveyQuestions?: SurveyQuestion[] } | undefined)
       ?.surveyQuestions;
     return Array.isArray(questions) && questions.length > 0;
   });
