@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "slides:dev": "node --experimental-strip-types server.ts",
+    "slides:dev": "node --conditions=development --experimental-strip-types server.ts",
     "slides:build": "react-router build",
     "slides:start": "NODE_ENV=production node --experimental-strip-types server.ts",
     "test": "playwright test",

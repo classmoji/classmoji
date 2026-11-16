@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "admin:dev": "node --experimental-strip-types server.ts",
+    "admin:dev": "node --conditions=development --experimental-strip-types server.ts",
     "admin:dev:cf": "NODE_ENV=development BUILD_TARGET=cloudflare CLOUDFLARE_ENV=dev react-router build && wrangler dev -c build/server/wrangler.json --port ${PORT:-7500}",
     "admin:build": "react-router build",
     "admin:build:cf": "BUILD_TARGET=cloudflare react-router build",
