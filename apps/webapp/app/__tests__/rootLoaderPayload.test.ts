@@ -192,12 +192,12 @@ vi.mock('~/store', () => ({ default: vi.fn() }));
 vi.mock('~/utils/sentry.client', () => ({ captureRouteError: vi.fn(), setSentryUser: vi.fn() }));
 
 const { loader } = await import('../root.tsx');
+const { routerArgs, routerUrl } = await import('./support/routerUrl.ts');
 
 const load = async (path: string) =>
-  (await loader({
-    request: new Request(`http://localhost${path}`),
-    url: new URL(`http://localhost${path}`),
-  } as unknown as Parameters<typeof loader>[0])) as Record<string, unknown>;
+  (await loader(
+    routerArgs(`http://localhost${path}`) as unknown as Parameters<typeof loader>[0]
+  )) as Record<string, unknown>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -410,5 +410,69 @@ describe('root loader payload', () => {
     getAuthSessionMock.mockResolvedValue(null);
     getSessionMock.mockResolvedValue(null);
     expect(await load('/student/test-class/dashboard')).toBeInstanceOf(Response);
+  });
+});
+
+/**
+ * A client navigation asks for `/x.data?_routes=…` (`/_.data` for the root).
+ * The root loader reads the path from `url`, so it answers that request as it
+ * answers the document `/x`: `request.url` still carries the suffix.
+ */
+describe('root loader on a client-navigation (.data) request', () => {
+  const signOut = () => {
+    getAuthSessionMock.mockResolvedValue(null);
+    getSessionMock.mockResolvedValue(null);
+  };
+  const unverifiedEmail = () =>
+    findUniqueMock.mockImplementation(async (query: { include?: Row; select?: Row }) =>
+      project({ ...USER_ROW, emailVerified: false }, query)
+    );
+  const location = (result: unknown) =>
+    result instanceof Response ? result.headers.get('Location') : null;
+
+  it('builds url the way React Router 8 does', () => {
+    expect(routerUrl('http://localhost/_.data?_routes=root').href).toBe('http://localhost/');
+    expect(routerUrl('http://localhost/feedback/_.data').pathname).toBe('/feedback/');
+    expect(routerUrl('http://localhost/feedback.data?_routes=root&sort=top').href).toBe(
+      'http://localhost/feedback?sort=top'
+    );
+    expect(routerUrl('http://localhost/x.data?index&_routes=root').search).toBe('');
+  });
+
+  it.each([
+    '/_.data?_routes=root,routes/_index',
+    '/feedback.data?_routes=root,routes/feedback',
+    '/join/abc123.data?_routes=root,routes/join.$code',
+  ])('keeps %s public when signed out', async path => {
+    signOut();
+    expect(await load(path)).toMatchObject({ user: null });
+  });
+
+  it('keeps the Ask Moji embed public, trailing slash included', async () => {
+    signOut();
+    expect(await load('/ask-moji/test-class/embed/_.data?_routes=root')).toEqual({
+      user: null,
+      askMojiEmbed: true,
+      sentry: null,
+    });
+  });
+
+  it('still sends a signed-out request for a protected route home', async () => {
+    signOut();
+    const result = await load('/student/test-class/dashboard.data?_routes=root');
+    expect(result).toBeInstanceOf(Response);
+    expect(location(result)).toBe('/');
+  });
+
+  it('names the page, never the .data URL, in the account-setup next=', async () => {
+    unverifiedEmail();
+    expect(location(await load('/join/abc123.data?_routes=root,routes/join.$code'))).toBe(
+      '/registration?next=%2Fjoin%2Fabc123'
+    );
+    expect(location(await load('/student/test-class/dashboard.data?tab=grades&_routes=root'))).toBe(
+      '/registration?next=%2Fstudent%2Ftest-class%2Fdashboard%3Ftab%3Dgrades'
+    );
+    // The landing page itself is never gated.
+    expect(await load('/_.data?_routes=root')).not.toBeInstanceOf(Response);
   });
 });
