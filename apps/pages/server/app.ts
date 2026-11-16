@@ -16,6 +16,11 @@ import { siteRouterContext } from './loadContext.ts';
  * so the two hold SEPARATE instances of siteHost.ts. That is fine, and is
  * exactly why the marker is a plain string property on the request rather than
  * a Symbol — see CUSTOM_DOMAIN_REQUEST_KEY.
+ *
+ * `pages:dev` runs node with `--conditions=development`, as `react-router dev`
+ * does: Vite loads react-router's development build, and without the condition
+ * the Express adapter would load the production one, whose request handler
+ * refuses a RouterContextProvider made by the other copy.
  */
 export const app = createRequestHandler({
   // In dev, Vite handles the build via virtual module

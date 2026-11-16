@@ -4,11 +4,14 @@
  * Every request gets its own Prisma client on a Postgres connection opened
  * through the Worker's Hyperdrive binding (a connection belongs to the request
  * that opened it on workerd, so nothing is shared between requests), and the
- * app's React Router handler runs inside it with `{ cloudflare: { env, ctx } }`
- * as load context.
+ * app's React Router handler runs inside it with `{ env, ctx }` in its load
+ * context (`context.get(cloudflareContext)`, ./context.ts).
  */
+import { RouterContextProvider } from 'react-router';
 import { runWithPrisma } from '@classmoji/database';
 import { PrismaPg } from '@classmoji/database/pg-adapter';
+
+import { cloudflareContext } from './context.ts';
 
 /** The Hyperdrive binding's shape (`env.HYPERDRIVE`). */
 export interface HyperdriveBinding {
@@ -29,14 +32,10 @@ export interface WorkerExecutionContext {
   passThroughOnException(): void;
 }
 
-/** React Router's load context on Workers (`context.cloudflare` in loaders). */
-export type WorkerLoadContext<Env = ClassmojiWorkerEnv> = {
-  cloudflare: { env: Env; ctx: WorkerExecutionContext };
-};
-
-export type WorkerRequestHandler<Env> = (
+/** React Router's request handler, as `createRequestHandler` returns it. */
+export type WorkerRequestHandler = (
   request: Request,
-  loadContext: WorkerLoadContext<Env>
+  loadContext: RouterContextProvider
 ) => Promise<Response>;
 
 export interface WorkerHandler<Env> {
@@ -44,7 +43,7 @@ export interface WorkerHandler<Env> {
 }
 
 export function createWorkerHandler<Env extends ClassmojiWorkerEnv>(
-  requestHandler: WorkerRequestHandler<Env>
+  requestHandler: WorkerRequestHandler
 ): WorkerHandler<Env> {
   return {
     async fetch(request, env, ctx) {
@@ -58,7 +57,9 @@ export function createWorkerHandler<Env extends ClassmojiWorkerEnv>(
       const adapter = new PrismaPg({ connectionString });
       // `waitUntil()` from @classmoji/database hands work to this request's
       // ctx.waitUntil, so un-awaited writes outlive the response.
-      return runWithPrisma(adapter, () => requestHandler(request, { cloudflare: { env, ctx } }), {
+      const loadContext = new RouterContextProvider();
+      loadContext.set(cloudflareContext, { env, ctx });
+      return runWithPrisma(adapter, () => requestHandler(request, loadContext), {
         waitUntil: promise => ctx.waitUntil(promise),
       });
     },

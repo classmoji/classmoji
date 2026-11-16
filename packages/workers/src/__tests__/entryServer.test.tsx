@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { Suspense, use } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppLoadContext, EntryContext } from 'react-router';
+import type { EntryContext, RouterContextProvider } from 'react-router';
 
 vi.mock('react-router', () => ({
   ServerRouter: ({ context, url }: { context: { late?: Promise<string> }; url: string }) => (
@@ -58,7 +58,7 @@ function render(
     200,
     new Headers({ 'x-app': 'kept' }),
     { isSpaMode: false, late } as unknown as EntryContext,
-    {} as AppLoadContext
+    {} as RouterContextProvider
   ) as Promise<Response>;
 }
 

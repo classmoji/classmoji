@@ -24,13 +24,13 @@
     "framer-motion": "12.34.2",
     "github-slugger": "2.0.0",
     "lucide-react": "0.563.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "starlight-theme-black": "0.7.1",
     "tailwindcss": "4.3.4"
   },
   "devDependencies": {
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3"
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
   }
 }

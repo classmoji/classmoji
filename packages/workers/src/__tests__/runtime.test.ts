@@ -1,9 +1,12 @@
 /**
  * createWorkerHandler (../runtime.ts): one Prisma client per request on the
  * Hyperdrive connection, the React Router handler run inside it with
- * `{ cloudflare: { env, ctx } }`, and a clear 503 without a binding.
+ * `{ env, ctx }` under `cloudflareContext`, and a clear 503 without a binding.
  */
+import { RouterContextProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { cloudflareContext } from '../context.ts';
 
 const db = vi.hoisted(() => ({
   runs: [] as unknown[],
@@ -57,7 +60,15 @@ describe('createWorkerHandler', () => {
     expect(await response.text()).toBe('ok');
     expect(db.adapters).toEqual([{ connectionString: 'postgres://hyperdrive/db' }]);
     expect(db.runs).toEqual([db.adapters[0]]);
-    expect(requestHandler).toHaveBeenCalledWith(request, { cloudflare: { env, ctx } });
+    expect(requestHandler).toHaveBeenCalledTimes(1);
+    const [received, loadContext] = requestHandler.mock.calls[0] as unknown as [
+      Request,
+      RouterContextProvider,
+    ];
+    expect(received).toBe(request);
+    // React Router 8 refuses any load context that is not a provider.
+    expect(loadContext).toBeInstanceOf(RouterContextProvider);
+    expect(loadContext.get(cloudflareContext)).toEqual({ env, ctx });
   });
 
   it("gives the run the request's ctx.waitUntil", async () => {

@@ -3,6 +3,10 @@ import { actionOriginHosts } from './actionOrigins.js';
 /** @type {import('@react-router/dev/config').Config} */
 export default {
   ssr: true,
+  // One chunk per route module, as before React Router 8 made splitting the
+  // default. No route here exports clientLoader, clientAction,
+  // clientMiddleware or HydrateFallback, so today there is nothing to split.
+  splitRouteModules: false,
   // The public host whose form submissions (document and `.data` actions) are
   // accepted. Fly terminates TLS and server.ts does not set `trust proxy`, so
   // `request.url` is `http://<host>` while the browser sends

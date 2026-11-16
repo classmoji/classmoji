@@ -1,5 +1,5 @@
 /**
- * Server entry for Node (Fly), React Router 7.18.5's own default
+ * Server entry for Node (Fly), React Router 8.5.1's own default
  * (`@react-router/dev/dist/config/defaults/entry.server.node.tsx`), copied
  * byte for byte below this comment, so an app that re-exports
  * `@classmoji/workers/entry-server` renders on Node exactly as it did with no
@@ -12,7 +12,7 @@
 /* eslint-disable -- kept verbatim; see above. */
 import { PassThrough } from "node:stream";
 
-import type { AppLoadContext, EntryContext } from "react-router";
+import type { EntryContext, RouterContextProvider } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { ServerRouter } from "react-router";
 import { isbot } from "isbot";
@@ -26,9 +26,7 @@ export default function handleRequest(
   responseStatusCode: number,
   responseHeaders: Headers,
   routerContext: EntryContext,
-  loadContext: AppLoadContext,
-  // If you have middleware enabled:
-  // loadContext: RouterContextProvider
+  loadContext: RouterContextProvider,
 ) {
   // https://httpwg.org/specs/rfc9110.html#HEAD
   if (request.method.toUpperCase() === "HEAD") {
