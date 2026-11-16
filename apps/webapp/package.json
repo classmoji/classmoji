@@ -109,16 +109,12 @@
     "postcss-simple-vars": "^7.0.1",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.2",
-    "vite": "^6.4.5",
+    "vite": "^8.3.6",
     "vite-env-only": "^3.0.3",
     "vite-plugin-devtools-json": "^0.2.1",
-    "vite-tsconfig-paths": "^4.3.2",
     "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=24.0.0"
-  },
-  "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "4.6.1"
   }
 }

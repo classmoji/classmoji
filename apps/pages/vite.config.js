@@ -1,6 +1,5 @@
 import { reactRouter } from '@react-router/dev/vite';
 import { defaultClientConditions, defaultServerConditions, defineConfig } from 'vite';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import tailwindcss from '@tailwindcss/vite';
 
 // The Sentry plugins a build keeps: the config `buildEnd` reads, hidden source
@@ -11,6 +10,19 @@ const SENTRY_BUILD_PLUGINS = new Set([
   'sentry-react-router-update-source-map-setting',
   'sentry-vite-plugin',
 ]);
+
+// CSS is built for Vite 8's default browsers (`build.cssTarget`), except that
+// media-query range syntax (`width >= 40rem`) is lowered to min-width and
+// max-width: Safari and iOS 15.4-16.3 render nearly all of this CSS but not range
+// syntax, and would lose every breakpoint. Older browsers (below Chrome/Edge
+// 111, Firefox 113, Safari 15.4) were already unsupported: the theme colours
+// are oklch() and the utilities sit in `@layer`. Vite's CSS minifier passes
+// `css.lightningcss` to Lightning CSS with those targets; without this it also
+// rewrites min-width queries (Tailwind's and those in node_modules CSS) into
+// range syntax. The value is Lightning CSS's
+// `Features.MediaIntervalSyntax | Features.MediaRangeSyntax` (64 | 128 in both
+// lightningcss copies installed, 1.31 and 1.33; no app depends on it directly).
+const LOWER_MEDIA_RANGE_SYNTAX = 64 | 128;
 
 export default async ({ command, mode }) => {
   // Source maps for Sentry (error stack traces), only when SENTRY_AUTH_TOKEN is
@@ -53,15 +65,14 @@ export default async ({ command, mode }) => {
   return defineConfig({
     // Strips the Sentry SDK's debug logging from the client bundle.
     define: { __SENTRY_DEBUG__: false },
+    css: { lightningcss: { include: LOWER_MEDIA_RANGE_SYNTAX } },
     ssr: {
       // BlockNote + Mantine have CSS imports that Vite must process during SSR
       noExternal: [/^@blocknote\//, /^@mantine\//],
     },
-    // Vite 6's default conditions, stated here. The React Router plugin reads
-    // them from the `vite` it resolves, the repo root's Vite 5, which has none,
-    // and Vite 6 treats the list it gets as a replacement: the client would
-    // lose `browser`, `@sentry/react-router` would not resolve, and no page
-    // would hydrate under server.ts. Vite merges these with the plugin's.
+    // Vite's default resolve conditions, stated explicitly so the client keeps
+    // `browser` (`@sentry/react-router` needs it). Vite merges these with the
+    // React Router plugin's.
     environments: {
       client: { resolve: { conditions: [...defaultClientConditions] } },
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
@@ -74,6 +85,8 @@ export default async ({ command, mode }) => {
       // already imported") — the editor's fragment and the provider's document
       // would come from different copies.
       dedupe: ['react', 'react-dom', 'react-router', 'yjs'],
+      // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
+      tsconfigPaths: true,
     },
     optimizeDeps: {
       // Pre-bundle the heavy editor deps on startup. Without this they're
@@ -96,7 +109,7 @@ export default async ({ command, mode }) => {
       entries: ['./app/root.jsx'],
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
-    plugins: [tailwindcss(), reactRouter(), tsconfigPaths(), ...sentryPlugins],
+    plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 7100,
       host: '0.0.0.0',
@@ -116,13 +129,18 @@ export default async ({ command, mode }) => {
       allowedHosts: process.env.NODE_ENV === 'production' ? ['.lvh.me', '.localhost'] : true,
       // Playwright writes its HTML report and per-test artifacts inside this
       // app while specs run against this server; a watched write there makes
-      // Vite reload the page under test. Vite 6 already ignores
+      // Vite reload the page under test. Vite already ignores
       // `**/test-results/**`; the report directory it does not.
       watch: {
         ignored: ['**/playwright-report/**', '**/tests/test-results/**'],
       },
     },
     build: {
+      // Vite 6's default target. Vite 8 raised its own default to Chrome/Edge
+      // 111, Firefox 114 and Safari 16.4; this keeps the browsers we supported.
+      target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
+      // Vite 8's default browsers; see LOWER_MEDIA_RANGE_SYNTAX.
+      cssTarget: ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'],
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,
     },
   });

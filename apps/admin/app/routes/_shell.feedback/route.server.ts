@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import type { Prisma } from '@prisma/client';
-import { ClassmojiService } from '@classmoji/services';
+import * as feedbackService from '@classmoji/services/feedback';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 
 /**
@@ -103,14 +103,14 @@ export async function loadFeedback({ request }: LoaderFunctionArgs) {
         })
       )
     ),
-    category === 'FEATURE' ? ClassmojiService.feedback.listFeatureRanking() : Promise.resolve([]),
+    category === 'FEATURE' ? feedbackService.listFeatureRanking() : Promise.resolve([]),
   ]);
   const roles = new Map(ranking.map(r => [r.id, r.roles]));
 
-  const selected = postId ? await ClassmojiService.feedback.getPost(postId, admin.id) : null;
+  const selected = postId ? await feedbackService.getPost(postId, admin.id) : null;
   const [voters, mergeTargets] = selected
     ? await Promise.all([
-        ClassmojiService.feedback.listFeatureVoters(selected.id),
+        feedbackService.listFeatureVoters(selected.id),
         prisma.feedbackPost.findMany({
           where: {
             category: selected.category,
@@ -130,10 +130,8 @@ export async function loadFeedback({ request }: LoaderFunctionArgs) {
     query: q,
     tab,
     webappUrl: process.env.WEBAPP_URL ?? 'http://localhost:3000',
-    statuses: ClassmojiService.feedback.FEEDBACK_STATUSES_BY_CATEGORY[
-      category
-    ] as readonly string[],
-    statusLabels: ClassmojiService.feedback.FEEDBACK_STATUS_LABELS as Record<string, string>,
+    statuses: feedbackService.FEEDBACK_STATUSES_BY_CATEGORY[category] as readonly string[],
+    statusLabels: feedbackService.FEEDBACK_STATUS_LABELS as Record<string, string>,
     categoryCounts: Object.fromEntries(CATEGORIES.map((c, i) => [c, categoryCounts[i]])) as Record<
       Category,
       number
@@ -209,7 +207,7 @@ export async function feedbackAction({ request }: ActionFunctionArgs) {
   const intent = String(form.get('intent') ?? '');
   const postId = String(form.get('postId') ?? '');
   if (!postId) return { error: 'No post named.' };
-  const svc = ClassmojiService.feedback;
+  const svc = feedbackService;
   try {
     if (intent === 'status') {
       const raw = String(form.get('status') ?? '');

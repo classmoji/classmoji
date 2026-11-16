@@ -44,10 +44,6 @@ RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --legacy-peer-deps --no-audit 
     --maxsockets=5 --cache=/tmp/npm-ci-cache \
     && rm -rf /tmp/npm-ci-cache
 
-# Fix lightningcss / tailwind oxide for Alpine
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-save lightningcss @tailwindcss/oxide
-
 # Generate Prisma client at build time
 COPY packages/database/schema.prisma packages/database/
 # Only the Node client (`client`); `workerClient` is for Cloudflare Workers builds.
