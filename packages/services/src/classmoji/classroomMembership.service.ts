@@ -1,4 +1,9 @@
-import getPrisma, { GIT_IDENTITY, gitScopeProvider, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  USER_STAFF_VIEW_SELECT,
+  gitScopeProvider,
+  whereGitUsername,
+} from '@classmoji/database';
 import { withLogin, withLogins } from '@classmoji/utils';
 import { findClassroomGitProvider, findClassroomGitScope } from './classroomGitProvider.ts';
 import * as planOwnerService from './planOwner.service.ts';
@@ -179,7 +184,7 @@ export const findByClassroomId = async (classroomId: string, role: Role | null =
   const memberships = await getPrisma().classroomMembership.findMany({
     where,
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
     orderBy: {
       user: {
@@ -211,7 +216,7 @@ export const findStaff = async (classroomId: string) => {
       role: { in: ['OWNER', 'TEACHER'] satisfies Role[] },
     },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
   });
   return withLogins(memberships, await findClassroomGitProvider(classroomId));
@@ -229,7 +234,7 @@ export const findGraders = async (classroomId: string) => {
       is_grader: true,
     },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
   });
   return withLogins(memberships, await findClassroomGitProvider(classroomId));
@@ -549,7 +554,7 @@ export const findUsersByRole = async (
       ...filters,
     },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
     orderBy: {
       user: {
@@ -596,7 +601,7 @@ export const findUsersByRoles = async (
       ...filters,
     },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
     orderBy: [{ is_grader: 'desc' }, { user: { name: 'asc' } }],
   });
@@ -641,6 +646,33 @@ export const isMember = async (classroomId: string, userId: string) => {
     select: { id: true },
   });
   return Boolean(membership);
+};
+
+/**
+ * Of `userIds`, the users holding a STUDENT membership in `classroomId`, as
+ * `{ id, name, login }` (login on the classroom's git provider), in the order
+ * given and each once. Anything that is not a non-empty string is dropped.
+ */
+export const studentsInClassroomByIds = async (
+  classroomId: string,
+  userIds: readonly unknown[]
+): Promise<{ id: string; name: string | null; login: string | null }[]> => {
+  const wanted = [
+    ...new Set(userIds.filter((id): id is string => typeof id === 'string' && id !== '')),
+  ];
+  if (!classroomId || wanted.length === 0) return [];
+  const rows = await getPrisma().classroomMembership.findMany({
+    where: { classroom_id: classroomId, role: 'STUDENT', user_id: { in: wanted } },
+    select: { user: { select: { id: true, name: true, ...GIT_IDENTITY } } },
+  });
+  const provider = await findClassroomGitProvider(classroomId);
+  const byId = new Map(
+    rows.map(({ user }) => {
+      const { id, name, login } = withLogin(user, provider);
+      return [id, { id, name, login }] as const;
+    })
+  );
+  return wanted.flatMap(id => byId.get(id) ?? []);
 };
 
 /**

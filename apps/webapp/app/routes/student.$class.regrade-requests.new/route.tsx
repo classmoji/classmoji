@@ -19,8 +19,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_new_regrade_form',
   });
 
-  // Fetch both individual AND team assignments so team assignments appear in dropdown
-  const studentAssignments = await ClassmojiService.helper.findAllAssignmentsForStudent(
+  // Individual AND team submissions, as the form's dropdown lists them: the
+  // submission id it posts back and the assignment title it shows.
+  const studentAssignments = await ClassmojiService.helper.findRegradeOptionsForStudent(
     userId,
     params.class!
   );
@@ -92,12 +93,10 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
             onChange={setAssignment}
             value={assignment}
             defaultValue={assignment}
-            options={studentAssignments.map(
-              (repoAssignment: { id: string; assignment: { title: string } }) => ({
-                label: repoAssignment.assignment.title,
-                value: repoAssignment.id,
-              })
-            )}
+            options={studentAssignments.map(repoAssignment => ({
+              label: repoAssignment.assignment.title,
+              value: repoAssignment.id,
+            }))}
           />
         </Form.Item>
 
@@ -117,7 +116,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const repositoryAssignment = await ClassmojiService.gitRepoAssignment.findById(
+  const repositoryAssignment = await ClassmojiService.gitRepoAssignment.findForRegradeRequest(
     data.git_repo_assignment_id
   );
 
@@ -136,7 +135,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // key was missed in the repository→gitRepo rename and made every run fail.
     const run = await tasks.trigger('request_regrade', {
       classroom_id: classroom.id,
-      gitRepoAssignment: repositoryAssignment,
+      // What the task reads: ids, titles, repo name and the graders' emails.
+      gitRepoAssignment:
+        ClassmojiService.gitRepoAssignment.regradeTaskSubmission(repositoryAssignment),
       student_id: userId, // Use authenticated userId, NOT data.student_id
       student_comment: data.student_comment,
       previous_grade: repositoryAssignment.grades.map(grade => grade.emoji),

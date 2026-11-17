@@ -1,4 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { USER_PUBLIC_SELECT } from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS, withLogins } from '@classmoji/utils';
 import { uniqueViolationTarget } from './uniqueViolation.ts';
 import { ContentService } from '../content/ContentService.ts';
@@ -114,7 +114,7 @@ const CREATE_INCLUDE = {
       git_organization: true,
     },
   },
-  creator: { include: GIT_IDENTITY },
+  creator: { select: USER_PUBLIC_SELECT },
   links: {
     include: {
       repository: true,
@@ -713,7 +713,7 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
               },
             }
           : false,
-      creator: (options.includeCreator ?? false) ? { include: GIT_IDENTITY } : false,
+      creator: (options.includeCreator ?? false) ? { select: USER_PUBLIC_SELECT } : false,
       links:
         (options.includeLinks ?? false)
           ? {
@@ -746,7 +746,7 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
               },
             }
           : false,
-      creator: (options.includeCreator ?? true) ? { include: GIT_IDENTITY } : false,
+      creator: (options.includeCreator ?? true) ? { select: USER_PUBLIC_SELECT } : false,
       links:
         (options.includeLinks ?? false)
           ? {
@@ -781,7 +781,7 @@ export async function findByRepository(repositoryId: string) {
               git_organization: true,
             },
           },
-          creator: { include: GIT_IDENTITY },
+          creator: { select: USER_PUBLIC_SELECT },
         },
       },
     },
@@ -809,7 +809,7 @@ export async function findByAssignment(assignmentId: string) {
               git_organization: true,
             },
           },
-          creator: { include: GIT_IDENTITY },
+          creator: { select: USER_PUBLIC_SELECT },
         },
       },
     },
@@ -956,7 +956,7 @@ export async function update(
           git_organization: true,
         },
       },
-      creator: { include: GIT_IDENTITY },
+      creator: { select: USER_PUBLIC_SELECT },
       links: {
         include: {
           repository: true,
@@ -1071,7 +1071,7 @@ export async function findByContentPath(
               },
             }
           : false,
-      creator: (options.includeCreator ?? false) ? { include: GIT_IDENTITY } : false,
+      creator: (options.includeCreator ?? false) ? { select: USER_PUBLIC_SELECT } : false,
       links:
         (options.includeLinks ?? false)
           ? {

@@ -14,6 +14,7 @@ import { closeLiveDeck, liveEditingEnv } from '~/utils/collab/collab.server';
 import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { classroomWriteRefusal } from '~/utils/classroomWrites';
 
 export const loader = async ({
   params,
@@ -123,6 +124,13 @@ export const action = async ({
   if ((slide as { classroom?: { slug?: string } }).classroom?.slug !== classroomSlug) {
     return { error: 'Slide does not belong to this classroom' };
   }
+
+  // Deleting writes: in a LOCKED or UNPUBLISHED classroom only the owner may.
+  const locked = classroomWriteRefusal(
+    (slide as { classroom?: { status?: string } }).classroom?.status,
+    membership?.role
+  );
+  if (locked) return locked;
 
   // The form is one field, read only now, after the gate above, and through the
   // byte-counting reader.

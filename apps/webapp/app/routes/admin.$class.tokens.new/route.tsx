@@ -247,6 +247,20 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/** The user id a submitted student selection names (an object or its JSON), or null. */
+const studentIdOf = (selection: unknown): string | null => {
+  let value = selection;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const id = (value as { id?: unknown } | null)?.id;
+  return typeof id === 'string' && id !== '' ? id : null;
+};
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
@@ -275,13 +289,24 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async assignTokens() {
       const { num_tokens, students, description } = data;
 
-      if (!students || students.length === 0) {
+      if (!Array.isArray(students) || students.length === 0) {
         throw new Error('No students selected for token assignment');
       }
 
-      const payloads = students.map((student: string) => ({
+      // Each selection is a student (or its JSON); only its id is read, and
+      // only students of this classroom get a grant. The run names the student
+      // (the progress panel's row) from the classroom's own records.
+      const recipients = await ClassmojiService.classroomMembership.studentsInClassroomByIds(
+        classroom.id,
+        students.map(studentIdOf)
+      );
+      if (recipients.length === 0) {
+        throw new Error('No students of this class were selected for token assignment');
+      }
+
+      const payloads = recipients.map(student => ({
         payload: {
-          student: typeof student === 'string' ? JSON.parse(student) : student,
+          student,
           classroomId: classroom.id,
           amount: parseInt(num_tokens, 10),
           // Omit when blank; sending null breaks the non-nullable description column.

@@ -1,4 +1,8 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  USER_PUBLIC_SELECT,
+  USER_STAFF_VIEW_SELECT,
+} from '@classmoji/database';
 import { displayUsername, sortNaturallyBy, withLogins } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
@@ -53,10 +57,14 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
       classroom: { slug: classroomSlug },
       repository_id: repositoryId,
     },
+    // Staff-facing: students and team members with the contact columns staff
+    // may read, graders as anyone sees them.
     include: {
-      student: { include: GIT_IDENTITY },
+      student: { select: USER_STAFF_VIEW_SELECT },
       // Members ride along so a team row can name who is on it.
-      team: { include: { memberships: { include: { user: { include: GIT_IDENTITY } } } } },
+      team: {
+        include: { memberships: { include: { user: { select: USER_STAFF_VIEW_SELECT } } } },
+      },
       repository: true,
       assignments: {
         include: {
@@ -70,12 +78,12 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
           grades: {
             include: {
               token_transaction: true,
-              grader: { include: GIT_IDENTITY },
+              grader: { select: USER_PUBLIC_SELECT },
             },
           },
           graders: {
             include: {
-              grader: { include: GIT_IDENTITY },
+              grader: { select: USER_PUBLIC_SELECT },
             },
           },
         },
@@ -101,7 +109,7 @@ export const findMany = async (query: Prisma.GitRepoWhereInput) => {
       where: query,
       include: {
         repository: true,
-        student: { include: GIT_IDENTITY },
+        student: { select: USER_STAFF_VIEW_SELECT },
         assignments: {
           include: {
             assignment: true,
@@ -113,7 +121,7 @@ export const findMany = async (query: Prisma.GitRepoWhereInput) => {
             },
             graders: {
               include: {
-                grader: { include: GIT_IDENTITY },
+                grader: { select: USER_PUBLIC_SELECT },
               },
             },
           },

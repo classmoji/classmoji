@@ -4,6 +4,7 @@ import type { ShouldRevalidateFunctionArgs } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { classroomForClient } from '~/utils/classroomForClient';
 import FormModule from './FormModule';
 import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
@@ -62,6 +63,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
   const slides = await getPrisma().slide.findMany({
     where: { classroom_id: classroom.id },
+    // Live presentation credentials, not linking options.
+    omit: { multiplex_id: true, multiplex_secret: true },
     include: {
       links: {
         include: { repository: true },
@@ -87,7 +90,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     repository,
     isNew: !repository,
     tags,
-    classroom,
+    classroom: classroomForClient(classroom),
     pages,
     slides,
     hasReposWithProjects,

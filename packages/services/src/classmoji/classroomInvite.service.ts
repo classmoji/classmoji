@@ -62,27 +62,20 @@ export const findInvitesByClassroomId = async (
 };
 
 /**
- * Delete an invite by ID
- * @param {string} id - UUID of the invite
- * @returns {Promise<Object>}
+ * Delete one pending invite of a classroom. The invite is deleted only where
+ * it belongs to `classroomId`; returns false (nothing deleted) for an invite
+ * of another classroom, an unknown id, or a value that is not a non-empty
+ * string.
  */
-export const deleteInvite = async (
-  id: string
-): Promise<Prisma.ClassroomInviteGetPayload<Record<string, never>>> => {
-  return getPrisma().classroomInvite.delete({
-    where: { id },
+export const deleteInviteInClassroom = async (
+  classroomId: string,
+  id: unknown
+): Promise<boolean> => {
+  if (typeof id !== 'string' || id === '' || !classroomId) return false;
+  const { count } = await getPrisma().classroomInvite.deleteMany({
+    where: { id, classroom_id: classroomId },
   });
-};
-
-/**
- * Delete multiple invites by IDs - used when student claims invites
- * @param {string[]} ids - Array of UUIDs
- * @returns {Promise<{count: number}>}
- */
-export const deleteManyInvites = async (ids: string[]): Promise<{ count: number }> => {
-  return getPrisma().classroomInvite.deleteMany({
-    where: { id: { in: ids } },
-  });
+  return count > 0;
 };
 
 /**

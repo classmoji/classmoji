@@ -10,12 +10,27 @@ export const create = async (classroomId: string, name: string) => {
   });
 };
 
-const deleteTag = async (tagId: string) => {
-  return getPrisma().tag.delete({
-    where: { id: tagId },
+/**
+ * Delete one tag of a classroom. The tag is deleted only where it belongs to
+ * `classroomId`; returns the deleted tag's id and name, or null (nothing
+ * deleted) for a tag id of another classroom, an unknown id, or a value that
+ * is not a non-empty string.
+ */
+export const deleteInClassroom = async (
+  classroomId: string,
+  tagId: unknown
+): Promise<{ id: string; name: string } | null> => {
+  if (typeof tagId !== 'string' || tagId === '' || !classroomId) return null;
+  return getPrisma().$transaction(async tx => {
+    const tag = await tx.tag.findFirst({
+      where: { id: tagId, classroom_id: classroomId },
+      select: { id: true, name: true },
+    });
+    if (!tag) return null;
+    const { count } = await tx.tag.deleteMany({ where: { id: tag.id, classroom_id: classroomId } });
+    return count > 0 ? tag : null;
   });
 };
-export { deleteTag as delete };
 
 export const findByClassroomId = async (classroomId: string) => {
   return getPrisma().tag.findMany({

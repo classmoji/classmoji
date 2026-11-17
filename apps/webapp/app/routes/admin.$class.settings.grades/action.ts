@@ -27,6 +27,43 @@ export const parseRemapMappings = (
   return out;
 };
 
+/**
+ * The emoji row the settings table sends (`EmojiMapping.tsx`): its emoji and
+ * grade, and optionally its bonus tokens and description. Null when the emoji
+ * or the grade is missing or malformed. Any other field in the body is not
+ * read.
+ */
+export const parseEmojiMappingInput = (
+  body: unknown
+): { emoji: string; grade: number; extra_tokens?: number; description?: string } | null => {
+  const { emoji, grade, extra_tokens, description } = (body ?? {}) as Record<string, unknown>;
+  if (typeof emoji !== 'string' || !emoji.trim() || emoji.length > 100) return null;
+  if (typeof grade !== 'number' || !Number.isFinite(grade)) return null;
+  return {
+    emoji,
+    grade,
+    ...(typeof extra_tokens === 'number' && Number.isInteger(extra_tokens) && extra_tokens >= 0
+      ? { extra_tokens }
+      : {}),
+    ...(typeof description === 'string' ? { description: description.slice(0, 500) } : {}),
+  };
+};
+
+/**
+ * The letter grade row the settings table sends (`LetterGradeMapping.tsx`):
+ * its label and minimum grade. Null when either is missing or malformed.
+ */
+export const parseLetterGradeInput = (
+  body: unknown
+): { letter_grade: string; min_grade: number } | null => {
+  const { letter_grade, min_grade } = (body ?? {}) as Record<string, unknown>;
+  if (typeof letter_grade !== 'string' || !letter_grade.trim() || letter_grade.length > 8) {
+    return null;
+  }
+  if (typeof min_grade !== 'number' || !Number.isFinite(min_grade)) return null;
+  return { letter_grade, min_grade };
+};
+
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -37,6 +74,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
+
+  /** One audit row per scale change, as the MCP mapping tools write. */
+  const auditScale = async (
+    action: 'UPDATE' | 'DELETE',
+    resourceId: string | null,
+    metadata: Record<string, unknown>
+  ) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'SETTINGS',
+      ...(resourceId ? { resourceId } : {}),
+      metadata: { ...metadata, ...(await impersonationAuditFields(request)) },
+      dedupe: false,
+    });
 
   return namedAction(request, {
     async saveGradingSettings() {
@@ -56,19 +110,54 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async saveEmojiToGradeMapping() {
-      return ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, data);
+      const input = parseEmojiMappingInput(data);
+      if (!input) return { error: 'Enter an emoji and a numeric grade.' };
+      const mapping = await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, input);
+      await auditScale('UPDATE', mapping.id, {
+        tool: 'web:settings.grades.emoji_mapping_upsert',
+        emoji: input.emoji,
+        grade: input.grade,
+      });
+      return mapping;
     },
 
     async deleteEmojiToGradeMapping() {
-      return ClassmojiService.emojiMapping.deleteEmojiMapping(classroom.id, data.emoji);
+      const { count } = await ClassmojiService.emojiMapping.deleteEmojiMapping(
+        classroom.id,
+        data?.emoji
+      );
+      if (count > 0) {
+        await auditScale('DELETE', null, {
+          tool: 'web:settings.grades.emoji_mapping_delete',
+          emoji: data.emoji,
+        });
+      }
+      return { deleted: count };
     },
 
     async saveLetterGradeMapping() {
-      return ClassmojiService.letterGradeMapping.save(classroom.id, data);
+      const input = parseLetterGradeInput(data);
+      if (!input) return { error: 'Enter a letter grade and a numeric minimum.' };
+      const mapping = await ClassmojiService.letterGradeMapping.save(classroom.id, input);
+      await auditScale('UPDATE', mapping.id, {
+        tool: 'web:settings.grades.letter_grade_mapping_upsert',
+        letter_grade: input.letter_grade,
+        min_grade: input.min_grade,
+      });
+      return mapping;
     },
 
     async deleteLetterGradeMapping() {
-      await ClassmojiService.letterGradeMapping.delete(classroom.id, data.letter_grade);
+      const { count } = await ClassmojiService.letterGradeMapping.delete(
+        classroom.id,
+        data?.letter_grade
+      );
+      if (count > 0) {
+        await auditScale('DELETE', null, {
+          tool: 'web:settings.grades.letter_grade_mapping_delete',
+          letter_grade: data.letter_grade,
+        });
+      }
       return { success: 'Deleted mapping successfully.' };
     },
 

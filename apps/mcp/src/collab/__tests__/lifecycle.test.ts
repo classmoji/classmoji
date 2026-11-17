@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/database', () => ({
   GIT_IDENTITY: {},
+  GIT_IDENTITY_PUBLIC: {},
+  USER_PUBLIC_SELECT: {},
+  USER_STAFF_VIEW_SELECT: {},
   default: () => ({
     classroom: { findUnique: (...a: unknown[]) => mocks.classroomFindUnique(...a) },
     collabDoc: { findUnique: (...a: unknown[]) => mocks.collabDocFindUnique(...a) },
