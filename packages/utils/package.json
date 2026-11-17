@@ -14,6 +14,7 @@
     "./upload-concurrency": "./src/uploadConcurrency.ts",
     "./input-caps": "./src/inputCaps.ts",
     "./zod-formats": "./src/zodFormats.ts",
+    "./email": "./src/email.ts",
     "./quiz-agent": "./src/quizAgent/index.ts",
     "./quiz-agent/limits": "./src/quizAgent/limits.ts",
     "./quiz-agent/copy": "./src/quizAgent/copy.ts",

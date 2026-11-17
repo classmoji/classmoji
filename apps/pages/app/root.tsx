@@ -92,9 +92,7 @@ const findRootUser = async (userId: string) => {
   return user ? withLogin(user) : null;
 };
 
-const loadRoot = async ({ request }: { request: Request }) => {
-  const url = new URL(request.url);
-
+const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   // Class websites are public, anonymous and script-less. This MUST come before
   // any auth work: the redirect below would otherwise bounce every visitor to
   // the webapp login. These paths are only reachable via the host middleware's
@@ -202,7 +200,7 @@ const loadRoot = async ({ request }: { request: Request }) => {
   return { user, isSite: false };
 };
 
-export const loader = async (args: { request: Request }) => {
+export const loader = async (args: { request: Request; url: URL }) => {
   const result = await loadRoot(args);
   // Class sites ship no bundle (and their CSP allows no other script), so only
   // the app documents get the browser's Sentry settings. Read from the

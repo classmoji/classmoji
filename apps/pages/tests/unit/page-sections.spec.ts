@@ -1739,7 +1739,9 @@ test.describe('the page loader', () => {
   });
 
   test('a sign-in link goes only to a signed-out reader', () => {
-    expect(loaderBody).toContain('signInUrl: authData?.userId ? null : signInUrlFor(request.url),');
+    // `url`, React Router's normalized one: `request.url` is the `.data` fetch
+    // on a client-side navigation, not the page.
+    expect(loaderBody).toContain('signInUrl: authData?.userId ? null : signInUrlFor(url.href),');
   });
 });
 

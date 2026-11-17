@@ -200,9 +200,7 @@ const askMojiRootConfig = async (
   };
 };
 
-const loadRoot = async ({ request }: Route.LoaderArgs) => {
-  const url = new URL(request.url);
-
+const loadRoot = async ({ request, url }: Route.LoaderArgs) => {
   // Redirect to setup wizard if requested
   if (process.env.SETUP_GITHUB_APP && !url.pathname.startsWith('/setup')) {
     return redirect('/setup');

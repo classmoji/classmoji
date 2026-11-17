@@ -43,7 +43,7 @@
 ### Technology Stack
 
 **Frontend**
-- React 19 with React Router 7
+- React 19 with React Router 8
 - TailwindCSS for styling
 - Remix-style route-based architecture
 
@@ -90,7 +90,7 @@
 ```
 classmoji/
 ├── apps/
-│   ├── webapp/          # React Router 7 frontend
+│   ├── webapp/          # React Router 8 frontend
 │   ├── ai-agent/        # Private submodule: the quiz and Ask Moji Trigger.dev chat agents
 │   ├── hook-station/    # Webhook listener
 │   └── docs/            # Documentation

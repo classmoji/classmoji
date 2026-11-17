@@ -74,11 +74,12 @@ export const themeFor = (themeKey: string | null | undefined): CanvasTheme => {
  *
  * Same shape `formAuth.server.ts` builds for the admin surfaces — the webapp
  * owns login, and `redirect` brings them back to the form afterwards rather
- * than to a dashboard they did not ask for.
+ * than to a dashboard they did not ask for. `url` is the loader's normalized
+ * one: `request.url` is the `.data` fetch on a client-side navigation.
  */
-export const loginUrlFor = (request: Request): string => {
+export const loginUrlFor = (url: URL): string => {
   const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
-  return `${webappUrl}?redirect=${encodeURIComponent(request.url)}`;
+  return `${webappUrl}?redirect=${encodeURIComponent(url.href)}`;
 };
 
 const notFound = (): never => {
@@ -99,10 +100,12 @@ export async function loadPublicForm({
   classroomSlug,
   formSlug,
   request,
+  url,
 }: {
   classroomSlug: string;
   formSlug: string;
   request: Request;
+  url: URL;
 }): Promise<PublicFormLoad> {
   const classroom = await prisma.classroom.findFirst({
     where: { slug: classroomSlug },
@@ -134,7 +137,7 @@ export async function loadPublicForm({
       theme,
       classroomName,
       request,
-      loginUrl: loginUrlFor(request),
+      loginUrl: loginUrlFor(url),
     });
   }
 

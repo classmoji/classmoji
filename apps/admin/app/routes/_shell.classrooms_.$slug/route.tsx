@@ -19,8 +19,12 @@ import { classroomAction, loadClassroom, type ClassroomTab } from './route.serve
 export const loader = loadClassroom;
 export const action = classroomAction;
 
-export const meta = ({ data }: { data?: { classroom?: { name: string } } }) => [
-  { title: data?.classroom ? `${data.classroom.name} · Classmoji Admin` : 'Classroom · Admin' },
+export const meta = ({ loaderData }: { loaderData?: { classroom?: { name: string } } }) => [
+  {
+    title: loaderData?.classroom
+      ? `${loaderData.classroom.name} · Classmoji Admin`
+      : 'Classroom · Admin',
+  },
 ];
 
 type Data = Awaited<ReturnType<typeof loadClassroom>>;

@@ -146,6 +146,7 @@ export { NO_STORE };
 export interface TeamsRouteArgs {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }
 
 /**
@@ -416,10 +417,10 @@ async function setFor(
  * @throws Response 302 (no session), 403, 404 — loaders let them propagate.
  */
 export async function requireTeamsForm(
-  { params, request }: TeamsRouteArgs,
+  { params, request, url }: TeamsRouteArgs,
   action = 'view_team_sets'
 ): Promise<TeamsFormContext> {
-  const access = await assertFormAdmin(params.classroomSlug ?? '', request, { action });
+  const access = await assertFormAdmin(params.classroomSlug ?? '', { request, url }, { action });
   const context = await formFor(access, params.formSlug);
   if (!context) throw notFound();
   return context;
@@ -1558,7 +1559,7 @@ function refusedBy(intent: SetIntent, error: unknown): SetActionData {
  * service. Success answers `{ intent, ok }` (plus `preview` / `missedTeams`),
  * or redirects: `run` to the new run, `new-set-from-setup` to the new set.
  */
-export async function setAction({ params, request }: TeamsRouteArgs) {
+export async function setAction({ params, request, url }: TeamsRouteArgs) {
   let body: unknown = null;
   try {
     body = await request.json();
@@ -1577,9 +1578,13 @@ export async function setAction({ params, request }: TeamsRouteArgs) {
 
   let access: FormAdminContext;
   try {
-    access = await assertFormAdmin(params.classroomSlug ?? '', request, {
-      action: `team_set_${intent}`,
-    });
+    access = await assertFormAdmin(
+      params.classroomSlug ?? '',
+      { request, url },
+      {
+        action: `team_set_${intent}`,
+      }
+    );
   } catch (thrown) {
     if (thrown instanceof Response && thrown.status === 403) {
       // Not staff here (or not Pro): no role reaches the gate below.
@@ -1887,7 +1892,7 @@ const listRefusal = (
  * already has is refused (`name_taken`) rather than opened — saveConfig with
  * an existing name updates that set. Redirects to the new set's Setup.
  */
-export async function listAction({ params, request }: TeamsRouteArgs) {
+export async function listAction({ params, request, url }: TeamsRouteArgs) {
   let body: unknown = null;
   try {
     body = await request.json();
@@ -1900,7 +1905,11 @@ export async function listAction({ params, request }: TeamsRouteArgs) {
 
   let access: FormAdminContext;
   try {
-    access = await assertFormAdmin(params.classroomSlug ?? '', request, { action: 'team_set_new' });
+    access = await assertFormAdmin(
+      params.classroomSlug ?? '',
+      { request, url },
+      { action: 'team_set_new' }
+    );
   } catch (thrown) {
     if (thrown instanceof Response && thrown.status === 403) {
       return data(listRefusal(teamsErrorView('unknown')), { status: 403 });

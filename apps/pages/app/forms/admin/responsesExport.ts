@@ -42,11 +42,18 @@ const GATE_ACTION = 'export_responses';
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
-  await requireFormForResponses(params.classroomSlug!, params.formSlug!, request, GATE_ACTION);
+  await requireFormForResponses(
+    params.classroomSlug!,
+    params.formSlug!,
+    { request, url },
+    GATE_ACTION
+  );
   return new Response('Use POST to export responses.', {
     status: 405,
     headers: { Allow: 'POST', 'Cache-Control': 'no-store' },
@@ -56,14 +63,16 @@ export const loader = async ({
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const context = await requireFormForResponses(
     params.classroomSlug!,
     params.formSlug!,
-    request,
+    { request, url },
     GATE_ACTION
   );
 

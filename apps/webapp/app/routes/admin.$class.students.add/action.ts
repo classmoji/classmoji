@@ -38,6 +38,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       added: result.addedExistingUsers,
       invited: result.invitedNewUsers,
       already_enrolled: result.alreadyEnrolled.length,
+      invalid: result.invalid.length,
     },
     // Two batches added a few seconds apart are two roster changes.
     dedupe: false,
@@ -58,6 +59,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     messages.push(`${added} student${added !== 1 ? 's' : ''} invited to the class.`);
   }
   if (already > 0) messages.push(`${already} already in the class.`);
+  // The form skips these before submitting; this is the server refusing one
+  // that got past it.
+  if (result.invalid.length > 0) {
+    messages.push(
+      `Skipped ${result.invalid.length} invalid email${result.invalid.length !== 1 ? 's' : ''}: ${result.invalid.join(', ')}`
+    );
+  }
 
   return {
     action: 'ADD_STUDENTS',

@@ -12,7 +12,7 @@ import { staffRedirectFromStudentRoute } from '~/utils/studentRouteRedirect.serv
  * `repositories` value from before that screen was removed falls through to
  * the dashboard like any other unknown value.
  */
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({ params, request, url }: Route.LoaderArgs) => {
   let classroom;
 
   try {
@@ -25,7 +25,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Staff go to their own section's dashboard, as the layout sends them
     // (#403). The layout's redirect normally wins; this keeps the index from
     // sending them to / if it ever doesn't.
-    const staffRedirect = await staffRedirectFromStudentRoute(request, params.class!, error);
+    const staffRedirect = await staffRedirectFromStudentRoute(
+      { request, url },
+      params.class!,
+      error
+    );
     if (staffRedirect) return staffRedirect;
     // If auth fails (401/403), redirect to home instead of showing error
     if (error instanceof Response && (error.status === 401 || error.status === 403)) {

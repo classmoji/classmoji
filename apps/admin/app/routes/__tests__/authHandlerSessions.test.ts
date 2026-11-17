@@ -18,6 +18,7 @@ const handler = vi.fn();
 vi.mock('@classmoji/auth/server', () => ({ auth: { handler: (r: Request) => handler(r) } }));
 
 const route = await import('../api.auth.$.ts');
+const { routerUrl } = await import('~/__tests__/support/routerUrl.ts');
 
 const ORIGIN = 'http://localhost:7500';
 const BASE = `${ORIGIN}/api/auth`;
@@ -28,7 +29,11 @@ const betterAuthResponse = (body: unknown) => {
   return new Response(JSON.stringify(body), { status: 200, headers });
 };
 
-/** A request as the route gets it: GET, HEAD and OPTIONS to the loader, the rest to the action. */
+/**
+ * A request as the route gets it: GET, HEAD and OPTIONS to the loader, the
+ * rest to the action, with React Router 8's normalized `url` beside the raw
+ * request.
+ */
 function send(url: string, method = 'GET', body?: unknown): Promise<Response> {
   const request = new Request(url, {
     method,
@@ -37,7 +42,7 @@ function send(url: string, method = 'GET', body?: unknown): Promise<Response> {
       : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
   });
   const run = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? route.loader : route.action;
-  return run({ request } as never) as Promise<Response>;
+  return run({ request, url: routerUrl(url) } as never) as Promise<Response>;
 }
 
 beforeEach(() => {
@@ -105,6 +110,7 @@ describe('admin api.auth.$: everything else is 404, before better-auth', () => {
     ['GET', '/admin/list-users'],
     ['POST', '/admin/set-user-password'],
     ['GET', '/get-session'],
+    ['GET', '/get-session.data?_routes=root'],
     ['POST', '/sign-in/email'],
     ['POST', '/sign-up/email'],
     ['POST', '/sign-in/social'],
@@ -137,6 +143,11 @@ describe('admin api.auth.$: everything else is 404, before better-auth', () => {
       '/api/auth/admin/impersonate-user/../../oauth2/register',
     ],
     ['a path parameter', '/api/auth/sign-out;x=1'],
+    // A client-navigation spelling: React Router routes it here with `url`
+    // normalized, but the match is on the raw path better-auth would get.
+    ['a .data suffix on a call this app makes', '/api/auth/sign-out.data'],
+    ['a .data suffix and _routes', '/api/auth/admin/impersonate-user.data?_routes=root'],
+    ['a .data suffix on registration', '/api/auth/oauth2/register.data?_routes=root'],
     ['an encoded NUL', '/api/auth/sign-out%00'],
     ['an encoded letter', '/api/auth/sign-ou%74'],
     ['no auth path', '/sign-out'],

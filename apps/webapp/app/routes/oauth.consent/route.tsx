@@ -65,8 +65,8 @@ export const INVALID_REDIRECT_MESSAGE = 'The application returned an invalid red
 /** The Client ID Metadata Document discovery's id (@better-auth/cimd). */
 const CIMD_DISCOVERY_ID = 'cimd';
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const signed = await verifiedAuthorizationQuery(new URL(request.url).search);
+export const loader = async ({ request, url }: LoaderFunctionArgs) => {
+  const signed = await verifiedAuthorizationQuery(url.search);
   if (!signed) return { state: 'invalid' as const };
 
   const clientId = signed.get('client_id');

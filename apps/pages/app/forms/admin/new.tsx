@@ -32,15 +32,21 @@ import { FORM_PRESETS, presetByKey, type FormAccessMode } from '~/components/for
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   // The child route gates too. It is reachable directly by URL, and its action
   // is a create endpoint.
-  const { membership } = await assertFormAdmin(params.classroomSlug!, request, {
-    action: 'new_form',
-  });
+  const { membership } = await assertFormAdmin(
+    params.classroomSlug!,
+    { request, url },
+    {
+      action: 'new_form',
+    }
+  );
   return {
     // Where backing out goes. This drawer's dominant entry point is the
     // webapp's New Form button, so Cancel and Escape have to return THERE —
@@ -65,14 +71,20 @@ export const loader = async ({
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(classroomSlug, request, {
-    action: 'create_form',
-  });
+  const { classroom, userId, membership } = await assertFormAdmin(
+    classroomSlug,
+    { request, url },
+    {
+      action: 'create_form',
+    }
+  );
 
   const blocked = formMutationBlocked(classroom, membership.role);
   if (blocked) return blocked;

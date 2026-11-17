@@ -31,6 +31,7 @@ import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
+import { isValidEmail } from '@classmoji/utils/email';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
@@ -59,7 +60,14 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     students: z
       .array(
         z.strictObject({
-          email: z.string().email().describe('Student email'),
+          // The web form's check: zod's own email format is a different rule,
+          // and one address Resend refuses fails the whole invitation batch.
+          email: z
+            .string()
+            .trim()
+            .refine(isValidEmail, 'Invalid email address')
+            .meta({ format: 'email' })
+            .describe('Student email'),
           name: z.string().min(1).max(200).optional().describe('Student name'),
         })
       )
@@ -89,6 +97,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
         added: result.addedExistingUsers,
         invited: result.invitedNewUsers,
         already_enrolled: result.alreadyEnrolled.length,
+        invalid: result.invalid.length,
       },
       // Two batches added a few seconds apart are two roster changes.
       dedupe: false,
@@ -108,6 +117,8 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
       invited: result.invitedNewUsers,
       // Addresses of students already in the class: nothing was sent to them.
       already_enrolled: result.alreadyEnrolled,
+      // Addresses refused as undeliverable: nothing was written or sent.
+      invalid: result.invalid,
       total: args.students.length,
     });
   },

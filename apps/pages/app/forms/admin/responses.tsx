@@ -106,14 +106,16 @@ const HEADER_CLAMP = 'block max-w-40 truncate';
 export const loader = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   const context = await requireFormForResponses(
     params.classroomSlug!,
     params.formSlug!,
-    request,
+    { request, url },
     'list_responses'
   );
 
@@ -237,9 +239,11 @@ async function revealIdentity(
 export const action = async ({
   params,
   request,
+  url,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
+  url: URL;
 }) => {
   // Read before the gate so the gate is named by the intent: a refused reveal
   // is logged as one, not as a refused triage edit.
@@ -256,7 +260,7 @@ export const action = async ({
   const context = await requireFormForResponses(
     params.classroomSlug!,
     params.formSlug!,
-    request,
+    { request, url },
     responsesGateAction(body.intent)
   );
 

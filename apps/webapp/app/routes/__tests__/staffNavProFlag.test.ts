@@ -147,6 +147,7 @@ const runLayout = async (prefix: keyof typeof LAYOUTS) =>
   (await LAYOUTS[prefix].loader({
     params: { class: CLASS_SLUG },
     request: new Request(`http://localhost/${prefix}/${CLASS_SLUG}/quizzes`),
+    url: new URL(`http://localhost/${prefix}/${CLASS_SLUG}/quizzes`),
   } as never)) as Record<string, unknown>;
 
 beforeEach(() => {

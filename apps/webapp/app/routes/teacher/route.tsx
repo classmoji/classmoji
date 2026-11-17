@@ -9,7 +9,7 @@ import { EMPTY_PAGES_NAV, loadPagesNav } from '~/utils/pagesNav.server';
 import { loadClassroomIsPro } from '~/utils/classroomProFlag.server';
 import { revalidateOnClassChange } from '~/utils/revalidateOnClassChange';
 
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({ params, request, url }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const pagesUrl = process.env.PAGES_URL || 'http://localhost:7100';
 
@@ -58,7 +58,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
     if (recentViewersEnabled) {
       // Normalize the current path for view tracking
-      const url = new URL(request.url);
       const resourcePath = ClassmojiService.resourceView.normalizePath(url.pathname);
 
       // Fire-and-forget: record the view without blocking.
