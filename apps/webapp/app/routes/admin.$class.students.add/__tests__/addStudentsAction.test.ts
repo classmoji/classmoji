@@ -58,6 +58,7 @@ const result = (over: Record<string, unknown> = {}) => ({
   addedExistingUsers: 0,
   invitedNewUsers: 0,
   alreadyEnrolled: [],
+  invalid: [],
   emails: [],
   activations: [],
   ...over,
@@ -98,7 +99,13 @@ describe('add students action', () => {
       role: 'OWNER',
       action: 'CREATE',
       resourceType: 'STUDENT_ROSTER',
-      metadata: { tool: 'web:students.add', added: 1, invited: 1, already_enrolled: 1 },
+      metadata: {
+        tool: 'web:students.add',
+        added: 1,
+        invited: 1,
+        already_enrolled: 1,
+        invalid: 0,
+      },
       dedupe: false,
     });
     expect(order).toEqual(['audit', 'emails']);
@@ -134,5 +141,14 @@ describe('add students action', () => {
       success: '1 already in the class.',
     });
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
+  });
+
+  it('names the addresses the server refused as undeliverable', async () => {
+    mocks.addStudents.mockResolvedValue(
+      result({ invitedNewUsers: 1, invalid: ['krishna@gmail.co.'] })
+    );
+    expect(await run([{ email: 'a@x.edu' }, { email: 'krishna@gmail.co.' }])).toMatchObject({
+      success: '1 student invited to the class. Skipped 1 invalid email: krishna@gmail.co.',
+    });
   });
 });
