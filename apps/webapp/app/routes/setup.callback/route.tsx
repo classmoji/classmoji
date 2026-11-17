@@ -2,6 +2,7 @@ import { redirect } from 'react-router';
 import type { Route } from './+types/route';
 import fs from 'fs';
 import path from 'path';
+import { requireSetupWizard } from '~/utils/setupWizard.server';
 
 function updateEnvFile(envPath: string, vars: Record<string, string>) {
   let content = '';
@@ -29,6 +30,9 @@ function updateEnvFile(envPath: string, vars: Record<string, string>) {
 }
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
+  // The callback only runs while setup is enabled.
+  requireSetupWizard();
+
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
@@ -39,7 +43,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   let appData;
   try {
-    const response = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, {
+    const conversionUrl = `https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`;
+    const response = await fetch(conversionUrl, {
       method: 'POST',
       headers: {
         Accept: 'application/vnd.github+json',
