@@ -8,7 +8,11 @@ import {
 } from '@classmoji/services/form-contract';
 
 import { FIELD_TYPE_META, makeField, metaFor } from '../../app/components/forms/fieldTypes';
-import { coerceValue, defaultValueFor } from '../../app/components/forms/answerCoerce';
+import {
+  coerceValue,
+  defaultValueFor,
+  scaleStepSelected,
+} from '../../app/components/forms/answerCoerce';
 import {
   formatAnswer,
   isDisplayOnly,
@@ -123,4 +127,19 @@ test('an unknown field type is refused loudly rather than degraded quietly', () 
   expect(() => coerceValue(alien, 'anything')).toThrow(/no case for field type/);
   expect(() => formatAnswer(alien, 'anything')).toThrow(/no case for field type/);
   expect(() => makeField('date' as FormFieldType)).toThrow(/no case for field type/);
+});
+
+test('an unanswered opinion scale has no step picked, including 0', () => {
+  const scale = makeField('opinion_scale');
+
+  // A scale may start at 0. Nothing is picked until somebody picks it, and a
+  // picked 0 is a real answer the contract receives as the number 0.
+  expect(scaleStepSelected(defaultValueFor(scale), 0)).toBe(false);
+  expect(scaleStepSelected(null, 0)).toBe(false);
+  expect(scaleStepSelected(undefined, 0)).toBe(false);
+  expect(scaleStepSelected(0, 0)).toBe(true);
+  expect(scaleStepSelected('0', 0)).toBe(true);
+  expect(scaleStepSelected(2, 2)).toBe(true);
+  expect(scaleStepSelected(2, 3)).toBe(false);
+  expect(coerceValue(scale, 0)).toBe(0);
 });

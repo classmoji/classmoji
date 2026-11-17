@@ -158,6 +158,19 @@ function defaultReviews(
 }
 
 /**
+ * Whether `step` is the step an opinion scale currently holds.
+ *
+ * An unanswered scale holds `''` (see `defaultValueFor`), and `Number('')` is
+ * 0: comparing numbers alone marks 0 as picked on a scale that starts at 0
+ * before anyone has answered, and the click that should pick it clears it
+ * instead.
+ */
+export function scaleStepSelected(current: unknown, step: number): boolean {
+  if (current === '' || current === null || current === undefined) return false;
+  return Number(current) === step;
+}
+
+/**
  * Narrow one browser-shaped value to what the field's answer schema expects.
  *
  * The `''` cases are the substance. An empty string means "left blank", and
