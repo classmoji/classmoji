@@ -1,4 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import type { MessageRole, Prisma, Role } from '@prisma/client';
 import {
   effectivePercentage,
@@ -306,7 +306,7 @@ export const findById = async (attemptId: string) => {
             },
           },
         },
-        user: { include: GIT_IDENTITY },
+        user: { select: USER_STAFF_VIEW_SELECT },
       },
     })
   );
@@ -761,7 +761,7 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
 export const findInQuiz = async (quizId: string, attemptId: string, provider?: string | null) => {
   const attempt = await getPrisma().quizAttempt.findFirst({
     where: { id: attemptId, quiz_id: quizId },
-    include: { user: { include: GIT_IDENTITY } },
+    include: { user: { select: USER_STAFF_VIEW_SELECT } },
   });
   return attempt ? withLogins(attempt, provider) : null;
 };
@@ -771,7 +771,7 @@ export const findByQuiz = async (quizId: string, provider?: string | null) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
     orderBy: { started_at: 'desc' },
   });

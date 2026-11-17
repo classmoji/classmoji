@@ -50,16 +50,24 @@ type LandingMembership = Pick<
 
 /**
  * What the landing screen reads of a membership: its id, role, invite state
- * and pin, and its classroom's own fields with the git organization's id,
- * provider, login and avatar.
+ * and pin, and its classroom's own fields (but `join_code`, `plan_owner_id`
+ * and `created_by`) with the git organization's id, provider, login and avatar.
  */
 const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership => {
+  // Not sent: the other members, the invite link's code (owner only, and not
+  // read here), the plan owner's and the creator's id.
   const {
     memberships: _otherMemberships,
     git_organization: gitOrganization,
+    join_code: _joinCode,
+    plan_owner_id: _planOwnerId,
+    created_by: _createdBy,
     ...classroom
   } = m.organization as SelectOrganizationMembership['organization'] & {
     memberships?: unknown;
+    join_code?: unknown;
+    plan_owner_id?: unknown;
+    created_by?: unknown;
     git_organization: MembershipOrganization['git_organization'] & {
       avatar_url?: string | null;
       base_url?: string | null;

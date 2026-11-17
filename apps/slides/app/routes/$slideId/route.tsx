@@ -100,6 +100,13 @@ import {
 } from '~/utils/slideKind';
 import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 import {
+  deckImagePathsOrNull,
+  isSnippetFileId,
+  isThemeFileId,
+  isThemeType,
+} from '~/utils/deckFiles';
+import { DECK_READ_INTENTS, classroomWriteRefusal } from '~/utils/classroomWrites';
+import {
   DECK_CHECKPOINT_REQUEST_ID,
   acceptDeckPreviewLive,
   deckCollabData,
@@ -864,7 +871,7 @@ export const action = async ({
   }
 
   // Authorization: require edit permission (owner/teacher/assistant with team_edit)
-  const { userId: actorId } = await assertSlideAccess({
+  const { userId: actorId, membership } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -923,6 +930,16 @@ export const action = async ({
     return data({ error: deckOnlyMessage(slide.kind, 'edit here') }, { status: 409 });
   }
 
+  // Every intent but the reads writes: in a LOCKED or UNPUBLISHED classroom
+  // only the owner may. Tagged with the intent, which the editor's handlers
+  // (the image dialog's pending upload among them) key on.
+  if (!(typeof intent === 'string' && DECK_READ_INTENTS.has(intent))) {
+    const refusal = classroomWriteRefusal(slide.classroom.status, membership?.role, {
+      ...(typeof intent === 'string' ? { intent } : {}),
+    });
+    if (refusal) return refusal;
+  }
+
   // Live editing: the deck lives on the collab server and only the git worker
   // writes deck.json. The ONE predicate the loader used to open it live.
   const liveEnv = liveEditingEnv(slide.classroom);
@@ -973,6 +990,12 @@ export const action = async ({
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
+
+  // A theme or snippet intent names one file of the classroom's
+  // `.slidesthemes/` folder by its file name (see ~/utils/deckFiles); any
+  // other id or theme type refuses the request before anything is written.
+  const refuseThemeFile = (intent: string) =>
+    data({ intent, error: 'That is not a theme or snippet file name.' }, { status: 400 });
 
   // Live editing: images in the deck's folder that the LIVE deck no longer
   // uses (asked after Done; git saves find them in their own response). The
@@ -1443,6 +1466,7 @@ export const action = async ({
       if (!id || !name || !content) {
         return { error: 'ID, name, and content are required' };
       }
+      if (!isSnippetFileId(id)) return refuseThemeFile('update-snippet');
 
       // Generate new filename from name
       const newFilename =
@@ -1505,6 +1529,7 @@ export const action = async ({
       if (!id) {
         return { error: 'Snippet ID is required' };
       }
+      if (!isSnippetFileId(id)) return refuseThemeFile('delete-snippet');
 
       await ContentService.delete({
         orgLogin: gitOrgLogin,
@@ -1535,6 +1560,7 @@ export const action = async ({
       if (!name || !type || !content) {
         return { error: 'Name, type, and content are required' };
       }
+      if (!isThemeType(type)) return refuseThemeFile('save-theme');
 
       // Sanitize filename: lowercase, replace spaces with hyphens, remove special chars
       const baseName = String(name)
@@ -1580,6 +1606,7 @@ export const action = async ({
       if (!id || !name || !type || !content) {
         return { error: 'ID, name, type, and content are required' };
       }
+      if (!isThemeFileId(id) || !isThemeType(type)) return refuseThemeFile('update-theme');
 
       // Generate new filename from name
       const baseName = String(name)
@@ -1643,6 +1670,7 @@ export const action = async ({
       if (!id) {
         return { error: 'Theme ID is required' };
       }
+      if (!isThemeFileId(id)) return refuseThemeFile('delete-theme');
 
       await ContentService.delete({
         orgLogin: gitOrgLogin,
@@ -1667,11 +1695,24 @@ export const action = async ({
   if (intent === 'delete-images') {
     try {
       const pathsJson = formData.get('paths');
-      const paths =
+      const sent =
         typeof pathsJson === 'string' ? parseJsonWithin(pathsJson, ID_LIST_MAX_BYTES) : null;
 
-      if (!Array.isArray(paths) || paths.length === 0) {
+      if (!Array.isArray(sent) || sent.length === 0) {
         return { error: 'No images to delete' };
+      }
+
+      // Only files directly in this deck's own image folder; one path that is
+      // anything else refuses the whole request, and nothing is deleted.
+      const paths = deckImagePathsOrNull(sent, slide.content_path);
+      if (!paths) {
+        return data(
+          {
+            intent: 'delete-images' as const,
+            error: "Only images in this deck's image folder can be deleted here.",
+          },
+          { status: 400 }
+        );
       }
 
       const result = await ContentService.deleteMultiple({

@@ -258,9 +258,13 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
     // Known limitation: the 60s wait below is a client-side timeout, NOT a
     // cancel — a run that finishes after it still creates the request (the
     // idempotency guard above absorbs the resulting retry).
+    // The submission as the task reads it (ids, titles, repo name, the
+    // graders' emails), from its own select rather than the row above.
+    const submission = await ClassmojiService.gitRepoAssignment.findForRegradeRequest(gra.id);
+    if (!submission) throw scopedNotFound('Submission');
     const run = await tasks.trigger('request_regrade', {
       classroom_id: classroom.classroomId,
-      gitRepoAssignment: gra,
+      gitRepoAssignment: ClassmojiService.gitRepoAssignment.regradeTaskSubmission(submission),
       student_id: ctx.viewer.userId,
       student_comment: args.comment,
       previous_grade: previousGrade,

@@ -30,7 +30,7 @@ const SettingsTeams = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_team_settings',
   });
@@ -50,7 +50,32 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async deleteTag() {
-      return ClassmojiService.organizationTag.delete(data.tagId);
+      // Only a tag of this classroom is deleted; any other id deletes nothing.
+      const deleted = await ClassmojiService.organizationTag.deleteInClassroom(
+        classroom.id,
+        data.tagId
+      );
+      if (!deleted) return { error: 'That tag was not found in this class.' };
+
+      // The tag is gone either way: a failed audit write is logged, not
+      // reported as a failed delete.
+      try {
+        await ClassmojiService.audit.create(
+          {
+            user_id: userId,
+            classroom_id: classroom.id,
+            role: membership!.role,
+            action: 'DELETE',
+            resource_type: 'TEAMS',
+            resource_id: deleted.id,
+            data: { tool: 'web:settings.team.delete_tag', name: deleted.name },
+          },
+          { dedupe: false }
+        );
+      } catch (error: unknown) {
+        console.error('deleteTag: audit row not written:', error);
+      }
+      return { deleted: deleted.id };
     },
   });
 };

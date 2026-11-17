@@ -12,6 +12,7 @@ import { isDeckSlide, slideService } from '@classmoji/services/slides';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
 import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
+import { classroomWriteRefusal } from '~/utils/classroomWrites';
 import { liveEditingEnv, notifyDeckMeta } from '~/utils/collab/collab.server';
 
 /**
@@ -161,6 +162,18 @@ export const loader = async ({ request }: { request: Request }) => {
  */
 const INDEX_ACTION_BODY_MAX_BYTES = 64 * 1024;
 
+/**
+ * Delete, rename and duplicate write: in a LOCKED or UNPUBLISHED classroom only
+ * its owner may. Decided on the deck's classroom as `assertSlideAccess` loaded
+ * it, at the caller's role there.
+ */
+const writeRefusal = (access: Awaited<ReturnType<typeof assertSlideAccess>>, intent: string) =>
+  classroomWriteRefusal(
+    (access.slide.classroom as { status?: string } | undefined)?.status,
+    access.membership?.role,
+    { intent }
+  );
+
 export const action = async ({ request }: { request: Request }) => {
   // A session before the body is touched. Every intent needs one — each is
   // gated by `assertSlideAccess` below, which refuses an anonymous caller — and
@@ -191,8 +204,9 @@ export const action = async ({ request }: { request: Request }) => {
     }
 
     // Authorization: require edit permission to delete slides
+    let access: Awaited<ReturnType<typeof assertSlideAccess>>;
     try {
-      await assertSlideAccess({
+      access = await assertSlideAccess({
         request,
         slideId,
         accessType: 'edit',
@@ -202,6 +216,8 @@ export const action = async ({ request }: { request: Request }) => {
         error instanceof Error ? error.message : 'You do not have permission to delete this slide';
       return { error: message };
     }
+    const locked = writeRefusal(access, 'delete');
+    if (locked) return locked;
 
     // Delete the slide (no theme cleanup for simple deletion).
     try {
@@ -265,8 +281,9 @@ export const action = async ({ request }: { request: Request }) => {
     }
 
     // Authorization: require edit permission to rename slides
+    let access: Awaited<ReturnType<typeof assertSlideAccess>>;
     try {
-      await assertSlideAccess({
+      access = await assertSlideAccess({
         request,
         slideId,
         accessType: 'edit',
@@ -276,6 +293,8 @@ export const action = async ({ request }: { request: Request }) => {
         error instanceof Error ? error.message : 'You do not have permission to rename this slide';
       return { error: message };
     }
+    const locked = writeRefusal(access, 'rename');
+    if (locked) return locked;
 
     try {
       const updated = await getPrisma().slide.update({
@@ -314,8 +333,9 @@ export const action = async ({ request }: { request: Request }) => {
     }
 
     // Authorization: require edit permission to duplicate slides
+    let access: Awaited<ReturnType<typeof assertSlideAccess>>;
     try {
-      await assertSlideAccess({
+      access = await assertSlideAccess({
         request,
         slideId,
         accessType: 'edit',
@@ -327,6 +347,8 @@ export const action = async ({ request }: { request: Request }) => {
           : 'You do not have permission to duplicate this slide';
       return { error: message };
     }
+    const locked = writeRefusal(access, 'duplicate');
+    if (locked) return locked;
 
     try {
       // Fetch the slide with classroom and git organization info

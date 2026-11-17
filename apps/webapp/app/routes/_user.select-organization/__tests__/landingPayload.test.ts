@@ -36,6 +36,10 @@ const CLASSROOM = {
   status: 'ACTIVE',
   is_archived: false,
   is_example: false,
+  // Classroom columns the picker never sends.
+  join_code: 'JOIN-CODE-1',
+  plan_owner_id: 'owner-1',
+  created_by: 'owner-1',
   created_at: new Date('2026-01-01T00:00:00Z'),
   updated_at: new Date('2026-01-02T00:00:00Z'),
   git_organization: GIT_ORG,

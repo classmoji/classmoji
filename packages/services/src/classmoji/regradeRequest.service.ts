@@ -25,7 +25,7 @@
  * LOCK ORDER: the attempt row before the request row, as deleting an attempt
  * (which cascades to its requests) takes them.
  */
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, USER_PUBLIC_SELECT } from '@classmoji/database';
 import {
   QUIZ_REGRADE_REPLY_MAX_LENGTH,
   quizAttemptGrade,
@@ -120,15 +120,16 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
         include: {
           assignment: true,
           git_repo: true,
+          // Graders as anyone sees them: this list is the student's too.
           graders: {
             include: {
-              grader: { include: GIT_IDENTITY },
+              grader: { select: USER_PUBLIC_SELECT },
             },
           },
           grades: {
             include: {
               token_transaction: true,
-              grader: { include: GIT_IDENTITY },
+              grader: { select: USER_PUBLIC_SELECT },
             },
           },
         },

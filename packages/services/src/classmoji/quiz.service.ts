@@ -1,4 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import {
   countingQuizAttempt,
   effectivePercentage,
@@ -227,7 +227,7 @@ const QUIZ_WRITE_INCLUDE = {
   assignment: { include: { module: { select: { id: true, title: true } } } },
   attempts: {
     include: {
-      user: { include: GIT_IDENTITY },
+      user: { select: USER_STAFF_VIEW_SELECT },
     },
   },
 } as const;
@@ -754,7 +754,7 @@ export const findById = async (quizId: string) => {
       assignment: { include: { module: { select: { id: true, title: true } } } },
       attempts: {
         include: {
-          user: { include: GIT_IDENTITY },
+          user: { select: USER_STAFF_VIEW_SELECT },
         },
       },
       ...SOURCE_MATERIAL_INCLUDE,
@@ -870,7 +870,7 @@ const getQuizzesWithAttempts = (classroomId: string, quizId?: string) =>
       },
       attempts: {
         include: {
-          user: { include: GIT_IDENTITY },
+          user: { select: USER_STAFF_VIEW_SELECT },
         },
       },
       _count: {

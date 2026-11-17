@@ -4,13 +4,30 @@ import { SCORE_EMOJI_MAPPINGS } from '@classmoji/utils';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
 
+/** The fields one emoji of a scale is saved with; nothing else is written. */
+export interface EmojiMappingFields {
+  emoji: string;
+  grade: number;
+  extra_tokens?: number;
+  description?: string;
+}
+
 /**
  * Add or update one emoji on a classroom's scale (the settings table, MCP
  * `emoji_mapping_upsert`). Under the scale lock (`lockScale`), so it lands
  * before or after a `replaceScale`, never between its delete and its insert.
+ *
+ * Writes only the named fields, to `classroomId`'s row for that emoji: the
+ * row's id and classroom are never taken from `values`. A field left
+ * undefined keeps its stored value on an update.
  */
-export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingInput) =>
-  getPrisma().$transaction(async tx => {
+export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingFields) => {
+  const fields = {
+    grade: values.grade,
+    ...(values.extra_tokens !== undefined ? { extra_tokens: values.extra_tokens } : {}),
+    ...(values.description !== undefined ? { description: values.description } : {}),
+  };
+  return getPrisma().$transaction(async tx => {
     await lockScale(tx, classroomId);
     return tx.emojiMapping.upsert({
       where: {
@@ -19,10 +36,11 @@ export const saveEmojiMapping = async (classroomId: string, values: EmojiMapping
           emoji: values.emoji,
         },
       },
-      update: values,
-      create: { classroom_id: classroomId, ...values },
+      update: fields,
+      create: { ...fields, emoji: values.emoji, classroom_id: classroomId },
     });
   });
+};
 
 export const findClassroomEmojiMappingDescription = async (classroomId: string) => {
   const mappings = await getPrisma().emojiMapping.findMany({
@@ -128,14 +146,14 @@ export const quizScaleEmojis = (scale: Readonly<Record<string, number>>): string
     .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
     .map(([emoji]) => emoji);
 
-export const deleteEmojiMapping = async (classroomId: string, emoji: string) => {
-  return getPrisma().emojiMapping.delete({
-    where: {
-      classroom_id_emoji: {
-        classroom_id: classroomId,
-        emoji: emoji,
-      },
-    },
+/**
+ * Delete one emoji from `classroomId`'s scale. Returns how many rows went (0
+ * or 1); an emoji that is not a non-empty string deletes nothing.
+ */
+export const deleteEmojiMapping = async (classroomId: string, emoji: unknown) => {
+  if (typeof emoji !== 'string' || emoji === '' || !classroomId) return { count: 0 };
+  return getPrisma().emojiMapping.deleteMany({
+    where: { classroom_id: classroomId, emoji },
   });
 };
 

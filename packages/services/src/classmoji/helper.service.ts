@@ -73,6 +73,29 @@ export const findAllAssignmentsForStudent = async (userId: string, classroomSlug
   return allAssignments;
 };
 
+/**
+ * The student's submissions in a classroom, individual and team, as the
+ * "new regrade request" form lists them: id and assignment title only. Same
+ * rows and order as `findAllAssignmentsForStudent`.
+ */
+export const findRegradeOptionsForStudent = async (userId: string, classroomSlug: string) => {
+  const own = await gitRepoAssignmentService.findRegradeOptions({
+    git_repo: { student_id: userId, classroom: { slug: classroomSlug } },
+  });
+
+  const teams = await findTeamsByUserId(userId);
+  const fromTeams = [];
+  for (const team of teams) {
+    fromTeams.push(
+      ...(await gitRepoAssignmentService.findRegradeOptions({
+        git_repo: { team_id: team.team_id, classroom: { slug: classroomSlug } },
+      }))
+    );
+  }
+
+  return [...own, ...fromTeams];
+};
+
 export const findClassroomGradingProgressPerAssignment = async (classroomId: string) => {
   let numberOfAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {

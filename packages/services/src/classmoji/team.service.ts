@@ -1,4 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import { sortNaturallyBy, withLogins } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
@@ -75,9 +75,10 @@ export const findByClassroomId = async (classroomId: string) => {
           tag: { include: { team_sets: { select: { name: true } } } },
         },
       },
+      // Staff-facing: members with the contact columns staff may read.
       memberships: {
         include: {
-          user: { include: GIT_IDENTITY },
+          user: { select: USER_STAFF_VIEW_SELECT },
         },
       },
       git_repos: { select: { name: true } },
@@ -122,7 +123,7 @@ export const findBySlugAndClassroomId = async (slug: string, classroomId: string
         },
         memberships: {
           include: {
-            user: { include: GIT_IDENTITY },
+            user: { select: USER_STAFF_VIEW_SELECT },
           },
         },
       },

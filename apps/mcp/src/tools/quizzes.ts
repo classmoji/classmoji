@@ -47,9 +47,10 @@
  * quiz.classroom_id against ctx.classroom.classroomId; a missing quiz and
  * another classroom's quiz produce the identical scopedNotFound('Quiz').
  *
- * RESPONSES ARE ALLOW-LISTED: quiz.create/update return the row WITH
- * `attempts: { include: { user: true } }` — full student User rows. Never echo
- * a service return; every response here is built field-by-field by quizSummary.
+ * RESPONSES ARE ALLOW-LISTED: quiz.create/update return the row with its
+ * attempts and their students (the staff view of a user: email, school id).
+ * Never echo a service return; every response here is built field-by-field by
+ * quizSummary.
  */
 
 import { ClassmojiService } from '@classmoji/services';

@@ -21,6 +21,7 @@ import {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
+import { classroomForClient } from '~/utils/classroomForClient';
 import { ClassmojiService, isDeckSlide, slideKindLabel, slideLinkHost } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
 import { SlideActionLink, SlideKindChip } from '~/components/features/slides';
@@ -112,7 +113,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   return {
     slides: rows,
-    org: classroom,
+    org: classroomForClient(classroom),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     slideViewers,
   };

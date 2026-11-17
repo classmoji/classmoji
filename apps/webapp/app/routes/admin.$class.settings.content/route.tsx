@@ -18,6 +18,7 @@ import {
 } from '~/utils/helpers';
 import { collabServerEnv, notifyCollabFlag } from '~/utils/collab.server';
 import { pickSettings } from '~/utils/pickSettings';
+import { classroomForClient } from '~/utils/classroomForClient';
 import { setLiveEditing } from './liveEditing.server';
 import type { Route } from './+types/route';
 
@@ -33,9 +34,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  // Return classroom with settings for display (API keys stripped by assertClassroomAccess)
+  // Return classroom with settings for display (API keys stripped by assertClassroomAccess;
+  // the git organization's credentials by classroomForClient)
   return {
-    organization: classroom,
+    organization: classroomForClient(classroom),
     // Whether this deployment has a live editing server at all; without one
     // the switch can only be turned off.
     liveEditingAvailable: collabServerEnv() !== null,

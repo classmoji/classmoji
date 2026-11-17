@@ -796,9 +796,10 @@ const assertSlugFree = async ({
 /**
  * Add members to a team by login, sequentially and throttled.
  *
- * Every login is reported: an unknown user, a provider rejection or a failed
- * membership write lands in `failed` with its reason and the remaining logins
- * still run. The route used to let the whole queue die on the first bad login
+ * Every login is reported: an unknown user (`not_found`), a user who is not a
+ * member of this classroom (`invalid`, no provider call), a provider rejection
+ * or a failed membership write lands in `failed` with its reason and the
+ * remaining logins still run. The route used to let the whole queue die on the first bad login
  * and still report success. The local write is an upsert, so re-adding an
  * existing member is a no-op rather than an error.
  */
@@ -813,7 +814,19 @@ export const addTeamMembers = async ({
 }): Promise<AddTeamMembersResult> => {
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
-  const gitProvider = getGitProvider(gitOrganization);
+  // Made on the first login that reaches the provider.
+  let gitProvider: ReturnType<typeof getGitProvider> | null = null;
+
+  // Only members of this classroom (any role, any invite state) join its
+  // teams; anyone else is reported `invalid` before any provider call.
+  const memberIds = new Set(
+    (
+      await getPrisma().classroomMembership.findMany({
+        where: { classroom_id: classroomId },
+        select: { user_id: true },
+      })
+    ).map(m => m.user_id)
+  );
 
   const succeeded: { login: string }[] = [];
   const failed: MemberFailure[] = [];
@@ -825,11 +838,16 @@ export const addTeamMembers = async ({
         failed.push({ login, error: 'not_found' });
         return;
       }
+      if (!memberIds.has(user.id)) {
+        failed.push({ login, error: 'invalid' });
+        return;
+      }
       const canonicalLogin = await providerUsername(gitOrganization, user, login);
       if (!canonicalLogin) {
         failed.push({ login, error: 'not_found' });
         return;
       }
+      gitProvider ??= getGitProvider(gitOrganization);
       await gitProvider.addTeamMember(orgLogin, team.slug, canonicalLogin);
       await teamMembershipService.addMemberToTeam(team.id, user.id);
       succeeded.push({ login: canonicalLogin });

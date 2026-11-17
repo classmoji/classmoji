@@ -22,8 +22,8 @@
  *   There is deliberately no student-facing roster (nothing to mirror).
  *
  * teams (any member):
- *   Web reality: admin.$class.teams (OWNER) returns members as FULL User
- *   rows; the student team view (student.$class.repos_.$repo.team) narrows to
+ *   Web reality: admin.$class.teams (OWNER) returns members in the staff
+ *   view of a user (id, name, avatar, email, school id); the student team view (student.$class.repos_.$repo.team) narrows to
  *   {id,name,login,provider_id}. Mirror the narrow select for everyone.
  *   Tiers: the teaching team sees every team in the classroom; a STUDENT sees
  *   the teams they are a member of, and only those. The web has no

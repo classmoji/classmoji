@@ -8,6 +8,7 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { classroomForClient } from '~/utils/classroomForClient';
 import { pickSettings } from '~/utils/pickSettings';
 import type { Route } from './+types/route';
 
@@ -23,8 +24,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_extension_settings',
   });
 
-  // Return classroom with settings for display (API keys stripped by assertClassroomAccess)
-  return { classroom };
+  // Return classroom with settings for display (API keys stripped by assertClassroomAccess;
+  // the git organization's credentials by classroomForClient)
+  return { classroom: classroomForClient(classroom) };
 };
 
 const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
