@@ -455,6 +455,9 @@ export async function update(formId: string, updates: UpdateFormInput) {
    * Both rules are checked against the locked row, whatever the unlocked read
    * said.
    */
+  // Long enough to wait out a staff batch of added responses, which holds this
+  // lock for up to thirty seconds (formResponse.service `createResponses`).
+  const FORM_LOCK_WAIT_TX = { maxWait: 10_000, timeout: 40_000 } as const;
   return getPrisma().$transaction(async tx => {
     const [locked] = await tx.$queryRaw<
       {
@@ -499,7 +502,7 @@ export async function update(formId: string, updates: UpdateFormInput) {
       }
     }
     return tx.form.update({ where: { id: formId }, data });
-  });
+  }, FORM_LOCK_WAIT_TX);
 }
 
 // ─── Tier-1 option sourcing (roster_select) ─────────────────────────────────

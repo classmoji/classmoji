@@ -2410,31 +2410,36 @@ export async function upsertDraft({
    */
   let lockedMany = false;
   try {
-    return await getPrisma().$transaction(async tx => {
-      const [locked] = await tx.$queryRaw<{ responses_per_person: FormResponsesPerPerson }[]>`
+    return await getPrisma().$transaction(
+      async tx => {
+        const [locked] = await tx.$queryRaw<{ responses_per_person: FormResponsesPerPerson }[]>`
         SELECT responses_per_person FROM forms WHERE id = ${formId} FOR SHARE
       `;
-      if (!locked) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
-      lockedMany = locked.responses_per_person === 'MANY';
+        if (!locked) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+        lockedMany = locked.responses_per_person === 'MANY';
 
-      if (lockedMany && userId && expectedSubmittedCount !== undefined) {
-        const sent = await tx.formResponse.count({
-          where: { form_id: formId, user_id: userId, submission_state: 'SUBMITTED' },
+        if (lockedMany && userId && expectedSubmittedCount !== undefined) {
+          const sent = await tx.formResponse.count({
+            where: { form_id: formId, user_id: userId, submission_state: 'SUBMITTED' },
+          });
+          if (sent !== expectedSubmittedCount) return DRAFT_DECLINED;
+        }
+
+        return tx.formResponse.create({
+          data: {
+            form_id: formId,
+            user_id: userId,
+            draft_token: userId ? null : draftToken,
+            submission_state: 'DRAFT',
+            repeatable: lockedMany,
+            ...payload,
+          },
         });
-        if (sent !== expectedSubmittedCount) return DRAFT_DECLINED;
-      }
-
-      return tx.formResponse.create({
-        data: {
-          form_id: formId,
-          user_id: userId,
-          draft_token: userId ? null : draftToken,
-          submission_state: 'DRAFT',
-          repeatable: lockedMany,
-          ...payload,
-        },
-      });
-    });
+        // Long enough to wait out a staff batch of added responses, which holds
+        // the form lock for up to thirty seconds (`createResponses`).
+      },
+      { maxWait: 10_000, timeout: 40_000 }
+    );
   } catch (error) {
     // Two first saves at once (two tabs, a retried request): the other one
     // created the row a moment ago, and the partial unique index refused this
