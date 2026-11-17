@@ -1,5 +1,4 @@
 import { IconFileText, IconPresentation } from '@tabler/icons-react';
-import { PageLink } from '~/components/features/pages';
 
 /**
  * A published page or slide deck linked to a coursework row's assignment, with
@@ -22,9 +21,10 @@ const materialLink =
 /**
  * The pages and decks linked to a row's assignment, one wrapping line of small
  * links under the row's module (the dashboard's Up next and the Assignments
- * page). A page opens in the peek drawer where the shell has one (a new tab
- * elsewhere, as PageLink does everywhere); a deck opens the slides app in a
- * new tab. Nothing is drawn for a row with none.
+ * page). Both open whole, in a new tab: a page in the pages app, a deck in the
+ * slides app. A page is deliberately not a PageLink: these are the material to
+ * work from, and the peek drawer covered only half the screen. Nothing is
+ * drawn for a row with none.
  */
 const CourseworkMaterials = ({ materials }: { materials: CourseworkMaterial[] }) => {
   if (materials.length === 0) return null;
@@ -41,19 +41,9 @@ const CourseworkMaterials = ({ materials }: { materials: CourseworkMaterial[] })
             <span className="truncate">{m.title}</span>
           </>
         );
-        return m.kind === 'PAGE' ? (
-          <PageLink
-            key={`page-${m.id}`}
-            pageId={m.id}
-            title={m.title}
-            href={m.href}
-            className={materialLink}
-          >
-            {content}
-          </PageLink>
-        ) : (
+        return (
           <a
-            key={`slide-${m.id}`}
+            key={`${m.kind === 'PAGE' ? 'page' : 'slide'}-${m.id}`}
             href={m.href}
             target="_blank"
             rel="noreferrer"
