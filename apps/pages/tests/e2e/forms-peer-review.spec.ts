@@ -152,7 +152,7 @@ async function makeForm(slug: string, title: string, fields: unknown[]) {
       slug,
       access: 'CLASSROOM',
       status: 'DRAFT',
-      allow_multiple: true,
+      responses_per_person: 'REPLACE',
       created_by: await ownerOf(classroomId),
       draft_fields: parseFormDefinition(fields) as never,
     },

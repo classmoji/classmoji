@@ -43,6 +43,8 @@ import {
  * What the form allows, as fact lines in place of what it can't have:
  *   - PUBLIC: no sets and no New team set (its respondents aren't a roster).
  *   - CLASSROOM, unpublished: New team set is disabled; any sets are listed.
+ *   - Several responses per person: New team set is disabled (a set reads one
+ *     response each); such a form never has a set to list.
  *
  * The gate, the data and the `new-set` intent live in teamsData.server.ts
  * (`loadTeamSetList`, `listAction`); only types come from it here. Dates are
@@ -76,7 +78,7 @@ function useShortDate(iso: string | null | undefined): string | null {
 export default function TeamSetsList() {
   const { classroom, backUrl, form, sets, suggestedName } = useLoaderData() as TeamSetListData;
   const classroomForm = form.access === 'CLASSROOM';
-  const canStart = classroomForm && form.published;
+  const canStart = classroomForm && form.published && !form.manyResponses;
   const listPath = teamSetsListPath(classroom.slug, form.slug);
   const factId = useId();
 
@@ -106,9 +108,11 @@ export default function TeamSetsList() {
 
   const fact = !classroomForm
     ? teamsErrorSentence('form_not_classroom')
-    : !form.published
-      ? FORM_NOT_PUBLISHED_TEXT
-      : null;
+    : form.manyResponses
+      ? teamsErrorSentence('form_many_responses')
+      : !form.published
+        ? FORM_NOT_PUBLISHED_TEXT
+        : null;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -138,6 +142,7 @@ export default function TeamSetsList() {
             access={form.access}
             active="teams"
             responses={form.responsesSubmitted}
+            manyResponses={form.manyResponses}
           />
         </div>
       </div>

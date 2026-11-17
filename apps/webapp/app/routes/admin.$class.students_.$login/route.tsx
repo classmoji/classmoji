@@ -103,8 +103,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     .map(a => a.id);
 
   // Quiz attempts for this student in one lookup, scored by each quiz's
-  // grading strategy through the shared selector (the gradebook's rule), and
-  // form responses one lookup each.
+  // grading strategy through the shared selector (the gradebook's rule); form
+  // responses in one grouped lookup below.
   const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz ? [a.quiz.id] : []));
   const hasQuizzes = quizIds.length > 0;
   const [quizAttempts, gradingStrategies, quizItemsByUser, quizWaived] = await Promise.all([
@@ -168,6 +168,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     }
   > = {};
   const formStatus: Record<string, { responded: boolean; draft: boolean }> = {};
+  // One grouped read for every form assignment (a MANY form can hold several
+  // responses per student, so no single row answers this).
+  const formIds = assignments.flatMap(a => (a.type === 'FORM' && a.form ? [a.form.id] : []));
+  const formResponseStatus = await ClassmojiService.formResponse.responseStatusForUserByFormIds(
+    studentId,
+    formIds
+  );
   await Promise.all(
     assignments.map(async a => {
       if (a.type === 'QUIZ' && a.quiz) {
@@ -188,11 +195,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           orphaned: grade?.orphaned ?? false,
         };
       } else if (a.type === 'FORM' && a.form) {
-        const response = await ClassmojiService.formResponse.findOwnResponse(a.form.id, studentId);
-        const submitted = Boolean(
-          (response as { submitted_at?: Date | null } | null)?.submitted_at
-        );
-        formStatus[a.id] = { responded: submitted, draft: Boolean(response) && !submitted };
+        const status = formResponseStatus.get(a.form.id);
+        const responded = status?.submitted ?? false;
+        formStatus[a.id] = { responded, draft: !responded && (status?.draft ?? false) };
       }
     })
   );

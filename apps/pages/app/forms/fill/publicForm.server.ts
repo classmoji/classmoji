@@ -138,6 +138,7 @@ export async function loadPublicForm({
       classroomName,
       request,
       loginUrl: loginUrlFor(url),
+      viewResponseId: url.searchParams.get('response'),
     });
   }
 

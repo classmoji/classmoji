@@ -39,7 +39,7 @@ const route = await import('../admin.$class.forms/route.tsx');
 const PAGES_URL = 'http://pages.test';
 const CLASS_SLUG = 'intro-course';
 
-const row = (slug: string, access: 'PUBLIC' | 'CLASSROOM') => ({
+const row = (slug: string, access: 'PUBLIC' | 'CLASSROOM', teamSets = access === 'CLASSROOM') => ({
   id: `id-${slug}`,
   title: `Form ${slug}`,
   slug,
@@ -50,6 +50,7 @@ const row = (slug: string, access: 'PUBLIC' | 'CLASSROOM') => ({
   responseCap: null,
   closesAt: null,
   updatedAt: '2026-01-15T12:00:00.000Z',
+  teamSets,
   publicUrl: `${PAGES_URL}/${CLASS_SLUG}/f/${slug}`,
 });
 
@@ -78,6 +79,48 @@ describe('forms list Teams link', () => {
     expect(html).toContain(`href="${PAGES_URL}/${CLASS_SLUG}/forms/open-waitlist/edit"`);
     expect(html).not.toContain('/teams"');
     expect(html).not.toContain('>Teams</span>');
+  });
+
+  it('shows no Teams link on a CLASSROOM form that takes several responses per person', () => {
+    const html = render([row('weekly-checkin', 'CLASSROOM', false)]);
+    expect(html).toContain(`href="${PAGES_URL}/${CLASS_SLUG}/forms/weekly-checkin/edit"`);
+    expect(html).not.toContain('/teams"');
+    expect(html).not.toContain('>Teams</span>');
+  });
+
+  it('marks a row for team sets from its access and responses per person', async () => {
+    const { ClassmojiService } = await import('@classmoji/services');
+    const helpers = await import('~/utils/helpers');
+    vi.mocked(helpers.assertClassroomAccess).mockResolvedValue({
+      classroom: { id: 'class-1' },
+    } as never);
+    const listRow = (access: string, responses_per_person: string) => ({
+      id: `id-${access}-${responses_per_person}`,
+      title: 'Form',
+      slug: `slug-${access}-${responses_per_person}`.toLowerCase(),
+      access,
+      status: 'OPEN',
+      current_revision_id: 'rev-1',
+      responses_per_person,
+      _count: { responses: 0 },
+      response_cap: null,
+      closes_at: null,
+      updated_at: new Date('2026-01-15T12:00:00.000Z'),
+    });
+    (ClassmojiService.form as Record<string, unknown>).findByClassroomId = vi.fn(async () => [
+      listRow('CLASSROOM', 'ONE'),
+      listRow('CLASSROOM', 'REPLACE'),
+      listRow('CLASSROOM', 'MANY'),
+      listRow('PUBLIC', 'ONE'),
+    ]);
+    const services = await import('@classmoji/services');
+    vi.mocked(services.publicFormUrlFor).mockResolvedValue(((slug: string) => slug) as never);
+
+    const data = (await route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://webapp.test/admin/${CLASS_SLUG}/forms`),
+    } as unknown as Parameters<typeof route.loader>[0])) as { forms: { teamSets: boolean }[] };
+    expect(data.forms.map(form => form.teamSets)).toEqual([true, true, false, false]);
   });
 
   it('decides per row when both kinds are listed', () => {

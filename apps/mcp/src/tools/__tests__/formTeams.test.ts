@@ -785,6 +785,96 @@ describe('cross-classroom scoping (S1)', () => {
   });
 });
 
+// ─── A form that takes several responses per person ─────────────────────────
+
+/**
+ * A team set reads one response per person, so a form whose
+ * responses_per_person is MANY has none (form.service refuses MANY on a form
+ * with a set, teamSet.service refuses a set on a MANY form). Every tool says so
+ * in the same words, before any team-set read, including form_teams_get naming
+ * a set, where the service's empty list would otherwise read "not found".
+ */
+describe('a MANY form', () => {
+  const MANY_MESSAGE =
+    'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE';
+
+  beforeEach(() => {
+    mocks.formFindById.mockResolvedValue({ ...FORM_ROW, responses_per_person: 'MANY' });
+  });
+
+  it('is refused by all three tools with one clear message, before the service', async () => {
+    const calls: Array<[ToolDefinition<never>, Record<string, unknown>]> = [
+      [formTeamsGetTool as never, {}],
+      [formTeamsGetTool as never, { team_set: 'pairs' }],
+      [formTeamsGetTool as never, { run: 3 }],
+      [formTeamsRunTool as never, {}],
+      [formTeamsRunTool as never, { check: true, patch: { team_size: { min: 2, max: 3 } } }],
+      [formTeamsCreateTool as never, { run: 3 }],
+      [formTeamsCreateTool as never, { run: 3, confirm: true }],
+    ];
+    for (const [tool, extra] of calls) {
+      for (const m of Object.values(mocks)) m.mockClear();
+      const error = await tool
+        .handler({ classroom: 'org/w26', form_id: FORM_ID, ...extra } as never, CTX)
+        .catch(e => e);
+      const label = `${tool.name} ${JSON.stringify(extra)}`;
+      expect(error, label).toBeInstanceOf(ToolError);
+      expect((error as ToolError).kind, label).toBe('invalid_params');
+      expect((error as ToolError).code, label).toBe('form_many_responses');
+      expect((error as ToolError).message, label).toBe(MANY_MESSAGE);
+      for (const service of [
+        mocks.listForForm,
+        mocks.getSet,
+        mocks.suggestForForm,
+        mocks.saveConfig,
+        mocks.checkPatch,
+        mocks.startRun,
+        mocks.previewCreate,
+        mocks.claimCreate,
+      ]) {
+        expect(service, label).not.toHaveBeenCalled();
+      }
+      expect(mocks.auditCreate, label).not.toHaveBeenCalled();
+    }
+  });
+
+  it('says so before "publish it" on an unpublished MANY form: publishing would not help', async () => {
+    mocks.formFindById.mockResolvedValue({
+      ...FORM_ROW,
+      responses_per_person: 'MANY',
+      current_revision_id: null,
+    });
+    for (const tool of ALL_TOOLS) {
+      const error = await tool
+        .handler({ classroom: 'org/w26', form_id: FORM_ID, run: 3 } as never, CTX)
+        .catch(e => e);
+      expect((error as ToolError).code, tool.name).toBe('form_many_responses');
+    }
+  });
+
+  it('maps the service’s own refusal to the same message (a form switched mid-call)', async () => {
+    mocks.formFindById.mockResolvedValue(FORM_ROW);
+    mocks.getSet.mockResolvedValue(null);
+    mocks.saveConfig.mockRejectedValue(
+      teamSetError(
+        'form_many_responses',
+        'This form takes several responses per person; team sets need one response per person.'
+      )
+    );
+    const error = (await formTeamsRunTool
+      .handler({ classroom: 'org/w26', form_id: FORM_ID }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.kind).toBe('invalid_params');
+    expect(error.code).toBe('form_many_responses');
+    expect(error.message).toBe(MANY_MESSAGE);
+  });
+
+  it('says so in form_teams_run’s description', () => {
+    expect(formTeamsRunTool.description).toContain('responses_per_person is MANY');
+  });
+});
+
 // ─── form_teams_run ─────────────────────────────────────────────────────────
 
 describe('form_teams_run — a new set shows its setup first', () => {

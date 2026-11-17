@@ -179,6 +179,17 @@ enum FormStatus {
   CLOSED
 }
 
+/// How many responses one person may give a form. ONE: a second submit is
+/// refused. REPLACE: the one response may be overwritten until the form closes
+/// (team bidding). MANY: every submit is a separate response, each taking a cap
+/// slot; CLASSROOM forms only, and never a team set's form (form.service and
+/// teamSet.service enforce both).
+enum FormResponsesPerPerson {
+  ONE
+  REPLACE
+  MANY
+}
+
 /// PENDING_VERIFICATION is the public path's holding state: the answers are
 /// stored but count for nothing until the magic link is clicked. DRAFT is the
 /// server-side autosave row for identified fillers. The response cap counts
@@ -2602,36 +2613,40 @@ model BillingEvent {
 // never orphans the answers already collected.
 
 model Form {
-  id                  String     @id @default(uuid())
-  classroom_id        String
-  title               String
+  id                   String                 @id @default(uuid())
+  classroom_id         String
+  title                String
   /// The form's address: `/{class}/forms/{slug}`. Derived from the title at
   /// create and immutable once the form is published — a slug already in
   /// circulation must not break. Reserved words (edit/responses/new) are
   /// rejected in form.service, not here.
-  slug                String
-  description         String?
+  slug                 String
+  description          String?
   /// Frozen once status leaves DRAFT (enforced in form.service).
-  access              FormAccess @default(PUBLIC)
-  status              FormStatus @default(DRAFT)
+  access               FormAccess             @default(PUBLIC)
+  status               FormStatus             @default(DRAFT)
   /// The builder's working copy of the field list, in the same shape a
   /// FormRevision stores. Revisions are immutable and are foreign-keyed by the
   /// responses filled against them, so an in-progress edit cannot live in one —
   /// it lives here until `publish` snapshots it into revision N+1.
-  draft_fields        Json?
+  draft_fields         Json?
   /// The revision the fill page renders. Null until first publish. Deliberately
   /// a plain column and NOT a relation: a FK here plus FormRevision.form_id
   /// would be a cycle, and the pointer is only ever set to a revision of this
   /// same form (form.service is the only writer).
-  current_revision_id String?
+  current_revision_id  String?
   /// Max VERIFIED responses. Null = uncapped. Enforced atomically under a row
   /// lock on this form, counting only submission_state SUBMITTED rows.
-  response_cap        Int?
-  closes_at           DateTime?
-  /// A filler may replace their existing response until the form closes. The
-  /// per-mode partial unique indexes hold either way: one row per identity,
-  /// overwritten rather than duplicated.
-  allow_multiple      Boolean    @default(false)
+  response_cap         Int?
+  closes_at            DateTime?
+  /// See FormResponsesPerPerson. Each response row copies whether this is MANY
+  /// into its own `repeatable` column, so a switch to or from MANY is allowed
+  /// only while the form has no response rows at all (form.service).
+  ///
+  /// It replaced the boolean `allow_multiple` (true = REPLACE). That column is
+  /// still in the database, unmapped here, for the apps that deploy after the
+  /// migration; a follow-up migration one deploy later drops it.
+  responses_per_person FormResponsesPerPerson @default(ONE)
   /// Public fills always store a server-side row (they must, to be verified).
   /// This governs anonymous DRAFT autosave: off → localStorage only, on →
   /// drafts persist server-side keyed by draft_token, with an on-form
@@ -2646,11 +2661,11 @@ model Form {
   /// disaster, and localStorage does not survive a different device, a private
   /// window, or cleared site data. An instructor who would rather not hold
   /// partial answers can turn it off per form.
-  save_partials       Boolean    @default(true)
-  confirmation_email  Boolean    @default(false)
-  created_by          String
-  created_at          DateTime   @default(now())
-  updated_at          DateTime   @default(now()) @updatedAt
+  save_partials        Boolean                @default(true)
+  confirmation_email   Boolean                @default(false)
+  created_by           String
+  created_at           DateTime               @default(now())
+  updated_at           DateTime               @default(now()) @updatedAt
 
   classroom    Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator      User           @relation(fields: [created_by], references: [id])
@@ -2726,6 +2741,11 @@ model FormResponse {
   resolved_context Json?
 
   submission_state SubmissionState @default(PENDING_VERIFICATION)
+  /// True when the row was written for a MANY form (copied from
+  /// `Form.responses_per_person` at insert, never changed). It is what the
+  /// partial unique indexes below key on: a partial index cannot read the
+  /// form's mode, so each row carries the part of it the index needs.
+  repeatable       Boolean         @default(false)
   /// Magic-link confirmation time. Set once and preserved across later edits.
   /// The cap counts SUBMITTED rows that carry one; FIFO order is `submitted_at`
   /// (see `listByFormId`), NOT this column — a staff-added row is verified at
@@ -2757,9 +2777,13 @@ model FormResponse {
   tokens   FormMagicToken[]
 
   // Identity uniqueness is per access mode and cannot be expressed in Prisma —
-  // two PARTIAL unique indexes are added by raw SQL in the migration:
-  //   (form_id, user_id)          WHERE user_id IS NOT NULL
+  // three PARTIAL unique indexes are added by raw SQL in the migrations:
+  //   (form_id, user_id)          WHERE user_id IS NOT NULL AND NOT repeatable
+  //   (form_id, user_id)          WHERE user_id IS NOT NULL AND repeatable
+  //                                 AND submission_state = 'DRAFT'
   //   (form_id, email_normalized) WHERE user_id IS NULL
+  // The first is one row per person on ONE/REPLACE forms; the second is one
+  // DRAFT per person on a MANY form, whose SUBMITTED rows are unlimited.
   @@index([form_id, submitted_at])
   @@index([added_by])
   @@map("form_responses")

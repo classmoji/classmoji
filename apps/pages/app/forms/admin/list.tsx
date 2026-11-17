@@ -63,6 +63,12 @@ interface FormRow {
   closesAt: string | null;
   updatedAt: string;
   /**
+   * Team sets can be made from it: a CLASSROOM form taking one response per
+   * person. A public form's respondents are not a roster, and a team set reads
+   * one response each.
+   */
+  teamSets: boolean;
+  /**
    * The link the copy button hands out — built in the loader, because it is the
    * only place that knows whether this classroom has a course site and
    * therefore which PATH the link takes. See `publicFormUrlFor`.
@@ -120,6 +126,7 @@ export const loader = async ({
       // string arrived.
       closesAt: form.closes_at ? form.closes_at.toISOString() : null,
       updatedAt: form.updated_at.toISOString(),
+      teamSets: form.access === 'CLASSROOM' && form.responses_per_person !== 'MANY',
       publicUrl: publicUrlFor(form.slug),
     })),
   };
@@ -413,9 +420,11 @@ export default function FormsList() {
                         <IconListDetails size={16} />
                       </Link>
                       {/* Team sets are built from a classroom roster, so a
-                          PUBLIC form has none. The spacer keeps the icons of
-                          every row in the same columns. */}
-                      {form.access === 'CLASSROOM' ? (
+                          PUBLIC form has none, and from one response per
+                          person, so a form taking several has none either.
+                          The spacer keeps the icons of every row in the same
+                          columns. */}
+                      {form.teamSets ? (
                         <Link
                           to={`/${classroomSlug}/forms/${form.slug}/teams`}
                           title="Team sets from this form"

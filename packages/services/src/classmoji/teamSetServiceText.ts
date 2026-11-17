@@ -84,5 +84,9 @@ export const SET_NAME_EMPTY_TEXT = 'A team set name needs at least one letter or
 /** `set_busy`: a save waited for the set's row past its time limit; nothing was written. */
 export const SET_BUSY_TEXT = 'Another save or run held this set; this change was not saved.';
 
+/** `form_many_responses`: the form takes several responses per person. */
+export const FORM_MANY_RESPONSES_TEXT =
+  'This form takes several responses per person; team sets need one response per person.';
+
 /** `set_busy` from a run's start: its transaction ran out of time; no run was made. */
 export const SET_BUSY_RUN_TEXT = 'Another save or run held this set; no run was started.';

@@ -67,6 +67,27 @@ export interface ReviewGroupView {
   targets: ReviewTarget[];
 }
 
+/** One of the person's own submitted responses, as the MANY list shows it. */
+export interface OwnResponseSummary {
+  id: string;
+  /** ISO. */
+  submittedAt: string;
+}
+
+/**
+ * One earlier response on a MANY form, opened read-only (`?response=<id>`).
+ * Rendered against the revision it was filled against, like a recorded one.
+ */
+export interface OwnResponseView extends OwnResponseSummary {
+  /** The questions of the revision it answered, identity questions removed. */
+  fields: FormField[];
+  answers: Record<string, unknown>;
+  /** Its own Tier-2 snapshot, teammates' emails removed. */
+  resolvedContext: unknown;
+  /** Filled against an older revision than the current one. */
+  revisionChanged: boolean;
+}
+
 export type ClassroomFormLoad =
   | { view: 'signin'; theme: CanvasTheme; classroomName: string; loginUrl: string }
   | {
@@ -110,11 +131,25 @@ export type ClassroomFormLoad =
        */
       revisionChanged: boolean;
       /**
-       * `fill` — nothing recorded yet.
+       * `fill` — nothing recorded yet; on a MANY form, a NEW response.
        * `update` — recorded, and the form still allows a replacement.
        * `recorded` — recorded and final (single-response form, or shut).
+       * `listed` — MANY only: the form takes no new response (closed, or its
+       *   cap is full), and the person's earlier responses are all there is.
        */
-      mode: 'fill' | 'update' | 'recorded';
+      mode: 'fill' | 'update' | 'recorded' | 'listed';
+      /** The form takes several responses per person (MANY). */
+      many: boolean;
+      /**
+       * MANY only: the person's submitted responses, newest first. Ids and
+       * times, never answers: one is read in full only when opened. Empty on
+       * every other form.
+       */
+      ownResponses: OwnResponseSummary[];
+      /** `listed` only: why no new response can start. */
+      notAccepting: 'closed' | 'full' | null;
+      /** MANY only: the earlier response named by `?response=<id>`. */
+      viewing: OwnResponseView | null;
       /**
        * Tier-2 resolution, one entry per `repeat_group` in the current
        * definition. Empty for every form that has none, which is almost all of
@@ -149,7 +184,7 @@ export type ClassroomFormLoad =
  * declared alongside it.
  *
  * A hand-written interface here would have to be asserted at the call site, and
- * the day `findBySlug`'s select stopped returning `allow_multiple` the compiler
+ * the day `findBySlug`'s select stopped returning `responses_per_person` the compiler
  * would say nothing: the field would read `undefined`, `mode` would settle on
  * `recorded`, the cap would never be checked, and every symptom would look like
  * a logic bug somewhere else.
@@ -201,6 +236,7 @@ export async function resolveClassroomForm({
   classroomName,
   request,
   loginUrl,
+  viewResponseId = null,
 }: {
   classroom: { id: string };
   form: ClassroomFormRow;
@@ -208,6 +244,12 @@ export async function resolveClassroomForm({
   classroomName: string;
   request: Request;
   loginUrl: string;
+  /**
+   * `?response=<id>` from the page address: one earlier response to show
+   * read-only. Read on a MANY form only, and only through a query scoped to
+   * this form and the session user.
+   */
+  viewResponseId?: string | null;
 }): Promise<ClassroomFormLoad> {
   const summary: PublicFormSummary = {
     id: form.id,
@@ -268,20 +310,38 @@ export async function resolveClassroomForm({
   if (!revision) return { view: 'closed', theme, classroomName, form: summary };
 
   /**
+   * MANY: every submit is a new response, so the page is never about one row.
+   * What it fills is a NEW response, prefilled from the person's DRAFT only,
+   * and their submitted responses are a list beside it. Nothing below reads an
+   * earlier response as `own`: prefilling one would put a finished response's
+   * answers into the next, and its snapshot would decide the next one's
+   * departed teammates.
+   */
+  const many = form.responses_per_person === 'MANY';
+
+  /**
    * Their own row, by session id. Read BEFORE the accepting/cap decision,
    * because a member who is already inside the cap must still be able to see
    * (and, on a resubmittable form, change) what they submitted after the form
    * fills up — the same rule `confirmSubmission` applies to an already-verified
-   * public response.
+   * public response. On a MANY form that row is the draft, and the responses
+   * come as their own list.
    */
-  const own = await ClassmojiService.formResponse.findOwnResponse(form.id, member.userId);
-  const submitted = own?.submission_state === 'SUBMITTED';
+  const [own, ownRows] = many
+    ? await Promise.all([
+        ClassmojiService.formResponse.findOwnDraft(form.id, member.userId),
+        ClassmojiService.formResponse.listOwnResponses(form.id, member.userId),
+      ])
+    : [await ClassmojiService.formResponse.findOwnResponse(form.id, member.userId), []];
+  const submitted = many ? ownRows.length > 0 : own?.submission_state === 'SUBMITTED';
 
   const accepting =
     form.status === 'OPEN' && !(form.closes_at && form.closes_at.getTime() <= Date.now());
 
+  // On a MANY form the cap is checked whether or not this person has answered
+  // before: each response takes a slot of its own, the next one included.
   let capFull = false;
-  if (accepting && !submitted && form.response_cap !== null) {
+  if (accepting && (many || !submitted) && form.response_cap !== null) {
     const verified = await prisma.formResponse.count({
       where: { form_id: form.id, submission_state: 'SUBMITTED', verified_at: { not: null } },
     });
@@ -294,13 +354,53 @@ export async function resolveClassroomForm({
 
   const identity: ClassroomIdentity = { name: member.name, email: member.email };
 
-  const mode: 'fill' | 'update' | 'recorded' = !submitted
-    ? 'fill'
-    : accepting && form.allow_multiple
-      ? 'update'
-      : 'recorded';
+  const mode: 'fill' | 'update' | 'recorded' | 'listed' = many
+    ? accepting && !capFull
+      ? 'fill'
+      : 'listed'
+    : !submitted
+      ? 'fill'
+      : accepting && form.responses_per_person === 'REPLACE'
+        ? 'update'
+        : 'recorded';
 
-  const revisionChanged = Boolean(own && own.revision_id !== revision.id);
+  /**
+   * One earlier response, opened read-only. The id is the page's own query
+   * string, so the read is what makes it safe: `findOwnSubmittedResponse`
+   * matches the id AND this form AND the session user, and anything else —
+   * somebody else's response, another form's, a draft — is the same 404 as an
+   * id that never existed.
+   */
+  let viewing: OwnResponseView | null = null;
+  if (many && viewResponseId) {
+    const row = await ClassmojiService.formResponse.findOwnSubmittedResponse(
+      form.id,
+      member.userId,
+      viewResponseId
+    );
+    if (!row) throw new Response('Response not found', { status: 404 });
+    // Scoped to the form as well as the id, for the reason `displayRevision`
+    // below gives.
+    const answered =
+      (await prisma.formRevision.findFirst({ where: { id: row.revision_id, form_id: form.id } })) ??
+      revision;
+    const answeredFields = ClassmojiService.form.fieldsOf(answered.fields);
+    viewing = {
+      id: row.id,
+      submittedAt: row.submitted_at.toISOString(),
+      fields: visibleClassroomFields(
+        answeredFields,
+        classroomIdentityPlan(answeredFields, identity)
+      ),
+      answers: (row.answers ?? {}) as Record<string, unknown>,
+      resolvedContext: ClassmojiService.formTeam.withoutTargetEmails(row.resolved_context ?? null),
+      revisionChanged: answered.id !== revision.id,
+    };
+  }
+
+  // On a MANY form `own` is the draft, so this says the DRAFT was started on
+  // an older revision; with no new response to fill, there is nothing to say.
+  const revisionChanged = Boolean(own && own.revision_id !== revision.id && mode !== 'listed');
 
   /**
    * Which revision this page RENDERS.
@@ -341,7 +441,11 @@ export async function resolveClassroomForm({
   // Answers written against an OLDER revision are never poured into a FILLABLE
   // form: the questions have changed, and prefilling across that boundary is
   // how a person ends up submitting something they never read.
-  const showStored = Boolean(own && (mode === 'recorded' || !revisionChanged));
+  //
+  // Nothing is shipped for a page that renders neither: a MANY form taking no
+  // new response, or one showing an earlier response instead of the form.
+  const fillable = (mode === 'fill' || mode === 'update') && !viewing;
+  const showStored = Boolean(own && (mode === 'recorded' || (fillable && !revisionChanged)));
 
   /**
    * ── Tier-2: who does this person review ──────────────────────────────────
@@ -352,13 +456,15 @@ export async function resolveClassroomForm({
    * with today's roster.
    *
    * Resolved against the CURRENT revision's fields, because that is what a
-   * submit is validated against.
+   * submit is validated against. On a MANY form `own` is the draft, so the
+   * departed teammates a new response carries are the draft's, never an
+   * earlier response's.
    */
   const currentFields = ClassmojiService.form.fieldsOf(revision.fields);
   const reviewGroups: ReviewGroupView[] = [];
   const reviewTargets: Record<string, ReviewTarget[]> = {};
 
-  if (mode !== 'recorded' && requiresResolvedContext(currentFields)) {
+  if (fillable && requiresResolvedContext(currentFields)) {
     const resolutions = await ClassmojiService.formTeam.resolveRepeatGroups({
       classroomId: classroom.id,
       userId: member.userId,
@@ -425,9 +531,18 @@ export async function resolveClassroomForm({
     resolvedContext: showStored
       ? ClassmojiService.formTeam.withoutTargetEmails(own?.resolved_context ?? null)
       : null,
-    restoredDraft: Boolean(own && !submitted && !revisionChanged),
+    // On a MANY form `own` is only ever the draft, and earlier responses do not
+    // make it any less one.
+    restoredDraft: Boolean(own && (many ? fillable : !submitted) && !revisionChanged),
     revisionChanged,
     mode,
+    many,
+    ownResponses: ownRows.map(row => ({
+      id: row.id,
+      submittedAt: row.submitted_at.toISOString(),
+    })),
+    notAccepting: mode === 'listed' ? (accepting ? 'full' : 'closed') : null,
+    viewing,
     reviewGroups,
     reviewBlocked,
     reviewTargets,
