@@ -24,6 +24,7 @@ import {
   exclusiveSelection,
   identityPlan,
   type IdentityPlan,
+  scaleStepSelected,
 } from './answerCoerce.ts';
 
 /**
@@ -1199,7 +1200,7 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
               className="flex flex-wrap gap-1.5"
             >
               {steps.map(step => {
-                const selected = Number(current) === step;
+                const selected = scaleStepSelected(current, step);
                 return (
                   <button
                     key={step}
