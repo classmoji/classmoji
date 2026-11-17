@@ -36,6 +36,7 @@ import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
 import { QUESTION_PRESETS, type QuestionPreset } from '~/components/forms/presets.ts';
 import {
+  publicSwitchBlockedReason,
   responsesPerPersonChoices,
   responsesPerPersonOf,
   type ResponsesPerPerson,
@@ -330,7 +331,15 @@ export const action = async ({
           ...(responsesPerPerson !== undefined ? { responses_per_person: responsesPerPerson } : {}),
           ...(body.savePartials !== undefined ? { save_partials: body.savePartials } : {}),
         });
-        await audit('UPDATE', 'forms.builder.save-meta');
+        // The new value when it changed: a switch to or from MANY becomes
+        // one-way once anyone responds, so the row says which way it went.
+        await audit(
+          'UPDATE',
+          'forms.builder.save-meta',
+          responsesPerPerson !== undefined && responsesPerPerson !== form.responses_per_person
+            ? { responses_per_person: responsesPerPerson }
+            : {}
+        );
         return { ok: true, savedAt: new Date().toISOString() };
       }
 
@@ -426,6 +435,10 @@ export default function FormBuilder() {
   useEffect(() => {
     if (fetcher.data?.error) setPerPerson(storedPerPerson.current);
   }, [fetcher.data]);
+  const publicSwitchBlocked = publicSwitchBlockedReason({
+    access,
+    current: data.form.responsesPerPerson,
+  });
   const perPersonOptions = responsesPerPersonChoices({
     access,
     current: data.form.responsesPerPerson,
@@ -693,16 +706,26 @@ export default function FormBuilder() {
             : 'members only, signed in · identity comes from the session'}
         </span>
         {isDraft ? (
-          <button
-            type="button"
-            onClick={() =>
-              post({ intent: 'save-meta', access: access === 'PUBLIC' ? 'CLASSROOM' : 'PUBLIC' })
-            }
-            disabled={busy}
-            className="ml-auto text-xs font-medium text-blue-600 hover:underline disabled:opacity-40 dark:text-blue-400"
-          >
-            Switch to {access === 'PUBLIC' ? 'Classroom' : 'Public link'}
-          </button>
+          <>
+            {/* Unavailable rather than refused after the click: the service
+                will not make a several-responses form public. */}
+            {publicSwitchBlocked ? (
+              <span id="form-access-switch-why" className="ml-auto text-xs text-gray-400">
+                {publicSwitchBlocked}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() =>
+                post({ intent: 'save-meta', access: access === 'PUBLIC' ? 'CLASSROOM' : 'PUBLIC' })
+              }
+              disabled={busy || publicSwitchBlocked !== null}
+              aria-describedby={publicSwitchBlocked ? 'form-access-switch-why' : undefined}
+              className={`${publicSwitchBlocked ? '' : 'ml-auto '}text-xs font-medium text-blue-600 hover:underline disabled:opacity-40 disabled:hover:no-underline dark:text-blue-400`}
+            >
+              Switch to {access === 'PUBLIC' ? 'Classroom' : 'Public link'}
+            </button>
+          </>
         ) : (
           <span className="ml-auto flex items-center gap-1 text-xs text-gray-400">
             <IconLock size={13} /> Frozen — responses under two identity modes cannot be mixed

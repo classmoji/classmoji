@@ -180,7 +180,14 @@ describe.skipIf(!RUN)('forms tools on a MANY form (real database)', () => {
 
   afterAll(async () => {
     if (!prisma) return;
-    if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
+    // Both steps run whatever the first did, and a failure of either fails the
+    // suite: fixtures left behind on a shared database must be noticed.
+    const failures: unknown[] = [];
+    if (orgId) {
+      await prisma.gitOrganization
+        .delete({ where: { id: orgId } })
+        .catch((error: unknown) => failures.push(error));
+    }
     await prisma.user
       .deleteMany({
         where: {
@@ -189,7 +196,11 @@ describe.skipIf(!RUN)('forms tools on a MANY form (real database)', () => {
           },
         },
       })
-      .catch(() => {});
+      .catch((error: unknown) => failures.push(error));
+    if (failures.length > 0) {
+      console.error(`[formsMany] cleanup of suite ${suite} failed`, failures);
+      throw new AggregateError(failures, `cleanup of suite ${suite} failed`);
+    }
   });
 
   it('form_create stores MANY on a CLASSROOM form and refuses it on a PUBLIC one', async () => {
@@ -292,7 +303,37 @@ describe.skipIf(!RUN)('forms tools on a MANY form (real database)', () => {
 
   it('refuses another classroom’s MANY form exactly like an unknown one', async () => {
     const elsewhere = await openForm('MANY', otherCtx);
-    await submit(elsewhere, studentAId, 'a', 'Elsewhere');
+    const theirs = await submit(elsewhere, studentAId, 'a', 'Elsewhere');
+
+    // Its response, asked for under a form of this classroom: not in that form.
+    const here = await openForm('MANY');
+    // Started one at a time: a second call already rejected while the first
+    // is awaited would be an unhandled rejection.
+    for (const call of [
+      () =>
+        tools.formResponseGetTool.handler(
+          { classroom: 'org/slug', form_id: here.formId, response_id: theirs.id },
+          ctx
+        ),
+      () =>
+        tools.formResponseUpdateTool.handler(
+          {
+            classroom: 'org/slug',
+            form_id: here.formId,
+            response_id: theirs.id,
+            staff_status: 'read',
+          },
+          ctx
+        ),
+    ]) {
+      expect(await refusalOf(call())).toMatchObject({
+        kind: 'not_found',
+        message: 'Form response not found in this classroom',
+      });
+    }
+    expect(
+      (await prisma.formResponse.findUniqueOrThrow({ where: { id: theirs.id } })).staff_status
+    ).toBeNull();
 
     for (const call of [
       tools.listFormResponsesTool.handler(
@@ -385,7 +426,7 @@ describe.skipIf(!RUN)('forms tools on a MANY form (real database)', () => {
         kind: 'invalid_params',
         code: 'form_many_responses',
         message:
-          'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE',
+          'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE; a MANY form with no responses or drafts yet can be switched with form_update',
       });
     }
     expect(await prisma.teamSet.count({ where: { form_id: form.formId } })).toBe(0);

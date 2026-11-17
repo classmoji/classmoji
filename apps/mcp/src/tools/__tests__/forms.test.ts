@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   formQuickUpdate: vi.fn(),
   formDelete: vi.fn(),
   responseListByFormId: vi.fn(),
+  responseFindInForm: vi.fn(),
   responseStatusLabels: vi.fn(),
   responseUpdateStaff: vi.fn(),
   responseCreate: vi.fn(),
@@ -82,6 +83,7 @@ vi.mock('@classmoji/services', () => ({
     },
     formResponse: {
       listByFormId: (...a: unknown[]) => mocks.responseListByFormId(...a),
+      findInForm: (...a: unknown[]) => mocks.responseFindInForm(...a),
       statusLabelSuggestions: (...a: unknown[]) => mocks.responseStatusLabels(...a),
       updateStaff: (...a: unknown[]) => mocks.responseUpdateStaff(...a),
       createResponses: (...a: unknown[]) => mocks.responseCreate(...a),
@@ -227,6 +229,14 @@ beforeEach(() => {
   mocks.responseNames.mockImplementation(realFormIdentity.responseNames);
   mocks.formListRevisions.mockResolvedValue([]);
   mocks.responseStatusLabels.mockResolvedValue([]);
+  // The one-row read, as the service runs it: the id matched WITHIN the form.
+  // It reads the rows a test handed the list fake through that fake's
+  // implementation, so the list itself is never called.
+  mocks.responseFindInForm.mockImplementation(async (formId: string, responseId: string) => {
+    const rows = ((await mocks.responseListByFormId.getMockImplementation()?.(formId)) ??
+      []) as Array<{ id: string; form_id: string }>;
+    return rows.find(row => row.id === responseId && row.form_id === formId) ?? null;
+  });
   // Stands in for the real projection: strips `email` from every target and
   // leaves the rest of the snapshot alone, so a payload assertion still reads
   // the shape the tools actually emit.
@@ -415,6 +425,7 @@ describe('Pro gating', () => {
       expect(mocks.formFindById).not.toHaveBeenCalled();
       expect(mocks.formFindByClassroomId).not.toHaveBeenCalled();
       expect(mocks.responseListByFormId).not.toHaveBeenCalled();
+      expect(mocks.responseFindInForm).not.toHaveBeenCalled();
       expect(mocks.formCreate).not.toHaveBeenCalled();
       expect(mocks.formUpdate).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
@@ -471,6 +482,7 @@ describe('cross-classroom scoping (S1)', () => {
       // Nothing of the foreign form leaked, and nothing was written.
       expect(JSON.stringify((error as ToolError).message)).not.toContain('CS52 Waitlist');
       expect(mocks.responseListByFormId).not.toHaveBeenCalled();
+      expect(mocks.responseFindInForm).not.toHaveBeenCalled();
       expect(mocks.formUpdate).not.toHaveBeenCalled();
       expect(mocks.formPublish).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
@@ -526,6 +538,11 @@ describe('cross-classroom scoping (S1)', () => {
       expect((error as ToolError).kind).toBe('not_found');
       expect((error as ToolError).message).toBe('Form response not found in this classroom');
     }
+    // Looked up by the id within the form S1 resolved, never on its own.
+    for (const call of mocks.responseFindInForm.mock.calls) {
+      expect(call).toEqual([FORM_ROW.id, 'resp-elsewhere']);
+    }
+    expect(mocks.responseFindInForm).toHaveBeenCalledTimes(2);
     expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
   });
 });
@@ -1033,7 +1050,14 @@ describe('responses_per_person', () => {
     expect(text).toContain('response_cap');
     expect(text).toContain('drafts included');
     expect(text).toContain('form_teams_');
+    // The setting is a CLASSROOM rule: a PUBLIC form is one row per address
+    // whatever it says, and leaving it out of an update changes nothing.
+    expect(text).toContain('A PUBLIC form keeps one response per verified email');
+    expect(text).toContain('ONE is the default for a new form');
     expect(new TextEncoder().encode(text).length).toBeLessThan(1500);
+    // A client holding the old schema is told what to send instead.
+    expect(formUpdateTool.description).toContain('allow_multiple');
+    expect(formUpdateTool.description).toContain('true = REPLACE, false = ONE');
   });
 
   it('form_create passes the setting to the service and records it', async () => {
@@ -1070,6 +1094,31 @@ describe('responses_per_person', () => {
       expect(audit.data.tool).toBe('forms.builder.save-meta');
       expect(audit.data.fields).toEqual(['responses_per_person']);
     }
+  });
+
+  it('form_update records the new value when the setting changed, and only then', async () => {
+    const audited = async (before: string, after: string) => {
+      mocks.auditCreate.mockClear();
+      mocks.formFindById.mockResolvedValue({ ...MANY_FORM, responses_per_person: before });
+      mocks.formUpdate.mockResolvedValue({ ...MANY_FORM, responses_per_person: after });
+      await formUpdateTool.handler(
+        { ...UPDATE, form_id: 'form-1', responses_per_person: after } as never,
+        CTX
+      );
+      return (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+    };
+    expect((await audited('ONE', 'MANY')).responses_per_person).toBe('MANY');
+    expect((await audited('MANY', 'REPLACE')).responses_per_person).toBe('REPLACE');
+    expect(await audited('MANY', 'MANY')).not.toHaveProperty('responses_per_person');
+
+    // A save of other settings says nothing about it.
+    mocks.auditCreate.mockClear();
+    mocks.formFindById.mockResolvedValue(MANY_FORM);
+    mocks.formUpdate.mockResolvedValue({ ...MANY_FORM, title: 'Renamed' });
+    await formUpdateTool.handler({ ...UPDATE, form_id: 'form-1', title: 'Renamed' } as never, CTX);
+    expect(
+      (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data
+    ).not.toHaveProperty('responses_per_person');
   });
 
   it('surfaces each service refusal as a tool error with its code and message, unaudited', async () => {
@@ -1199,6 +1248,9 @@ describe('responses_per_person', () => {
       );
       expect(payload.response.id).toBe('resp-2');
       expect(payload.response.answers['f-why']).toBe('Week 2 check-in');
+      // One row read by id within the form, never the whole form's responses.
+      expect(mocks.responseFindInForm).toHaveBeenCalledWith('form-1', 'resp-2');
+      expect(mocks.responseListByFormId).not.toHaveBeenCalled();
     });
 
     it('form_response_update labels exactly the response named by id', async () => {

@@ -16,6 +16,7 @@ import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
 import {
   clientIpFor,
   recordAddressProbe,
+  recordMemberSubmission,
   recordSubmissionAttempt,
 } from '~/utils/submissionRate.server.ts';
 import {
@@ -37,6 +38,7 @@ import AnswerView from '~/components/forms/AnswerView.tsx';
 import FormRenderer, { draftKeyFor } from '~/components/forms/FormRenderer.tsx';
 import { extractIdentity, identityPlan } from '~/components/forms/answerCoerce.ts';
 import { loadPublicForm, type PublicFormLoad } from './publicForm.server.ts';
+import { canStartAnother, seedForNewResponse } from './manyResponses.ts';
 /**
  * From the import-free leaf, NEVER from `delivery.ts` itself — that module
  * imports Prisma, and an edge to it from this page (which has a client bundle)
@@ -414,9 +416,10 @@ interface SubmissionBody {
   renderedTargets?: Record<string, string[]>;
   /**
    * Classroom autosave on a MANY form only: how many responses the page knew
-   * this person had sent when it rendered. Read only to DECLINE a save: one
-   * that left the browser before the person's latest submit would otherwise
-   * land after it and start a new draft holding the answers just sent.
+   * this person had sent when it rendered (`ownResponseCount`). Read only to
+   * DECLINE a save: one that left the browser before the person's latest
+   * submit would otherwise land after it and start a new draft holding the
+   * answers just sent.
    */
   responsesSeen?: number;
 }
@@ -458,13 +461,16 @@ async function classroomWrite(
     // turns into a response. A save rendered before their latest response
     // belongs to that response, not the next one: the page now has an empty
     // form. The page holds its saves around a submit; this catches one that
-    // was already on the wire.
-    if (loaded.many && body.responsesSeen !== loaded.ownResponses.length) {
+    // was already on the wire. A cheap first look: the count read here comes
+    // before the write, so the service checks it again under the form's lock
+    // (`expectedSubmittedCount`), where a submit cannot land in between.
+    const responsesSeen = body.responsesSeen;
+    if (loaded.many && responsesSeen !== loaded.ownResponseCount) {
       return { state: 'draft-skipped' };
     }
 
     try {
-      await ClassmojiService.formResponse.upsertDraft({
+      const saved = await ClassmojiService.formResponse.upsertDraft({
         formId: loaded.form.id,
         revisionId: loaded.revisionId,
         userId: loaded.server.userId,
@@ -476,7 +482,13 @@ async function classroomWrite(
         email: loaded.identity.email,
         name: loaded.identity.name || null,
         answers,
+        ...(loaded.many && typeof responsesSeen === 'number'
+          ? { expectedSubmittedCount: responsesSeen }
+          : {}),
       });
+      if (saved === ClassmojiService.formResponse.DRAFT_DECLINED) {
+        return { state: 'draft-skipped' };
+      }
       return { state: 'draft-saved', at: new Date().toISOString() };
     } catch (error) {
       // A draft is a convenience. An oversized one, or a lost race with the
@@ -503,6 +515,21 @@ async function classroomWrite(
   // person's earlier responses stand; this one is refused as `closed`, which
   // is true here.
   if (loaded.mode === 'listed') return { state: 'closed' };
+
+  // On a MANY form every submit is a new, permanent response: one member's
+  // submits are metered (`recordMemberSubmission`), so a script cannot fill
+  // the staff table or a capped form's every slot. The answers stay on the
+  // page, under the message.
+  if (loaded.many && !recordMemberSubmission(loaded.server.userId, loaded.form.id).allowed) {
+    console.warn('[forms:fill] rate-limited a member’s submits to a MANY form', {
+      formId: loaded.form.id,
+    });
+    return {
+      state: 'error',
+      message:
+        'You have sent a lot of responses to this form in the last few minutes. Wait a few minutes, then submit again.',
+    };
+  }
 
   try {
     await ClassmojiService.formResponse.submitClassroom({
@@ -1171,9 +1198,19 @@ function LocalTime({ iso }: { iso: string }) {
 
 /**
  * A MANY form's earlier responses, newest first, each opening read-only on
- * this page (`?response=<id>`). Numbered from the first one sent.
+ * this page (`?response=<id>`). Numbered from the first one sent, out of
+ * `total`: the list itself holds only the newest of them.
  */
-function OwnResponsesList({ responses }: { responses: ClassroomFillData['ownResponses'] }) {
+function OwnResponsesList({
+  responses,
+  total,
+  onOpen,
+}: {
+  responses: ClassroomFillData['ownResponses'];
+  total: number;
+  /** Runs before an earlier response opens (and the form below unmounts). */
+  onOpen: () => void;
+}) {
   if (responses.length === 0) return null;
   return (
     <section className="mb-8" aria-labelledby="forms-own-responses">
@@ -1181,7 +1218,7 @@ function OwnResponsesList({ responses }: { responses: ClassroomFillData['ownResp
         id="forms-own-responses"
         className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
       >
-        Your responses · {responses.length}
+        Your responses · {total}
       </h2>
       <ul
         data-testid="forms-own-responses"
@@ -1191,10 +1228,11 @@ function OwnResponsesList({ responses }: { responses: ClassroomFillData['ownResp
           <li key={response.id}>
             <Link
               to={`?response=${encodeURIComponent(response.id)}`}
+              onClick={onOpen}
               className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/60"
             >
               <span className="font-medium text-gray-900 dark:text-white">
-                Response {responses.length - index}
+                Response {total - index}
               </span>
               <span className="text-gray-500 dark:text-gray-400">
                 <LocalTime iso={response.submittedAt} />
@@ -1204,17 +1242,17 @@ function OwnResponsesList({ responses }: { responses: ClassroomFillData['ownResp
           </li>
         ))}
       </ul>
+      {total > responses.length ? (
+        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          The newest {responses.length} are listed.
+        </p>
+      ) : null}
     </section>
   );
 }
 
 function ClassroomFill({ data }: { data: ClassroomFillData }) {
   const submitter = useFetcher<ActionResult>();
-  /**
-   * Keyed by how many responses the person has sent, so each new response on a
-   * MANY form gets a fetcher of its own and its "Draft saved" line starts
-   * blank. Every other form has no responses list, so the key never changes.
-   */
   /**
    * Keyed per new response this page starts ("Submit another response" bumps
    * `generation`), so the next response's "Draft saved" line starts blank.
@@ -1257,9 +1295,6 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
   const blocked = data.reviewBlocked;
   const blockedNotice = blocked ? reviewBlockedNotice(blocked) : null;
 
-  const post = (payload: Record<string, unknown>) =>
-    submitter.submit(payload as SubmitTarget, { method: 'post', encType: 'application/json' });
-
   /**
    * ── MANY: a submit and an autosave never overlap ─────────────────────────
    *
@@ -1267,50 +1302,84 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
    * that draft into a response. An autosave that reached the server AFTER the
    * submit would find no draft and start a new one holding the answers just
    * sent: a partial response nobody typed, prefilled into the next form. So
-   * from Submit until the reply, no autosave leaves this page, and a Submit
-   * pressed while one is on the wire waits for its reply. The action declines
-   * a save rendered before the latest response as well (`responsesSeen`).
+   * from Submit until its reply no autosave leaves this page (the renderer
+   * offers a declined one again afterwards), and a Submit pressed while one is
+   * on the wire waits for its reply. Both are tracked in refs set at the call,
+   * not read from the fetchers' rendered state, which lags the call by a
+   * render: a save fired just before the click would otherwise look idle. The
+   * server declines a save from before the latest response as well
+   * (`responsesSeen`), which covers one this page could not hold back.
    */
   const sending = useRef(false);
+  const autosavesInFlight = useRef(0);
   const heldSubmit = useRef<Record<string, unknown> | null>(null);
   const [holding, setHolding] = useState(false);
+  /** `ownResponseCount` when the latest MANY submit was sent; see `manyResponses.ts`. */
+  const [sentWithCount, setSentWithCount] = useState<number | null>(null);
+  /** The same count for the form "Submit another response" started, if it did. */
+  const [startedAfterCount, setStartedAfterCount] = useState<number | null>(null);
+  /** Sends the open form's pending autosave now (set by the renderer). */
+  const flushDraft = useRef<(() => void) | null>(null);
+
+  const post = (payload: Record<string, unknown>) =>
+    submitter
+      .submit(payload as SubmitTarget, { method: 'post', encType: 'application/json' })
+      // The submit has its answer, and the reload after it: autosaves may go
+      // out again.
+      .finally(() => {
+        sending.current = false;
+      });
+
+  const releaseHeldSubmit = () => {
+    if (autosavesInFlight.current > 0 || !heldSubmit.current) return;
+    const payload = heldSubmit.current;
+    heldSubmit.current = null;
+    setHolding(false);
+    void post(payload);
+  };
 
   const send = (payload: Record<string, unknown>) => {
     if (!many) {
-      post(payload);
+      void post(payload);
       return;
     }
     // Every MANY submit is a permanent new response: a second press before
     // the first is answered is not sent.
     if (sending.current) return;
     sending.current = true;
-    if (autosave.state === 'submitting') {
+    setSentWithCount(data.ownResponseCount);
+    if (autosavesInFlight.current > 0) {
       heldSubmit.current = payload;
       setHolding(true);
       return;
     }
-    post(payload);
+    void post(payload);
   };
 
-  useEffect(() => {
-    if (autosave.state === 'submitting' || !heldSubmit.current) return;
-    const payload = heldSubmit.current;
-    heldSubmit.current = null;
-    setHolding(false);
-    post(payload);
-    // `post` closes over the submitter, which is stable; the trigger is the
-    // autosave's reply.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosave.state]);
-
-  // The submit has its answer: autosaves may go out again.
-  useEffect(() => {
-    if (!sending.current || heldSubmit.current || submitter.state !== 'idle') return;
-    sending.current = false;
-  }, [submitter.state, submitter.data]);
+  /** The renderer's autosave. `false` when it was held back (see above). */
+  const saveDraft = (answers: Record<string, unknown>): boolean => {
+    if (sending.current) return false;
+    autosavesInFlight.current += 1;
+    void autosave
+      .submit(
+        {
+          intent: 'autosave',
+          answers,
+          revisionId: data.revisionId,
+          ...(many ? { responsesSeen: data.ownResponseCount } : {}),
+        } as SubmitTarget,
+        { method: 'post', encType: 'application/json' }
+      )
+      .finally(() => {
+        autosavesInFlight.current -= 1;
+        releaseHeldSubmit();
+      });
+    return true;
+  };
 
   const startAnother = () => {
     setDismissed(result);
+    setStartedAfterCount(sentWithCount);
     setGeneration(value => value + 1);
   };
 
@@ -1331,9 +1400,20 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
         ? 'Draft saved'
         : null;
 
+  /**
+   * What the open form is prefilled from. A form "Submit another response"
+   * started takes nothing from loader data older than the submit before it
+   * (`seedForNewResponse`); every other form takes the loader's draft.
+   */
+  const seed = seedForNewResponse({
+    startedAfterCount: many && generation > 0 ? startedAfterCount : null,
+    loadedCount: data.ownResponseCount,
+    storedAnswers: data.storedAnswers,
+    restoredDraft: data.restoredDraft,
+  });
+
   if (data.viewing) {
     const viewing = data.viewing;
-    const position = data.ownResponses.findIndex(response => response.id === viewing.id);
     return (
       <FormCanvas theme={data.theme} classroomName={data.classroomName}>
         <FormHeader title={data.form.title} description={data.form.description} />
@@ -1348,10 +1428,8 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
           data-testid="forms-own-response-view"
           className="mb-6 rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
         >
-          <strong className="font-semibold">
-            {position >= 0 ? `Response ${data.ownResponses.length - position}` : 'Your response'}
-          </strong>
-          , submitted <LocalTime iso={viewing.submittedAt} />.
+          <strong className="font-semibold">Response {viewing.number}</strong>, submitted{' '}
+          <LocalTime iso={viewing.submittedAt} />.
           {viewing.revisionChanged
             ? ' The form has changed since then; this is the version you filled in.'
             : null}
@@ -1414,7 +1492,16 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
             <button
               type="button"
               onClick={startAnother}
-              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
+              // Until the reload after the submit has landed, the page still
+              // holds the draft that submit sent (see `manyResponses.ts`).
+              disabled={
+                !canStartAnother({
+                  submitterIdle: submitter.state === 'idle',
+                  sentWithCount,
+                  loadedCount: data.ownResponseCount,
+                })
+              }
+              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:cursor-wait disabled:opacity-60 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
             >
               Submit another response
             </button>
@@ -1490,18 +1577,25 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
           same courtesy for the opposite reason: answers appearing in a form the
           person does not remember filling in on THIS machine is the confusing
           case, so the notice says where they came from. */}
-      {mode === 'fill' && data.restoredDraft && !confirmed ? (
+      {mode === 'fill' && seed.restoredDraft && !confirmed ? (
         <p className="mb-5 rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
           We brought back the answers you started. They are saved to your account, not to this
           browser.
         </p>
       ) : null}
 
-      {many ? <OwnResponsesList responses={data.ownResponses} /> : null}
+      {many ? (
+        <OwnResponsesList
+          responses={data.ownResponses}
+          total={data.ownResponseCount}
+          // The form below unmounts when one opens: its last edits go first.
+          onOpen={() => flushDraft.current?.()}
+        />
+      ) : null}
 
       {/* The form below a list of earlier responses is the next one, not an
           edit of any of them. */}
-      {many && mode === 'fill' && !confirmed && !blocked && data.ownResponses.length > 0 ? (
+      {many && mode === 'fill' && !confirmed && !blocked && data.ownResponseCount > 0 ? (
         <h2 className="mb-4 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
           New response
         </h2>
@@ -1534,30 +1628,18 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
           key={many ? `${data.revisionId}:${generation}` : data.revisionId}
           fields={data.fields as FormField[]}
           reviewTargets={data.reviewTargets}
-          storedAnswers={teamChanged?.answers ?? stale?.answers ?? data.storedAnswers ?? null}
+          storedAnswers={teamChanged?.answers ?? stale?.answers ?? seed.storedAnswers ?? null}
           lockedIdentity={data.identity}
           /* localStorage OFF. The draft belongs to an identified member and
              lives on the server, so it follows them to another machine — and
              a shared lab browser is not left holding their answers. */
           draftKey={null}
-          onDraft={
-            mode === 'fill'
-              ? answers => {
-                  // MANY: nothing is saved between Submit and its reply (see
-                  // `send`).
-                  if (sending.current) return;
-                  autosave.submit(
-                    {
-                      intent: 'autosave',
-                      answers,
-                      revisionId: data.revisionId,
-                      ...(many ? { responsesSeen: data.ownResponses.length } : {}),
-                    } as SubmitTarget,
-                    { method: 'post', encType: 'application/json' }
-                  );
-                }
-              : null
-          }
+          onDraft={mode === 'fill' ? saveDraft : null}
+          flushDraftRef={many ? flushDraft : null}
+          /* A refused MANY submit held its autosaves back, and a `stale` reply
+             remounts the form (new revision) with the answers it returned:
+             those go to the server as the draft, not as already saved. */
+          seedIsUnsaved={many && stale !== null}
           submitLabel={mode === 'update' ? 'Update' : 'Submit'}
           busy={submitter.state !== 'idle' || holding}
           error={result?.state === 'error' ? result.message : null}

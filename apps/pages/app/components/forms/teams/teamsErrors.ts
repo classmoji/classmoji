@@ -84,7 +84,8 @@ const TEAM_SET_SENTENCES: Record<TeamSetPageErrorCode, Sentence> = {
   no_grouping_field:
     "The question the teams are made from isn't a ranked-choice or dropdown question on the current form.",
   form_not_classroom: 'Team sets need a classroom form.',
-  form_many_responses: 'Team sets need a form that takes one response per person.',
+  form_many_responses:
+    'Team sets need a form that takes one response per person. This form takes several, a setting that stays fixed once the form has a response or a draft.',
   checks_failed: "The run didn't start: the checks found errors.",
   run_not_solved: details => {
     const run = positiveInt(details.run_number);

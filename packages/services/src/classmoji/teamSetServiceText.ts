@@ -88,5 +88,8 @@ export const SET_BUSY_TEXT = 'Another save or run held this set; this change was
 export const FORM_MANY_RESPONSES_TEXT =
   'This form takes several responses per person; team sets need one response per person.';
 
+/** `set_busy` from a new set: the form's row stayed locked past the time limit; no set was made. */
+export const SET_BUSY_FORM_TEXT = 'Another change to this form held it; no team set was made.';
+
 /** `set_busy` from a run's start: its transaction ran out of time; no run was made. */
 export const SET_BUSY_RUN_TEXT = 'Another save or run held this set; no run was started.';

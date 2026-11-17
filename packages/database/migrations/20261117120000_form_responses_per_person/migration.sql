@@ -10,6 +10,11 @@
 
 BEGIN;
 
+-- First, so no lock this file takes waits unbounded on the previous build,
+-- which keeps serving while this runs. A lock that cannot be had within it
+-- fails the file, and the deploy, with nothing written.
+SET LOCAL lock_timeout = '5s';
+
 CREATE TYPE "FormResponsesPerPerson" AS ENUM ('ONE', 'REPLACE', 'MANY');
 
 ALTER TABLE "forms"
@@ -40,5 +45,12 @@ CREATE UNIQUE INDEX "form_responses_form_user_unique"
 CREATE UNIQUE INDEX "form_responses_form_user_draft_unique"
   ON "form_responses" ("form_id", "user_id")
   WHERE "user_id" IS NOT NULL AND "repeatable" AND "submission_state" = 'DRAFT';
+
+-- The plain lookup the two above cannot serve: their predicates name
+-- `repeatable`, so a query for one person's rows on a form (`form_id` and
+-- `user_id` only, as the fill page and `submitClassroom` ask, the latter
+-- while holding the form row lock) would otherwise scan the form's rows.
+CREATE INDEX "form_responses_form_id_user_id_idx"
+  ON "form_responses" ("form_id", "user_id");
 
 COMMIT;

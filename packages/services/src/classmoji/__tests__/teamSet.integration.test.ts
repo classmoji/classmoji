@@ -99,6 +99,7 @@ import type { CreateState, SolverOutput, TeamSetRunRow } from '../teamSet.servic
 import type { TeamSetConfig } from '../teamSetConfig.ts';
 import type { TeamSetProblem } from '../teamSetProblem.ts';
 import { prng } from './helpers/teamSetFixtures.ts';
+import { raceAgainstFormLock } from './helpers/formRowLock.ts';
 
 /**
  * The real engine, from packages/tasks' Python venv (see its README). Tests
@@ -555,6 +556,14 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       formId: flipped.id,
       userId: ownerId,
     });
+    // While it still takes one response each, a copy of that set is made.
+    const copy = await teamSetService.newSetFromSetup({
+      classroomId,
+      formId: flipped.id,
+      fromSetRef: set.id,
+      userId: ownerId,
+    });
+    expect(copy.id).not.toBe(set.id);
     await prisma.form.update({
       where: { id: flipped.id },
       data: { responses_per_person: 'MANY' },
@@ -573,6 +582,32 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       )
     ).toBe('form_many_responses');
     expect(await prisma.teamSetRun.count({ where: { team_set_id: set.id } })).toBe(0);
+  });
+
+  it('a new set waits for a switch to MANY and is refused against it', async () => {
+    const form = await formService.create({
+      classroomId,
+      title: `Switching ${suite}`,
+      access: 'CLASSROOM',
+      responses_per_person: 'REPLACE',
+      createdBy: ownerId,
+      fields: [
+        { type: 'ranked_choice', label: 'Rank the projects', options: ['Alpha', 'Beta'], ranks: 1 },
+      ],
+    });
+    await formService.publish(form.id);
+
+    // The set is saved while a switch to MANY holds the form (it has counted
+    // no sets yet); the switch commits first.
+    const outcome = await raceAgainstFormLock({
+      formId: form.id,
+      contender: () => teamSetService.saveConfig({ classroomId, formId: form.id, userId: ownerId }),
+      whileHeld: tx =>
+        tx.form.update({ where: { id: form.id }, data: { responses_per_person: 'MANY' } }),
+    });
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { error: { code?: string } }).error.code).toBe('form_many_responses');
+    expect(await prisma.teamSet.count({ where: { form_id: form.id } })).toBe(0);
   });
 
   it('keeps non-roster respondents out of the population', async () => {

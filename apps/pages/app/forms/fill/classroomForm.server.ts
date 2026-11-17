@@ -79,6 +79,8 @@ export interface OwnResponseSummary {
  * Rendered against the revision it was filled against, like a recorded one.
  */
 export interface OwnResponseView extends OwnResponseSummary {
+  /** Its place among the person's responses, counted from the first one sent. */
+  number: number;
   /** The questions of the revision it answered, identity questions removed. */
   fields: FormField[];
   answers: Record<string, unknown>;
@@ -141,11 +143,17 @@ export type ClassroomFormLoad =
       /** The form takes several responses per person (MANY). */
       many: boolean;
       /**
-       * MANY only: the person's submitted responses, newest first. Ids and
-       * times, never answers: one is read in full only when opened. Empty on
-       * every other form.
+       * MANY only: the person's submitted responses, newest first, the newest
+       * `OWN_RESPONSES_LIST_MAX` of them. Ids and times, never answers: one is
+       * read in full only when opened. Empty on every other form.
        */
       ownResponses: OwnResponseSummary[];
+      /**
+       * MANY only: how many responses the person has sent, exactly, listed or
+       * not. What the list numbers from, and what an autosave reports back as
+       * the responses its page knew of. 0 on every other form.
+       */
+      ownResponseCount: number;
       /** `listed` only: why no new response can start. */
       notAccepting: 'closed' | 'full' | null;
       /** MANY only: the earlier response named by `?response=<id>`. */
@@ -327,13 +335,16 @@ export async function resolveClassroomForm({
    * public response. On a MANY form that row is the draft, and the responses
    * come as their own list.
    */
-  const [own, ownRows] = many
+  const [own, ownList] = many
     ? await Promise.all([
         ClassmojiService.formResponse.findOwnDraft(form.id, member.userId),
-        ClassmojiService.formResponse.listOwnResponses(form.id, member.userId),
+        ClassmojiService.formResponse.listOwnResponseSummaries(form.id, member.userId),
       ])
-    : [await ClassmojiService.formResponse.findOwnResponse(form.id, member.userId), []];
-  const submitted = many ? ownRows.length > 0 : own?.submission_state === 'SUBMITTED';
+    : [
+        await ClassmojiService.formResponse.findOwnResponse(form.id, member.userId),
+        { total: 0, responses: [] },
+      ];
+  const submitted = many ? ownList.total > 0 : own?.submission_state === 'SUBMITTED';
 
   const accepting =
     form.status === 'OPEN' && !(form.closes_at && form.closes_at.getTime() <= Date.now());
@@ -385,8 +396,15 @@ export async function resolveClassroomForm({
       (await prisma.formRevision.findFirst({ where: { id: row.revision_id, form_id: form.id } })) ??
       revision;
     const answeredFields = ClassmojiService.form.fieldsOf(answered.fields);
+    // Numbered from the list when it is there, else counted: the list holds
+    // only the newest responses.
+    const listed = ownList.responses.findIndex(response => response.id === row.id);
     viewing = {
       id: row.id,
+      number:
+        listed >= 0
+          ? ownList.total - listed
+          : await ClassmojiService.formResponse.ownResponseNumber(form.id, member.userId, row),
       submittedAt: row.submitted_at.toISOString(),
       fields: visibleClassroomFields(
         answeredFields,
@@ -537,10 +555,11 @@ export async function resolveClassroomForm({
     revisionChanged,
     mode,
     many,
-    ownResponses: ownRows.map(row => ({
+    ownResponses: ownList.responses.map(row => ({
       id: row.id,
       submittedAt: row.submitted_at.toISOString(),
     })),
+    ownResponseCount: ownList.total,
     notAccepting: mode === 'listed' ? (accepting ? 'full' : 'closed') : null,
     viewing,
     reviewGroups,

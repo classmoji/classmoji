@@ -165,7 +165,7 @@ type MappedKind = 'invalid_params' | 'not_found' | 'internal';
 
 /** `form_many_responses`, from the service or from `loadPublishedForm`'s own check. */
 const MANY_RESPONSES_MESSAGE =
-  'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE';
+  'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE; a MANY form with no responses or drafts yet can be switched with form_update';
 
 /**
  * Every TeamSetError code, with the kind and the sentence a caller sees. The

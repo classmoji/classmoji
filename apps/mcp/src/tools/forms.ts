@@ -237,16 +237,16 @@ interface ResponseRow {
 /**
  * Resolve one response id INSIDE a form that has already passed S1.
  *
- * `formResponse.service` exposes no staff-side by-id read (only `findOwnResponse`,
- * which keys on the viewer's own user id), so the id is narrowed the same way
- * the web's `scopeResponseIds` narrows a checkbox selection: fetch this form's
- * responses and match within them. A response id belonging to another form — in
- * this classroom or any other — is simply not in the set, and gets the uniform
- * not-found.
+ * One row, read by the id AND the form (`formResponse.findInForm`), with the
+ * same staff columns `listByFormId` returns. A response id belonging to another
+ * form — in this classroom or any other — matches nothing and gets the uniform
+ * not-found, the rule the web's `scopeResponseIds` applies to a selection.
  */
 async function loadResponseInForm(formId: string, responseId: string): Promise<ResponseRow> {
-  const rows = (await ClassmojiService.formResponse.listByFormId(formId)) as ResponseRow[];
-  const row = rows.find(candidate => candidate.id === responseId);
+  const row = (await ClassmojiService.formResponse.findInForm(
+    formId,
+    responseId
+  )) as ResponseRow | null;
   if (!row) throw scopedNotFound('Form response');
   return row;
 }
@@ -446,12 +446,14 @@ const accessArg = z
 const responsesPerPersonArg = z
   .enum(['ONE', 'REPLACE', 'MANY'])
   .describe(
-    'How many responses one person may give. ONE (default): a second submit is refused. ' +
-      'REPLACE: they may replace their response until the form closes (team bidding). MANY: ' +
-      'every submit is a new, separate response; CLASSROOM forms only, and each response takes ' +
-      'a response_cap slot. Switching to or from MANY is refused once the form has any ' +
-      'response, drafts included (list_forms counts submitted ones only). Team sets ' +
-      '(form_teams_*) need one response per person, so a MANY form cannot have one.'
+    'How many responses one person may give a CLASSROOM form. ONE: a second submit is ' +
+      'refused (ONE is the default for a new form). REPLACE: they may replace their response ' +
+      'until the form closes (team bidding). MANY: every submit is a new, separate response, ' +
+      'each taking a response_cap slot; CLASSROOM forms only. A PUBLIC form keeps one response ' +
+      'per verified email whatever this says: the person changes it through the link emailed ' +
+      'to them. Switching to or from MANY is refused once the form has any response, drafts ' +
+      'included (list_forms counts submitted ones only). Team sets (form_teams_*) need one ' +
+      'response per person, so a MANY form cannot have one.'
   );
 
 // ─── list_forms ─────────────────────────────────────────────────────────────
@@ -681,7 +683,8 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     'not reopen it, since the published revision still holds the roster it was built with; and ' +
     'the slug is immutable, so it cannot be ' +
     'set here at all. Editing the draft field list does NOT change what fillers see until you ' +
-    'publish. responses_per_person has rules of its own (see the field).',
+    'publish. responses_per_person has rules of its own (see the field); it replaced ' +
+    'allow_multiple, which is no longer accepted (true = REPLACE, false = ONE).',
   scope: 'write',
   roles: FORMS_STAFF,
   inputSchema: {
@@ -780,6 +783,12 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
         mcp_tool: 'form_update',
         slug: form.slug,
         fields: changed,
+        // The new value when it changed: a switch to or from MANY becomes
+        // one-way once anyone responds, so the row says which way it went.
+        ...(updated.responses_per_person !== undefined &&
+        updated.responses_per_person !== form.responses_per_person
+          ? { responses_per_person: updated.responses_per_person }
+          : {}),
       },
     });
 

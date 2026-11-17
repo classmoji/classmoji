@@ -387,13 +387,15 @@ export async function update(formId: string, updates: UpdateFormInput) {
    * because a single guard on a write path is one bug away from being the only
    * thing between a roster and the internet.
    */
-  if (updates.access !== undefined && updates.access !== form.access && (published || !isDraft)) {
-    throw serviceError(
+  const accessFrozen = (state: { status: FormStatus; current_revision_id: string | null }) =>
+    serviceError(
       FORM_ACCESS_FROZEN,
-      published
+      state.current_revision_id !== null
         ? 'Access is frozen once a form has been published — its live revision was built for the audience it had then. Create a new form for a different audience.'
-        : `Access is frozen once a form leaves DRAFT (this form is ${form.status}). Responses collected under one identity mode cannot be mixed with another.`
+        : `Access is frozen once a form leaves DRAFT (this form is ${state.status}). Responses collected under one identity mode cannot be mixed with another.`
     );
+  if (updates.access !== undefined && updates.access !== form.access && (published || !isDraft)) {
+    throw accessFrozen(form);
   }
 
   // Checked against the RESULT of this update, so a single call cannot set
@@ -434,45 +436,66 @@ export async function update(formId: string, updates: UpdateFormInput) {
     assertFieldsAllowedForAccess(fieldsOf(form.draft_fields), nextAccess);
   }
 
-  const crossesMany = (from: FormResponsesPerPerson) =>
-    updates.responses_per_person !== undefined &&
-    (updates.responses_per_person === 'MANY') !== (from === 'MANY');
-  if (!crossesMany(form.responses_per_person)) {
+  // Everything above is a fast refusal from an unlocked read. An update that
+  // touches neither the audience nor the mode cannot break the rules below,
+  // so it writes without the lock.
+  if (updates.access === undefined && updates.responses_per_person === undefined) {
     return getPrisma().form.update({ where: { id: formId }, data });
   }
 
   /**
-   * A switch to or from MANY, decided under the form's row lock: the lock every
-   * classroom submit takes (formResponse.service `lockForm`) before it reads
-   * the mode and writes a row carrying it. Holding it here means no submit can
-   * land between "no rows" and the switch.
+   * A change of audience or mode, decided under the form's row lock: the lock
+   * every classroom submit takes (formResponse.service `lockForm`) before it
+   * reads the mode and writes a row carrying it, the one a new draft and a new
+   * team set take in share mode before they do the same, and the one a
+   * concurrent update of either setting takes here. Holding it means nothing
+   * can land between the checks below and this write: no response row before a
+   * switch to or from MANY, no team set before a switch to MANY, and no
+   * `{ access: 'PUBLIC' }` racing a switch to MANY into a PUBLIC + MANY form.
+   * Both rules are checked against the locked row, whatever the unlocked read
+   * said.
    */
   return getPrisma().$transaction(async tx => {
     const [locked] = await tx.$queryRaw<
-      { responses_per_person: FormResponsesPerPerson; access: FormAccess }[]
-    >`SELECT responses_per_person, access FROM forms WHERE id = ${formId} FOR UPDATE`;
+      {
+        responses_per_person: FormResponsesPerPerson;
+        access: FormAccess;
+        status: FormStatus;
+        current_revision_id: string | null;
+      }[]
+    >`SELECT responses_per_person, access, status, current_revision_id
+      FROM forms WHERE id = ${formId} FOR UPDATE`;
     if (!locked) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
-    if (!crossesMany(locked.responses_per_person)) {
-      return tx.form.update({ where: { id: formId }, data });
+
+    if (
+      updates.access !== undefined &&
+      updates.access !== locked.access &&
+      (locked.current_revision_id !== null || locked.status !== 'DRAFT')
+    ) {
+      throw accessFrozen(locked);
     }
 
-    const rows = await tx.formResponse.count({ where: { form_id: formId } });
-    if (rows > 0) {
-      throw serviceError(
-        FORM_RESPONSES_MODE_LOCKED,
-        `This form already has ${rows === 1 ? 'a response' : `${rows} responses`} (drafts included), so it cannot switch to or from several responses per person.`
-      );
+    const nextMode = updates.responses_per_person ?? locked.responses_per_person;
+    if (nextMode === 'MANY' && (updates.access ?? locked.access) !== 'CLASSROOM') {
+      throw serviceError(FORM_MANY_NEEDS_CLASSROOM, MANY_NEEDS_CLASSROOM_TEXT);
     }
-    if (updates.responses_per_person === 'MANY') {
-      if ((updates.access ?? locked.access) !== 'CLASSROOM') {
-        throw serviceError(FORM_MANY_NEEDS_CLASSROOM, MANY_NEEDS_CLASSROOM_TEXT);
-      }
-      const sets = await tx.teamSet.count({ where: { form_id: formId } });
-      if (sets > 0) {
+
+    if ((nextMode === 'MANY') !== (locked.responses_per_person === 'MANY')) {
+      const rows = await tx.formResponse.count({ where: { form_id: formId } });
+      if (rows > 0) {
         throw serviceError(
-          FORM_MANY_HAS_TEAM_SETS,
-          'This form has team sets, which read one response per person, so it cannot take several.'
+          FORM_RESPONSES_MODE_LOCKED,
+          `This form already has ${rows === 1 ? 'a response' : `${rows} responses`} (drafts included), so it cannot switch to or from several responses per person.`
         );
+      }
+      if (nextMode === 'MANY') {
+        const sets = await tx.teamSet.count({ where: { form_id: formId } });
+        if (sets > 0) {
+          throw serviceError(
+            FORM_MANY_HAS_TEAM_SETS,
+            'This form has team sets, which read one response per person, so it cannot take several.'
+          );
+        }
       }
     }
     return tx.form.update({ where: { id: formId }, data });

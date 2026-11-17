@@ -16,9 +16,15 @@ import { test, expect } from '@playwright/test';
 
 import { importWithStubs, stubModule } from '../helpers/dataRequest.helpers.ts';
 import {
+  publicSwitchBlockedReason,
   responsesPerPersonChoices,
   responsesPerPersonOf,
 } from '../../app/components/forms/responsesPerPerson.ts';
+import {
+  canStartAnother,
+  loaderDataAfterSubmit,
+  seedForNewResponse,
+} from '../../app/forms/fill/manyResponses.ts';
 
 const FORM_ID = 'form-1';
 const SESSION_USER = 'user-a';
@@ -52,6 +58,13 @@ type Fakes = {
   upserts: unknown[];
   submits: unknown[];
   loaded: unknown;
+  /** What the fake upsertDraft answers; `{}` is a row. */
+  upsertResult: unknown;
+  /** Whether the fake member limiter lets a submit through. */
+  memberAllowed: boolean;
+  memberSubmits: unknown[];
+  /** The fake list holds at most this many (the service's cap, smaller). */
+  listMax: number;
 };
 
 const fakes: Fakes = {
@@ -63,6 +76,10 @@ const fakes: Fakes = {
   upserts: [],
   submits: [],
   loaded: null,
+  upsertResult: {},
+  memberAllowed: true,
+  memberSubmits: [],
+  listMax: 100,
 };
 (globalThis as unknown as { __perPersonFakes: Fakes }).__perPersonFakes = fakes;
 
@@ -107,9 +124,19 @@ export const ClassmojiService = {
       call('findOwnDraft', [formId, userId]);
       return mine(formId, userId).find(r => r.submission_state === 'DRAFT') ?? null;
     },
-    listOwnResponses: async (formId, userId) => {
-      call('listOwnResponses', [formId, userId]);
-      return mine(formId, userId).filter(r => r.submission_state === 'SUBMITTED').sort(newestFirst);
+    listOwnResponseSummaries: async (formId, userId) => {
+      call('listOwnResponseSummaries', [formId, userId]);
+      const sent = mine(formId, userId).filter(r => r.submission_state === 'SUBMITTED').sort(newestFirst);
+      return {
+        total: sent.length,
+        responses: sent.slice(0, f().listMax).map(r => ({ id: r.id, submitted_at: r.submitted_at })),
+      };
+    },
+    ownResponseNumber: async (formId, userId, response) => {
+      call('ownResponseNumber', [formId, userId, response.id]);
+      return mine(formId, userId).filter(
+        r => r.submission_state === 'SUBMITTED' && r.submitted_at <= response.submitted_at
+      ).length;
     },
     findOwnSubmittedResponse: async (formId, userId, responseId) => {
       call('findOwnSubmittedResponse', [formId, userId, responseId]);
@@ -118,9 +145,10 @@ export const ClassmojiService = {
         null
       );
     },
+    DRAFT_DECLINED: 'DRAFT_DECLINED',
     upsertDraft: async args => {
       f().upserts.push(args);
-      return {};
+      return f().upsertResult;
     },
     submitClassroom: async args => {
       f().submits.push(args);
@@ -171,6 +199,10 @@ test.beforeEach(() => {
   fakes.upserts = [];
   fakes.submits = [];
   fakes.loaded = null;
+  fakes.upsertResult = {};
+  fakes.memberAllowed = true;
+  fakes.memberSubmits = [];
+  fakes.listMax = 100;
 });
 
 let seq = 0;
@@ -232,7 +264,7 @@ test.describe('ONE and REPLACE: unchanged', () => {
       storedAnswers: null,
     });
     expect(called('findOwnResponse')).toHaveLength(1);
-    expect(called('listOwnResponses')).toHaveLength(0);
+    expect(called('listOwnResponseSummaries')).toHaveLength(0);
   });
 
   test('ONE: a submitted response is final, and shown', async () => {
@@ -289,13 +321,14 @@ test.describe('MANY', () => {
       mode: 'fill',
       many: true,
       ownResponses: [],
+      ownResponseCount: 0,
       storedAnswers: null,
       restoredDraft: false,
     });
     // The page never reads "the" response of a MANY form.
     expect(called('findOwnResponse')).toHaveLength(0);
     expect(called('findOwnDraft')[0].args).toEqual([FORM_ID, SESSION_USER]);
-    expect(called('listOwnResponses')[0].args).toEqual([FORM_ID, SESSION_USER]);
+    expect(called('listOwnResponseSummaries')[0].args).toEqual([FORM_ID, SESSION_USER]);
   });
 
   test('after a submit: still a NEW, empty form, and the responses as a list of ids and times', async () => {
@@ -313,6 +346,7 @@ test.describe('MANY', () => {
         { id: second.id, submittedAt: second.submitted_at.toISOString() },
         { id: first.id, submittedAt: first.submitted_at.toISOString() },
       ],
+      ownResponseCount: 2,
     });
     expect(Object.keys((loaded.ownResponses as object[])[0]).sort()).toEqual(['id', 'submittedAt']);
 
@@ -400,6 +434,8 @@ test.describe('MANY', () => {
     expect(called('findOwnSubmittedResponse')[0].args).toEqual([FORM_ID, SESSION_USER, sent.id]);
     expect(loaded.viewing).toEqual({
       id: sent.id,
+      // The first of two sent, numbered from the listed page.
+      number: 1,
       submittedAt: sent.submitted_at.toISOString(),
       // The revision it answered, not the current one.
       fields: [{ ...FIELD, label: 'Old question' }],
@@ -430,6 +466,20 @@ test.describe('MANY', () => {
     fakes.rows = [sent];
     const loaded = await load({ ...MANY, status: 'CLOSED' }, sent.id);
     expect(loaded).toMatchObject({ mode: 'listed', viewing: { id: sent.id } });
+  });
+
+  test('a long list ships its newest page with the exact count, and numbers beyond it', async () => {
+    fakes.listMax = 2;
+    const oldest = row();
+    fakes.rows = [oldest, row(), row(), row()];
+    const loaded = await load(MANY);
+    expect(loaded).toMatchObject({ ownResponseCount: 4 });
+    expect(loaded.ownResponses as unknown[]).toHaveLength(2);
+
+    // An earlier response the page does not list is still numbered from the first.
+    const viewed = await load(MANY, oldest.id);
+    expect(viewed.viewing).toMatchObject({ id: oldest.id, number: 1 });
+    expect(called('ownResponseNumber').at(-1)?.args).toEqual([FORM_ID, SESSION_USER, oldest.id]);
   });
 
   test('a stranger is asked to sign in before any response is read', async () => {
@@ -469,6 +519,10 @@ export const readCappedBody = request => request.text();
 export const clientIpFor = () => null;
 export const recordAddressProbe = () => {};
 export const recordSubmissionAttempt = () => ({ allowed: true });
+export const recordMemberSubmission = (userId, formId) => {
+  globalThis.__perPersonFakes.memberSubmits.push([userId, formId]);
+  return { allowed: globalThis.__perPersonFakes.memberAllowed, retryAfterSeconds: 60 };
+};
 `),
         '/app/utils/formLinkCookie.server.ts': STUB(`
 export const EDIT_LINK_COOKIE_MAX_AGE_SECONDS = 0;
@@ -498,6 +552,7 @@ export const suggestDomain = () => null;
     mode: 'fill',
     many: true,
     ownResponses: [{ id: 'resp-a', submittedAt: '2026-11-01T10:00:00.000Z' }],
+    ownResponseCount: 1,
     server: { userId: SESSION_USER, classroomId: 'class-1', injected: {} },
     ...patch,
   });
@@ -525,7 +580,49 @@ export const suggestDomain = () => null;
     fakes.loaded = loadedMany();
     expect(await autosave(1)).toMatchObject({ state: 'draft-saved' });
     expect(fakes.upserts).toHaveLength(1);
-    expect(fakes.upserts[0]).toMatchObject({ formId: FORM_ID, userId: SESSION_USER });
+    // The count goes to the service too, which checks it again under the
+    // form's lock before it creates a draft.
+    expect(fakes.upserts[0]).toMatchObject({
+      formId: FORM_ID,
+      userId: SESSION_USER,
+      expectedSubmittedCount: 1,
+    });
+  });
+
+  test('a save the service declines (a submit landed first) is skipped, not saved', async () => {
+    fakes.loaded = loadedMany();
+    fakes.upsertResult = 'DRAFT_DECLINED';
+    expect(await autosave(1)).toEqual({ state: 'draft-skipped' });
+    expect(fakes.upserts).toHaveLength(1);
+  });
+
+  test('MANY submits are metered per session user and form; autosaves are not', async () => {
+    fakes.loaded = loadedMany();
+    await post({ intent: 'submit', answers: { [FIELD.id]: 'x' }, revisionId: REVISION });
+    await autosave(1);
+    expect(fakes.memberSubmits).toEqual([[SESSION_USER, FORM_ID]]);
+
+    fakes.memberAllowed = false;
+    const refused = (await post({
+      intent: 'submit',
+      answers: { [FIELD.id]: 'y' },
+      revisionId: REVISION,
+      userId: 'user-b',
+    })) as { state: string; message: string };
+    expect(refused.state).toBe('error');
+    expect(refused.message).toContain('Wait a few minutes');
+    // Counted under the session user, whatever the body says, and not written.
+    expect(fakes.memberSubmits.at(-1)).toEqual([SESSION_USER, FORM_ID]);
+    expect(fakes.submits).toHaveLength(1);
+  });
+
+  test('ONE and REPLACE submits are not metered', async () => {
+    fakes.memberAllowed = false;
+    fakes.loaded = loadedMany({ many: false, ownResponses: [], ownResponseCount: 0 });
+    expect(
+      await post({ intent: 'submit', answers: { [FIELD.id]: 'x' }, revisionId: REVISION })
+    ).toEqual({ state: 'recorded' });
+    expect(fakes.memberSubmits).toHaveLength(0);
   });
 
   test('an autosave rendered before the latest response is declined, and writes nothing', async () => {
@@ -537,8 +634,9 @@ export const suggestDomain = () => null;
   });
 
   test('ONE and REPLACE autosaves do not need the count', async () => {
-    fakes.loaded = loadedMany({ many: false, ownResponses: [] });
+    fakes.loaded = loadedMany({ many: false, ownResponses: [], ownResponseCount: 0 });
     expect(await autosave(undefined)).toMatchObject({ state: 'draft-saved' });
+    expect(fakes.upserts[0]).not.toHaveProperty('expectedSubmittedCount');
   });
 
   test('a MANY form taking no new response refuses a submit as closed', async () => {
@@ -568,7 +666,12 @@ export const suggestDomain = () => null;
   });
 
   test('ONE: a submit after the response is final stays already-recorded', async () => {
-    fakes.loaded = loadedMany({ many: false, ownResponses: [], mode: 'recorded' });
+    fakes.loaded = loadedMany({
+      many: false,
+      ownResponses: [],
+      ownResponseCount: 0,
+      mode: 'recorded',
+    });
     expect(
       await post({ intent: 'submit', answers: { [FIELD.id]: 'x' }, revisionId: REVISION })
     ).toEqual({ state: 'already-recorded' });
@@ -628,5 +731,150 @@ test.describe('responses per person in the builder', () => {
     for (const bad of ['many', 'TWO', true, 1, null, undefined, {}]) {
       expect(responsesPerPersonOf(bad)).toBeNull();
     }
+  });
+});
+
+test.describe('the builder’s access switch on a form that takes several responses', () => {
+  test('a classroom form taking several responses cannot switch to a public link, and says why', () => {
+    expect(publicSwitchBlockedReason({ access: 'CLASSROOM', current: 'MANY' })).toBe(
+      'A public link needs one response per person: change Per person first.'
+    );
+    for (const current of ['ONE', 'REPLACE'] as const) {
+      expect(publicSwitchBlockedReason({ access: 'CLASSROOM', current })).toBeNull();
+    }
+    // Back to Classroom is always on offer.
+    expect(publicSwitchBlockedReason({ access: 'PUBLIC', current: 'ONE' })).toBeNull();
+  });
+});
+
+test.describe('the builder’s settings save, audited', () => {
+  type Fakes = {
+    form: Record<string, unknown>;
+    updates: unknown[];
+    audits: Array<{ data: object }>;
+  };
+  const builder: Fakes = { form: {}, updates: [], audits: [] };
+  (globalThis as unknown as { __builderFakes: Fakes }).__builderFakes = builder;
+  let builderAction: Action;
+
+  test.beforeAll(async () => {
+    ({ action: builderAction } = await importWithStubs<{ action: Action }>(
+      new URL('../../app/forms/admin/builder.tsx', import.meta.url),
+      {
+        '.css': STUB(''),
+        '/app/utils/db.server.ts': STUB(`
+const f = () => globalThis.__builderFakes;
+export const prisma = {};
+export const ClassmojiService = {
+  form: {
+    findBySlug: async () => f().form,
+    update: async (_id, updates) => { f().updates.push(updates); return {}; },
+  },
+  audit: { create: async row => { f().audits.push(row); } },
+};
+`),
+        '/app/utils/formAuth.server.ts': STUB(`
+export const assertFormAdmin = async () => ({
+  classroom: { id: 'class-1' },
+  userId: 'staff-1',
+  membership: { role: 'OWNER' },
+});
+export const formMutationBlocked = () => null;
+`),
+        '/app/forms/admin/adminLinks.server.ts': STUB(`
+export const formsListUrl = () => '';
+export const publicFormUrlFor = () => '';
+`),
+      }
+    ));
+  });
+
+  const saveMeta = (body: Record<string, unknown>) =>
+    builderAction({
+      params: { classroomSlug: 'intro', formSlug: 'check-in' },
+      request: new Request('http://localhost/intro/forms/check-in/edit', {
+        method: 'POST',
+        body: JSON.stringify({ intent: 'save-meta', ...body }),
+        headers: { 'content-type': 'application/json' },
+      }),
+      url: new URL('http://localhost/intro/forms/check-in/edit'),
+    });
+
+  test.beforeEach(() => {
+    builder.form = { id: FORM_ID, slug: 'check-in', responses_per_person: 'ONE' };
+    builder.updates = [];
+    builder.audits = [];
+  });
+
+  test('a change of responses per person records the new value', async () => {
+    expect(await saveMeta({ responsesPerPerson: 'MANY' })).toMatchObject({ ok: true });
+    expect(builder.audits[0].data).toEqual({
+      tool: 'forms.builder.save-meta',
+      slug: 'check-in',
+      responses_per_person: 'MANY',
+    });
+  });
+
+  test('a save that leaves it as it was, or does not touch it, records no value', async () => {
+    await saveMeta({ responsesPerPerson: 'ONE' });
+    await saveMeta({ title: 'Renamed' });
+    for (const audit of builder.audits) {
+      expect(audit.data).toEqual({ tool: 'forms.builder.save-meta', slug: 'check-in' });
+    }
+  });
+});
+
+// ─── Starting the next response on the page ─────────────────────────────────
+
+test.describe('the next response after a MANY submit', () => {
+  test('loader data counts as after the submit only once it shows the response sent', () => {
+    expect(loaderDataAfterSubmit(null, 0)).toBe(true);
+    // Sent with 2 on file: data still showing 2 is from before it.
+    expect(loaderDataAfterSubmit(2, 2)).toBe(false);
+    expect(loaderDataAfterSubmit(2, 3)).toBe(true);
+    // Another tab's response landing too still counts as after.
+    expect(loaderDataAfterSubmit(2, 5)).toBe(true);
+  });
+
+  test('"Submit another response" waits for the submit and the reload after it', () => {
+    // The reply is in, the reload is not: still the pre-submit data.
+    expect(canStartAnother({ submitterIdle: false, sentWithCount: 1, loadedCount: 1 })).toBe(false);
+    expect(canStartAnother({ submitterIdle: true, sentWithCount: 1, loadedCount: 1 })).toBe(false);
+    expect(canStartAnother({ submitterIdle: false, sentWithCount: 1, loadedCount: 2 })).toBe(false);
+    expect(canStartAnother({ submitterIdle: true, sentWithCount: 1, loadedCount: 2 })).toBe(true);
+  });
+
+  test('a form started after a submit is never seeded from data older than it', () => {
+    const justSent = { 'q-1': 'the answer just sent' };
+    // The pre-submit data still carries the draft that submit turned into a response.
+    expect(
+      seedForNewResponse({
+        startedAfterCount: 1,
+        loadedCount: 1,
+        storedAnswers: justSent,
+        restoredDraft: true,
+      })
+    ).toEqual({ storedAnswers: null, restoredDraft: false });
+
+    // Fresh data stands as it is, a draft of the next response included.
+    const next = { 'q-1': 'the next one' };
+    expect(
+      seedForNewResponse({
+        startedAfterCount: 1,
+        loadedCount: 2,
+        storedAnswers: next,
+        restoredDraft: true,
+      })
+    ).toEqual({ storedAnswers: next, restoredDraft: true });
+
+    // The page's first form takes the loader's draft.
+    expect(
+      seedForNewResponse({
+        startedAfterCount: null,
+        loadedCount: 0,
+        storedAnswers: next,
+        restoredDraft: true,
+      })
+    ).toEqual({ storedAnswers: next, restoredDraft: true });
   });
 });

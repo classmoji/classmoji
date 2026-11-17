@@ -2784,7 +2784,10 @@ model FormResponse {
   //   (form_id, email_normalized) WHERE user_id IS NULL
   // The first is one row per person on ONE/REPLACE forms; the second is one
   // DRAFT per person on a MANY form, whose SUBMITTED rows are unlimited.
+  // Neither serves a plain `form_id` + `user_id` lookup (their predicates name
+  // `repeatable`), hence the plain index on the same pair.
   @@index([form_id, submitted_at])
+  @@index([form_id, user_id])
   @@index([added_by])
   @@map("form_responses")
 }

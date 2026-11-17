@@ -78,3 +78,22 @@ export function responsesPerPersonChoices({
 
   return { choices, reason: choices.some(choice => choice.disabled) ? reason : null };
 }
+
+/**
+ * Why the builder's "Switch to Public link" is unavailable, or null when it is
+ * not. A form that takes several responses per person cannot become public
+ * (form.service refuses it): a public filler is an email address, which holds
+ * one response. Said the way the Per person select explains its own disabled
+ * choices.
+ */
+export function publicSwitchBlockedReason({
+  access,
+  current,
+}: {
+  access: 'PUBLIC' | 'CLASSROOM';
+  current: ResponsesPerPerson;
+}): string | null {
+  return access === 'CLASSROOM' && current === 'MANY'
+    ? 'A public link needs one response per person: change Per person first.'
+    : null;
+}

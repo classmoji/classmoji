@@ -2218,6 +2218,34 @@ export async function createResponses({
 
 // ─── Drafts (server-side autosave) ──────────────────────────────────────────
 
+interface UpsertDraftInput {
+  formId: string;
+  revisionId: string;
+  userId?: string | null;
+  draftToken?: string | null;
+  email: string;
+  name?: string | null;
+  answers: unknown;
+  /**
+   * Set on a CLASSROOM draft. When the revision has repeat groups the draft
+   * carries a `resolved_context` snapshot too, MERGED with whatever the row
+   * already held — see below.
+   */
+  classroomId?: string;
+  /**
+   * MANY classroom autosave: how many responses the caller's page knew this
+   * person had SUBMITTED to the form when it rendered the answers being saved.
+   * Read only when this save would CREATE the draft: see "A save from before
+   * the latest response" below.
+   */
+  expectedSubmittedCount?: number;
+}
+
+/** `upsertDraft`'s answer when it declined to write anything (see `expectedSubmittedCount`). */
+export const DRAFT_DECLINED = 'DRAFT_DECLINED' as const;
+
+type DraftRow = Prisma.FormResponseGetPayload<object>;
+
 /**
  * Create or update the server-side partial for one filler.
  *
@@ -2242,7 +2270,19 @@ export async function createResponses({
  * debounced autosave in flight while its own form is being submitted lands
  * BETWEEN them, and only the database can decide that race. The caller's cheap
  * check still runs — this is what makes it unnecessary to be right.
+ *
+ * Returns the row, or `DRAFT_DECLINED` when a MANY autosave from before the
+ * person's latest response would have created a draft (`expectedSubmittedCount`).
  */
+export async function upsertDraft(
+  input: UpsertDraftInput & { expectedSubmittedCount: number }
+): Promise<DraftRow | typeof DRAFT_DECLINED>;
+export async function upsertDraft(
+  input: UpsertDraftInput & { expectedSubmittedCount?: undefined }
+): Promise<DraftRow>;
+export async function upsertDraft(
+  input: UpsertDraftInput
+): Promise<DraftRow | typeof DRAFT_DECLINED>;
 export async function upsertDraft({
   formId,
   revisionId,
@@ -2252,21 +2292,8 @@ export async function upsertDraft({
   name,
   answers,
   classroomId,
-}: {
-  formId: string;
-  revisionId: string;
-  userId?: string | null;
-  draftToken?: string | null;
-  email: string;
-  name?: string | null;
-  answers: unknown;
-  /**
-   * Set on a CLASSROOM draft. When the revision has repeat groups the draft
-   * carries a `resolved_context` snapshot too, MERGED with whatever the row
-   * already held — see below.
-   */
-  classroomId?: string;
-}) {
+  expectedSubmittedCount,
+}: UpsertDraftInput): Promise<DraftRow | typeof DRAFT_DECLINED> {
   if (!userId && !draftToken) {
     throw serviceError(
       FORM_RESPONSE_NOT_FOUND,
@@ -2300,8 +2327,7 @@ export async function upsertDraft({
    * would otherwise land on one of them, write nothing, and drop every autosave
    * from then on. Without a draft, a new one is created next to them.
    */
-  const many = form.responses_per_person === 'MANY';
-  const findTarget = () =>
+  const findTarget = (many: boolean) =>
     getPrisma().formResponse.findFirst({
       where: userId
         ? many
@@ -2310,7 +2336,7 @@ export async function upsertDraft({
         : { form_id: formId, draft_token: draftToken },
       orderBy: { updated_at: 'desc' },
     });
-  const existing = await findTarget();
+  const existing = await findTarget(form.responses_per_person === 'MANY');
 
   /**
    * The draft's teammate snapshot.
@@ -2362,27 +2388,60 @@ export async function upsertDraft({
 
   if (existing) return writeInto(existing);
 
+  /**
+   * ── Creating the draft: under the form's row lock, in share mode ─────────
+   *
+   * The new row copies the form's mode into `repeatable`, so the mode is read
+   * here, under the lock a switch to or from MANY takes (form.service
+   * `update`, FOR UPDATE): a switch cannot land between this read and the
+   * insert. Share mode, because drafts do not need to exclude each other
+   * (the partial unique indexes decide two first saves at once, below).
+   * Only the create path takes it; writing into an existing draft does not.
+   *
+   * ── A save from before the latest response ───────────────────────────────
+   * On a MANY form a submit turns the person's draft into a response. An
+   * autosave that left the browser before that submit, and arrives after it,
+   * finds no draft and would start a new one holding the answers just sent.
+   * The caller says how many responses its page knew of; a classroom submit
+   * holds the form row lock (`lockForm`) until it commits, so the count read
+   * here, after this lock is granted, already includes it. A different count
+   * means the save belongs to a response that has since been sent: nothing is
+   * written.
+   */
+  let lockedMany = false;
   try {
-    return await getPrisma().formResponse.create({
-      data: {
-        form_id: formId,
-        user_id: userId,
-        draft_token: userId ? null : draftToken,
-        submission_state: 'DRAFT',
-        // From the form read above, not under its row lock. A switch to or from
-        // MANY in the same instant as a person's FIRST draft can leave that one
-        // draft with the other flag; submit and autosave look rows up by state,
-        // not by this flag, so such a row still behaves as a draft.
-        repeatable: many,
-        ...payload,
-      },
+    return await getPrisma().$transaction(async tx => {
+      const [locked] = await tx.$queryRaw<{ responses_per_person: FormResponsesPerPerson }[]>`
+        SELECT responses_per_person FROM forms WHERE id = ${formId} FOR SHARE
+      `;
+      if (!locked) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+      lockedMany = locked.responses_per_person === 'MANY';
+
+      if (lockedMany && userId && expectedSubmittedCount !== undefined) {
+        const sent = await tx.formResponse.count({
+          where: { form_id: formId, user_id: userId, submission_state: 'SUBMITTED' },
+        });
+        if (sent !== expectedSubmittedCount) return DRAFT_DECLINED;
+      }
+
+      return tx.formResponse.create({
+        data: {
+          form_id: formId,
+          user_id: userId,
+          draft_token: userId ? null : draftToken,
+          submission_state: 'DRAFT',
+          repeatable: lockedMany,
+          ...payload,
+        },
+      });
     });
   } catch (error) {
     // Two first saves at once (two tabs, a retried request): the other one
     // created the row a moment ago, and the partial unique index refused this
-    // one. Write into that row instead of dropping the newer answers.
+    // one. Write into that row instead of dropping the newer answers. Looked
+    // up by the mode read under the lock, which is the one that row carries.
     if ((error as { code?: unknown }).code !== 'P2002') throw error;
-    const created = await findTarget();
+    const created = await findTarget(lockedMany);
     if (!created) throw error;
     return writeInto(created);
   }
@@ -2420,7 +2479,7 @@ const SELF_SELECT = {
  * On a ONE or REPLACE form there is at most one row. On a MANY form there can
  * be several: this returns the newest SUBMITTED one, and the draft only when
  * nothing has been submitted. A page that shows every response, or the draft
- * beside them, reads `listOwnResponses` and `findOwnDraft` instead.
+ * beside them, reads `listOwnResponseSummaries` and `findOwnDraft` instead.
  */
 export async function findOwnResponse(formId: string, userId: string) {
   const submitted = await getPrisma().formResponse.findFirst({
@@ -2453,18 +2512,64 @@ export async function findOwnDraft(formId: string, userId: string) {
 }
 
 /**
- * Every response the caller has SUBMITTED to a form, newest first. Drafts are
- * not responses and are not listed (see findOwnDraft). One row at most on a
- * ONE or REPLACE form; any number on a MANY form.
+ * How many of the caller's newest responses `listOwnResponseSummaries` lists.
+ * A MANY form has no per-person limit, and the fill page reads this list on
+ * every load and every autosave, so it is bounded; the total beside it stays
+ * exact.
+ */
+export const OWN_RESPONSES_LIST_MAX = 100;
+
+/**
+ * The caller's SUBMITTED responses to a form, newest first, as ids and times
+ * only (never answers: one is read in full only when it is opened), with the
+ * exact total. Drafts are not responses and are not listed (see
+ * findOwnDraft). One row at most on a ONE or REPLACE form; any number on a
+ * MANY form, of which the newest `OWN_RESPONSES_LIST_MAX` are listed.
  *
  * Same rule as findOwnResponse: `userId` comes from the session, never from
- * the request, and staff columns are never selected.
+ * the request.
  */
-export async function listOwnResponses(formId: string, userId: string) {
-  return getPrisma().formResponse.findMany({
-    where: { form_id: formId, user_id: userId, submission_state: 'SUBMITTED' },
+export async function listOwnResponseSummaries(
+  formId: string,
+  userId: string
+): Promise<{ total: number; responses: { id: string; submitted_at: Date }[] }> {
+  const where = { form_id: formId, user_id: userId, submission_state: 'SUBMITTED' as const };
+  const responses = await getPrisma().formResponse.findMany({
+    where,
     orderBy: [{ submitted_at: 'desc' }, { id: 'desc' }],
-    select: SELF_SELECT,
+    select: { id: true, submitted_at: true },
+    take: OWN_RESPONSES_LIST_MAX,
+  });
+  // A short page is the whole list; only a full one needs counting.
+  const total =
+    responses.length < OWN_RESPONSES_LIST_MAX
+      ? responses.length
+      : await getPrisma().formResponse.count({ where });
+  return { total, responses };
+}
+
+/**
+ * Where one of the caller's SUBMITTED responses falls among them, counted
+ * from the first one sent (1-based), in the list's own order: `submitted_at`,
+ * then `id`. For numbering a response the bounded list does not reach.
+ *
+ * Same rule as findOwnResponse: `userId` comes from the session.
+ */
+export async function ownResponseNumber(
+  formId: string,
+  userId: string,
+  response: { id: string; submitted_at: Date }
+): Promise<number> {
+  return getPrisma().formResponse.count({
+    where: {
+      form_id: formId,
+      user_id: userId,
+      submission_state: 'SUBMITTED',
+      OR: [
+        { submitted_at: { lt: response.submitted_at } },
+        { submitted_at: response.submitted_at, id: { lte: response.id } },
+      ],
+    },
   });
 }
 
@@ -2513,6 +2618,34 @@ export async function responseStatusForUserByFormIds(
     status.set(group.form_id, entry);
   }
   return status;
+}
+
+/**
+ * Per form, the members who have SUBMITTED a response to it (a draft or an
+ * unverified response does not count). Anonymous rows have no member and are
+ * left out. One grouped read and no answers, for the gradebook's form
+ * columns, which need to know who sent something and nothing about what.
+ *
+ * STAFF ONLY, like `listByFormId`: the caller must have passed its staff gate
+ * for the classroom these forms belong to, and pass only form ids it resolved
+ * there.
+ */
+export async function submittedUserIdsByFormIds(
+  formIds: string[]
+): Promise<Map<string, Set<string>>> {
+  const byForm = new Map<string, Set<string>>();
+  if (formIds.length === 0) return byForm;
+  const groups = await getPrisma().formResponse.groupBy({
+    by: ['form_id', 'user_id'],
+    where: { form_id: { in: formIds }, submission_state: 'SUBMITTED', user_id: { not: null } },
+  });
+  for (const group of groups) {
+    if (!group.user_id) continue;
+    const users = byForm.get(group.form_id) ?? new Set<string>();
+    users.add(group.user_id);
+    byForm.set(group.form_id, users);
+  }
+  return byForm;
 }
 
 /**
@@ -2669,6 +2802,22 @@ export async function listByFormId(formId: string, filters: ListResponsesFilters
     orderBy: [{ submitted_at: 'asc' }, { id: 'asc' }],
     ...(filters.take === undefined ? {} : { take: filters.take }),
     ...(filters.skip === undefined ? {} : { skip: filters.skip }),
+  });
+}
+
+/**
+ * One response to a form, by id, with the same staff columns `listByFormId`
+ * returns, or null.
+ *
+ * STAFF ONLY, by the same contract as `listByFormId`: `formId` must be a form
+ * the caller resolved inside the classroom it authorized. The id is matched
+ * WITHIN that form, so an id belonging to any other form, in this classroom or
+ * another, finds nothing.
+ */
+export async function findInForm(formId: string, responseId: string) {
+  return getPrisma().formResponse.findFirst({
+    where: { id: responseId, form_id: formId },
+    select: RESPONSE_SELECT,
   });
 }
 

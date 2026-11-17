@@ -796,7 +796,7 @@ describe('cross-classroom scoping (S1)', () => {
  */
 describe('a MANY form', () => {
   const MANY_MESSAGE =
-    'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE';
+    'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE; a MANY form with no responses or drafts yet can be switched with form_update';
 
   beforeEach(() => {
     mocks.formFindById.mockResolvedValue({ ...FORM_ROW, responses_per_person: 'MANY' });
@@ -868,6 +868,22 @@ describe('a MANY form', () => {
     expect(error.kind).toBe('invalid_params');
     expect(error.code).toBe('form_many_responses');
     expect(error.message).toBe(MANY_MESSAGE);
+  });
+
+  it('answers another classroom’s MANY form as not found, never with the MANY message', async () => {
+    mocks.formFindById.mockResolvedValue({ ...FOREIGN_FORM, responses_per_person: 'MANY' });
+    for (const tool of ALL_TOOLS) {
+      for (const m of Object.values(mocks)) m.mockClear();
+      const error = await tool
+        .handler({ classroom: 'org/w26', form_id: FORM_ID, run: 3 } as never, CTX)
+        .catch(e => e);
+      expect(error, tool.name).toBeInstanceOf(ToolError);
+      expect((error as ToolError).kind, tool.name).toBe('not_found');
+      expect((error as ToolError).message, tool.name).toBe('Form not found in this classroom');
+      expect((error as ToolError).code, tool.name).not.toBe('form_many_responses');
+      expect((error as ToolError).message, tool.name).not.toContain('MANY');
+      expect(mocks.auditCreate, tool.name).not.toHaveBeenCalled();
+    }
   });
 
   it('says so in form_teams_run’s description', () => {
