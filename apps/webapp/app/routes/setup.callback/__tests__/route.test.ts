@@ -123,7 +123,7 @@ beforeEach(() => {
   savedEnv = { ...process.env };
   for (const key of GITHUB_KEYS) process.env[key] = `existing-${key}`;
   delete process.env.SETUP_GITHUB_APP;
-  process.env.NODE_ENV = 'test';
+  process.env.NODE_ENV = 'development';
 
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);

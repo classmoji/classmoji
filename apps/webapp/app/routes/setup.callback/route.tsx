@@ -43,7 +43,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   let appData;
   try {
-    const response = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, {
+    const conversionUrl = `https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`;
+    const response = await fetch(conversionUrl, {
       method: 'POST',
       headers: {
         Accept: 'application/vnd.github+json',

@@ -61,7 +61,7 @@ let savedEnv: NodeJS.ProcessEnv;
 beforeEach(() => {
   savedEnv = { ...process.env };
   delete process.env.SETUP_GITHUB_APP;
-  process.env.NODE_ENV = 'test';
+  process.env.NODE_ENV = 'development';
   process.env.SENTRY_DSN = '';
   vi.clearAllMocks();
   getAuthSessionMock.mockResolvedValue(null);
@@ -135,4 +135,19 @@ describe('root loader: setup paths while the wizard is off', () => {
       });
     }
   });
+
+  // Only a development server with the exact value `.env.example` ships.
+  for (const [label, env] of [
+    ['an empty NODE_ENV', { SETUP_GITHUB_APP: 'true', NODE_ENV: '' }],
+    ['a NODE_ENV other than development', { SETUP_GITHUB_APP: 'true', NODE_ENV: 'test' }],
+    ['a switch value other than "true"', { SETUP_GITHUB_APP: '1', NODE_ENV: 'development' }],
+    ['the switch set to "false"', { SETUP_GITHUB_APP: 'false', NODE_ENV: 'development' }],
+  ] as const) {
+    it(`stays off with ${label}`, async () => {
+      Object.assign(process.env, env);
+      expect(redirectedTo(await load('/setup/callback'))).toBe('/');
+      const home = await load('/');
+      expect(home).not.toBeInstanceOf(Response);
+    });
+  }
 });
