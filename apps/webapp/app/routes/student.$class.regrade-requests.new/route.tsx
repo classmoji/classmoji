@@ -130,6 +130,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     throw new Response('Assignment not found or not yours', { status: 403 });
   }
 
+  // One open request per submission (the service enforces it too, under a
+  // lock, for a double submit that gets past this check).
+  const open = await ClassmojiService.regradeRequest.findOpenByAssignmentId(
+    repositoryAssignment.id
+  );
+  if (open) {
+    return {
+      action: 'REQUEST_REGRADE',
+      error: 'This submission already has an open regrade request.',
+    };
+  }
+
   try {
     // Payload key must match the task's contract (`gitRepoAssignment` —
     // packages/tasks/src/workflows/regrades.ts); the old `repositoryAssignment`
@@ -142,7 +154,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       previous_grade: repositoryAssignment.grades.map(grade => grade.emoji),
     });
 
-    await waitForRunCompletion(run.id);
+    // The run's output is the request, with created: false when another
+    // submit filed the open request first.
+    const finished = await waitForRunCompletion(run.id);
+    const output = finished?.output as { created?: boolean } | undefined;
+    if (output?.created === false) {
+      return {
+        action: 'REQUEST_REGRADE',
+        error: 'This submission already has an open regrade request.',
+      };
+    }
 
     return {
       action: 'REQUEST_REGRADE',

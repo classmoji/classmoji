@@ -269,7 +269,21 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
       id?: string;
       status?: string;
       previous_grade?: string[];
+      /** False when another call filed the open request first (the service's lock). */
+      created?: boolean;
     } | null;
+    if (output?.id && output.created === false) {
+      return ok({
+        success: true,
+        created: false,
+        note: 'This submission already has an open regrade request; it was returned unchanged.',
+        regrade_request: {
+          id: output.id,
+          status: output.status,
+          previous_grade: output.previous_grade,
+        },
+      });
+    }
 
     // The run returns the created RegradeRequest; fall back to the DB if the
     // output was not materialized in the retrieve response.
