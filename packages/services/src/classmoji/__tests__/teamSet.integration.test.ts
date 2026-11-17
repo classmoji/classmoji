@@ -99,6 +99,7 @@ import type { CreateState, SolverOutput, TeamSetRunRow } from '../teamSet.servic
 import type { TeamSetConfig } from '../teamSetConfig.ts';
 import type { TeamSetProblem } from '../teamSetProblem.ts';
 import { prng } from './helpers/teamSetFixtures.ts';
+import { raceAgainstFormLock } from './helpers/formRowLock.ts';
 
 /**
  * The real engine, from packages/tasks' Python venv (see its README). Tests
@@ -401,7 +402,7 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
         { type: 'long_text', label: 'Anything the staff should know?' },
       ],
     });
-    await formService.update(form.id, { allow_multiple: true });
+    await formService.update(form.id, { responses_per_person: 'REPLACE' });
     const { revision } = await formService.publish(form.id);
     formId = form.id;
     revisionId = revision.id;
@@ -512,6 +513,101 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
         teamSetService.saveConfig({ classroomId, formId: publicForm.id, userId: ownerId })
       )
     ).toBe('form_not_classroom');
+  });
+
+  it('refuses a form that takes several responses per person', async () => {
+    const pitchFields = [
+      { type: 'ranked_choice', label: 'Rank the projects', options: ['Alpha', 'Beta'], ranks: 1 },
+    ];
+    const manyForm = await formService.create({
+      classroomId,
+      title: `Many ${suite}`,
+      access: 'CLASSROOM',
+      responses_per_person: 'MANY',
+      createdBy: ownerId,
+      fields: pitchFields,
+    });
+    await formService.publish(manyForm.id);
+    const onMany = { classroomId, formId: manyForm.id };
+
+    expect(await codeOf(teamSetService.saveConfig({ ...onMany, userId: ownerId }))).toBe(
+      'form_many_responses'
+    );
+    expect(await codeOf(teamSetService.suggestForForm(onMany))).toBe('form_many_responses');
+    expect(await codeOf(teamSetService.loadInputs(onMany))).toBe('form_many_responses');
+    // It can have no sets, and listing them says so rather than refusing.
+    expect(await teamSetService.listForForm(onMany)).toEqual([]);
+
+    // A set made while the form took one response each, then the column
+    // flipped underneath it (form.service refuses that switch while a set
+    // exists, so only a direct write can reach this state): running it, or
+    // starting another set from it, is refused too.
+    const flipped = await formService.create({
+      classroomId,
+      title: `Flipped ${suite}`,
+      access: 'CLASSROOM',
+      responses_per_person: 'REPLACE',
+      createdBy: ownerId,
+      fields: pitchFields,
+    });
+    await formService.publish(flipped.id);
+    const set = await teamSetService.saveConfig({
+      classroomId,
+      formId: flipped.id,
+      userId: ownerId,
+    });
+    // While it still takes one response each, a copy of that set is made.
+    const copy = await teamSetService.newSetFromSetup({
+      classroomId,
+      formId: flipped.id,
+      fromSetRef: set.id,
+      userId: ownerId,
+    });
+    expect(copy.id).not.toBe(set.id);
+    await prisma.form.update({
+      where: { id: flipped.id },
+      data: { responses_per_person: 'MANY' },
+    });
+    expect(
+      await codeOf(teamSetService.startRun({ classroomId, teamSetId: set.id, userId: ownerId }))
+    ).toBe('form_many_responses');
+    expect(
+      await codeOf(
+        teamSetService.newSetFromSetup({
+          classroomId,
+          formId: flipped.id,
+          fromSetRef: set.id,
+          userId: ownerId,
+        })
+      )
+    ).toBe('form_many_responses');
+    expect(await prisma.teamSetRun.count({ where: { team_set_id: set.id } })).toBe(0);
+  });
+
+  it('a new set waits for a switch to MANY and is refused against it', async () => {
+    const form = await formService.create({
+      classroomId,
+      title: `Switching ${suite}`,
+      access: 'CLASSROOM',
+      responses_per_person: 'REPLACE',
+      createdBy: ownerId,
+      fields: [
+        { type: 'ranked_choice', label: 'Rank the projects', options: ['Alpha', 'Beta'], ranks: 1 },
+      ],
+    });
+    await formService.publish(form.id);
+
+    // The set is saved while a switch to MANY holds the form (it has counted
+    // no sets yet); the switch commits first.
+    const outcome = await raceAgainstFormLock({
+      formId: form.id,
+      contender: () => teamSetService.saveConfig({ classroomId, formId: form.id, userId: ownerId }),
+      whileHeld: tx =>
+        tx.form.update({ where: { id: form.id }, data: { responses_per_person: 'MANY' } }),
+    });
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { error: { code?: string } }).error.code).toBe('form_many_responses');
+    expect(await prisma.teamSet.count({ where: { form_id: form.id } })).toBe(0);
   });
 
   it('keeps non-roster respondents out of the population', async () => {
@@ -2243,7 +2339,7 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
             },
           ],
         });
-        await formService.update(form.id, { allow_multiple: true });
+        await formService.update(form.id, { responses_per_person: 'REPLACE' });
         const { revision } = await formService.publish(form.id);
         form2Id = form.id;
         rev2Id = revision.id;
@@ -3038,7 +3134,7 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
           { type: 'dropdown', label: 'Pick a size', options: ['Small', 'Large'] },
         ],
       });
-      await formService.update(form.id, { allow_multiple: true });
+      await formService.update(form.id, { responses_per_person: 'REPLACE' });
       const { revision } = await formService.publish(form.id);
       formC = form.id;
       revC = revision.id;

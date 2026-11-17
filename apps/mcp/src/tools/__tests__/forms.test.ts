@@ -29,6 +29,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolError } from '../../mcp/errors.ts';
 import { toolAnnotations, type ToolContext, type ToolDefinition } from '../../mcp/registry.ts';
+import { toolArguments } from '../../mcp/toolInputSchema.ts';
 
 const mocks = vi.hoisted(() => ({
   assertProTier: vi.fn(),
@@ -44,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   formQuickUpdate: vi.fn(),
   formDelete: vi.fn(),
   responseListByFormId: vi.fn(),
+  responseFindInForm: vi.fn(),
   responseStatusLabels: vi.fn(),
   responseUpdateStaff: vi.fn(),
   responseCreate: vi.fn(),
@@ -81,6 +83,7 @@ vi.mock('@classmoji/services', () => ({
     },
     formResponse: {
       listByFormId: (...a: unknown[]) => mocks.responseListByFormId(...a),
+      findInForm: (...a: unknown[]) => mocks.responseFindInForm(...a),
       statusLabelSuggestions: (...a: unknown[]) => mocks.responseStatusLabels(...a),
       updateStaff: (...a: unknown[]) => mocks.responseUpdateStaff(...a),
       createResponses: (...a: unknown[]) => mocks.responseCreate(...a),
@@ -172,7 +175,7 @@ const FORM_ROW = {
   current_revision_id: 'rev-1',
   response_cap: null,
   closes_at: new Date('2026-09-30T04:00:00.000Z'),
-  allow_multiple: false,
+  responses_per_person: 'ONE',
   save_partials: false,
   confirmation_email: false,
   created_at: new Date('2026-08-01T00:00:00.000Z'),
@@ -226,6 +229,14 @@ beforeEach(() => {
   mocks.responseNames.mockImplementation(realFormIdentity.responseNames);
   mocks.formListRevisions.mockResolvedValue([]);
   mocks.responseStatusLabels.mockResolvedValue([]);
+  // The one-row read, as the service runs it: the id matched WITHIN the form.
+  // It reads the rows a test handed the list fake through that fake's
+  // implementation, so the list itself is never called.
+  mocks.responseFindInForm.mockImplementation(async (formId: string, responseId: string) => {
+    const rows = ((await mocks.responseListByFormId.getMockImplementation()?.(formId)) ??
+      []) as Array<{ id: string; form_id: string }>;
+    return rows.find(row => row.id === responseId && row.form_id === formId) ?? null;
+  });
   // Stands in for the real projection: strips `email` from every target and
   // leaves the rest of the snapshot alone, so a payload assertion still reads
   // the shape the tools actually emit.
@@ -414,6 +425,7 @@ describe('Pro gating', () => {
       expect(mocks.formFindById).not.toHaveBeenCalled();
       expect(mocks.formFindByClassroomId).not.toHaveBeenCalled();
       expect(mocks.responseListByFormId).not.toHaveBeenCalled();
+      expect(mocks.responseFindInForm).not.toHaveBeenCalled();
       expect(mocks.formCreate).not.toHaveBeenCalled();
       expect(mocks.formUpdate).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
@@ -470,6 +482,7 @@ describe('cross-classroom scoping (S1)', () => {
       // Nothing of the foreign form leaked, and nothing was written.
       expect(JSON.stringify((error as ToolError).message)).not.toContain('CS52 Waitlist');
       expect(mocks.responseListByFormId).not.toHaveBeenCalled();
+      expect(mocks.responseFindInForm).not.toHaveBeenCalled();
       expect(mocks.formUpdate).not.toHaveBeenCalled();
       expect(mocks.formPublish).not.toHaveBeenCalled();
       expect(mocks.formDelete).not.toHaveBeenCalled();
@@ -525,6 +538,11 @@ describe('cross-classroom scoping (S1)', () => {
       expect((error as ToolError).kind).toBe('not_found');
       expect((error as ToolError).message).toBe('Form response not found in this classroom');
     }
+    // Looked up by the id within the form S1 resolved, never on its own.
+    for (const call of mocks.responseFindInForm.mock.calls) {
+      expect(call).toEqual([FORM_ROW.id, 'resp-elsewhere']);
+    }
+    expect(mocks.responseFindInForm).toHaveBeenCalledTimes(2);
     expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
   });
 });
@@ -767,7 +785,7 @@ describe('form_update', () => {
         title: 'CS52 Waitlist 26W',
         response_cap: 40,
         closes_at: '2026-09-30T00:00:00-04:00',
-        allow_multiple: true,
+        responses_per_person: 'REPLACE',
       } as never,
       CTX
     );
@@ -777,12 +795,12 @@ describe('form_update', () => {
     expect(updates.title).toBe('CS52 Waitlist 26W');
     expect(updates.response_cap).toBe(40);
     expect(updates.closes_at).toBeInstanceOf(Date);
-    expect(updates.allow_multiple).toBe(true);
+    expect(updates.responses_per_person).toBe('REPLACE');
     // Nothing the caller did not send.
     expect(Object.keys(updates).sort()).toEqual([
-      'allow_multiple',
       'closes_at',
       'response_cap',
+      'responses_per_person',
       'title',
     ]);
 
@@ -793,9 +811,9 @@ describe('form_update', () => {
     expect(audit.data.tool).toBe('forms.builder.save-meta');
     expect(audit.data.mcp_tool).toBe('form_update');
     expect(audit.data.fields.sort()).toEqual([
-      'allow_multiple',
       'closes_at',
       'response_cap',
+      'responses_per_person',
       'title',
     ]);
   });
@@ -954,6 +972,317 @@ describe('form_update', () => {
       .catch(e => e);
     expect(error).not.toBeInstanceOf(ToolError);
     expect((error as Error).message).toBe('connection reset');
+  });
+});
+
+// ─── responses_per_person ───────────────────────────────────────────────────
+
+/**
+ * One setting, three values, spelled as the database spells them so form_get's
+ * output can be sent back unchanged. The old `allow_multiple` boolean is gone
+ * from the input, not kept beside it: two inputs for one setting could say
+ * different things in one call.
+ */
+describe('responses_per_person', () => {
+  const MANY_FORM = { ...FORM_ROW, access: 'CLASSROOM', responses_per_person: 'MANY' };
+  /** The registered argument object: strict, so an undeclared key is refused. */
+  const argsOf = (tool: ToolDefinition<never>) => toolArguments(tool.inputSchema);
+  const CREATE = { classroom: 'org/w26', title: 'Check-ins', access: 'CLASSROOM' };
+  const UPDATE = { classroom: 'org/w26', form_id: '5a0c7d1e-2b3f-4a5b-8c6d-7e8f9a0b1c2d' };
+
+  /** A form.service refusal as it throws: an Error carrying a code. */
+  const refusal = (code: string, message: string) => Object.assign(new Error(message), { code });
+
+  beforeEach(() => {
+    mocks.formFindById.mockResolvedValue(MANY_FORM);
+    mocks.formUpdate.mockResolvedValue(MANY_FORM);
+    mocks.formCreate.mockResolvedValue({
+      ...MANY_FORM,
+      status: 'DRAFT',
+      current_revision_id: null,
+    });
+  });
+
+  it('accepts ONE, REPLACE and MANY on form_create and form_update, and nothing else', () => {
+    for (const [tool, base] of [
+      [formCreateTool, CREATE],
+      [formUpdateTool, UPDATE],
+    ] as const) {
+      const schema = argsOf(tool as unknown as ToolDefinition<never>);
+      for (const value of ['ONE', 'REPLACE', 'MANY']) {
+        expect(schema.safeParse({ ...base, responses_per_person: value }).success, value).toBe(
+          true
+        );
+      }
+      for (const value of ['many', 'TWICE', true, 2, null]) {
+        expect(
+          schema.safeParse({ ...base, responses_per_person: value }).success,
+          String(value)
+        ).toBe(false);
+      }
+      // Optional: leaving it out keeps the service's default (create) or the
+      // stored value (update).
+      expect(schema.safeParse(base).success).toBe(true);
+    }
+  });
+
+  it('no longer takes allow_multiple: the argument is refused, not ignored', () => {
+    for (const tool of [formCreateTool, formUpdateTool]) {
+      expect(tool.inputSchema).not.toHaveProperty('allow_multiple');
+    }
+    expect(
+      argsOf(formUpdateTool as unknown as ToolDefinition<never>).safeParse({
+        ...UPDATE,
+        allow_multiple: true,
+      }).success
+    ).toBe(false);
+  });
+
+  it('describes the three values and their rules where a client reads them', () => {
+    const json = z.toJSONSchema(z.object(formUpdateTool.inputSchema), {
+      target: 'draft-7',
+      io: 'input',
+    }) as { properties: Record<string, { description?: string; enum?: string[] }> };
+    const field = json.properties.responses_per_person;
+    expect(field.enum).toEqual(['ONE', 'REPLACE', 'MANY']);
+    const text = field.description ?? '';
+    expect(text).toContain('CLASSROOM forms only');
+    expect(text).toContain('response_cap');
+    expect(text).toContain('drafts included');
+    expect(text).toContain('form_teams_');
+    // The setting is a CLASSROOM rule: a PUBLIC form is one row per address
+    // whatever it says, and leaving it out of an update changes nothing.
+    expect(text).toContain('A PUBLIC form keeps one response per verified email');
+    expect(text).toContain('ONE is the default for a new form');
+    expect(new TextEncoder().encode(text).length).toBeLessThan(1500);
+    // A client holding the old schema is told what to send instead.
+    expect(formUpdateTool.description).toContain('allow_multiple');
+    expect(formUpdateTool.description).toContain('true = REPLACE, false = ONE');
+  });
+
+  it('form_create passes the setting to the service and records it', async () => {
+    const payload = parse(
+      await formCreateTool.handler({ ...CREATE, responses_per_person: 'MANY' } as never, CTX)
+    );
+    expect(
+      (mocks.formCreate.mock.calls[0][0] as Record<string, unknown>).responses_per_person
+    ).toBe('MANY');
+    expect(payload.form.responses_per_person).toBe('MANY');
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data.responses_per_person).toBe('MANY');
+  });
+
+  it('form_create leaves the key out when the caller does, so the service default applies', async () => {
+    await formCreateTool.handler(CREATE as never, CTX);
+    expect('responses_per_person' in (mocks.formCreate.mock.calls[0][0] as object)).toBe(false);
+  });
+
+  it('form_update sends each value as given and audits the field by name', async () => {
+    for (const value of ['ONE', 'REPLACE', 'MANY'] as const) {
+      mocks.formUpdate.mockClear();
+      mocks.auditCreate.mockClear();
+      await formUpdateTool.handler(
+        { ...UPDATE, form_id: 'form-1', responses_per_person: value } as never,
+        CTX
+      );
+      expect(mocks.formUpdate).toHaveBeenCalledWith('form-1', { responses_per_person: value });
+      const audit = mocks.auditCreate.mock.calls[0][0] as {
+        action: string;
+        data: { tool: string; fields: string[] };
+      };
+      expect(audit.action).toBe('UPDATE');
+      expect(audit.data.tool).toBe('forms.builder.save-meta');
+      expect(audit.data.fields).toEqual(['responses_per_person']);
+    }
+  });
+
+  it('form_update records the new value when the setting changed, and only then', async () => {
+    const audited = async (before: string, after: string) => {
+      mocks.auditCreate.mockClear();
+      mocks.formFindById.mockResolvedValue({ ...MANY_FORM, responses_per_person: before });
+      mocks.formUpdate.mockResolvedValue({ ...MANY_FORM, responses_per_person: after });
+      await formUpdateTool.handler(
+        { ...UPDATE, form_id: 'form-1', responses_per_person: after } as never,
+        CTX
+      );
+      return (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+    };
+    expect((await audited('ONE', 'MANY')).responses_per_person).toBe('MANY');
+    expect((await audited('MANY', 'REPLACE')).responses_per_person).toBe('REPLACE');
+    expect(await audited('MANY', 'MANY')).not.toHaveProperty('responses_per_person');
+
+    // A save of other settings says nothing about it.
+    mocks.auditCreate.mockClear();
+    mocks.formFindById.mockResolvedValue(MANY_FORM);
+    mocks.formUpdate.mockResolvedValue({ ...MANY_FORM, title: 'Renamed' });
+    await formUpdateTool.handler({ ...UPDATE, form_id: 'form-1', title: 'Renamed' } as never, CTX);
+    expect(
+      (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data
+    ).not.toHaveProperty('responses_per_person');
+  });
+
+  it('surfaces each service refusal as a tool error with its code and message, unaudited', async () => {
+    const cases: Array<[ToolDefinition<never>, Record<string, unknown>, string, string]> = [
+      [
+        formCreateTool as never,
+        { ...CREATE, access: 'PUBLIC', responses_per_person: 'MANY' },
+        'FORM_MANY_NEEDS_CLASSROOM',
+        'Several responses per person need a classroom form: a public form keeps one response per email address.',
+      ],
+      [
+        formUpdateTool as never,
+        { ...UPDATE, form_id: 'form-1', access: 'PUBLIC' },
+        'FORM_MANY_NEEDS_CLASSROOM',
+        'Several responses per person need a classroom form: a public form keeps one response per email address.',
+      ],
+      [
+        formUpdateTool as never,
+        { ...UPDATE, form_id: 'form-1', responses_per_person: 'ONE' },
+        'FORM_RESPONSES_MODE_LOCKED',
+        'This form already has 3 responses (drafts included), so it cannot switch to or from several responses per person.',
+      ],
+      [
+        formUpdateTool as never,
+        { ...UPDATE, form_id: 'form-1', responses_per_person: 'MANY' },
+        'FORM_MANY_HAS_TEAM_SETS',
+        'This form has team sets, which read one response per person, so it cannot take several.',
+      ],
+    ];
+    for (const [tool, args, code, message] of cases) {
+      mocks.auditCreate.mockClear();
+      mocks.formCreate.mockRejectedValue(refusal(code, message));
+      mocks.formUpdate.mockRejectedValue(refusal(code, message));
+      const error = await tool.handler(args as never, CTX).catch(e => e);
+      expect(error, `${tool.name} ${code}`).toBeInstanceOf(ToolError);
+      expect((error as ToolError).kind).toBe('invalid_params');
+      expect((error as ToolError).code).toBe(code);
+      expect((error as ToolError).message).toBe(message);
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  });
+
+  it('form_get and list_forms report the setting, and allow_multiple is gone', async () => {
+    mocks.formGetCurrentRevision.mockResolvedValue({ id: 'rev-1', fields: DEFINITION });
+    const got = parse(
+      await formGetTool.handler({ classroom: 'org/w26', form_id: 'form-1' } as never, CTX)
+    );
+    expect(got.form.responses_per_person).toBe('MANY');
+    expect(got.form).not.toHaveProperty('allow_multiple');
+
+    mocks.formFindByClassroomId.mockResolvedValue([
+      { ...MANY_FORM, _count: { responses: 4 } },
+      { ...FORM_ROW, id: 'form-2', responses_per_person: 'REPLACE', _count: { responses: 1 } },
+    ]);
+    const listed = parse(await listFormsTool.handler({ classroom: 'org/w26' } as never, CTX));
+    expect(
+      listed.forms.map((form: Record<string, unknown>) => [form.id, form.responses_per_person])
+    ).toEqual([
+      ['form-1', 'MANY'],
+      ['form-2', 'REPLACE'],
+    ]);
+    for (const form of listed.forms) expect(form).not.toHaveProperty('allow_multiple');
+  });
+
+  /**
+   * On a MANY form one person can have several responses. Each is its own row
+   * on the staff side, attributed to that person, in the service's order;
+   * nothing groups them by user or address.
+   */
+  describe('two responses by one person', () => {
+    const FIRST = {
+      ...RESPONSE_ROW,
+      id: 'resp-1',
+      added_by: null,
+      submitted_at: new Date('2026-09-01T12:00:00.000Z'),
+      answers: { 'f-name': 'Maya Chen', 'f-why': 'Week 1 check-in' },
+    };
+    const SECOND = {
+      ...FIRST,
+      id: 'resp-2',
+      submitted_at: new Date('2026-09-08T12:00:00.000Z'),
+      answers: { 'f-name': 'Maya Chen', 'f-why': 'Week 2 check-in' },
+    };
+
+    beforeEach(() => {
+      mocks.responseListByFormId.mockResolvedValue([FIRST, SECOND]);
+      mocks.formGetCurrentRevision.mockResolvedValue({ id: 'rev-1', fields: DEFINITION });
+      mocks.responseUpdateStaff.mockImplementation(async ({ responseId, staff_status }) => ({
+        ...(responseId === 'resp-2' ? SECOND : FIRST),
+        staff_status,
+      }));
+    });
+
+    it('list_form_responses returns both, each attributed to the filler', async () => {
+      const payload = parse(
+        await listFormResponsesTool.handler(
+          { classroom: 'org/w26', form_id: 'form-1' } as never,
+          CTX
+        )
+      );
+      expect(payload.returned).toBe(2);
+      expect(
+        payload.responses.map((row: Record<string, unknown>) => [
+          row.id,
+          row.user_id,
+          row.email,
+          row.name,
+          (row.answers as Record<string, string>)['f-why'],
+        ])
+      ).toEqual([
+        ['resp-1', 'user-9', 'Maya.Chen@dartmouth.edu', 'Maya Chen', 'Week 1 check-in'],
+        ['resp-2', 'user-9', 'Maya.Chen@dartmouth.edu', 'Maya Chen', 'Week 2 check-in'],
+      ]);
+      // Still the allow-list: the bearer credential and the identity key stay out.
+      expect(JSON.stringify(payload)).not.toContain('SECRET-DRAFT-TOKEN');
+      expect(JSON.stringify(payload)).not.toContain('email_normalized');
+      const audit = mocks.auditCreate.mock.calls[0][0] as { data: { count: number } };
+      expect(audit.data.count).toBe(2);
+    });
+
+    it('form_response_get reads the one asked for, not the person’s other response', async () => {
+      const payload = parse(
+        await formResponseGetTool.handler(
+          { classroom: 'org/w26', form_id: 'form-1', response_id: 'resp-2' } as never,
+          CTX
+        )
+      );
+      expect(payload.response.id).toBe('resp-2');
+      expect(payload.response.answers['f-why']).toBe('Week 2 check-in');
+      // One row read by id within the form, never the whole form's responses.
+      expect(mocks.responseFindInForm).toHaveBeenCalledWith('form-1', 'resp-2');
+      expect(mocks.responseListByFormId).not.toHaveBeenCalled();
+    });
+
+    it('form_response_update labels exactly the response named by id', async () => {
+      const payload = parse(
+        await formResponseUpdateTool.handler(
+          {
+            classroom: 'org/w26',
+            form_id: 'form-1',
+            response_id: 'resp-2',
+            staff_status: 'followed up',
+          } as never,
+          CTX
+        )
+      );
+      expect(mocks.responseUpdateStaff).toHaveBeenCalledTimes(1);
+      expect(mocks.responseUpdateStaff).toHaveBeenCalledWith({
+        responseId: 'resp-2',
+        staff_status: 'followed up',
+      });
+      expect(payload.response.id).toBe('resp-2');
+    });
+  });
+
+  it('refuses another classroom’s form before any write, as for every other field', async () => {
+    mocks.formFindById.mockResolvedValue({ ...FOREIGN_FORM, responses_per_person: 'MANY' });
+    const error = await formUpdateTool
+      .handler({ ...UPDATE, form_id: 'form-x', responses_per_person: 'ONE' } as never, CTX)
+      .catch(e => e);
+    expect((error as ToolError).kind).toBe('not_found');
+    expect((error as ToolError).message).toBe('Form not found in this classroom');
+    expect(mocks.formUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 

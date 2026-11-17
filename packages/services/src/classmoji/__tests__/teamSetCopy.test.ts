@@ -36,6 +36,7 @@ import {
 } from '../teamSetExplain.ts';
 import { compileProblem, type CompileInput } from '../teamSetProblem.ts';
 import {
+  FORM_MANY_RESPONSES_TEXT,
   SET_BUSY_RUN_TEXT,
   SET_BUSY_TEXT,
   SET_NAME_EMPTY_TEXT,
@@ -284,7 +285,8 @@ function produceService(): string[] {
     retryBlockedText(2),
     SET_BUSY_TEXT,
     SET_BUSY_RUN_TEXT,
-    SET_NAME_EMPTY_TEXT
+    SET_NAME_EMPTY_TEXT,
+    FORM_MANY_RESPONSES_TEXT
   );
   const [rule] = workshopConfig().rules;
   out.push(

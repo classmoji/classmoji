@@ -16,7 +16,7 @@ import {
   type FormField,
   type FormOption,
 } from './formContract.ts';
-import type { Prisma, FormAccess, FormStatus, Role } from '@prisma/client';
+import type { Prisma, FormAccess, FormResponsesPerPerson, FormStatus, Role } from '@prisma/client';
 
 /**
  * Form Service
@@ -53,6 +53,22 @@ export const FORM_ROSTER_TOO_LARGE = 'FORM_ROSTER_TOO_LARGE';
  * it exists so a future divergence between the two is loud rather than empty.
  */
 export const FORM_UNKNOWN_OPTION_SOURCE = 'FORM_UNKNOWN_OPTION_SOURCE';
+/**
+ * MANY responses per person on a form that is (or would become) PUBLIC. A
+ * public filler is an email address, and an address can only hold one row.
+ */
+export const FORM_MANY_NEEDS_CLASSROOM = 'FORM_MANY_NEEDS_CLASSROOM';
+/**
+ * A switch to or from MANY on a form that already has response rows, drafts
+ * included. Every row copied the old mode into its `repeatable` column, and the
+ * uniqueness rules read that copy.
+ */
+export const FORM_RESPONSES_MODE_LOCKED = 'FORM_RESPONSES_MODE_LOCKED';
+/** MANY on a form a team set groups: team bidding reads one response per person. */
+export const FORM_MANY_HAS_TEAM_SETS = 'FORM_MANY_HAS_TEAM_SETS';
+
+const MANY_NEEDS_CLASSROOM_TEXT =
+  'Several responses per person need a classroom form: a public form keeps one response per email address.';
 
 /**
  * Paths the forms subtree owns inside `/{class}/forms/…`. A form slugged
@@ -157,7 +173,7 @@ const LIST_SELECT = {
   current_revision_id: true,
   response_cap: true,
   closes_at: true,
-  allow_multiple: true,
+  responses_per_person: true,
   save_partials: true,
   confirmation_email: true,
   created_by: true,
@@ -246,6 +262,8 @@ export interface CreateFormInput {
   title: string;
   description?: string | null;
   access?: FormAccess;
+  /** MANY only with `access: 'CLASSROOM'`. */
+  responses_per_person?: FormResponsesPerPerson;
   createdBy: string;
   /** Optional starting field list (a template preset). Validated + normalized. */
   fields?: unknown;
@@ -261,9 +279,13 @@ export async function create({
   title,
   description = null,
   access = 'PUBLIC',
+  responses_per_person = 'ONE',
   createdBy,
   fields,
 }: CreateFormInput) {
+  if (responses_per_person === 'MANY' && access !== 'CLASSROOM') {
+    throw serviceError(FORM_MANY_NEEDS_CLASSROOM, MANY_NEEDS_CLASSROOM_TEXT);
+  }
   let draftFields: FormDefinition | null = null;
   if (fields !== undefined) {
     draftFields = parseFormDefinition(fields);
@@ -278,6 +300,7 @@ export async function create({
         slug,
         description,
         access,
+        responses_per_person,
         created_by: createdBy,
         ...(draftFields ? { draft_fields: draftFields as unknown as Prisma.InputJsonValue } : {}),
       },
@@ -291,7 +314,11 @@ export interface UpdateFormInput {
   access?: FormAccess;
   response_cap?: number | null;
   closes_at?: Date | null;
-  allow_multiple?: boolean;
+  /**
+   * ONE ↔ REPLACE at any time. To or from MANY only while the form has no
+   * response rows at all, and MANY only on a CLASSROOM form with no team set.
+   */
+  responses_per_person?: FormResponsesPerPerson;
   save_partials?: boolean;
   confirmation_email?: boolean;
   /** The working field list. DRAFT only. */
@@ -323,6 +350,7 @@ export async function update(formId: string, updates: UpdateFormInput) {
       access: true,
       draft_fields: true,
       current_revision_id: true,
+      responses_per_person: true,
     },
   });
   if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
@@ -359,13 +387,23 @@ export async function update(formId: string, updates: UpdateFormInput) {
    * because a single guard on a write path is one bug away from being the only
    * thing between a roster and the internet.
    */
-  if (updates.access !== undefined && updates.access !== form.access && (published || !isDraft)) {
-    throw serviceError(
+  const accessFrozen = (state: { status: FormStatus; current_revision_id: string | null }) =>
+    serviceError(
       FORM_ACCESS_FROZEN,
-      published
+      state.current_revision_id !== null
         ? 'Access is frozen once a form has been published — its live revision was built for the audience it had then. Create a new form for a different audience.'
-        : `Access is frozen once a form leaves DRAFT (this form is ${form.status}). Responses collected under one identity mode cannot be mixed with another.`
+        : `Access is frozen once a form leaves DRAFT (this form is ${state.status}). Responses collected under one identity mode cannot be mixed with another.`
     );
+  if (updates.access !== undefined && updates.access !== form.access && (published || !isDraft)) {
+    throw accessFrozen(form);
+  }
+
+  // Checked against the RESULT of this update, so a single call cannot set
+  // MANY and PUBLIC together, nor turn a MANY form PUBLIC.
+  if ((updates.responses_per_person ?? form.responses_per_person) === 'MANY') {
+    if (nextAccess !== 'CLASSROOM') {
+      throw serviceError(FORM_MANY_NEEDS_CLASSROOM, MANY_NEEDS_CLASSROOM_TEXT);
+    }
   }
 
   const data: Prisma.FormUncheckedUpdateInput = {};
@@ -374,7 +412,9 @@ export async function update(formId: string, updates: UpdateFormInput) {
   if (updates.access !== undefined) data.access = updates.access;
   if (updates.response_cap !== undefined) data.response_cap = updates.response_cap;
   if (updates.closes_at !== undefined) data.closes_at = updates.closes_at;
-  if (updates.allow_multiple !== undefined) data.allow_multiple = updates.allow_multiple;
+  if (updates.responses_per_person !== undefined) {
+    data.responses_per_person = updates.responses_per_person;
+  }
   if (updates.save_partials !== undefined) data.save_partials = updates.save_partials;
   if (updates.confirmation_email !== undefined) {
     data.confirmation_email = updates.confirmation_email;
@@ -396,7 +436,73 @@ export async function update(formId: string, updates: UpdateFormInput) {
     assertFieldsAllowedForAccess(fieldsOf(form.draft_fields), nextAccess);
   }
 
-  return getPrisma().form.update({ where: { id: formId }, data });
+  // Everything above is a fast refusal from an unlocked read. An update that
+  // touches neither the audience nor the mode cannot break the rules below,
+  // so it writes without the lock.
+  if (updates.access === undefined && updates.responses_per_person === undefined) {
+    return getPrisma().form.update({ where: { id: formId }, data });
+  }
+
+  /**
+   * A change of audience or mode, decided under the form's row lock: the lock
+   * every classroom submit takes (formResponse.service `lockForm`) before it
+   * reads the mode and writes a row carrying it, the one a new draft and a new
+   * team set take in share mode before they do the same, and the one a
+   * concurrent update of either setting takes here. Holding it means nothing
+   * can land between the checks below and this write: no response row before a
+   * switch to or from MANY, no team set before a switch to MANY, and no
+   * `{ access: 'PUBLIC' }` racing a switch to MANY into a PUBLIC + MANY form.
+   * Both rules are checked against the locked row, whatever the unlocked read
+   * said.
+   */
+  // Long enough to wait out a staff batch of added responses, which holds this
+  // lock for up to thirty seconds (formResponse.service `createResponses`).
+  const FORM_LOCK_WAIT_TX = { maxWait: 10_000, timeout: 40_000 } as const;
+  return getPrisma().$transaction(async tx => {
+    const [locked] = await tx.$queryRaw<
+      {
+        responses_per_person: FormResponsesPerPerson;
+        access: FormAccess;
+        status: FormStatus;
+        current_revision_id: string | null;
+      }[]
+    >`SELECT responses_per_person, access, status, current_revision_id
+      FROM forms WHERE id = ${formId} FOR UPDATE`;
+    if (!locked) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+
+    if (
+      updates.access !== undefined &&
+      updates.access !== locked.access &&
+      (locked.current_revision_id !== null || locked.status !== 'DRAFT')
+    ) {
+      throw accessFrozen(locked);
+    }
+
+    const nextMode = updates.responses_per_person ?? locked.responses_per_person;
+    if (nextMode === 'MANY' && (updates.access ?? locked.access) !== 'CLASSROOM') {
+      throw serviceError(FORM_MANY_NEEDS_CLASSROOM, MANY_NEEDS_CLASSROOM_TEXT);
+    }
+
+    if ((nextMode === 'MANY') !== (locked.responses_per_person === 'MANY')) {
+      const rows = await tx.formResponse.count({ where: { form_id: formId } });
+      if (rows > 0) {
+        throw serviceError(
+          FORM_RESPONSES_MODE_LOCKED,
+          `This form already has ${rows === 1 ? 'a response' : `${rows} responses`} (drafts included), so it cannot switch to or from several responses per person.`
+        );
+      }
+      if (nextMode === 'MANY') {
+        const sets = await tx.teamSet.count({ where: { form_id: formId } });
+        if (sets > 0) {
+          throw serviceError(
+            FORM_MANY_HAS_TEAM_SETS,
+            'This form has team sets, which read one response per person, so it cannot take several.'
+          );
+        }
+      }
+    }
+    return tx.form.update({ where: { id: formId }, data });
+  }, FORM_LOCK_WAIT_TX);
 }
 
 // ─── Tier-1 option sourcing (roster_select) ─────────────────────────────────

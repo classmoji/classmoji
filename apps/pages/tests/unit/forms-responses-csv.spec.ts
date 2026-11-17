@@ -2,12 +2,14 @@ import { test, expect } from '@playwright/test';
 import { identityQuestionIds, type FormField } from '@classmoji/services/form-contract';
 
 import {
+  buildLongCsv,
   buildWideCsv,
   type ExportableResponse,
 } from '../../app/forms/admin/responsesCsv.server.ts';
 import {
   identityAudit,
   pickAnswers,
+  toResponseRow,
   type ResponsesContext,
 } from '../../app/forms/admin/responsesData.server.ts';
 
@@ -336,5 +338,87 @@ test.describe('identityAudit — what the view, export and reveal rows record', 
     expect(identityAudit(context(['field-a']), false)).toEqual({ identity_answers: false });
     // Asked for on a form with no identity question: nothing was disclosed.
     expect(identityAudit(context([]), true)).toEqual({ identity_answers: false });
+  });
+});
+
+/**
+ * A form that takes several responses per person: one filler, several rows.
+ * Every surface keys a row by the response id, so each response is its own row
+ * under its filler's name and address, and none of them is folded into
+ * another. Nothing here may dedupe by person.
+ */
+test.describe('several responses by one person', () => {
+  const text = field({ type: 'short_text', label: 'What did you work on' });
+  const first = response({
+    id: 'response-first',
+    submitted_at: '2026-11-03T09:00:00.000Z',
+    answers: { [text.id]: 'Parser' },
+  });
+  const second = response({
+    id: 'response-second',
+    submitted_at: '2026-11-10T09:00:00.000Z',
+    answers: { [text.id]: 'Tests' },
+  });
+
+  test('the wide sheet has one row per response, each with its filler', () => {
+    const rows = cells(buildWideCsv([text], [first, second], NONE));
+    expect(rows).toHaveLength(3); // header + both responses
+    expect(rows.slice(1).map(row => [row[0], row[1], row[2], row[ADDED_BY + 1]])).toEqual([
+      ['Ada Lovelace', 'ada@example.edu', '2026-11-03T09:00:00.000Z', 'Parser'],
+      ['Ada Lovelace', 'ada@example.edu', '2026-11-10T09:00:00.000Z', 'Tests'],
+    ]);
+  });
+
+  test('the long sheet has each response’s reviews, not one person’s', () => {
+    const inner = field({ type: 'short_text', label: 'Comment' });
+    const group = field({ type: 'repeat_group', label: 'Review each teammate', fields: [inner] });
+    const context = { targets: { [group.id]: [{ user_id: 'user-b', name: 'Grace' }] } };
+    const review = (comment: string, submitted_at: string, id: string) =>
+      response({
+        id,
+        submitted_at,
+        resolved_context: context,
+        answers: { [group.id]: { 'user-b': { [inner.id]: comment } } },
+      });
+
+    const rows = cells(
+      buildLongCsv(
+        [group],
+        [
+          review('Early', '2026-11-03T09:00:00.000Z', 'r-1'),
+          review('Late', '2026-11-10T09:00:00.000Z', 'r-2'),
+        ]
+      )
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.slice(1).map(row => [row[0], row[1], row[3], row[6], row[7]])).toEqual([
+      ['Ada Lovelace', 'ada@example.edu', 'Grace', '2026-11-03T09:00:00.000Z', 'Early'],
+      ['Ada Lovelace', 'ada@example.edu', 'Grace', '2026-11-10T09:00:00.000Z', 'Late'],
+    ]);
+  });
+
+  test('the table rows keep each response apart, keyed by response id', () => {
+    const stored = (id: string, value: string) =>
+      toResponseRow({
+        id,
+        name: 'Ada Lovelace',
+        email: 'ada@example.edu',
+        user_id: 'user-a',
+        submitted_at: new Date('2026-11-03T09:00:00.000Z'),
+        verified_at: new Date('2026-11-03T09:00:00.000Z'),
+        updated_at: new Date('2026-11-03T09:00:00.000Z'),
+        submission_state: 'SUBMITTED',
+        staff_status: null,
+        staff_note: null,
+        revision_id: 'rev-1',
+        answers: { [text.id]: value },
+        resolved_context: null,
+      });
+    const rows = [stored('response-1', 'Parser'), stored('response-2', 'Tests')];
+    expect(rows.map(row => [row.id, row.userId, row.answers[text.id]])).toEqual([
+      ['response-1', 'user-a', 'Parser'],
+      ['response-2', 'user-a', 'Tests'],
+    ]);
+    expect(new Set(rows.map(row => row.id)).size).toBe(2);
   });
 });

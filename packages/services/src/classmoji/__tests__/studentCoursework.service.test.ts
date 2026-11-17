@@ -119,6 +119,7 @@ const form = (id: string, over: Record<string, unknown> = {}) => ({
   access: 'CLASSROOM',
   status: 'OPEN',
   closes_at: null as Date | null,
+  responses_per_person: 'ONE',
   ...over,
 });
 
@@ -1254,6 +1255,33 @@ describe('listForStudent — FORM rows', () => {
     const row = await formRow({ status: 'CLOSED' }, true);
 
     expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
+  });
+
+  it('keeps Fill out on a submitted form that takes several responses, while it is open', async () => {
+    const href = 'https://pages.test/intro-101/forms/slug-form-a-f';
+    expect(await formRow({ responses_per_person: 'MANY' }, true)).toMatchObject({
+      status: 'SUBMITTED',
+      done: true,
+      action: { kind: 'FILL_OUT', href },
+    });
+    // Before the first response it is any other form.
+    expect(await formRow({ responses_per_person: 'MANY' })).toMatchObject({
+      status: 'NOT_SUBMITTED',
+      action: { kind: 'FILL_OUT', href },
+    });
+    // Shut, it takes no next response.
+    expect(await formRow({ responses_per_person: 'MANY', status: 'CLOSED' }, true)).toMatchObject({
+      status: 'SUBMITTED',
+      action: null,
+    });
+    expect(
+      await formRow({ responses_per_person: 'MANY', status: 'OPEN', closes_at: at(-1) }, true)
+    ).toMatchObject({ status: 'SUBMITTED', action: null });
+    // One response, editable or not, is done once it is in.
+    expect(await formRow({ responses_per_person: 'REPLACE' }, true)).toMatchObject({
+      status: 'SUBMITTED',
+      action: null,
+    });
   });
 
   it('shows a PUBLIC form untracked, with no per-student status until it closes', async () => {

@@ -159,7 +159,7 @@ async function makeForm({
       slug,
       access: 'CLASSROOM',
       status: 'DRAFT',
-      allow_multiple: allowMultiple,
+      responses_per_person: allowMultiple ? 'REPLACE' : 'ONE',
       response_cap: responseCap,
       created_by: await ownerOf(classroomId),
       draft_fields: parseFormDefinition(fields) as never,
@@ -680,8 +680,8 @@ test.describe('editing a recorded response', () => {
       .toBe('Second pass');
 
     // The point of the test: ONE row, replaced in place. The partial unique
-    // index on (form_id, user_id) is what makes that true, and `allow_multiple`
-    // is what makes it allowed.
+    // index on (form_id, user_id) is what makes that true, and
+    // `responses_per_person: REPLACE` is what makes it allowed.
     const rows = await responsesOf(multiFormId!);
     expect(rows).toHaveLength(1);
     expect(rows[0].submission_state).toBe('SUBMITTED');

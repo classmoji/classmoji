@@ -163,6 +163,10 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
 
 type MappedKind = 'invalid_params' | 'not_found' | 'internal';
 
+/** `form_many_responses`, from the service or from `loadPublishedForm`'s own check. */
+const MANY_RESPONSES_MESSAGE =
+  'Team sets need one response per person, and this form takes several (responses_per_person MANY). Use a form whose responses_per_person is ONE or REPLACE; a MANY form with no responses or drafts yet can be switched with form_update';
+
 /**
  * Every TeamSetError code, with the kind and the sentence a caller sees. The
  * sentences are written for the agent relaying them to a teacher: what is
@@ -189,6 +193,7 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     'form_not_classroom',
     { kind: 'invalid_params', message: 'Team sets need a CLASSROOM-access form' },
   ],
+  ['form_many_responses', { kind: 'invalid_params', message: MANY_RESPONSES_MESSAGE }],
   [
     'checks_failed',
     { kind: 'invalid_params', message: 'The setup has blocking problems; see issues' },
@@ -488,13 +493,23 @@ function compareRefusal(error: unknown): never {
 // ─── S1 loader ──────────────────────────────────────────────────────────────
 
 /**
- * The shared S1 form loader (shared.ts), plus the one refusal only this
- * surface makes: a form that was never published has no field list to
- * configure against. The service refuses it too, but only here can the
- * refusal say so precisely.
+ * The shared S1 form loader (shared.ts), plus the refusals only this surface
+ * can make precisely. A form that was never published has no field list to
+ * configure against. A form that takes several responses per person (MANY)
+ * cannot be grouped: the service refuses it too, but its list of a form's
+ * sets answers an empty list, so form_teams_get with a `team_set` would say
+ * "Team set not found" instead of why.
  */
 async function loadPublishedForm(formId: string, ctx: ToolContext): Promise<FormRecord> {
-  const form = await loadFormInClassroom(formId, ctx);
+  const form = await loadFormInClassroom<FormRecord & { responses_per_person?: string }>(
+    formId,
+    ctx
+  );
+  // MANY first: publishing would not help it, and a caller told to publish
+  // would open the form to students only to be refused again.
+  if (form.responses_per_person === 'MANY') {
+    throw new ToolError('invalid_params', MANY_RESPONSES_MESSAGE, 'form_many_responses');
+  }
   if (!form.current_revision_id) {
     throw new ToolError(
       'invalid_params',
@@ -1850,6 +1865,7 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
   title: 'Configure and run a team set',
   description:
     'Saves a team set’s config for a CLASSROOM form and solves it against the current responses. ' +
+    'Not for a form whose responses_per_person is MANY: teams need one response per person. ' +
     'Staff only (owner or teacher); requires Pro.\n' +
     'patch is a partial config (see form_teams_get’s config and patch_help): rules {upsert, remove} ' +
     'keyed by field_id + job (strength off/prefer/must, weight 1-10), pins {add, remove, clear}, ' +

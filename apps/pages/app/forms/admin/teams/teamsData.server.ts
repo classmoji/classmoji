@@ -319,6 +319,8 @@ export interface TeamsFormContext extends FormAdminContext {
     /** Has a published revision: a set can be built from it. */
     published: boolean;
     closesAtIso: string | null;
+    /** Takes several responses per person: no team set can be made from it. */
+    manyResponses: boolean;
   };
   isOwner: boolean;
 }
@@ -334,7 +336,8 @@ const notFound = () => new Response('Not found', { status: 404 });
 /**
  * Run a service read, turning "that isn't here" into a 404 so a service
  * error never reaches the root ErrorBoundary as a crash. `form_not_classroom`
- * is a 404 too: a PUBLIC form has no team sets.
+ * and `form_many_responses` are 404s too: a PUBLIC form, or one that takes
+ * several responses per person, has no team sets.
  */
 export async function orNotFound<T>(read: () => Promise<T>): Promise<T> {
   try {
@@ -342,7 +345,9 @@ export async function orNotFound<T>(read: () => Promise<T>): Promise<T> {
   } catch (error) {
     if (
       isTeamSetError(error) &&
-      (error.code === 'not_found' || error.code === 'form_not_classroom')
+      (error.code === 'not_found' ||
+        error.code === 'form_not_classroom' ||
+        error.code === 'form_many_responses')
     ) {
       throw notFound();
     }
@@ -362,6 +367,7 @@ function formContextOf(access: FormAdminContext, form: FormRow): TeamsFormContex
       access: form.access === 'CLASSROOM' ? 'CLASSROOM' : 'PUBLIC',
       published: Boolean(form.current_revision_id),
       closesAtIso: form.closes_at ? form.closes_at.toISOString() : null,
+      manyResponses: form.responses_per_person === 'MANY',
     },
     isOwner: access.membership.role === 'OWNER',
   };
@@ -391,7 +397,9 @@ async function setFor(
   } catch (error) {
     if (
       isTeamSetError(error) &&
-      (error.code === 'not_found' || error.code === 'form_not_classroom')
+      (error.code === 'not_found' ||
+        error.code === 'form_not_classroom' ||
+        error.code === 'form_many_responses')
     ) {
       return null;
     }
@@ -1056,6 +1064,7 @@ async function formFacts(context: TeamsFormContext): Promise<TeamsFormFacts> {
     access: context.form.access,
     published: context.form.published,
     closesAtIso: context.form.closesAtIso,
+    manyResponses: context.form.manyResponses,
     responsesSubmitted,
   };
 }

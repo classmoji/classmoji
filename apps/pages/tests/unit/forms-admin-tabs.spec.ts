@@ -44,6 +44,16 @@ test.describe('formAdminTabItems', () => {
     expect(items.some(item => item.href.endsWith('/teams'))).toBe(false);
   });
 
+  test('a form that takes several responses per person has no Teams tab', () => {
+    const items = formAdminTabItems(props({ manyResponses: true }));
+    expect(items.map(item => item.tab)).toEqual(['edit', 'responses']);
+    expect(formAdminTabItems(props({ manyResponses: false })).map(item => item.tab)).toEqual([
+      'edit',
+      'responses',
+      'teams',
+    ]);
+  });
+
   test('a public form asked to show Teams as active marks nothing current', () => {
     // The teams pages refuse a PUBLIC form; the switcher never invents the tab.
     const items = formAdminTabItems(props({ access: 'PUBLIC', active: 'teams' }));

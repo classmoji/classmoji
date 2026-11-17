@@ -84,6 +84,7 @@ const CONTRACT_SET_CODES = [
   'invalid_config',
   'no_grouping_field',
   'form_not_classroom',
+  'form_many_responses',
   'checks_failed',
   'run_not_solved',
   'run_stale',
