@@ -53,6 +53,7 @@ const AskMojiRoot = lazy(() => import('./components/features/ask-moji/AskMojiRoo
 import { isAskMojiEmbedPath } from './components/features/ask-moji/paths';
 import type { AskMojiRootConfig } from './components/features/ask-moji/AskMojiRoot';
 import { askMojiHostUrls } from '~/utils/askMojiHosts.server';
+import { isSetupPath, setupWizardEnabled } from '~/utils/setupWizard.server';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 import NavigationProgress from './components/layout/NavigationProgress';
@@ -201,13 +202,10 @@ const askMojiRootConfig = async (
 };
 
 const loadRoot = async ({ request, url }: Route.LoaderArgs) => {
-  // Redirect to setup wizard if requested
-  if (process.env.SETUP_GITHUB_APP && !url.pathname.startsWith('/setup')) {
-    return redirect('/setup');
-  }
-
-  // Setup routes are public - bypass all auth
-  if (url.pathname.startsWith('/setup')) {
+  // While the setup wizard is on, every page leads to it and its own pages
+  // need no session. While it is off, its paths are like any other.
+  if (setupWizardEnabled()) {
+    if (!isSetupPath(url.pathname)) return redirect('/setup');
     return { user: null };
   }
 
