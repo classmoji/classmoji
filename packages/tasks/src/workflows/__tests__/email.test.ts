@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 // so the test can invoke `run` directly.
 vi.mock('@trigger.dev/sdk', () => ({
   task: (config: unknown) => config,
+  AbortTaskRunError: class AbortTaskRunError extends Error {},
   logger: { info: vi.fn(), error: vi.fn(), warn: (...a: unknown[]) => mocks.warn(...a) },
 }));
 
@@ -356,6 +357,81 @@ describe('sendBatchEmailTask', () => {
     await expect(
       runBatch({ emails: [{ to: 'a@x.edu', template: { id: 'roster-added' } }] })
     ).rejects.toThrow('rate_limit_exceeded');
+  });
+
+  it('skips an undeliverable address instead of losing the whole batch', async () => {
+    // Resend refuses a batch outright over one invalid `to`; one typo used to
+    // cost 49 other students their invitation.
+    mocks.batchSend.mockResolvedValue({ data: [{ id: 'a' }], error: null });
+
+    await runBatch({
+      emails: [
+        { to: 'a@x.edu', template: { id: 'roster-invited' } },
+        { to: 'krishna@gmail.co.', template: { id: 'roster-invited' } },
+      ],
+    });
+
+    expect(mocks.batchSend).toHaveBeenCalledTimes(1);
+    expect(mocks.batchSend.mock.calls[0][0].map((e: { to: string }) => e.to)).toEqual(['a@x.edu']);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      'Skipping undeliverable addresses',
+      expect.objectContaining({ count: 1 })
+    );
+  });
+
+  it('sends permissively, so Resend delivers the rest when it refuses one', async () => {
+    mocks.batchSend.mockResolvedValue({
+      data: { data: [{ id: 'a' }], errors: [{ index: 1, message: 'Invalid `to` field.' }] },
+      error: null,
+    });
+
+    await expect(
+      runBatch({
+        emails: [
+          { to: 'a@x.edu', template: { id: 'roster-invited' } },
+          { to: 'b@x.edu', template: { id: 'roster-invited' } },
+        ],
+      })
+    ).resolves.toHaveLength(1);
+
+    expect(mocks.batchSend.mock.calls[0][1]).toMatchObject({ batchValidation: 'permissive' });
+    expect(mocks.warn).toHaveBeenCalledWith('Resend refused emails in a batch', {
+      batch: 0,
+      refused: [{ to: 'b@x.edu', message: 'Invalid `to` field.' }],
+    });
+  });
+
+  it('sends nothing when every address is undeliverable', async () => {
+    await expect(
+      runBatch({ emails: [{ to: 'nope', template: { id: 'roster-invited' } }] })
+    ).resolves.toEqual([]);
+    expect(mocks.batchSend).not.toHaveBeenCalled();
+  });
+
+  it('stops retrying on a validation error, which would fail the same way again', async () => {
+    const { AbortTaskRunError } = await import('@trigger.dev/sdk');
+    mocks.batchSend.mockResolvedValue({
+      data: null,
+      error: { message: 'Invalid `to` field.', statusCode: 422 },
+    });
+
+    await expect(
+      runBatch({ emails: [{ to: 'a@x.edu', template: { id: 'roster-added' } }] })
+    ).rejects.toBeInstanceOf(AbortTaskRunError);
+  });
+
+  it('keeps retrying on a rate limit', async () => {
+    const { AbortTaskRunError } = await import('@trigger.dev/sdk');
+    mocks.batchSend.mockResolvedValue({
+      data: null,
+      error: { message: 'rate_limit_exceeded', statusCode: 429 },
+    });
+
+    const error = await runBatch({
+      emails: [{ to: 'a@x.edu', template: { id: 'roster-added' } }],
+    }).catch(e => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(AbortTaskRunError);
   });
 
   it('is a no-op on an empty list', async () => {

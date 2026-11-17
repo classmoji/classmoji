@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
+import { normalizeEmail } from '@classmoji/utils/email';
 import { appUrl, escapeVars, inviteLandingUrl } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
@@ -29,6 +30,13 @@ export interface AddStudentsResult {
    * counted in `addedExistingUsers`.
    */
   alreadyEnrolled: string[];
+  /**
+   * Addresses (as the caller typed them) that are not deliverable addresses:
+   * nothing is written or sent for them. Resend refuses a whole batch over one
+   * such `to`, so letting one through would cost every other student their
+   * email.
+   */
+  invalid: string[];
   /**
    * Composed notification emails for the CALLER to send. Services must not
    * import @classmoji/tasks (tasks already depends on services — importing it
@@ -80,17 +88,27 @@ export const addStudents = async ({
     throw new Error(`[roster] classroom ${classroomId} not found`);
   }
 
+  // Every address is trimmed and lower-cased (how user emails are stored), and
+  // one that is not deliverable is refused here, whoever called: the web form
+  // and the MCP schema check too, but this is the write.
+  const invalid: string[] = [];
+  const validStudents: Array<RosterStudentInput & { typed: string }> = [];
+  for (const student of students) {
+    const email = normalizeEmail(student.email);
+    if (email) validStudents.push({ ...student, email, typed: student.email });
+    else invalid.push(student.email);
+  }
+
   // One entry per address: the same student listed twice (in any casing) is
   // one student, enrolled, counted and emailed once.
   const seen = new Set<string>();
-  const uniqueStudents = students.filter(s => {
-    const key = s.email.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
+  const uniqueStudents = validStudents.filter(s => {
+    if (seen.has(s.email)) return false;
+    seen.add(s.email);
     return true;
   });
 
-  const emails = uniqueStudents.map(s => s.email.toLowerCase());
+  const emails = uniqueStudents.map(s => s.email);
   const existingUsers = await getPrisma().user.findMany({
     // Only a verified address identifies a person; an unverified one gets an
     // invite like any unknown address, claimed once they verify it.
@@ -120,8 +138,10 @@ export const addStudents = async ({
   }
   const existingByEmail = new Map(existingUsers.map(u => [(u.email ?? '').toLowerCase(), u]));
 
-  const toAddDirectly: Array<RosterStudentInput & { userId: string; userName: string | null }> = [];
-  const toInvite: RosterStudentInput[] = [];
+  const toAddDirectly: Array<
+    (typeof uniqueStudents)[number] & { userId: string; userName: string | null }
+  > = [];
+  const toInvite: typeof uniqueStudents = [];
   for (const student of uniqueStudents) {
     const existing = existingByEmail.get(student.email.toLowerCase());
     if (existing) {
@@ -170,7 +190,7 @@ export const addStudents = async ({
   const newlyEnrolled = toAddDirectly.filter(s => insertedUserIds.has(s.userId));
   const alreadyEnrolled = toAddDirectly
     .filter(s => !insertedUserIds.has(s.userId))
-    .map(s => s.email);
+    .map(s => s.typed);
 
   const emailsOut: RosterEmail[] = [];
   const activations: AddStudentsResult['activations'] = [];
@@ -227,6 +247,7 @@ export const addStudents = async ({
     addedExistingUsers: newlyEnrolled.length,
     invitedNewUsers: toInvite.length,
     alreadyEnrolled,
+    invalid,
     emails: emailsOut,
     activations,
   };

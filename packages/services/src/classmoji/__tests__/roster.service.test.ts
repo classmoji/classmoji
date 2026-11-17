@@ -147,7 +147,8 @@ describe('roster.addStudents', () => {
     const url = result.emails[0].payload.template.variables.APP_URL as string;
     const outer = new URL(url.replace(/&amp;/g, '&'));
     const target = outer.searchParams.get('redirect');
-    expect(target).toBe('/select-organization?invite=tok(New.Student%40x.edu)');
+    // Signed for the stored (lower-case) address; the claim compares without case.
+    expect(target).toBe('/select-organization?invite=tok(new.student%40x.edu)');
   });
 
   it('escapes user-authored names before they become template variables', async () => {
@@ -313,6 +314,42 @@ describe('roster.addStudents', () => {
       data: [{ school_email: 'dup@x.edu', classroom_id: 'class-1', student_name: 'D' }],
       skipDuplicates: true,
     });
+  });
+
+  it('refuses an undeliverable address: no row, no email, reported', async () => {
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      // The address that sank a whole batch of invitations in production.
+      students: [
+        { email: 'krishna@gmail.co.', name: 'K' },
+        { email: 'not-an-email', name: 'N' },
+        { email: 'ok@x.edu', name: 'O' },
+      ],
+    });
+
+    expect(result.invalid).toEqual(['krishna@gmail.co.', 'not-an-email']);
+    expect(result.invitedNewUsers).toBe(1);
+    expect(result.emails.map(e => e.payload.to)).toEqual(['ok@x.edu']);
+    expect(inviteCreateMany).toHaveBeenCalledWith({
+      data: [{ school_email: 'ok@x.edu', classroom_id: 'class-1', student_name: 'O' }],
+      skipDuplicates: true,
+    });
+  });
+
+  it('writes and mails the trimmed, lower-case address', async () => {
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: '  Jane@X.edu ' }],
+    });
+
+    expect(result.invalid).toEqual([]);
+    expect(result.emails.map(e => e.payload.to)).toEqual(['jane@x.edu']);
   });
 
   it('throws when the classroom does not exist', async () => {

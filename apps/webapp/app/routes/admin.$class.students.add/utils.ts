@@ -1,6 +1,7 @@
-const isValidEmail = (email: string) => {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-};
+// The one address check (registration uses it too). The regex this replaced
+// passed `jane@gmail.co.`, which Resend refuses, and one such address sank a
+// whole batch of invitations.
+import { isValidEmail } from '@classmoji/utils/email';
 
 export const parseStudentInput = (text: string) => {
   const lines = text

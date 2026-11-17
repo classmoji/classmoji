@@ -1,6 +1,7 @@
-import { logger, task } from '@trigger.dev/sdk';
+import { AbortTaskRunError, logger, task } from '@trigger.dev/sdk';
 import { Resend } from 'resend';
 import getPrisma from '@classmoji/database';
+import { isValidEmail } from '@classmoji/utils/email';
 
 /**
  * Correlate this send back to the thing that asked for it.
@@ -292,6 +293,17 @@ async function recordProviderMessageId(
 /** Resend caps a batch at 100 messages per request. */
 const RESEND_BATCH_LIMIT = 100;
 
+/**
+ * A Resend error no retry can fix: a 4xx other than 429 (rate limit) is about
+ * the request itself (an invalid `to`, a missing template), and the same
+ * request fails the same way five times.
+ */
+const isPermanentResendError = (error: { statusCode?: number | null }) =>
+  typeof error.statusCode === 'number' &&
+  error.statusCode >= 400 &&
+  error.statusCode < 500 &&
+  error.statusCode !== 429;
+
 const chunk = <T>(items: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -335,8 +347,28 @@ export const sendBatchEmailTask = task({
       throw new Error('RESEND_API_KEY env var not set in Trigger.dev environment');
     }
 
-    const { emails } = 'payload' in input ? input.payload : input;
-    if (!emails?.length) {
+    const { emails: requested } = 'payload' in input ? input.payload : input;
+
+    // In its default (strict) mode Resend refuses the WHOLE batch over one bad
+    // email, so a single typo (`jane@gmail.co.`) cost 51 students their
+    // invitations. The sends below are permissive; this filter only keeps the
+    // addresses we already know are bad out of the request. It is
+    // deterministic, so a retry builds the same chunks under the same keys.
+    const emails: SendEmailTaskBody[] = [];
+    const skipped: SendEmailTaskBody[] = [];
+    for (const email of requested ?? []) {
+      const to = typeof email.to === 'string' ? email.to.trim() : '';
+      if (isValidEmail(to)) emails.push({ ...email, to });
+      else skipped.push(email);
+    }
+    if (skipped.length > 0) {
+      logger.warn('Skipping undeliverable addresses', {
+        count: skipped.length,
+        to: skipped.map(email => email.to),
+      });
+    }
+
+    if (!emails.length) {
       logger.info('No emails to send, skipping batch');
       return [];
     }
@@ -351,6 +383,9 @@ export const sendBatchEmailTask = task({
         // two chunks in one run are different payloads and would 409 if they
         // shared one.
         idempotencyKey: `send-batch-email/${ctx.run.id}/${index}`,
+        // Send the valid emails and report the rest in `errors`, instead of
+        // refusing the batch over one of them.
+        batchValidation: 'permissive',
       });
 
       if (error) {
@@ -359,10 +394,27 @@ export const sendBatchEmailTask = task({
           size: batch.length,
           error,
         });
-        throw new Error(`Resend batch send failed: ${error.message}`);
+        const message = `Resend batch send failed: ${error.message}`;
+        // Chunks before this one were sent: retrying them is safe (their
+        // idempotency keys replay), but a permanent error would only fail again.
+        throw isPermanentResendError(error) ? new AbortTaskRunError(message) : new Error(message);
       }
 
-      logger.info('Batch sent', { batch: index, size: batch.length });
+      // Emails Resend refused one by one: the run still succeeds for everyone
+      // else, and a retry could not fix these.
+      const refused = data?.errors ?? [];
+      if (refused.length > 0) {
+        logger.warn('Resend refused emails in a batch', {
+          batch: index,
+          refused: refused.map(r => ({ to: batch[r.index]?.to, message: r.message })),
+        });
+      }
+
+      logger.info('Batch sent', {
+        batch: index,
+        size: batch.length,
+        sent: batch.length - refused.length,
+      });
       sent.push(data);
     }
 

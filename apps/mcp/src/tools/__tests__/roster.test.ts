@@ -91,6 +91,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 1,
       invitedNewUsers: 1,
       alreadyEnrolled: [],
+      invalid: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
     });
@@ -117,6 +118,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 0,
       invitedNewUsers: 0,
       alreadyEnrolled: [],
+      invalid: [],
       emails: [],
       activations: [],
     });
@@ -129,6 +131,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 1,
       invitedNewUsers: 0,
       alreadyEnrolled: [],
+      invalid: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
     });
@@ -144,6 +147,7 @@ describe('roster_add_student', () => {
       addedExistingUsers: 0,
       invitedNewUsers: 1,
       alreadyEnrolled: ['a@x.edu'],
+      invalid: [],
       emails: [{ payload: { to: 'b@x.edu', template: { id: 'roster-invited', variables: {} } } }],
       activations: [],
     });
@@ -154,6 +158,7 @@ describe('roster_add_student', () => {
       added: 0,
       invited: 1,
       already_enrolled: ['a@x.edu'],
+      invalid: [],
       total: 2,
     });
     // Only the invitee is emailed; the audit row carries the count, not addresses.
@@ -167,6 +172,21 @@ describe('roster_add_student', () => {
       invited: 1,
       already_enrolled: 1,
     });
+  });
+
+  it("refuses an address Resend would reject, by the web form's rule", async () => {
+    // One such `to` fails the whole invitation batch. zod's own email format
+    // is a different rule; the tool uses the shared one.
+    const { students } = rosterAddStudentTool.inputSchema as unknown as {
+      students: {
+        element: {
+          shape: { email: { safeParse: (v: string) => { success: boolean; data?: string } } };
+        };
+      };
+    };
+    const { email } = students.element.shape;
+    expect(email.safeParse('krishna@gmail.co.').success).toBe(false);
+    expect(email.safeParse(' jane@school.edu ').data).toBe('jane@school.edu');
   });
 
   it('writes no audit row and sends nothing when the roster write fails', async () => {

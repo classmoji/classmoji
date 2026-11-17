@@ -1,11 +1,11 @@
 /**
- * The shared address check behind registration, account settings and
+ * The shared address check behind registration, account settings, the roster and
  * sendEmailVerificationCode (#396): reject what Resend refuses as a `to`,
  * accept the addresses people actually have.
  */
 
 import { describe, expect, it } from 'vitest';
-import { isValidEmail, normalizeEmail } from '../email';
+import { isValidEmail, normalizeEmail } from '../email.ts';
 
 describe('isValidEmail', () => {
   it.each([
