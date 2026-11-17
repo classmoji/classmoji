@@ -4,7 +4,6 @@
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "types": [],
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "rootDirs": [".", "./.react-router/types"],
     "paths": {
       "~/*": ["./app/*"]

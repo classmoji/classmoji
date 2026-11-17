@@ -290,7 +290,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           <Button onClick={onAddTags}>Add</Button>
         </div>
 
-        <Table
+        <Table<(typeof team.tags)[number]>
           columns={tagColumns}
           dataSource={team.tags}
           rowHoverable={false}

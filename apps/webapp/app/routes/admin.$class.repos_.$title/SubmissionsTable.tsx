@@ -382,7 +382,7 @@ const SubmissionsTable = ({
   // page header already names it, so the trio sits flat instead.
   const groupPerAssignment = assignments.length > 1;
 
-  const assignmentColumns: ColumnsType<SubmissionsRepo> = assignments.flatMap(assignment => {
+  const assignmentColumns = assignments.flatMap((assignment): ColumnsType<SubmissionsRepo> => {
     const trio: ColumnsType<SubmissionsRepo> = [
       {
         title: 'Submission',
