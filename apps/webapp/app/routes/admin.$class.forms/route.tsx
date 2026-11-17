@@ -75,6 +75,12 @@ interface FormRow {
   closesAt: string | null;
   updatedAt: string;
   /**
+   * Team sets can be made from it: a CLASSROOM form taking one response per
+   * person. A public form's respondents are not a roster, and a team set reads
+   * one response each.
+   */
+  teamSets: boolean;
+  /**
    * The link the copy button hands out — built in the loader, because it is the
    * only place that knows whether this classroom has a course site and
    * therefore which HOST and which PATH the link takes. See `publicFormUrlFor`.
@@ -142,6 +148,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // string arrived.
       closesAt: form.closes_at ? form.closes_at.toISOString() : null,
       updatedAt: form.updated_at.toISOString(),
+      teamSets: form.access === 'CLASSROOM' && form.responses_per_person !== 'MANY',
       publicUrl: publicUrlFor(form.slug),
     })),
   };
@@ -508,7 +515,7 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
           <FormActionLink href={`${formsUrl}/${record.slug}/edit`} icon={<IconPencil size={17} />}>
             Edit
           </FormActionLink>
-          {record.access === 'CLASSROOM' && (
+          {record.teamSets && (
             <FormActionLink
               href={`${formsUrl}/${record.slug}/teams`}
               icon={<IconUsersGroup size={17} />}

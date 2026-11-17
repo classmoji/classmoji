@@ -122,9 +122,26 @@ export interface FormRendererProps {
   /**
    * Server-side autosave. Called with the current answers after ~1.5s of quiet,
    * never on mount, and never when nothing has been typed. The caller decides
-   * what to do with it (and whether the row is safe to write at all).
+   * what to do with it (and whether the row is safe to write at all), and
+   * returns `false` when it did not send it: those answers then count as
+   * unsaved and are offered again on the next render (a reply arriving, `busy`
+   * dropping), not only on the next keystroke.
    */
-  onDraft?: ((answers: Record<string, unknown>) => void) | null;
+  onDraft?: ((answers: Record<string, unknown>) => boolean | void) | null;
+  /**
+   * Set by the renderer to a function that sends a pending server autosave
+   * NOW instead of when its timer fires. For a caller about to unmount the
+   * form (a link away from it), whose unmount would otherwise cancel the
+   * timer and lose the last edits. Does nothing when no save is pending.
+   */
+  flushDraftRef?: { current: (() => void) | null } | null;
+  /**
+   * The `storedAnswers` this form mounts with are not saved on the server
+   * (answers handed back by a refused submit). Read once, at mount: the first
+   * server autosave then sends them instead of treating them as already
+   * saved.
+   */
+  seedIsUnsaved?: boolean;
   submitLabel: string;
   busy?: boolean;
   /** A server-side error to show above the submit button. */
@@ -297,6 +314,8 @@ export default function FormRenderer({
   lockedIdentity,
   draftKey,
   onDraft,
+  flushDraftRef,
+  seedIsUnsaved = false,
   submitLabel,
   busy = false,
   error,
@@ -461,12 +480,15 @@ export default function FormRenderer({
    */
   const draftReady = useRef(false);
   const lastSentDraft = useRef<string>('');
+  const seedUnsaved = useRef(seedIsUnsaved);
   // Held in a ref so the effect can depend on `values` alone. Callers pass an
   // inline arrow (it closes over a fetcher), which is a new function identity
   // every render — in the dependency array it would say "changed" on renders
   // where nothing about the draft did.
   const draftSink = useRef(onDraft);
   draftSink.current = onDraft;
+  /** The save the timer below will send, while one is scheduled. */
+  const pendingDraft = useRef<{ send: () => void } | null>(null);
 
   useEffect(() => {
     if (!draftSink.current) return;
@@ -474,17 +496,45 @@ export default function FormRenderer({
     const serialized = JSON.stringify(values.answers ?? {});
     if (!draftReady.current) {
       draftReady.current = true;
-      lastSentDraft.current = serialized;
-      return;
+      // What the form opened with is on the server already, unless the
+      // caller says otherwise; then it goes out like an edit.
+      if (!seedUnsaved.current) {
+        lastSentDraft.current = serialized;
+        return;
+      }
     }
     if (serialized === lastSentDraft.current) return;
 
-    const handle = window.setTimeout(() => {
-      lastSentDraft.current = serialized;
-      draftSink.current?.(values.answers as Record<string, unknown>);
-    }, SERVER_DRAFT_DEBOUNCE_MS);
-    return () => window.clearTimeout(handle);
-  }, [values]);
+    // Marked sent only when the sink took it. One it declined (a submit is
+    // outstanding) stays unsent, so the next render schedules it again: the
+    // reply that ends the submit re-renders this form through `busy`.
+    const send = () => {
+      pendingDraft.current = null;
+      if (draftSink.current?.(values.answers as Record<string, unknown>) !== false) {
+        lastSentDraft.current = serialized;
+      }
+    };
+    const handle = window.setTimeout(send, SERVER_DRAFT_DEBOUNCE_MS);
+    const pending = {
+      send: () => {
+        window.clearTimeout(handle);
+        send();
+      },
+    };
+    pendingDraft.current = pending;
+    return () => {
+      window.clearTimeout(handle);
+      if (pendingDraft.current === pending) pendingDraft.current = null;
+    };
+  }, [values, busy]);
+
+  useEffect(() => {
+    if (!flushDraftRef) return;
+    flushDraftRef.current = () => pendingDraft.current?.send();
+    return () => {
+      flushDraftRef.current = null;
+    };
+  }, [flushDraftRef]);
 
   /**
    * Has this form become interactive?

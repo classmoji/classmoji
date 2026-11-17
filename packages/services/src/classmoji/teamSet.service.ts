@@ -162,6 +162,8 @@ import { scoreAssignment } from './teamSetScore.ts';
 import { runChecks, teamCountRange, type CheckIssue } from './teamSetChecks.ts';
 import { minimalFlex } from './teamSetFlex.ts';
 import {
+  FORM_MANY_RESPONSES_TEXT,
+  SET_BUSY_FORM_TEXT,
   SET_BUSY_RUN_TEXT,
   SET_BUSY_TEXT,
   SET_NAME_EMPTY_TEXT,
@@ -324,6 +326,8 @@ export type TeamSetErrorCode =
   | 'invalid_config'
   | 'no_grouping_field'
   | 'form_not_classroom'
+  /** The form takes several responses per person (MANY); a team set needs one each. */
+  | 'form_many_responses'
   | 'checks_failed'
   | 'run_not_solved'
   | 'run_stale'
@@ -1175,8 +1179,18 @@ const pinPeople = (pin: TeamSetConfig['pins'][number]): string[] =>
  * The form, scoped to the classroom. A PUBLIC form has no roster and its
  * respondents have no accounts to put on a team, so it is refused here, once,
  * for every entry point.
+ *
+ * So is a form that takes several responses per person (MANY): everything
+ * here reads one response per person (the by-user maps of the compile, the
+ * staleness and the explanations). form.service refuses MANY on a form that
+ * has a team set, so a MANY form never has one; `listing` lets the list of a
+ * form's sets answer with that empty list instead of an error.
  */
-async function loadForm(classroomId: string, formId: string) {
+async function loadForm(
+  classroomId: string,
+  formId: string,
+  { listing = false }: { listing?: boolean } = {}
+) {
   const form = await getPrisma().form.findFirst({
     where: { id: formId, classroom_id: classroomId },
     select: {
@@ -1186,6 +1200,7 @@ async function loadForm(classroomId: string, formId: string) {
       status: true,
       closes_at: true,
       current_revision_id: true,
+      responses_per_person: true,
     },
   });
   if (!form) throw new TeamSetError('not_found', 'Form not found in this classroom.');
@@ -1195,7 +1210,51 @@ async function loadForm(classroomId: string, formId: string) {
       'This form is not a CLASSROOM form; a public form’s respondents are not classroom members.'
     );
   }
+  if (form.responses_per_person === 'MANY' && !listing) {
+    throw new TeamSetError('form_many_responses', FORM_MANY_RESPONSES_TEXT);
+  }
   return form;
+}
+
+/**
+ * Insert a new set, re-checking under the form's row lock that the form still
+ * takes one response per person.
+ *
+ * `loadForm` refused MANY from an unlocked read, and a switch to MANY
+ * (form.service `update`) counts the form's sets under the same row lock
+ * FOR UPDATE: a set inserted between that count and its commit would leave a
+ * MANY form with a team set. Holding the lock in share mode here makes the two
+ * take turns, form row first in both, the order every writer to a form's rows
+ * uses. Long enough to wait out a staff batch (`createResponses` holds the lock
+ * for up to thirty seconds); past that, `set_busy`.
+ */
+async function createSetUnderFormLock(data: {
+  classroom_id: string;
+  form_id: string;
+  name: string;
+  config: Prisma.InputJsonValue;
+  created_by: string;
+}): Promise<TeamSetDbRow> {
+  try {
+    return await getPrisma().$transaction(
+      async tx => {
+        const [locked] = await tx.$queryRaw<{ responses_per_person: string }[]>`
+          SELECT responses_per_person FROM forms
+          WHERE id = ${data.form_id} AND classroom_id = ${data.classroom_id}
+          FOR SHARE
+        `;
+        if (!locked) throw new TeamSetError('not_found', 'Form not found in this classroom.');
+        if (locked.responses_per_person === 'MANY') {
+          throw new TeamSetError('form_many_responses', FORM_MANY_RESPONSES_TEXT);
+        }
+        return tx.teamSet.create({ data });
+      },
+      { maxWait: 10_000, timeout: 40_000 }
+    );
+  } catch (error) {
+    if (isTransactionTimeout(error)) throw new TeamSetError('set_busy', SET_BUSY_FORM_TEXT);
+    throw error;
+  }
 }
 
 /** The current published revision's fields. An unpublished form has none to configure. */
@@ -1470,7 +1529,7 @@ export async function listForForm({
   classroomId: string;
   formId: string;
 }): Promise<TeamSetSummary[]> {
-  await loadForm(classroomId, formId);
+  await loadForm(classroomId, formId, { listing: true });
   // So each set's latest-run status below is not a stale QUEUED/RUNNING.
   await expireLostRuns({ team_set: { classroom_id: classroomId, form_id: formId } });
   const rows = await getPrisma().teamSet.findMany({
@@ -1897,14 +1956,12 @@ export async function saveConfig({
   await assertPinPeopleInClassroom(getPrisma(), classroomId, null, config);
 
   try {
-    const created = await getPrisma().teamSet.create({
-      data: {
-        classroom_id: classroomId,
-        form_id: formId,
-        name: newName!,
-        config: toJson(config),
-        created_by: userId,
-      },
+    const created = await createSetUnderFormLock({
+      classroom_id: classroomId,
+      form_id: formId,
+      name: newName!,
+      config: toJson(config),
+      created_by: userId,
     });
     return { ...withStatus(toSetRow(created)), notes };
   } catch (error) {
@@ -2012,14 +2069,12 @@ export async function newSetFromSetup({
   }
 
   try {
-    const created = await prisma.teamSet.create({
-      data: {
-        classroom_id: classroomId,
-        form_id: formId,
-        name: setName,
-        config: toJson(config),
-        created_by: userId,
-      },
+    const created = await createSetUnderFormLock({
+      classroom_id: classroomId,
+      form_id: formId,
+      name: setName,
+      config: toJson(config),
+      created_by: userId,
     });
     return withStatus(toSetRow(created));
   } catch (error) {

@@ -521,6 +521,7 @@ export default function FormResponses() {
               access={form.access === 'CLASSROOM' ? 'CLASSROOM' : 'PUBLIC'}
               active="responses"
               responses={submittedCount}
+              manyResponses={form.responsesPerPerson === 'MANY'}
             />
           </div>
         </div>

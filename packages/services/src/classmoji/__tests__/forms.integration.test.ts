@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import * as formService from '../form.service.ts';
 import * as responseService from '../formResponse.service.ts';
+import { raceAgainstFormLock } from './helpers/formRowLock.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(DATABASE_URL);
@@ -114,7 +115,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
     access?: 'PUBLIC' | 'CLASSROOM';
     fields?: unknown;
     response_cap?: number | null;
-    allow_multiple?: boolean;
+    responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
     closes_at?: Date | null;
     save_partials?: boolean;
   } = {}) => {
@@ -1248,7 +1249,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       expect(response.verified_at).toBeInstanceOf(Date);
     });
 
-    it('refuses a second submission unless allow_multiple is set', async () => {
+    it('refuses a second submission unless responses may be replaced', async () => {
       const { formId, revisionId } = await makeOpenForm({ access: 'CLASSROOM' });
       const fieldId = await nameFieldId(revisionId);
       const submit = (value: string) =>
@@ -1263,7 +1264,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       await submit('First');
       expect(await codeOf(submit('Second'))).toBe(responseService.FORM_ALREADY_SUBMITTED);
 
-      await formService.update(formId, { allow_multiple: true });
+      await formService.update(formId, { responses_per_person: 'REPLACE' });
       const replaced = await submit('Second');
       expect((replaced.answers as Record<string, string>)[fieldId]).toBe('Second');
       expect(await prisma.formResponse.count({ where: { form_id: formId } })).toBe(1);
@@ -1273,7 +1274,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       const { formId, revisionId } = await makeOpenForm({
         access: 'CLASSROOM',
         response_cap: 1,
-        allow_multiple: true,
+        responses_per_person: 'REPLACE',
       });
       const fieldId = await nameFieldId(revisionId);
       const submit = (value: string) =>
@@ -1317,6 +1318,722 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           })
         )
       ).toBe(responseService.FORM_ACCESS_MISMATCH);
+    });
+  });
+
+  // ── responses per person ─────────────────────────────────────────────────
+
+  describe('responses per person', () => {
+    const emailOf = (label: string) => `formtest-${suite}-${label}@example.test`;
+
+    /** An OPEN classroom form in the given mode, and a submit/autosave pair for one user. */
+    const classroomForm = async (
+      responses_per_person: 'ONE' | 'REPLACE' | 'MANY',
+      extra: { response_cap?: number | null } = {}
+    ) => {
+      const { formId, revisionId } = await makeOpenForm({
+        access: 'CLASSROOM',
+        responses_per_person,
+        ...extra,
+      });
+      const fieldId = await nameFieldId(revisionId);
+      const submit = (value: string, userId = studentAId, label = 'a') =>
+        responseService.submitClassroom({
+          formId,
+          userId,
+          email: emailOf(label),
+          answers: { [fieldId]: value },
+          revisionId,
+        });
+      const autosave = (value: string, userId = studentAId, label = 'a') =>
+        responseService.upsertDraft({
+          formId,
+          revisionId,
+          userId,
+          email: emailOf(label),
+          answers: { [fieldId]: value },
+        });
+      const rowsOf = (userId = studentAId) =>
+        prisma.formResponse.findMany({
+          where: { form_id: formId, user_id: userId },
+          orderBy: { created_at: 'asc' },
+        });
+      return { formId, revisionId, fieldId, submit, autosave, rowsOf };
+    };
+
+    const answerOf = (row: { answers: unknown } | null, fieldId: string) =>
+      (row?.answers as Record<string, unknown> | undefined)?.[fieldId];
+
+    it('ONE: a second submit is refused and the first stays as it was', async () => {
+      const { fieldId, submit, rowsOf } = await classroomForm('ONE');
+      const first = await submit('First');
+      expect(await codeOf(submit('Second'))).toBe(responseService.FORM_ALREADY_SUBMITTED);
+
+      const rows = await rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(first.id);
+      expect(answerOf(rows[0], fieldId)).toBe('First');
+      expect(rows[0].repeatable).toBe(false);
+    });
+
+    it('REPLACE: a second submit overwrites the one row', async () => {
+      const { fieldId, submit, rowsOf } = await classroomForm('REPLACE');
+      const first = await submit('First');
+      const second = await submit('Second');
+
+      expect(second.id).toBe(first.id);
+      const rows = await rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(answerOf(rows[0], fieldId)).toBe('Second');
+      expect(rows[0].repeatable).toBe(false);
+      // An overwrite keeps its place in the queue.
+      expect(rows[0].submitted_at.getTime()).toBe(first.submitted_at.getTime());
+    });
+
+    it('MANY: every submit is a new response, and an earlier one is never touched', async () => {
+      const { fieldId, submit, rowsOf } = await classroomForm('MANY');
+      const first = await submit('First');
+      const firstStored = await prisma.formResponse.findUniqueOrThrow({ where: { id: first.id } });
+      const second = await submit('Second');
+
+      expect(second.id).not.toBe(first.id);
+      const rows = await rowsOf();
+      expect(rows.map(row => row.id).sort()).toEqual([first.id, second.id].sort());
+      for (const row of rows) {
+        expect(row.user_id).toBe(studentAId);
+        expect(row.submission_state).toBe('SUBMITTED');
+        expect(row.verified_at).toBeInstanceOf(Date);
+        expect(row.repeatable).toBe(true);
+      }
+
+      // The first response, column for column, as it was before the second.
+      const firstAfter = await prisma.formResponse.findUniqueOrThrow({ where: { id: first.id } });
+      expect(firstAfter).toEqual(firstStored);
+      expect(answerOf(firstAfter, fieldId)).toBe('First');
+      expect(answerOf(second, fieldId)).toBe('Second');
+    });
+
+    it('MANY: autosave after a submit writes a new draft and never the response', async () => {
+      const { fieldId, submit, autosave, rowsOf } = await classroomForm('MANY');
+      const sent = await submit('Sent');
+      const sentStored = await prisma.formResponse.findUniqueOrThrow({ where: { id: sent.id } });
+
+      const draft = await autosave('Typing the next one');
+      expect(draft.id).not.toBe(sent.id);
+      expect(draft.submission_state).toBe('DRAFT');
+      expect(draft.repeatable).toBe(true);
+      expect(answerOf(draft, fieldId)).toBe('Typing the next one');
+
+      // A later autosave lands on the same draft.
+      const again = await autosave('Typing the next one, more');
+      expect(again.id).toBe(draft.id);
+      expect(answerOf(again, fieldId)).toBe('Typing the next one, more');
+
+      expect(await prisma.formResponse.findUniqueOrThrow({ where: { id: sent.id } })).toEqual(
+        sentStored
+      );
+      expect(await rowsOf()).toHaveLength(2);
+    });
+
+    it('MANY: submit turns the draft into the response, filed at submit time', async () => {
+      const { fieldId, submit, autosave, rowsOf } = await classroomForm('MANY');
+      await submit('First');
+      const draft = await autosave('Half of the second');
+      const draftStored = await prisma.formResponse.findUniqueOrThrow({ where: { id: draft.id } });
+
+      // Far enough apart that "filed at submit" and "filed when the draft was
+      // made" cannot round to the same millisecond.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const before = Date.now();
+      const second = await submit('All of the second');
+
+      expect(second.id).toBe(draft.id);
+      expect(second.submission_state).toBe('SUBMITTED');
+      expect(answerOf(second, fieldId)).toBe('All of the second');
+      expect(second.submitted_at.getTime()).toBeGreaterThanOrEqual(before);
+      expect(second.submitted_at.getTime()).toBeGreaterThan(draftStored.submitted_at.getTime());
+      expect(second.verified_at?.getTime()).toBeGreaterThanOrEqual(before);
+
+      const rows = await rowsOf();
+      expect(rows).toHaveLength(2);
+      expect(rows.every(row => row.submission_state === 'SUBMITTED')).toBe(true);
+      expect(await responseService.findOwnDraft(rows[0].form_id, studentAId)).toBeNull();
+    });
+
+    /**
+     * Opens enough pooled connections that the saves below really overlap.
+     * On a cold pool each one waits for a connection of its own to open, and
+     * that staggering alone lets the first create land before the others look.
+     */
+    const warmPool = () => Promise.all(Array.from({ length: 8 }, () => prisma.$queryRaw`SELECT 1`));
+
+    it('MANY: two first autosaves at once leave one draft holding one of them', async () => {
+      const { fieldId, autosave, rowsOf } = await classroomForm('MANY');
+      await warmPool();
+      const saves = await Promise.all(
+        ['one', 'two', 'three', 'four'].map(value => autosave(value))
+      );
+
+      const rows = await rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].submission_state).toBe('DRAFT');
+      expect(new Set(saves.map(save => save.id))).toEqual(new Set([rows[0].id]));
+      expect(['one', 'two', 'three', 'four']).toContain(answerOf(rows[0], fieldId));
+    });
+
+    it('ONE: two first autosaves at once leave one draft as well', async () => {
+      const { autosave, rowsOf } = await classroomForm('ONE');
+      await warmPool();
+      await Promise.all(['one', 'two', 'three'].map(value => autosave(value)));
+      expect(await rowsOf()).toHaveLength(1);
+    });
+
+    it('MANY: each response takes a cap slot', async () => {
+      const { submit, autosave } = await classroomForm('MANY', { response_cap: 2 });
+      await submit('One');
+      await autosave('Drafts take no slot');
+      await submit('Two');
+      expect(await codeOf(submit('Three'))).toBe(responseService.FORM_CAP_REACHED);
+      expect(await codeOf(submit('From B', studentBId, 'b'))).toBe(
+        responseService.FORM_CAP_REACHED
+      );
+    });
+
+    it('MANY: own reads return the caller’s rows only, and no staff columns', async () => {
+      const { formId, fieldId, submit, autosave } = await classroomForm('MANY');
+      await submit('A first');
+      await new Promise(resolve => setTimeout(resolve, 5));
+      await submit('A second');
+      await autosave('A drafting');
+      await submit('B only', studentBId, 'b');
+
+      const answersOf = async (ids: string[]) =>
+        (
+          await prisma.formResponse.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, answers: true },
+          })
+        ).reduce<Record<string, unknown>>(
+          (byId, row) => ({ ...byId, [row.id]: answerOf(row, fieldId) }),
+          {}
+        );
+
+      const mine = await responseService.listOwnResponseSummaries(formId, studentAId);
+      expect(mine.total).toBe(2);
+      // Ids and times only: no answers, no identity, no staff columns.
+      for (const row of mine.responses) {
+        expect(Object.keys(row).sort()).toEqual(['id', 'submitted_at']);
+      }
+      const mineAnswers = await answersOf(mine.responses.map(row => row.id));
+      expect(mine.responses.map(row => mineAnswers[row.id])).toEqual(['A second', 'A first']);
+
+      const theirs = await responseService.listOwnResponseSummaries(formId, studentBId);
+      expect(theirs.total).toBe(1);
+      const theirAnswers = await answersOf(theirs.responses.map(row => row.id));
+      expect(theirs.responses.map(row => theirAnswers[row.id])).toEqual(['B only']);
+
+      const myDraft = await responseService.findOwnDraft(formId, studentAId);
+      expect(answerOf(myDraft, fieldId)).toBe('A drafting');
+      expect(await responseService.findOwnDraft(formId, studentBId)).toBeNull();
+      expect(await responseService.listOwnResponseSummaries(formId, ownerId)).toEqual({
+        total: 0,
+        responses: [],
+      });
+
+      // With a draft and responses both present, the single read is the
+      // newest response, never the draft.
+      const latest = await responseService.findOwnResponse(formId, studentAId);
+      expect(answerOf(latest, fieldId)).toBe('A second');
+    });
+
+    it('MANY: the own list is bounded, and its total and numbering stay exact', async () => {
+      const { formId, revisionId } = await classroomForm('MANY');
+      const count = responseService.OWN_RESPONSES_LIST_MAX + 2;
+      const base = Date.UTC(2026, 0, 1);
+      await prisma.formResponse.createMany({
+        data: Array.from({ length: count }, (_, index) => ({
+          form_id: formId,
+          revision_id: revisionId,
+          user_id: studentAId,
+          email: emailOf('a'),
+          email_normalized: emailOf('a'),
+          answers: {},
+          submission_state: 'SUBMITTED' as const,
+          repeatable: true,
+          verified_at: new Date(base),
+          submitted_at: new Date(base + index * 1000),
+        })),
+      });
+      // Two responses sent in the same instant: the id orders them.
+      const sameInstant = new Date(base + count * 1000);
+      const [early, late] = [
+        '00000000-0000-4000-8000-000000000001',
+        'ffffffff-ffff-4fff-8fff-fffffffffffe',
+      ]
+        .map(id => `${suite}-${id}`)
+        .sort();
+      await prisma.formResponse.createMany({
+        data: [early, late].map(id => ({
+          id,
+          form_id: formId,
+          revision_id: revisionId,
+          user_id: studentAId,
+          email: emailOf('a'),
+          email_normalized: emailOf('a'),
+          answers: {},
+          submission_state: 'SUBMITTED' as const,
+          repeatable: true,
+          verified_at: sameInstant,
+          submitted_at: sameInstant,
+        })),
+      });
+
+      const listed = await responseService.listOwnResponseSummaries(formId, studentAId);
+      expect(listed.total).toBe(count + 2);
+      expect(listed.responses).toHaveLength(responseService.OWN_RESPONSES_LIST_MAX);
+      // Newest first, the id breaking the tie.
+      expect(listed.responses[0].id).toBe(late);
+      expect(listed.responses[1].id).toBe(early);
+
+      const oldest = await prisma.formResponse.findFirstOrThrow({
+        where: { form_id: formId, user_id: studentAId },
+        orderBy: [{ submitted_at: 'asc' }, { id: 'asc' }],
+      });
+      // Not in the listed page, and still numbered from the first one sent.
+      expect(listed.responses.some(row => row.id === oldest.id)).toBe(false);
+      expect(await responseService.ownResponseNumber(formId, studentAId, oldest)).toBe(1);
+      expect(
+        await responseService.ownResponseNumber(formId, studentAId, {
+          id: early,
+          submitted_at: sameInstant,
+        })
+      ).toBe(count + 1);
+      expect(
+        await responseService.ownResponseNumber(formId, studentAId, {
+          id: late,
+          submitted_at: sameInstant,
+        })
+      ).toBe(count + 2);
+      // Another person's count is their own.
+      expect(await responseService.listOwnResponseSummaries(formId, studentBId)).toEqual({
+        total: 0,
+        responses: [],
+      });
+    });
+
+    it('MANY: a save from before the latest response starts no draft', async () => {
+      const { formId, revisionId, fieldId, submit, rowsOf } = await classroomForm('MANY');
+      await submit('Sent');
+      const save = (expectedSubmittedCount: number) =>
+        responseService.upsertDraft({
+          formId,
+          revisionId,
+          userId: studentAId,
+          email: emailOf('a'),
+          answers: { [fieldId]: 'Sent' },
+          expectedSubmittedCount,
+        });
+
+      // Rendered when nothing had been sent: it belongs to the response above.
+      expect(await save(0)).toBe(responseService.DRAFT_DECLINED);
+      expect((await rowsOf()).map(row => row.submission_state)).toEqual(['SUBMITTED']);
+
+      // Rendered after it: the next response's first draft.
+      const draft = await save(1);
+      expect(draft).not.toBe(responseService.DRAFT_DECLINED);
+      const rows = await rowsOf();
+      expect(rows.map(row => row.submission_state).sort()).toEqual(['DRAFT', 'SUBMITTED']);
+      expect(rows.find(row => row.submission_state === 'DRAFT')?.repeatable).toBe(true);
+
+      // A draft that already exists is written whatever the count says: the
+      // count guards only the creation of one.
+      const again = await save(0);
+      expect(again).not.toBe(responseService.DRAFT_DECLINED);
+      expect(await rowsOf()).toHaveLength(2);
+    });
+
+    it('the expected count is not read on a ONE or REPLACE form', async () => {
+      for (const mode of ['ONE', 'REPLACE'] as const) {
+        const { formId, revisionId, fieldId, rowsOf } = await classroomForm(mode);
+        const draft = await responseService.upsertDraft({
+          formId,
+          revisionId,
+          userId: studentAId,
+          email: emailOf('a'),
+          answers: { [fieldId]: 'Typing' },
+          expectedSubmittedCount: 7,
+        });
+        expect(draft).not.toBe(responseService.DRAFT_DECLINED);
+        expect(await rowsOf()).toHaveLength(1);
+      }
+    });
+
+    it('a first draft takes the mode a switch committed while it waited for the form', async () => {
+      const { formId, autosave, rowsOf } = await classroomForm('ONE');
+      const outcome = await raceAgainstFormLock({
+        formId,
+        contender: () => autosave('First draft'),
+        // What a switch to MANY writes while it holds the lock (no rows yet).
+        whileHeld: tx =>
+          tx.form.update({ where: { id: formId }, data: { responses_per_person: 'MANY' } }),
+      });
+      expect(outcome.ok).toBe(true);
+      const rows = await rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].submission_state).toBe('DRAFT');
+      expect(rows[0].repeatable).toBe(true);
+    });
+
+    it('MANY: an autosave waiting behind a submit of the draft it raced starts no new one', async () => {
+      const { formId, revisionId, fieldId, rowsOf } = await classroomForm('MANY');
+      // The page rendered with nothing sent. While its autosave waits for the
+      // form, the submit it raced lands under the lock.
+      const outcome = await raceAgainstFormLock({
+        formId,
+        contender: () =>
+          responseService.upsertDraft({
+            formId,
+            revisionId,
+            userId: studentAId,
+            email: emailOf('a'),
+            answers: { [fieldId]: 'Just sent' },
+            expectedSubmittedCount: 0,
+          }),
+        whileHeld: tx =>
+          tx.formResponse.create({
+            data: {
+              form_id: formId,
+              revision_id: revisionId,
+              user_id: studentAId,
+              email: emailOf('a'),
+              email_normalized: emailOf('a'),
+              answers: { [fieldId]: 'Just sent' },
+              submission_state: 'SUBMITTED',
+              verified_at: new Date(),
+              repeatable: true,
+            },
+          }),
+      });
+      expect(outcome).toEqual({ ok: true, value: responseService.DRAFT_DECLINED });
+      expect((await rowsOf()).map(row => row.submission_state)).toEqual(['SUBMITTED']);
+    });
+
+    it('MANY: one response by id only for its own filler, on its own form, once submitted', async () => {
+      const { formId, fieldId, submit, autosave } = await classroomForm('MANY');
+      const other = await classroomForm('MANY');
+      const mine = await submit('A first');
+      const draft = await autosave('A drafting');
+      const theirs = await submit('B only', studentBId, 'b');
+      const mineElsewhere = await other.submit('A on the other form');
+
+      const read = await responseService.findOwnSubmittedResponse(formId, studentAId, mine.id);
+      expect(read?.id).toBe(mine.id);
+      expect(answerOf(read, fieldId)).toBe('A first');
+      expect(read).not.toHaveProperty('staff_status');
+      expect(read).not.toHaveProperty('staff_note');
+      expect(read).not.toHaveProperty('added_by');
+
+      // B's response, read as A: nothing. And A's, read as B.
+      expect(await responseService.findOwnSubmittedResponse(formId, studentAId, theirs.id)).toBe(
+        null
+      );
+      expect(await responseService.findOwnSubmittedResponse(formId, studentBId, mine.id)).toBe(
+        null
+      );
+      // A's own response to another form, asked for under this one.
+      expect(
+        await responseService.findOwnSubmittedResponse(formId, studentAId, mineElsewhere.id)
+      ).toBe(null);
+      // A draft is not a response.
+      expect(await responseService.findOwnSubmittedResponse(formId, studentAId, draft.id)).toBe(
+        null
+      );
+      expect(
+        await responseService.findOwnSubmittedResponse(formId, studentAId, 'not-a-response-id')
+      ).toBe(null);
+    });
+
+    it('findOwnResponse falls back to the draft when nothing is submitted', async () => {
+      const { formId, fieldId, autosave } = await classroomForm('MANY');
+      await autosave('Only a draft');
+      const own = await responseService.findOwnResponse(formId, studentAId);
+      expect(own?.submission_state).toBe('DRAFT');
+      expect(answerOf(own, fieldId)).toBe('Only a draft');
+    });
+
+    it('status by form: submitted when any response is, draft beside it', async () => {
+      const many = await classroomForm('MANY');
+      await many.submit('Sent');
+      await many.autosave('Next');
+      const one = await classroomForm('ONE');
+      await one.autosave('Drafting only');
+      const untouched = await classroomForm('ONE');
+
+      const status = await responseService.responseStatusForUserByFormIds(studentAId, [
+        many.formId,
+        one.formId,
+        untouched.formId,
+      ]);
+      expect(status.get(many.formId)).toEqual({ submitted: true, draft: true });
+      expect(status.get(one.formId)).toEqual({ submitted: false, draft: true });
+      expect(status.has(untouched.formId)).toBe(false);
+      // Another user's rows are not this user's status.
+      expect(
+        (await responseService.responseStatusForUserByFormIds(studentBId, [many.formId])).size
+      ).toBe(0);
+
+      // One row per form for the Assignments page, at the latest submission.
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const latest = await many.submit('Sent again');
+      const submitted = await responseService.findSubmittedForUserByFormIds(studentAId, [
+        many.formId,
+        one.formId,
+      ]);
+      expect(submitted).toEqual([{ form_id: many.formId, submitted_at: latest.submitted_at }]);
+    });
+
+    it('MANY: the staff list returns every response with its filler', async () => {
+      const { formId, submit } = await classroomForm('MANY');
+      await submit('A1');
+      await submit('A2');
+      await submit('B1', studentBId, 'b');
+
+      const rows = await responseService.listByFormId(formId);
+      expect(rows).toHaveLength(3);
+      expect(rows.filter(row => row.user_id === studentAId)).toHaveLength(2);
+      expect(rows.filter(row => row.user_id === studentBId)).toHaveLength(1);
+      expect(new Set(rows.map(row => row.id)).size).toBe(3);
+      expect(rows.filter(row => row.user_id === studentAId).map(row => row.email)).toEqual([
+        emailOf('a'),
+        emailOf('a'),
+      ]);
+    });
+
+    it('staff reads of one response, and of who submitted, stay inside their forms', async () => {
+      const many = await classroomForm('MANY');
+      const other = await classroomForm('ONE');
+      const sent = await many.submit('A1');
+      await many.submit('A2');
+      await many.autosave('A drafting');
+      await other.autosave('B drafting only', studentBId, 'b');
+      const elsewhere = await other.submit('A elsewhere');
+
+      const one = await responseService.findInForm(many.formId, sent.id);
+      expect(one?.id).toBe(sent.id);
+      expect(one).toHaveProperty('staff_note');
+      expect(one).not.toHaveProperty('draft_token');
+      expect(one).not.toHaveProperty('email_normalized');
+      // An id from another form is not in this one.
+      expect(await responseService.findInForm(many.formId, elsewhere.id)).toBeNull();
+
+      const submitted = await responseService.submittedUserIdsByFormIds([
+        many.formId,
+        other.formId,
+      ]);
+      expect([...(submitted.get(many.formId) ?? [])]).toEqual([studentAId]);
+      // B holds only a draft there: not a submission.
+      expect([...(submitted.get(other.formId) ?? [])]).toEqual([studentAId]);
+      expect(await responseService.submittedUserIdsByFormIds([])).toEqual(new Map());
+    });
+
+    describe('the indexes', () => {
+      const raw = (
+        formId: string,
+        revisionId: string,
+        state: 'DRAFT' | 'SUBMITTED',
+        repeatable: boolean
+      ) =>
+        prisma.formResponse.create({
+          data: {
+            form_id: formId,
+            revision_id: revisionId,
+            user_id: studentAId,
+            email: 'a@example.test',
+            email_normalized: 'a@example.test',
+            answers: {},
+            submission_state: state,
+            repeatable,
+          },
+        });
+
+      it('refuses a second non-repeatable row for one user', async () => {
+        const { formId, revisionId } = await classroomForm('ONE');
+        await raw(formId, revisionId, 'SUBMITTED', false);
+        await expect(raw(formId, revisionId, 'DRAFT', false)).rejects.toMatchObject({
+          code: 'P2002',
+        });
+      });
+
+      it('refuses a second repeatable DRAFT and takes any number of repeatable SUBMITTED', async () => {
+        const { formId, revisionId } = await classroomForm('MANY');
+        await raw(formId, revisionId, 'DRAFT', true);
+        await expect(raw(formId, revisionId, 'DRAFT', true)).rejects.toMatchObject({
+          code: 'P2002',
+        });
+        await raw(formId, revisionId, 'SUBMITTED', true);
+        await raw(formId, revisionId, 'SUBMITTED', true);
+        await raw(formId, revisionId, 'SUBMITTED', true);
+        expect(await prisma.formResponse.count({ where: { form_id: formId } })).toBe(4);
+      });
+    });
+
+    describe('changing the mode', () => {
+      it('ONE and REPLACE switch freely, responses or not', async () => {
+        const { formId, submit } = await classroomForm('ONE');
+        await submit('First');
+        await formService.update(formId, { responses_per_person: 'REPLACE' });
+        await formService.update(formId, { responses_per_person: 'ONE' });
+        expect(
+          (await prisma.form.findUniqueOrThrow({ where: { id: formId } })).responses_per_person
+        ).toBe('ONE');
+      });
+
+      it('to or from MANY only while the form has no rows, a draft included', async () => {
+        const toMany = await classroomForm('ONE');
+        await toMany.autosave('Just a draft');
+        expect(
+          await codeOf(formService.update(toMany.formId, { responses_per_person: 'MANY' }))
+        ).toBe(formService.FORM_RESPONSES_MODE_LOCKED);
+
+        const fromMany = await classroomForm('MANY');
+        await fromMany.submit('Sent');
+        for (const mode of ['ONE', 'REPLACE'] as const) {
+          expect(
+            await codeOf(formService.update(fromMany.formId, { responses_per_person: mode }))
+          ).toBe(formService.FORM_RESPONSES_MODE_LOCKED);
+        }
+        expect(
+          (await prisma.form.findUniqueOrThrow({ where: { id: fromMany.formId } }))
+            .responses_per_person
+        ).toBe('MANY');
+
+        // Nothing collected yet: both directions are allowed.
+        const fresh = await classroomForm('ONE');
+        await formService.update(fresh.formId, { responses_per_person: 'MANY' });
+        await formService.update(fresh.formId, { responses_per_person: 'REPLACE' });
+      });
+
+      it('MANY is refused on a PUBLIC form, and a MANY form cannot become PUBLIC', async () => {
+        expect(
+          await codeOf(
+            formService.create({
+              classroomId,
+              title: `Public many ${suite}`,
+              access: 'PUBLIC',
+              responses_per_person: 'MANY',
+              createdBy: ownerId,
+            })
+          )
+        ).toBe(formService.FORM_MANY_NEEDS_CLASSROOM);
+
+        const publicForm = await makeForm({ access: 'PUBLIC' });
+        expect(
+          await codeOf(formService.update(publicForm.id, { responses_per_person: 'MANY' }))
+        ).toBe(formService.FORM_MANY_NEEDS_CLASSROOM);
+        // Not even both in one call.
+        expect(
+          await codeOf(
+            formService.update(publicForm.id, { responses_per_person: 'MANY', access: 'PUBLIC' })
+          )
+        ).toBe(formService.FORM_MANY_NEEDS_CLASSROOM);
+
+        // A draft CLASSROOM form in MANY may not be turned PUBLIC (access is
+        // still editable: it has never been published).
+        const draftMany = await makeForm({ access: 'CLASSROOM', responses_per_person: 'MANY' });
+        expect(await codeOf(formService.update(draftMany.id, { access: 'PUBLIC' }))).toBe(
+          formService.FORM_MANY_NEEDS_CLASSROOM
+        );
+        // …unless it leaves MANY in the same call.
+        await formService.update(draftMany.id, { access: 'PUBLIC', responses_per_person: 'ONE' });
+
+        const created = await formService.create({
+          classroomId,
+          title: `Classroom many ${suite}`,
+          access: 'CLASSROOM',
+          responses_per_person: 'MANY',
+          createdBy: ownerId,
+        });
+        expect(created.responses_per_person).toBe('MANY');
+      });
+
+      it('a refused update writes none of its other fields', async () => {
+        const { formId, submit } = await classroomForm('ONE');
+        await submit('First');
+        const before = await prisma.form.findUniqueOrThrow({ where: { id: formId } });
+        expect(
+          await codeOf(
+            formService.update(formId, {
+              title: `Renamed ${suite}`,
+              description: 'Changed',
+              responses_per_person: 'MANY',
+            })
+          )
+        ).toBe(formService.FORM_RESPONSES_MODE_LOCKED);
+        const after = await prisma.form.findUniqueOrThrow({ where: { id: formId } });
+        expect(after.title).toBe(before.title);
+        expect(after.description).toBe(before.description);
+        expect(after.responses_per_person).toBe('ONE');
+      });
+
+      it('a change of access waits for a switch to MANY and is refused against it', async () => {
+        const form = await makeForm({ access: 'CLASSROOM' });
+        const outcome = await raceAgainstFormLock({
+          formId: form.id,
+          contender: () => formService.update(form.id, { access: 'PUBLIC' }),
+          whileHeld: tx =>
+            tx.form.update({ where: { id: form.id }, data: { responses_per_person: 'MANY' } }),
+        });
+        expect(outcome.ok).toBe(false);
+        expect((outcome as { error: { code?: string } }).error.code).toBe(
+          formService.FORM_MANY_NEEDS_CLASSROOM
+        );
+        const after = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+        expect(after.access).toBe('CLASSROOM');
+        expect(after.responses_per_person).toBe('MANY');
+      });
+
+      it('a switch to MANY waits for a first response and is refused against it', async () => {
+        const { formId, revisionId } = await classroomForm('ONE');
+        const outcome = await raceAgainstFormLock({
+          formId,
+          contender: () => formService.update(formId, { responses_per_person: 'MANY' }),
+          whileHeld: tx =>
+            tx.formResponse.create({
+              data: {
+                form_id: formId,
+                revision_id: revisionId,
+                user_id: studentAId,
+                email: emailOf('a'),
+                email_normalized: emailOf('a'),
+                answers: {},
+                submission_state: 'SUBMITTED',
+                verified_at: new Date(),
+              },
+            }),
+        });
+        expect(outcome.ok).toBe(false);
+        expect((outcome as { error: { code?: string } }).error.code).toBe(
+          formService.FORM_RESPONSES_MODE_LOCKED
+        );
+      });
+
+      it('MANY is refused on a form with a team set', async () => {
+        const form = await makeForm({ access: 'CLASSROOM' });
+        await prisma.teamSet.create({
+          data: {
+            classroom_id: classroomId,
+            form_id: form.id,
+            name: 'bidding',
+            config: {},
+            created_by: ownerId,
+          },
+        });
+        expect(await codeOf(formService.update(form.id, { responses_per_person: 'MANY' }))).toBe(
+          formService.FORM_MANY_HAS_TEAM_SETS
+        );
+        // REPLACE, the team-bidding mode, is fine.
+        await formService.update(form.id, { responses_per_person: 'REPLACE' });
+      });
     });
   });
 

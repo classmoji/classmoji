@@ -169,6 +169,8 @@ export interface TeamsFormFacts {
   published: boolean;
   /** ISO time; null = no close time. */
   closesAtIso: string | null;
+  /** Takes several responses per person: a team set can't be made from it. */
+  manyResponses: boolean;
   /** Submitted responses, for the Responses tab count. */
   responsesSubmitted: number;
 }

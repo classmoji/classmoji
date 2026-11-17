@@ -139,7 +139,7 @@ const formRow = {
   current_revision_id: 'rev-1',
   response_cap: null,
   closes_at: null,
-  allow_multiple: false,
+  responses_per_person: 'ONE',
   save_partials: true,
   created_by: 'owner-1',
   created_at: T0,

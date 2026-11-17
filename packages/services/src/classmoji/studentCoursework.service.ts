@@ -541,7 +541,14 @@ export const listForStudent = async ({
       ? Promise.all([
           getPrisma().form.findMany({
             where: { id: { in: formIds } },
-            select: { id: true, slug: true, access: true, status: true, closes_at: true },
+            select: {
+              id: true,
+              slug: true,
+              access: true,
+              status: true,
+              closes_at: true,
+              responses_per_person: true,
+            },
           }),
           formResponseService.findSubmittedForUserByFormIds(userId, formIds),
         ]).catch(degraded('form', context, null))
@@ -796,6 +803,12 @@ export const listForStudent = async ({
             : isPublic
               ? null
               : 'NOT_SUBMITTED';
+      // A form that takes several responses per person still takes the next
+      // one after the first: the row reads Submitted and keeps Fill out until
+      // the form closes. A full cap is the fill page's to say.
+      const fillable =
+        status === 'NOT_SUBMITTED' ||
+        (status === 'SUBMITTED' && form.responses_per_person === 'MANY' && !closed);
       rows.push({
         ...base,
         ...NO_LATE_FIELDS,
@@ -807,7 +820,7 @@ export const listForStudent = async ({
         done: status === 'SUBMITTED' || status === 'CLOSED',
         href,
         external: true,
-        action: status === 'NOT_SUBMITTED' ? { kind: 'FILL_OUT', href } : null,
+        action: fillable ? { kind: 'FILL_OUT', href } : null,
       });
     }
   }

@@ -195,8 +195,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   };
 
   // Quiz and form assignments have no submission row; their per-student state
-  // comes from attempts and responses, one query per assignment, keyed by
-  // assignment id then user id.
+  // comes from attempts (one query per quiz) and from one grouped read of who
+  // submitted each form, keyed by assignment id then user id.
   const activity = promises.assignments.then(async assignments => {
     // Cell states only, and the counting attempt's grade as the classroom's
     // emoji: no quiz number leaves the server here (E1).
@@ -213,6 +213,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
     const gradingStrategies =
       quizIds.length > 0 ? ClassmojiService.quiz.findGradingStrategies(quizIds) : null;
+    // A form cell says only whether the student sent something: one grouped
+    // read of who submitted, for every form column at once, and no answers.
+    const formIds = assignments.flatMap(a => (a.type === 'FORM' && a.form_id ? [a.form_id] : []));
+    const submittedByForm =
+      formIds.length > 0
+        ? ClassmojiService.formResponse.submittedUserIdsByFormIds(formIds)
+        : Promise.resolve(new Map<string, Set<string>>());
     await Promise.all(
       assignments.map(async a => {
         if (a.type === 'QUIZ' && a.quiz_id) {
@@ -245,15 +252,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
             };
           }
         } else if (a.type === 'FORM' && a.form_id) {
-          const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);
-          form[a.id] = {};
-          for (const r of responses) {
-            if (!r.user_id) continue;
-            const submitted = r.submission_state === 'SUBMITTED';
-            form[a.id][r.user_id] = {
-              submitted: submitted || form[a.id][r.user_id]?.submitted || false,
-            };
-          }
+          const submitted = (await submittedByForm).get(a.form_id) ?? new Set<string>();
+          form[a.id] = Object.fromEntries(
+            [...submitted].map(userId => [userId, { submitted: true }])
+          );
         }
       })
     );

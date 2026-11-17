@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   findAllAssignmentsForStudent: vi.fn(),
   findForUserByQuizIds: vi.fn(),
   findGradingStrategies: vi.fn(),
-  findOwnResponse: vi.fn(),
+  responseStatusForUserByFormIds: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   loadQuizGradeItems: vi.fn(),
   waivedAssignmentIdsForStudent: vi.fn(),
@@ -63,7 +63,10 @@ vi.mock('@classmoji/services', () => ({
     quiz: {
       findGradingStrategies: (...a: unknown[]) => mocks.findGradingStrategies(...a),
     },
-    formResponse: { findOwnResponse: (...a: unknown[]) => mocks.findOwnResponse(...a) },
+    formResponse: {
+      responseStatusForUserByFormIds: (...a: unknown[]) =>
+        mocks.responseStatusForUserByFormIds(...a),
+    },
     entitlement: {
       quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
     },
@@ -131,7 +134,7 @@ describe('student report loader — quiz visibility', () => {
         partial_credit_percentage: 80,
       },
     ]);
-    mocks.findOwnResponse.mockResolvedValue(null);
+    mocks.responseStatusForUserByFormIds.mockResolvedValue(new Map());
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
     mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
@@ -221,7 +224,26 @@ describe('student report loader — quiz visibility', () => {
     expect(mocks.loadQuizGradeItems).not.toHaveBeenCalled();
     expect(data.quizItems).toEqual([]);
     // Form state is unaffected.
-    expect(mocks.findOwnResponse).toHaveBeenCalledWith('form-1', 'u-1');
+    expect(mocks.responseStatusForUserByFormIds).toHaveBeenCalledWith('u-1', ['form-1']);
+  });
+
+  // A form that takes several responses per person can hold responses and a
+  // draft for the next one at once.
+  it('reads a form as responded when any response is submitted, draft or not', async () => {
+    mocks.responseStatusForUserByFormIds.mockResolvedValue(
+      new Map([['form-1', { submitted: true, draft: true }]])
+    );
+    expect((await load()).formStatus['a-form']).toEqual({ responded: true, draft: false });
+  });
+
+  it('reads a form as a draft only when nothing is submitted', async () => {
+    mocks.responseStatusForUserByFormIds.mockResolvedValue(
+      new Map([['form-1', { submitted: false, draft: true }]])
+    );
+    expect((await load()).formStatus['a-form']).toEqual({ responded: false, draft: true });
+
+    mocks.responseStatusForUserByFormIds.mockResolvedValue(new Map());
+    expect((await load()).formStatus['a-form']).toEqual({ responded: false, draft: false });
   });
 });
 
@@ -259,7 +281,7 @@ describe('student report loader — quiz grade items', () => {
     mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
     mocks.findGradingStrategies.mockResolvedValue({ 'quiz-1': 'HIGHEST' });
     mocks.findForUserByQuizIds.mockResolvedValue([]);
-    mocks.findOwnResponse.mockResolvedValue(null);
+    mocks.responseStatusForUserByFormIds.mockResolvedValue(new Map());
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
     mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());

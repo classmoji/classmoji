@@ -3,12 +3,14 @@ import { test, expect } from '@playwright/test';
 import {
   ADDRESS_PROBE_LIMIT,
   ADDRESS_PROBE_WINDOW_MS,
+  MEMBER_SUBMISSION_RATE_LIMIT,
   SUBMISSION_RATE_LIMIT,
   SUBMISSION_RATE_WINDOW_MS,
   clientBucketFor,
   clientIpFor,
   mayLearnDeliveryOutcome,
   recordAddressProbe,
+  recordMemberSubmission,
   recordSubmissionAttempt,
   resetSubmissionRateLimiter,
 } from '../../app/utils/submissionRate.server.ts';
@@ -268,5 +270,40 @@ test.describe('clientBucketFor', () => {
       expect(recordAddressProbe(null, 'cs52/waitlist', `probe${i}@example.edu`)).toBe(true);
     }
     expect(mayLearnDeliveryOutcome(null, 'cs52/waitlist')).toBe(true);
+  });
+});
+
+test.describe('recordMemberSubmission', () => {
+  test.beforeEach(() => resetSubmissionRateLimiter());
+  const T0 = 1_000_000;
+
+  test('allows a member up to the ceiling on one form and refuses the one after', () => {
+    for (let n = 1; n <= MEMBER_SUBMISSION_RATE_LIMIT; n++) {
+      expect(recordMemberSubmission('user-a', 'form-x', T0 + n).allowed, `submit ${n}`).toBe(true);
+    }
+    const refused = recordMemberSubmission('user-a', 'form-x', T0 + 1000);
+    expect(refused.allowed).toBe(false);
+    expect(refused.retryAfterSeconds).toBeGreaterThan(0);
+  });
+
+  test('keeps each member’s budget, and each form’s, apart', () => {
+    for (let n = 0; n <= MEMBER_SUBMISSION_RATE_LIMIT; n++) {
+      recordMemberSubmission('user-a', 'form-x', T0);
+    }
+    expect(recordMemberSubmission('user-a', 'form-x', T0).allowed).toBe(false);
+    expect(recordMemberSubmission('user-b', 'form-x', T0).allowed).toBe(true);
+    expect(recordMemberSubmission('user-a', 'form-y', T0).allowed).toBe(true);
+    // Nor does it spend an anonymous client's budget, or the other way round.
+    expect(recordSubmissionAttempt('203.0.113.9', 'form-x', T0).allowed).toBe(true);
+  });
+
+  test('a new window starts the count again', () => {
+    for (let n = 0; n <= MEMBER_SUBMISSION_RATE_LIMIT; n++) {
+      recordMemberSubmission('user-a', 'form-x', T0);
+    }
+    expect(recordMemberSubmission('user-a', 'form-x', T0).allowed).toBe(false);
+    expect(recordMemberSubmission('user-a', 'form-x', T0 + SUBMISSION_RATE_WINDOW_MS).allowed).toBe(
+      true
+    );
   });
 });

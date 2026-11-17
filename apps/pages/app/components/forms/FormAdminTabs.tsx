@@ -9,9 +9,10 @@ import { Link } from 'react-router';
  *
  * Presentational only: every prop is something the route's loader already has.
  * Teams is left out for a PUBLIC form, because team sets are built from a
- * classroom roster and a public form's respondents are not on one. An
- * unpublished CLASSROOM form still gets the tab; the team-set pages say what is
- * missing there.
+ * classroom roster and a public form's respondents are not on one, and for a
+ * form that takes several responses per person, because a team set reads one
+ * response each. An unpublished CLASSROOM form still gets the tab; the
+ * team-set pages say what is missing there.
  *
  * Paths are built the way the rest of the forms admin builds them (template
  * literals, no encoding): slugs are already URL-safe.
@@ -30,6 +31,8 @@ export interface FormAdminTabsProps {
   active: FormAdminTab;
   /** Submitted responses, shown next to "Responses". Omitted: no count. */
   responses?: number | null;
+  /** The form takes several responses per person: no Teams tab. */
+  manyResponses?: boolean;
 }
 
 export interface FormAdminTabItem {
@@ -59,10 +62,13 @@ export function formAdminTabItems({
   access,
   active,
   responses,
+  manyResponses = false,
 }: FormAdminTabsProps): FormAdminTabItem[] {
   const base = `/${classroomSlug}/forms/${formSlug}`;
   const tabs: FormAdminTab[] =
-    access === 'CLASSROOM' ? ['edit', 'responses', 'teams'] : ['edit', 'responses'];
+    access === 'CLASSROOM' && !manyResponses
+      ? ['edit', 'responses', 'teams']
+      : ['edit', 'responses'];
 
   return tabs.map(tab => ({
     tab,

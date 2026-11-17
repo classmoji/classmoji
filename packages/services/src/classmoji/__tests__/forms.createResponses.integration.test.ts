@@ -77,7 +77,7 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     access?: 'PUBLIC' | 'CLASSROOM';
     fields?: unknown;
     response_cap?: number | null;
-    allow_multiple?: boolean;
+    responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
     closes_at?: Date | null;
     save_partials?: boolean;
   } = {}) => {

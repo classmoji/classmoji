@@ -128,6 +128,9 @@ const FORM_RULE_CODES: ReadonlySet<string> = new Set([
   'FORM_SLUG_RESERVED',
   'FORM_SLUG_UNAVAILABLE',
   'FORM_ROSTER_TOO_LARGE',
+  'FORM_MANY_NEEDS_CLASSROOM',
+  'FORM_RESPONSES_MODE_LOCKED',
+  'FORM_MANY_HAS_TEAM_SETS',
   // …and the rules `formResponse.service` owns, reached by form_response_create.
   // Same treatment for the same reason: each is a documented refusal a caller can
   // act on — re-read and retry (STALE), raise the cap (CAP_REACHED), publish the
@@ -194,7 +197,7 @@ interface FormRow {
   current_revision_id?: string | null;
   response_cap?: number | null;
   closes_at?: Date | string | null;
-  allow_multiple?: boolean;
+  responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
   save_partials?: boolean;
   confirmation_email?: boolean;
   created_at?: Date | string;
@@ -234,16 +237,16 @@ interface ResponseRow {
 /**
  * Resolve one response id INSIDE a form that has already passed S1.
  *
- * `formResponse.service` exposes no staff-side by-id read (only `findOwnResponse`,
- * which keys on the viewer's own user id), so the id is narrowed the same way
- * the web's `scopeResponseIds` narrows a checkbox selection: fetch this form's
- * responses and match within them. A response id belonging to another form — in
- * this classroom or any other — is simply not in the set, and gets the uniform
- * not-found.
+ * One row, read by the id AND the form (`formResponse.findInForm`), with the
+ * same staff columns `listByFormId` returns. A response id belonging to another
+ * form — in this classroom or any other — matches nothing and gets the uniform
+ * not-found, the rule the web's `scopeResponseIds` applies to a selection.
  */
 async function loadResponseInForm(formId: string, responseId: string): Promise<ResponseRow> {
-  const rows = (await ClassmojiService.formResponse.listByFormId(formId)) as ResponseRow[];
-  const row = rows.find(candidate => candidate.id === responseId);
+  const row = (await ClassmojiService.formResponse.findInForm(
+    formId,
+    responseId
+  )) as ResponseRow | null;
   if (!row) throw scopedNotFound('Form response');
   return row;
 }
@@ -268,7 +271,7 @@ function formSummary(form: FormRow) {
     current_revision_id: form.current_revision_id ?? null,
     response_cap: form.response_cap ?? null,
     closes_at: iso(form.closes_at),
-    allow_multiple: form.allow_multiple ?? false,
+    responses_per_person: form.responses_per_person ?? 'ONE',
     save_partials: form.save_partials ?? false,
     confirmation_email: form.confirmation_email ?? false,
     created_at: iso(form.created_at),
@@ -434,6 +437,25 @@ const accessArg = z
       'revision still holds the roster it was materialized with.'
   );
 
+/**
+ * One setting with three values, in the database's own spelling (like `access`
+ * and `status`), so form_get's output can be sent back unchanged. It replaced
+ * the `allow_multiple` boolean (true = REPLACE); a second input for the same
+ * thing could contradict this one, so there is none.
+ */
+const responsesPerPersonArg = z
+  .enum(['ONE', 'REPLACE', 'MANY'])
+  .describe(
+    'How many responses one person may give a CLASSROOM form. ONE: a second submit is ' +
+      'refused (ONE is the default for a new form). REPLACE: they may replace their response ' +
+      'until the form closes (team bidding). MANY: every submit is a new, separate response, ' +
+      'each taking a response_cap slot; CLASSROOM forms only. A PUBLIC form keeps one response ' +
+      'per verified email whatever this says: the person changes it through the link emailed ' +
+      'to them. Switching to or from MANY is refused once the form has any response, drafts ' +
+      'included (list_forms counts submitted ones only). Team sets (form_teams_*) need one ' +
+      'response per person, so a MANY form cannot have one.'
+  );
+
 // ─── list_forms ─────────────────────────────────────────────────────────────
 
 interface ListFormsArgs {
@@ -527,6 +549,7 @@ interface FormCreateArgs {
   title: string;
   access: 'PUBLIC' | 'CLASSROOM';
   description?: string;
+  responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
   fields?: unknown;
 }
 
@@ -542,7 +565,8 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
     'apart, what a pick means to form_teams) / repeat_group (teammate) fields, ' +
     'PUBLIC ones may not and are rejected at save if they try. The slug is derived from the title ' +
     'server-side and is the form’s permanent address — it cannot be supplied or changed. Optional ' +
-    '`fields` seeds the draft field list.',
+    '`fields` seeds the draft field list; `responses_per_person` says whether a person answers ' +
+    'once, may replace their answer, or may answer many times (MANY: CLASSROOM forms only).',
   scope: 'write',
   roles: FORMS_STAFF,
   inputSchema: {
@@ -558,6 +582,7 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
           'on the calendar entry for the close date). Write it for them; notes for staff do ' +
           'not belong here'
       ),
+    responses_per_person: responsesPerPersonArg.optional(),
     fields: fieldsArg.optional(),
   },
   handler: async (args, ctx) => {
@@ -574,6 +599,9 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
         access: args.access,
         createdBy: ctx.viewer.userId,
         ...(args.description !== undefined ? { description: args.description } : {}),
+        ...(args.responses_per_person !== undefined
+          ? { responses_per_person: args.responses_per_person }
+          : {}),
         // Passing the key at all triggers validation, so an absent field list
         // must stay absent rather than become `undefined`.
         ...(args.fields !== undefined ? { fields: args.fields } : {}),
@@ -592,6 +620,7 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
         title: created.title,
         slug: created.slug,
         access: created.access,
+        responses_per_person: created.responses_per_person,
       },
     });
 
@@ -620,7 +649,7 @@ interface FormServiceUpdate {
   access?: 'PUBLIC' | 'CLASSROOM';
   response_cap?: number | null;
   closes_at?: Date | null;
-  allow_multiple?: boolean;
+  responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
   save_partials?: boolean;
   confirmation_email?: boolean;
   fields?: unknown;
@@ -634,7 +663,7 @@ interface FormUpdateArgs {
   access?: 'PUBLIC' | 'CLASSROOM';
   response_cap?: number | null;
   closes_at?: string | null;
-  allow_multiple?: boolean;
+  responses_per_person?: 'ONE' | 'REPLACE' | 'MANY';
   save_partials?: boolean;
   confirmation_email?: boolean;
   fields?: unknown;
@@ -654,7 +683,8 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     'not reopen it, since the published revision still holds the roster it was built with; and ' +
     'the slug is immutable, so it cannot be ' +
     'set here at all. Editing the draft field list does NOT change what fillers see until you ' +
-    'publish.',
+    'publish. responses_per_person has rules of its own (see the field); it replaced ' +
+    'allow_multiple, which is no longer accepted (true = REPLACE, false = ONE).',
   scope: 'write',
   roles: FORMS_STAFF,
   inputSchema: {
@@ -688,10 +718,7 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       .nullable()
       .optional()
       .describe('When the form stops accepting responses (ISO 8601); null clears it'),
-    allow_multiple: z
-      .boolean()
-      .optional()
-      .describe('Let a filler replace their response until the form closes (team bidding)'),
+    responses_per_person: responsesPerPersonArg.optional(),
     save_partials: z
       .boolean()
       .optional()
@@ -722,7 +749,7 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     set('description', 'description', args.description);
     set('access', 'access', args.access);
     set('response_cap', 'response_cap', args.response_cap);
-    set('allow_multiple', 'allow_multiple', args.allow_multiple);
+    set('responses_per_person', 'responses_per_person', args.responses_per_person);
     set('save_partials', 'save_partials', args.save_partials);
     set('confirmation_email', 'confirmation_email', args.confirmation_email);
     if (args.closes_at !== undefined) {
@@ -756,6 +783,12 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
         mcp_tool: 'form_update',
         slug: form.slug,
         fields: changed,
+        // The new value when it changed: a switch to or from MANY becomes
+        // one-way once anyone responds, so the row says which way it went.
+        ...(updated.responses_per_person !== undefined &&
+        updated.responses_per_person !== form.responses_per_person
+          ? { responses_per_person: updated.responses_per_person }
+          : {}),
       },
     });
 
@@ -971,7 +1004,8 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
     'do not repeat it into anywhere it does not belong, and every call is audit-logged.\n' +
     'Answers key on FIELD IDS, so the current revision’s definition is returned alongside; join ' +
     'them to read an answer. Filterable by submission_state, staff_status (pass null for ' +
-    '"unlabelled") and a name/email search.\n' +
+    '"unlabelled") and a name/email search. On a form whose responses_per_person is MANY one ' +
+    'person can have several rows, each its own response.\n' +
     'Answers to identity questions are always left out (their field ids are in ' +
     'hidden_identity_field_ids); form_response_get can include them for one response.',
   scope: 'read',

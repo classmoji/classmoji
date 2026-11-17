@@ -109,6 +109,8 @@ export interface ResponsesContext extends FormAdminContext {
     status: string;
     savePartials: boolean;
     responseCap: number | null;
+    /** MANY: several rows per person, each its own response (no Teams tab). */
+    responsesPerPerson: 'ONE' | 'REPLACE' | 'MANY';
   };
   /**
    * The CURRENT revision's fields: the one column set that lines every response
@@ -177,6 +179,7 @@ export async function requireFormForResponses(
       status: form.status,
       savePartials: form.save_partials,
       responseCap: form.response_cap,
+      responsesPerPerson: form.responses_per_person,
     },
     currentFields,
     fieldsByRevision,

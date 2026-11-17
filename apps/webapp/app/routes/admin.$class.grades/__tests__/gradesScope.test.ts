@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   findAttemptsByQuiz: vi.fn(),
   findGradingStrategies: vi.fn(),
   listResponsesByFormId: vi.fn(),
+  submittedUserIdsByFormIds: vi.fn(),
   openForGradebook: vi.fn(),
   findTeamsByClassroomId: vi.fn(),
 }));
@@ -91,7 +92,10 @@ vi.mock('@classmoji/services', () => ({
     },
     quizAttempt: { findByQuiz: (...a: unknown[]) => mocks.findAttemptsByQuiz(...a) },
     quiz: { findGradingStrategies: (...a: unknown[]) => mocks.findGradingStrategies(...a) },
-    formResponse: { listByFormId: (...a: unknown[]) => mocks.listResponsesByFormId(...a) },
+    formResponse: {
+      listByFormId: (...a: unknown[]) => mocks.listResponsesByFormId(...a),
+      submittedUserIdsByFormIds: (...a: unknown[]) => mocks.submittedUserIdsByFormIds(...a),
+    },
     entitlement: {
       quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
     },
@@ -218,6 +222,7 @@ beforeEach(() => {
   mocks.findAttemptsByQuiz.mockResolvedValue([]);
   mocks.findGradingStrategies.mockResolvedValue({});
   mocks.listResponsesByFormId.mockResolvedValue([]);
+  mocks.submittedUserIdsByFormIds.mockResolvedValue(new Map());
   mocks.openForGradebook.mockResolvedValue({ submissions: {}, quizzes: {} });
   mocks.findTeamsByClassroomId.mockResolvedValue([]);
 });
@@ -466,7 +471,28 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(mocks.findAttemptsByQuiz).not.toHaveBeenCalled();
     expect(mocks.findGradingStrategies).not.toHaveBeenCalled();
     // Form activity is unaffected.
-    expect(mocks.listResponsesByFormId).toHaveBeenCalledWith('form-1');
+    expect(mocks.submittedUserIdsByFormIds).toHaveBeenCalledWith(['form-1']);
+  });
+
+  it('marks the students who submitted each form from one grouped read, never the answers', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      ...ASSIGNMENT_ROWS,
+      { id: 'a-form-2', title: 'Exit', type: 'FORM', form_id: 'form-2', module: { title: 'W2' } },
+    ]);
+    mocks.submittedUserIdsByFormIds.mockResolvedValue(
+      new Map([['form-1', new Set(['student-1', 'student-2'])]])
+    );
+
+    const { activity } = await resolveColumns();
+
+    expect(activity.form).toEqual({
+      'a-form': { 'student-1': { submitted: true }, 'student-2': { submitted: true } },
+      'a-form-2': {},
+    });
+    // Once, for every form column, with the form ids of this classroom's assignments.
+    expect(mocks.submittedUserIdsByFormIds).toHaveBeenCalledTimes(1);
+    expect(mocks.submittedUserIdsByFormIds).toHaveBeenCalledWith(['form-1', 'form-2']);
+    expect(mocks.listResponsesByFormId).not.toHaveBeenCalled();
   });
 });
 

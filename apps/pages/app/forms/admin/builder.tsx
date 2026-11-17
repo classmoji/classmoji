@@ -35,6 +35,12 @@ import { formsListUrl, publicFormUrlFor } from './adminLinks.server.ts';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
 import { QUESTION_PRESETS, type QuestionPreset } from '~/components/forms/presets.ts';
+import {
+  publicSwitchBlockedReason,
+  responsesPerPersonChoices,
+  responsesPerPersonOf,
+  type ResponsesPerPerson,
+} from '~/components/forms/responsesPerPerson.ts';
 
 /**
  * The builder: a field LIST on the left, a live preview on the right.
@@ -148,16 +154,22 @@ export const loader = async ({
   // Team-review scopes. Read here rather than in the component because both
   // lists are classroom-scoped data and the picker must never be able to name a
   // tag or an assignment from another classroom.
-  const [tags, repositories, publicUrlFor, responsesSubmitted] = await Promise.all([
-    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    // The same URL the list copies, built by the same function, so the two
-    // surfaces can never hand out two different addresses for one form.
-    publicFormUrlFor(classroom, new URL(request.url).origin, classroomSlug),
-    // The count next to "Responses" in the switcher: submitted only, as the
-    // list counts them.
-    prisma.formResponse.count({ where: { form_id: form.id, submission_state: 'SUBMITTED' } }),
-  ]);
+  const [tags, repositories, publicUrlFor, responsesSubmitted, responseRows, teamSets] =
+    await Promise.all([
+      ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      // The same URL the list copies, built by the same function, so the two
+      // surfaces can never hand out two different addresses for one form.
+      publicFormUrlFor(classroom, new URL(request.url).origin, classroomSlug),
+      // The count next to "Responses" in the switcher: submitted only, as the
+      // list counts them.
+      prisma.formResponse.count({ where: { form_id: form.id, submission_state: 'SUBMITTED' } }),
+      // Every row, drafts included, and the team sets: the two things that fix
+      // whether the form can switch to or from several responses per person
+      // (form.service `update` refuses the switch on either).
+      prisma.formResponse.count({ where: { form_id: form.id } }),
+      prisma.teamSet.count({ where: { form_id: form.id } }),
+    ]);
 
   const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];
 
@@ -186,8 +198,10 @@ export const loader = async ({
       // server rendering that string would be answering in ITS zone and
       // silently moving the deadline for everyone else.
       closesAtIso: form.closes_at ? form.closes_at.toISOString() : '',
-      allowMultiple: form.allow_multiple,
+      responsesPerPerson: form.responses_per_person as ResponsesPerPerson,
       savePartials: form.save_partials,
+      hasResponseRows: responseRows > 0,
+      hasTeamSets: teamSets > 0,
     },
     fields: fieldsOf(form.draft_fields),
     scopes: {
@@ -228,7 +242,7 @@ export const action = async ({
     access?: FormAccess;
     responseCap?: number | null;
     closesAt?: string | null;
-    allowMultiple?: boolean;
+    responsesPerPerson?: unknown;
     savePartials?: boolean;
   };
 
@@ -297,6 +311,15 @@ export const action = async ({
             error: `A description can be at most ${DESCRIPTION_MAX.toLocaleString('en-US')} characters.`,
           };
         }
+        // One of the three values or nothing: anything else would reach the
+        // database as an unknown enum value and fail there, as a 500.
+        const responsesPerPerson =
+          body.responsesPerPerson === undefined
+            ? undefined
+            : responsesPerPersonOf(body.responsesPerPerson);
+        if (responsesPerPerson === null) {
+          return { error: 'Choose how many responses each person can send.' };
+        }
         await ClassmojiService.form.update(form.id, {
           ...(body.title !== undefined ? { title: body.title } : {}),
           ...(description !== undefined ? { description } : {}),
@@ -305,10 +328,18 @@ export const action = async ({
           ...(body.closesAt !== undefined
             ? { closes_at: body.closesAt ? new Date(body.closesAt) : null }
             : {}),
-          ...(body.allowMultiple !== undefined ? { allow_multiple: body.allowMultiple } : {}),
+          ...(responsesPerPerson !== undefined ? { responses_per_person: responsesPerPerson } : {}),
           ...(body.savePartials !== undefined ? { save_partials: body.savePartials } : {}),
         });
-        await audit('UPDATE', 'forms.builder.save-meta');
+        // The new value when it changed: a switch to or from MANY becomes
+        // one-way once anyone responds, so the row says which way it went.
+        await audit(
+          'UPDATE',
+          'forms.builder.save-meta',
+          responsesPerPerson !== undefined && responsesPerPerson !== form.responses_per_person
+            ? { responses_per_person: responsesPerPerson }
+            : {}
+        );
         return { ok: true, savedAt: new Date().toISOString() };
       }
 
@@ -325,7 +356,10 @@ export const action = async ({
       code === 'FORM_NO_FIELDS' ||
       code === 'FORM_DEFINITION_INVALID' ||
       code === 'FORM_DEFINITION_TOO_LARGE' ||
-      code === 'FORM_FIELD_ACCESS_VIOLATION'
+      code === 'FORM_FIELD_ACCESS_VIOLATION' ||
+      code === 'FORM_MANY_NEEDS_CLASSROOM' ||
+      code === 'FORM_RESPONSES_MODE_LOCKED' ||
+      code === 'FORM_MANY_HAS_TEAM_SETS'
     ) {
       return { error: (error as Error).message };
     }
@@ -385,6 +419,32 @@ export default function FormBuilder() {
   const isDraft = status === 'DRAFT';
   const access = data.form.access;
   const busy = fetcher.state !== 'idle';
+
+  /**
+   * Responses per person, shown as chosen while the save is on its way, and
+   * back to the stored value whenever the loader brings one or a save comes
+   * back refused: a select left showing a choice the service turned down would
+   * say the form takes something it does not.
+   */
+  const [perPerson, setPerPerson] = useState<ResponsesPerPerson>(data.form.responsesPerPerson);
+  useEffect(() => {
+    setPerPerson(data.form.responsesPerPerson);
+  }, [data.form.responsesPerPerson]);
+  const storedPerPerson = useRef(data.form.responsesPerPerson);
+  storedPerPerson.current = data.form.responsesPerPerson;
+  useEffect(() => {
+    if (fetcher.data?.error) setPerPerson(storedPerPerson.current);
+  }, [fetcher.data]);
+  const publicSwitchBlocked = publicSwitchBlockedReason({
+    access,
+    current: data.form.responsesPerPerson,
+  });
+  const perPersonOptions = responsesPerPersonChoices({
+    access,
+    current: data.form.responsesPerPerson,
+    hasResponseRows: data.form.hasResponseRows,
+    hasTeamSets: data.form.hasTeamSets,
+  });
 
   /**
    * The intent of the last action posted from this page.
@@ -571,6 +631,7 @@ export default function FormBuilder() {
             access={access}
             active="edit"
             responses={data.responsesSubmitted}
+            manyResponses={data.form.responsesPerPerson === 'MANY'}
           />
           {/* The link a respondent gets — the SHORT one on a classroom that has
               a course site. The builder is where a form is finished, and the
@@ -645,16 +706,26 @@ export default function FormBuilder() {
             : 'members only, signed in · identity comes from the session'}
         </span>
         {isDraft ? (
-          <button
-            type="button"
-            onClick={() =>
-              post({ intent: 'save-meta', access: access === 'PUBLIC' ? 'CLASSROOM' : 'PUBLIC' })
-            }
-            disabled={busy}
-            className="ml-auto text-xs font-medium text-blue-600 hover:underline disabled:opacity-40 dark:text-blue-400"
-          >
-            Switch to {access === 'PUBLIC' ? 'Classroom' : 'Public link'}
-          </button>
+          <>
+            {/* Unavailable rather than refused after the click: the service
+                will not make a several-responses form public. */}
+            {publicSwitchBlocked ? (
+              <span id="form-access-switch-why" className="ml-auto text-xs text-gray-400">
+                {publicSwitchBlocked}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() =>
+                post({ intent: 'save-meta', access: access === 'PUBLIC' ? 'CLASSROOM' : 'PUBLIC' })
+              }
+              disabled={busy || publicSwitchBlocked !== null}
+              aria-describedby={publicSwitchBlocked ? 'form-access-switch-why' : undefined}
+              className={`${publicSwitchBlocked ? '' : 'ml-auto '}text-xs font-medium text-blue-600 hover:underline disabled:opacity-40 disabled:hover:no-underline dark:text-blue-400`}
+            >
+              Switch to {access === 'PUBLIC' ? 'Classroom' : 'Public link'}
+            </button>
+          </>
         ) : (
           <span className="ml-auto flex items-center gap-1 text-xs text-gray-400">
             <IconLock size={13} /> Frozen — responses under two identity modes cannot be mixed
@@ -738,20 +809,48 @@ export default function FormBuilder() {
           <span className="mt-1 block h-4" />
         </div>
         <div>
+          <label
+            htmlFor="form-responses-per-person"
+            className="block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+          >
+            Per person
+          </label>
+          {/* A choice that cannot be taken right now is disabled, and the help
+              slot says why; the service refuses it either way. */}
+          <select
+            id="form-responses-per-person"
+            value={perPerson}
+            disabled={busy}
+            aria-describedby={perPersonOptions.reason ? 'form-responses-per-person-why' : undefined}
+            onChange={event => {
+              const next = responsesPerPersonOf(event.target.value);
+              if (!next || next === data.form.responsesPerPerson) return;
+              setPerPerson(next);
+              post({ intent: 'save-meta', responsesPerPerson: next });
+            }}
+            className="mt-1 block rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+          >
+            {perPersonOptions.choices.map(choice => (
+              <option key={choice.value} value={choice.value} disabled={choice.disabled}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+          {/* Always rendered, conditionally filled — see the note above. */}
+          <span
+            id="form-responses-per-person-why"
+            className="mt-1 block h-4 text-[11px] leading-4 text-gray-400"
+          >
+            {perPersonOptions.reason}
+          </span>
+        </div>
+        <div>
           {/* This column has no label of its own — the checkbox carries its own
               text — so it takes an empty one, and the transparent border plus
               the same `py-1` as the inputs beside it makes the control row
               exactly their height. Without the spacer the checkbox would sit a
               label's height above the two inputs. */}
           <span className="block h-4" aria-hidden="true" />
-          <label className="mt-1 flex items-center gap-2 border border-transparent py-1 text-sm text-gray-700 dark:text-gray-200">
-            <input
-              type="checkbox"
-              defaultChecked={data.form.allowMultiple}
-              onChange={event => post({ intent: 'save-meta', allowMultiple: event.target.checked })}
-            />
-            Let one person submit more than once
-          </label>
           {/* Partial saving is ON by default, and this is the only way to turn
               it off. A default that collects something, with no control to
               refuse it, is not a default — it is a decision taken on somebody
