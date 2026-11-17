@@ -44,7 +44,7 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
     classroomInvite: {
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
-      deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
+      deleteInviteInClassroom: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
   },
 }));

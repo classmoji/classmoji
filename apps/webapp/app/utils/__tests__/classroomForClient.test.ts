@@ -29,6 +29,25 @@ const CLASSROOM = {
 };
 
 describe('classroomForClient', () => {
+  it('returns no organization credential, invite link code or plan owner id', () => {
+    const out = classroomForClient({
+      ...CLASSROOM,
+      join_code: 'JOIN-CODE-1',
+      join_link_enabled: true,
+      plan_owner_id: 'owner-1',
+      git_organization: { ...CLASSROOM.git_organization, access_token: 'org-token' },
+    });
+
+    expect(out).not.toHaveProperty('join_code');
+    expect(out).not.toHaveProperty('plan_owner_id');
+    expect(out).toHaveProperty('join_link_enabled', true);
+    expect(Object.keys(out.git_organization!).sort()).toEqual(
+      ['base_url', 'id', 'login', 'provider', 'provider_id'].sort()
+    );
+    expect(JSON.stringify(out)).not.toContain('org-token');
+    expect(JSON.stringify(out)).not.toContain('JOIN-CODE-1');
+  });
+
   it('keeps the classroom and its settings, and the organization fields pages read', () => {
     const out = classroomForClient(CLASSROOM);
 

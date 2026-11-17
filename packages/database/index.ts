@@ -38,6 +38,9 @@ const extendedDeadline = (
 
 export {
   GIT_IDENTITY,
+  GIT_IDENTITY_PUBLIC,
+  USER_PUBLIC_SELECT,
+  USER_STAFF_VIEW_SELECT,
   gitScopeProvider,
   whereGitUsername,
   whereGitUsernameIn,

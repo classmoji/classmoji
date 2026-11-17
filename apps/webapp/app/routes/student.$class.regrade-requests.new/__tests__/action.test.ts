@@ -19,9 +19,15 @@ vi.mock('~/utils/helpers', () => ({
   assertClassroomMutationAllowed: () => undefined,
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
-    gitRepoAssignment: { findById: (...a: unknown[]) => findByIdMock(...a) },
+    gitRepoAssignment: {
+      findForRegradeRequest: (...a: unknown[]) => findByIdMock(...a),
+      // The real projection: the payload's shape is what these tests pin.
+      regradeTaskSubmission: (
+        await import('../../../../../../packages/services/src/classmoji/regradeTaskPayload.ts')
+      ).regradeTaskSubmission,
+    },
     helper: { findAllAssignmentsForStudent: vi.fn() },
   },
 }));
@@ -51,7 +57,10 @@ const submission = () => ({
   git_repo: { classroom_id: 'class-1', student_id: 'student-1', name: 'hw1-student' },
   assignment: { title: 'HW 1' },
   grades: [{ emoji: ':x:' }, { emoji: ':white_check_mark:' }],
-  graders: [{ grader: { email: 'ta@example.com' } }],
+  graders: [
+    { grader: { name: 'Ta One', email: 'ta@example.com' } },
+    { grader: { name: 'Ta Two', email: 'ta2@example.com' } },
+  ],
 });
 
 describe('regrade-requests.new action — request_regrade payload contract', () => {
@@ -82,6 +91,22 @@ describe('regrade-requests.new action — request_regrade payload contract', () 
     expect(payload.previous_grade).toEqual([':x:', ':white_check_mark:']);
     expect(waitMock).toHaveBeenCalledWith('run-1');
     expect(result).toMatchObject({ success: 'Regrade/resubmit request submitted' });
+  });
+
+  it('sends the submission as the task reads it, with every grader email', async () => {
+    await action(actionArgs({ git_repo_assignment_id: 'gra-1', student_comment: 'x' }));
+
+    const [, payload] = triggerMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.gitRepoAssignment).toEqual({
+      id: 'gra-1',
+      provider_issue_number: 7,
+      git_repo: { name: 'hw1-student' },
+      assignment: { title: 'HW 1' },
+      graders: [
+        { grader: { name: 'Ta One', email: 'ta@example.com' } },
+        { grader: { name: 'Ta Two', email: 'ta2@example.com' } },
+      ],
+    });
   });
 
   it('rejects submissions that belong to another student (IDOR guard)', async () => {

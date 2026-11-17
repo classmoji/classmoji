@@ -343,13 +343,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async revokeInvite() {
+      let revoked: boolean;
       try {
-        await ClassmojiService.classroomInvite.deleteInvite(data.inviteId);
-
-        return {
-          success: 'Invite revoked',
-          action: 'REVOKE_INVITE',
-        };
+        // Only an invite of this classroom is deleted; any other id deletes
+        // nothing and is answered as not found.
+        revoked = await ClassmojiService.classroomInvite.deleteInviteInClassroom(
+          classroom.id,
+          data.inviteId
+        );
       } catch (error: unknown) {
         console.error('revokeInvite failed:', error);
         return {
@@ -357,6 +358,33 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           error: 'Failed to revoke invite. Please try again.',
         };
       }
+      if (!revoked) {
+        return { action: 'REVOKE_INVITE', error: 'That invite was not found in this class.' };
+      }
+
+      // The invite is gone either way: a failed audit write is logged, not
+      // reported as a failed revoke.
+      try {
+        await ClassmojiService.audit.create(
+          {
+            user_id: userId,
+            classroom_id: classroom.id,
+            role: membership!.role,
+            action: 'DELETE',
+            resource_type: 'STUDENT_ROSTER',
+            resource_id: String(data.inviteId),
+            data: { tool: 'web:roster.revoke_invite' },
+          },
+          { dedupe: false }
+        );
+      } catch (error: unknown) {
+        console.error('revokeInvite: audit row not written:', error);
+      }
+
+      return {
+        success: 'Invite revoked',
+        action: 'REVOKE_INVITE',
+      };
     },
   });
 };

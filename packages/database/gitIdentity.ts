@@ -23,6 +23,62 @@ export const GIT_IDENTITY = {
 } satisfies Prisma.UserInclude;
 
 /**
+ * `GIT_IDENTITY` without the git account's email: the identity a user is shown
+ * by to other people (username, provider id, avatar).
+ */
+export const GIT_IDENTITY_PUBLIC = {
+  accounts: {
+    where: { provider_id: { in: ['github', 'gitlab'] } },
+    select: {
+      provider_id: true,
+      account_id: true,
+      username: true,
+      image: true,
+    },
+  },
+} satisfies Prisma.UserInclude;
+
+/**
+ * The user's `avatar_url`, the computed field the database client's result
+ * extension adds (`image`, or the default avatar). A `select` returns a
+ * computed field only when it names it, so the user selects below name it.
+ * Typed `object` because the base client's types do not know the field (as
+ * with an `include`, rows carry it at runtime only).
+ */
+const COMPUTED_AVATAR_URL: object = { avatar_url: true };
+
+/**
+ * A user as other people see them: id, name, avatar and git identity. For any
+ * user row a read returns to someone other than that user. Never the billing,
+ * moderation, sign-in or platform-role columns (`stripe_customer_id`,
+ * `banned`/`ban_reason`/`ban_expires_at`, `last_seen_at`, `first_sign_in_at`,
+ * `onboarding_completed_at`, `role`), and no email.
+ */
+export const USER_PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  image: true,
+  ...COMPUTED_AVATAR_URL,
+  ...GIT_IDENTITY_PUBLIC,
+} satisfies Prisma.UserSelect;
+
+/**
+ * A user as the classroom's teaching staff see them: `USER_PUBLIC_SELECT` plus
+ * the contact columns staff may read (email, school id, and the git account's
+ * email). For staff-facing reads of the classroom's people only; never in a
+ * payload a student receives about someone else.
+ */
+export const USER_STAFF_VIEW_SELECT = {
+  id: true,
+  name: true,
+  image: true,
+  ...COMPUTED_AVATAR_URL,
+  email: true,
+  school_id: true,
+  ...GIT_IDENTITY,
+} satisfies Prisma.UserSelect;
+
+/**
  * Where a git username is looked up: a provider (`'GITHUB'`, `'GITLAB'`), or a
  * git organization (`{ provider, gitlab_instance_id }`). GitLab usernames are
  * unique per server, so pass the organization whenever the lookup belongs to a

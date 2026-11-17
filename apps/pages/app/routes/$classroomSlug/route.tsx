@@ -21,6 +21,7 @@ import {
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
+import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import { closeLivePageForDelete } from '~/utils/collab.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { askMojiHostData } from '~/utils/askMoji.server.ts';
@@ -252,6 +253,40 @@ export const action = async ({
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
+  // Every intent here writes: in a LOCKED or UNPUBLISHED classroom only the
+  // owner may (the rule the single-page action applies).
+  const blocked = pageMutationBlocked(classroom, role);
+  if (blocked) return blocked;
+
+  /**
+   * One audit row per change, naming the page by id (and title or new value
+   * where known). Written after the change; a failure to write it is logged,
+   * never reported as a failed change.
+   */
+  const audit = async (
+    action: 'CREATE' | 'UPDATE' | 'DELETE',
+    pageId: string,
+    tool: string,
+    detail: Record<string, unknown> = {}
+  ) => {
+    try {
+      await ClassmojiService.audit.create(
+        {
+          user_id: authData.userId,
+          classroom_id: classroom.id,
+          role,
+          action,
+          resource_type: 'PAGES',
+          resource_id: pageId,
+          data: { tool, ...detail },
+        },
+        { dedupe: false }
+      );
+    } catch (error: unknown) {
+      console.error('[pages] audit row not written:', error);
+    }
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>;
   const contentType = request.headers.get('Content-Type') || '';
@@ -304,6 +339,7 @@ export const action = async ({
         is_draft: true,
         content_path: `pages/${slug}`,
       });
+      await audit('CREATE', page.id, 'pages.list.create', { title });
       return redirect(`/${classroomSlug}/${page.id}`);
     } catch (error: unknown) {
       if (ClassmojiService.planLimits.isContentLimitError(error)) {
@@ -343,6 +379,9 @@ export const action = async ({
         }
       }
       await ClassmojiService.page.deletePage(data.pageId);
+      await audit('DELETE', String(data.pageId), 'pages.list.delete', {
+        ...(page ? { title: page.title } : {}),
+      });
       // Return redirect instead of JSON response
       return redirect(`/${classroomSlug}`);
     } catch (error: unknown) {
@@ -354,10 +393,17 @@ export const action = async ({
   }
 
   if (intent === 'toggle-menu') {
+    if (typeof data.show !== 'boolean') {
+      return Response.json({ error: 'show must be true or false' }, { status: 400 });
+    }
     try {
       await ClassmojiService.page.quickUpdate(data.pageId, {
         show_in_student_menu: data.show,
         updated_at: new Date(),
+      });
+      await audit('UPDATE', String(data.pageId), 'pages.list.toggle-menu', {
+        field: 'show_in_student_menu',
+        value: data.show,
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
@@ -369,6 +415,11 @@ export const action = async ({
   }
 
   if (intent === 'update-status') {
+    for (const field of ['is_draft', 'is_public'] as const) {
+      if (field in data && typeof data[field] !== 'boolean') {
+        return Response.json({ error: `${field} must be true or false` }, { status: 400 });
+      }
+    }
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic page update fields from form data
       const updates: Record<string, any> = { updated_at: new Date() };
@@ -376,6 +427,11 @@ export const action = async ({
       if ('is_public' in data) updates.is_public = data.is_public;
 
       await ClassmojiService.page.quickUpdate(data.pageId, updates);
+      await audit('UPDATE', String(data.pageId), 'pages.list.update-status', {
+        field: 'status',
+        ...('is_draft' in updates ? { is_draft: updates.is_draft } : {}),
+        ...('is_public' in updates ? { is_public: updates.is_public } : {}),
+      });
       return Response.json({ success: true });
     } catch (error: unknown) {
       return Response.json(

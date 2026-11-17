@@ -31,12 +31,15 @@ export const ROOT_GIT_ORGANIZATION_SELECT = {
 } as const satisfies Prisma.GitOrganizationSelect;
 
 // Membership projection for the root loader: what the client reads of a
-// membership, its `id` and `role`, plus its classroom.
+// membership, its `id` and `role`, plus its classroom — without the invite
+// link's code (owner only, served by the roster loader), the plan owner's or
+// the creator's id.
 export const ROOT_MEMBERSHIP_SELECT = {
   id: true,
   role: true,
   has_accepted_invite: true,
   classroom: {
+    omit: { join_code: true, plan_owner_id: true, created_by: true },
     include: {
       git_organization: { select: ROOT_GIT_ORGANIZATION_SELECT },
       settings: { select: CLASSROOM_SETTINGS_SELECT },

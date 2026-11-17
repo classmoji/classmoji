@@ -6,7 +6,11 @@
 import _ from 'lodash';
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  USER_PUBLIC_SELECT,
+  USER_STAFF_VIEW_SELECT,
+} from '@classmoji/database';
 import { displayUsername, withLogin, withLogins, type GitIdentityAccount } from '@classmoji/utils';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import * as classroomService from './classroom.service.ts';
@@ -207,21 +211,23 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
             },
             // Purchased extension hours, for lateness (is_late, num_late_hours).
             token_transactions: { select: { hours_purchased: true } },
+            // Staff-facing: graders as anyone sees them, students with the
+            // contact columns staff may read.
             grades: {
               include: {
                 token_transaction: true,
-                grader: { include: GIT_IDENTITY },
+                grader: { select: USER_PUBLIC_SELECT },
               },
             },
             graders: {
               include: {
-                grader: { include: GIT_IDENTITY },
+                grader: { select: USER_PUBLIC_SELECT },
               },
             },
             git_repo: {
               include: {
                 repository: true,
-                student: { include: GIT_IDENTITY },
+                student: { select: USER_STAFF_VIEW_SELECT },
                 team: true,
               },
             },

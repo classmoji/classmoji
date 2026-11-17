@@ -37,9 +37,24 @@ vi.mock('@classmoji/database', async () => ({
   }),
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
-    gitRepoAssignment: { findById: (...a: unknown[]) => mocks.findById(...a) },
+    gitRepoAssignment: {
+      findById: (...a: unknown[]) => mocks.findById(...a),
+      // The task's submission, from its own select: the scoped row plus what
+      // the task reads.
+      findForRegradeRequest: async (id: string) => ({
+        id,
+        provider_issue_number: null,
+        git_repo: { name: 'hw1-student', classroom_id: 'class-1', student_id: 'student-1' },
+        assignment: { title: 'HW 1' },
+        graders: [{ grader: { name: 'Ta', email: 'ta@example.com' } }],
+        grades: [{ emoji: '🎯' }, { emoji: '✅' }],
+      }),
+      regradeTaskSubmission: (
+        await import('../../../../../packages/services/src/classmoji/regradeTaskPayload.ts')
+      ).regradeTaskSubmission,
+    },
     regradeRequest: {
       findOpenByAssignmentId: (...a: unknown[]) => mocks.findOpenByAssignmentId(...a),
       findMany: (...a: unknown[]) => mocks.findMany(...a),
@@ -171,6 +186,14 @@ describe('regrade_create with a numeric (ISSUE-mode) submission id', () => {
       'request_regrade',
       expect.objectContaining({ gitRepoAssignment: expect.objectContaining({ id: NUMERIC_ID }) })
     );
+    // Only what the task reads travels, the graders' emails included.
+    expect(mocks.trigger.mock.calls[0][1].gitRepoAssignment).toEqual({
+      id: NUMERIC_ID,
+      provider_issue_number: null,
+      git_repo: { name: 'hw1-student' },
+      assignment: { title: 'HW 1' },
+      graders: [{ grader: { name: 'Ta', email: 'ta@example.com' } }],
+    });
   });
 });
 

@@ -10,7 +10,15 @@ import { redirect } from 'react-router';
  * its id, role and classroom.
  */
 const ROOT_USER_INCLUDE = {
-  classroom_memberships: { select: { id: true, role: true, classroom: true } },
+  // The classroom without the invite link's code (owner only), the plan
+  // owner's or the creator's id: this payload goes to every member.
+  classroom_memberships: {
+    select: {
+      id: true,
+      role: true,
+      classroom: { omit: { join_code: true, plan_owner_id: true, created_by: true } },
+    },
+  },
   ...GIT_IDENTITY,
 } as const satisfies Prisma.UserInclude;
 

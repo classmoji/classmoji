@@ -18,6 +18,7 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { SlideKindError, slideFileService, validateSlideLinkUrl } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { classroomWriteRefusal } from '~/utils/classroomWrites';
 import { PendingCancelLink, PendingSubmitButton } from '~/components/FormPending';
 import { isSubmissionPending } from '~/utils/pendingSubmission';
 
@@ -81,7 +82,11 @@ export const action = async ({
   }
 
   // Its own gate. The loader's is not a mutation boundary.
-  const { membership } = await authorizeLinkSlide(request, classroomSlug, slideId);
+  const { slide, membership } = await authorizeLinkSlide(request, classroomSlug, slideId);
+  // Changing the link writes: in a LOCKED or UNPUBLISHED classroom only the
+  // owner may.
+  const locked = classroomWriteRefusal(slide.classroom?.status, membership?.role);
+  if (locked) return locked;
 
   const formData = await request.formData();
   const link = validateSlideLinkUrl(String(formData.get('url') ?? ''));

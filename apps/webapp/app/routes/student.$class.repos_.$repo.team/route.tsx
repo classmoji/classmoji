@@ -16,11 +16,21 @@ import { FetcherContext } from '~/contexts';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 import { gitTerms } from '~/utils/gitWeb';
 
+/**
+ * A student reaches a repository's team page only once the repository is
+ * published, as on the other student repository screens; its owner and
+ * teachers (who reach it too) see it either way.
+ */
+const repositoryVisibleTo = (
+  repository: { is_published: boolean },
+  role: string | null | undefined
+): boolean => repository.is_published || role === 'OWNER' || role === 'TEACHER';
+
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
   const moduleSlug = params.repo!;
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
@@ -35,7 +45,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     moduleSlug
   );
 
-  if (!repository) {
+  if (!repository || !repositoryVisibleTo(repository, membership?.role)) {
     throw new Response(`${terms.Repo} not found`, { status: 404 });
   }
 
@@ -62,7 +72,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     : false;
 
   return {
-    repository,
+    // What the page shows of the repository: its title.
+    repository: { title: repository.title },
     teams,
     userTeam,
     userId,
@@ -95,6 +106,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   if (
     !repository ||
+    !repositoryVisibleTo(repository, membership?.role) ||
     repository.type !== 'GROUP' ||
     repository.team_formation_mode !== 'SELF_FORMED'
   ) {

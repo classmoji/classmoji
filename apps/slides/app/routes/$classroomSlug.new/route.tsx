@@ -65,6 +65,7 @@ import {
   validateSlideLinkUrl,
 } from '@classmoji/services/slides';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { classroomWriteRefusal } from '~/utils/classroomWrites';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
 import {
@@ -264,9 +265,15 @@ export const action = async ({
 
   // Authorization FIRST — before a byte of the body is read. The classroom is
   // in the URL, so this costs nothing to move ahead of the upload.
-  const { userId, membership } = await requireClassroomTeachingTeam(request, classroomSlug, {
-    resourceType: 'SLIDE_CONTENT',
-  });
+  const { userId, membership, classroom } = await requireClassroomTeachingTeam(
+    request,
+    classroomSlug,
+    { resourceType: 'SLIDE_CONTENT' }
+  );
+  // Creating a slide writes: in a LOCKED or UNPUBLISHED classroom only the
+  // owner may. Refused before the body (an upload, maybe) is read.
+  const locked = classroomWriteRefusal(classroom.status, membership?.role);
+  if (locked) return locked;
 
   if (!isMultipartUpload(request)) {
     return createFromForm({ request, classroomSlug, userId, membership });

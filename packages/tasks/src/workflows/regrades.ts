@@ -24,9 +24,14 @@ import { appUrl, ClassmojiService, escapeHtml, escapeVars } from '@classmoji/ser
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
 import { getEmojiSymbol, gitContextFor, gitWeb, quizAttemptGrade } from '@classmoji/utils';
 
+/**
+ * An assigned grader as the payload carries them (`regradeTaskSubmission` in
+ * @classmoji/services): the address the request is emailed to, and a name.
+ */
 interface GitRepoAssignmentGraderRecord {
   grader: {
-    email: string;
+    email: string | null;
+    name?: string | null;
   };
 }
 
@@ -131,23 +136,26 @@ export const requestRegradeTask = task({
       // One batched request rather than one run (and one API request) per
       // grader — Resend's 10 req/s ceiling is shared team-wide.
       sendBatchEmailTask.trigger({
-        emails: gitRepoAssignment.graders.map(({ grader }) => ({
-          to: grader.email,
-          template: {
-            id: 'regrade-requested',
-            // `student_comment` is free-form student input rendered into a TA's
-            // inbox, and Resend injects variables raw — escaping here is the
-            // only thing standing between the two.
-            variables: escapeVars({
-              STUDENT_NAME: student.name,
-              STUDENT_LOGIN: studentHandle,
-              ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
-              ISSUE_URL: issueUrl,
-              PREVIOUS_GRADE: previous_grade.map(grade => getEmojiSymbol(grade)).join(' '),
-              STUDENT_COMMENT: student_comment || 'None',
-            }),
-          },
-        })),
+        emails: gitRepoAssignment.graders
+          .map(({ grader }) => grader.email)
+          .filter((to): to is string => Boolean(to))
+          .map(to => ({
+            to,
+            template: {
+              id: 'regrade-requested',
+              // `student_comment` is free-form student input rendered into a TA's
+              // inbox, and Resend injects variables raw — escaping here is the
+              // only thing standing between the two.
+              variables: escapeVars({
+                STUDENT_NAME: student.name,
+                STUDENT_LOGIN: studentHandle,
+                ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
+                ISSUE_URL: issueUrl,
+                PREVIOUS_GRADE: previous_grade.map(grade => getEmojiSymbol(grade)).join(' '),
+                STUDENT_COMMENT: student_comment || 'None',
+              }),
+            },
+          })),
       });
     }
   },

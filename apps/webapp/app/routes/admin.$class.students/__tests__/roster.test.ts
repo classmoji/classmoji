@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   findUsersByRole: vi.fn(),
   findInvitesByClassroomId: vi.fn(),
   deleteInvite: vi.fn(),
+  auditCreate: vi.fn(),
   findRegisteredEmails: vi.fn(),
   taskTrigger: vi.fn(),
   waitForRunCompletion: vi.fn(),
@@ -45,8 +46,9 @@ vi.mock('@classmoji/services', async () => ({
     },
     classroomInvite: {
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
-      deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
+      deleteInviteInClassroom: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
+    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     joinLink: {
       getJoinLink: async () => ({ enabled: true, code: 'secretcode123456' }),
     },
@@ -155,7 +157,8 @@ beforeEach(() => {
   mocks.findInvitesByClassroomId.mockResolvedValue([INVITE_ROW]);
   mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
   mocks.waitForRunCompletion.mockResolvedValue(undefined);
-  mocks.deleteInvite.mockResolvedValue(undefined);
+  mocks.deleteInvite.mockResolvedValue(true);
+  mocks.auditCreate.mockResolvedValue(undefined);
   mocks.findRegisteredEmails.mockResolvedValue(new Set<string>());
 });
 
@@ -474,8 +477,49 @@ describe('students action — mutations stay owner-only', () => {
 
     const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
 
-    expect(mocks.deleteInvite).toHaveBeenCalledWith('invite-1');
-    expect(result).toMatchObject({ action: 'REVOKE_INVITE' });
+    // The classroom is the gate's, never the body's.
+    expect(mocks.deleteInvite).toHaveBeenCalledWith(CLASSROOM.id, 'invite-1');
+    expect(result).toMatchObject({ action: 'REVOKE_INVITE', success: 'Invite revoked' });
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      user_id: 'owner-1',
+      classroom_id: CLASSROOM.id,
+      action: 'DELETE',
+      resource_id: 'invite-1',
+      data: { tool: 'web:roster.revoke_invite' },
+    });
+  });
+
+  it('reports a revoke that happened even when its audit row cannot be written', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
+
+    expect(result).toMatchObject({ action: 'REVOKE_INVITE', success: 'Invite revoked' });
+  });
+
+  it("revokes only this classroom's invites: another classroom's invite id is not found and nothing is audited", async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+    // The service deletes only where the invite's classroom matches; an id of
+    // another classroom matches nothing.
+    mocks.deleteInvite.mockResolvedValue(false);
+
+    const result = await action(actionArgs({ inviteId: 'invite-of-class-2' }, 'revokeInvite'));
+
+    expect(mocks.deleteInvite).toHaveBeenCalledWith(CLASSROOM.id, 'invite-of-class-2');
+    expect(result).toMatchObject({ action: 'REVOKE_INVITE', error: expect.any(String) });
+    expect(result).not.toHaveProperty('success');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 

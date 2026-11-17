@@ -30,6 +30,7 @@ import {
 } from '@classmoji/services/slides';
 import { readLimitedBody, UploadTooLargeError } from '@classmoji/utils/upload-limit';
 import { handleHtmlBlockRequest, isJsonContentType } from '~/utils/htmlBlockApi.server';
+import { classroomWriteBlock } from '~/utils/classroomWrites';
 
 /** The JSON around 1 MB of code, with room for escaping. */
 const MAX_BODY_BYTES = MAX_HTML_BLOCK_FILE_BYTES * 6 + 16 * 1024;
@@ -57,7 +58,12 @@ export const action = async ({
   });
   if (!slide) return json({ error: 'Slide not found' }, 404);
 
-  const { userId } = await assertSlideAccess({ request, slideId, slide, accessType: 'edit' });
+  const { userId, membership } = await assertSlideAccess({
+    request,
+    slideId,
+    slide,
+    accessType: 'edit',
+  });
   if (!userId) return json({ error: 'Sign in to edit this deck.' }, 403);
   if (!isDeckSlide(slide)) return json({ error: 'Only a deck has html blocks.' }, 409);
 
@@ -71,6 +77,14 @@ export const action = async ({
       return json({ error: "This block's code is too large.", code: 'too-large' }, 413);
     }
     return json({ error: 'Expected a JSON body', code: 'invalid' }, 400);
+  }
+
+  // Saving or deleting a block's file writes: in a LOCKED or UNPUBLISHED
+  // classroom only the owner may. Reading and listing stay open.
+  const blockIntent = (body as { intent?: unknown } | null)?.intent;
+  if (blockIntent !== 'read' && blockIntent !== 'list') {
+    const block = classroomWriteBlock(slide.classroom.status, membership?.role);
+    if (block) return json(block, 403);
   }
 
   const answer = await handleHtmlBlockRequest(

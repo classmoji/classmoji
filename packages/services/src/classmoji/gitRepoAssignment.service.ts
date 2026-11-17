@@ -4,7 +4,11 @@
  * A GitRepoAssignment represents a student's instance of an Assignment.
  * It tracks their progress, grades, and submission status.
  */
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  USER_PUBLIC_SELECT,
+  USER_STAFF_VIEW_SELECT,
+} from '@classmoji/database';
 import {
   CLASSMOJI_BOT_EMAIL,
   extendedDeadlineMs,
@@ -179,21 +183,23 @@ export const findByClassroomId = async (classroomId: string) => {
         },
         // Purchased extension hours, for lateness (is_late, num_late_hours).
         token_transactions: { select: { hours_purchased: true } },
+        // Staff-facing: graders as anyone sees them, students with the contact
+        // columns staff may read.
         grades: {
           include: {
             token_transaction: true,
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
           },
         },
         graders: {
           include: {
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
           },
         },
         git_repo: {
           include: {
             repository: true,
-            student: { include: GIT_IDENTITY },
+            student: { select: USER_STAFF_VIEW_SELECT },
             team: true,
           },
         },
@@ -243,6 +249,52 @@ export const findByAssignmentId = async (
 };
 
 /**
+ * What the student's "new regrade request" form lists for one submission: its
+ * id (the value the form posts back) and its assignment's title (the label).
+ */
+const REGRADE_OPTION_SELECT = {
+  id: true,
+  assignment: { select: { title: true } },
+} satisfies Prisma.GitRepoAssignmentSelect;
+
+/**
+ * Submissions matching `query` in the shape of a regrade-request option
+ * (`REGRADE_OPTION_SELECT`), newest deadline first like `findForUser`.
+ */
+export const findRegradeOptions = async (query: Prisma.GitRepoAssignmentWhereInput) => {
+  return getPrisma().gitRepoAssignment.findMany({
+    where: query,
+    select: REGRADE_OPTION_SELECT,
+    orderBy: { assignment: { student_deadline: 'desc' } },
+  });
+};
+
+/**
+ * What a new repo regrade request reads of its submission: the scoping the
+ * caller checks (repo's classroom and student), the grades it snapshots, and
+ * what the `request_regrade` task reads to email the assigned graders.
+ */
+const REGRADE_REQUEST_SELECT = {
+  id: true,
+  provider_issue_number: true,
+  git_repo: { select: { name: true, classroom_id: true, student_id: true } },
+  assignment: { select: { title: true } },
+  graders: { select: { grader: { select: { name: true, email: true } } } },
+  grades: { select: { emoji: true } },
+} satisfies Prisma.GitRepoAssignmentSelect;
+
+/** One submission as a new repo regrade request reads it, or null. */
+export const findForRegradeRequest = async (id: unknown) => {
+  if (!isScopedId(id)) return null;
+  return getPrisma().gitRepoAssignment.findUnique({
+    where: { id },
+    select: REGRADE_REQUEST_SELECT,
+  });
+};
+
+export { regradeTaskSubmission, type RegradeTaskSubmission } from './regradeTaskPayload.ts';
+
+/**
  * Find GitRepoAssignments for a user
  * @param {Object} query - Prisma where clause
  * @returns {Promise<Object[]>}
@@ -259,24 +311,21 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
         },
         git_repo: {
           include: {
-            student: { include: GIT_IDENTITY },
+            student: { select: USER_STAFF_VIEW_SELECT },
             repository: true,
-            classroom: {
-              include: {
-                git_organization: true,
-              },
-            },
+            // What a repository link is built from (`gitContextFor`), no more.
+            classroom: { select: CLASSROOM_LINK_SELECT },
           },
         },
         assignment: true,
         graders: {
           include: {
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
           },
         },
         grades: {
           include: {
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
             token_transaction: true,
           },
         },
@@ -289,6 +338,21 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
     })
   );
 };
+
+/**
+ * The classroom of a submission's repository as a read returns it: enough to
+ * build links to the repository (`gitContextFor`), and no organization
+ * credential or classroom setting.
+ */
+const CLASSROOM_LINK_SELECT = {
+  id: true,
+  slug: true,
+  name: true,
+  git_namespace: true,
+  git_organization: {
+    select: { id: true, login: true, provider: true, provider_id: true, base_url: true },
+  },
+} satisfies Prisma.ClassroomSelect;
 
 /**
  * Create a GitRepoAssignment
@@ -970,19 +1034,19 @@ export const findAllForStudent = async (studentId: string, classroomSlug: string
         token_transactions: true,
         git_repo: {
           include: {
-            student: { include: GIT_IDENTITY },
+            student: { select: USER_STAFF_VIEW_SELECT },
             repository: true,
           },
         },
         assignment: true,
         graders: {
           include: {
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
           },
         },
         grades: {
           include: {
-            grader: { include: GIT_IDENTITY },
+            grader: { select: USER_PUBLIC_SELECT },
             token_transaction: true,
           },
         },

@@ -22,6 +22,7 @@ const userFindFirst = vi.fn();
 const accountFindFirst = vi.fn();
 const accountUpdate = vi.fn();
 const queryRaw = vi.fn();
+const membershipFindMany = vi.fn();
 const transaction = vi.fn((fn: (tx: unknown) => unknown) => fn(client));
 
 // The transaction client exposes the same model methods, so the assertions hold
@@ -39,6 +40,7 @@ const client = {
     delete: (...a: unknown[]) => teamTagRowDelete(...a),
   },
   user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
+  classroomMembership: { findMany: (...a: unknown[]) => membershipFindMany(...a) },
   account: {
     findFirst: (...a: unknown[]) => accountFindFirst(...a),
     update: (...a: unknown[]) => accountUpdate(...a),
@@ -137,6 +139,8 @@ beforeEach(() => {
   // the tests assert the reason code, so the log itself is silenced.
   vi.spyOn(console, 'error').mockImplementation(() => {});
   classroomFindById.mockResolvedValue(CLASSROOM);
+  // The classroom's members (any role): the users the tests below add.
+  membershipFindMany.mockResolvedValue([{ user_id: 'u-1' }, { user_id: 'u-3' }]);
   // No stored Github account by default: the stored login is used as is.
   accountFindFirst.mockResolvedValue(null);
   accountUpdate.mockResolvedValue({});
@@ -656,6 +660,31 @@ describe('teamAdmin.addTeamMembers', () => {
     ]);
     expect(JSON.stringify(result.failed)).not.toContain('not in org');
     // The membership row is only written when the provider call succeeded.
+    expect(addMemberToTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds only members of this classroom: anyone else is `invalid`, with no provider call', async () => {
+    userFindFirst
+      .mockResolvedValueOnce({ id: 'u-1', login: 'ada' })
+      .mockResolvedValueOnce({ id: 'u-other-class', login: 'lin' });
+
+    const result = await teamAdmin.addTeamMembers({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      logins: ['ada', 'lin'],
+    });
+
+    expect(membershipFindMany).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-1' },
+      select: { user_id: true },
+    });
+    expect(result).toEqual({
+      succeeded: [{ login: 'ada' }],
+      failed: [{ login: 'lin', error: 'invalid' }],
+    });
+    expect(addTeamMember).toHaveBeenCalledTimes(1);
+    expect(addTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
+    expect(getLoginById).not.toHaveBeenCalled();
     expect(addMemberToTeam).toHaveBeenCalledTimes(1);
   });
 

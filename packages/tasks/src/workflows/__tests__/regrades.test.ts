@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   findScaleByClassroomId: vi.fn(),
   sendEmail: vi.fn(),
   sendBatch: vi.fn(),
+  userFindById: vi.fn(),
 }));
 
 // `task()` normally returns a trigger handle; return the config so the test
@@ -43,6 +44,10 @@ vi.mock('@classmoji/services', async () => ({
       resolveRepo: (...a: unknown[]) => mocks.resolveRepo(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
+    user: {
+      findById: (...a: unknown[]) => mocks.userFindById(...a),
+      findProviderUsernames: async () => new Map(),
+    },
     emojiMapping: {
       findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
     },
@@ -54,8 +59,14 @@ vi.mock('../email.ts', () => ({
   sendBatchEmailTask: { trigger: (...a: unknown[]) => mocks.sendBatch(...a) },
 }));
 
-const { quizRegradeResolvedTask, updateRegradeRequestTask, renderQuizRegradeResolvedEmail } =
-  await import('../regrades.ts');
+const {
+  quizRegradeResolvedTask,
+  updateRegradeRequestTask,
+  requestRegradeTask,
+  renderQuizRegradeResolvedEmail,
+} = await import('../regrades.ts');
+const { regradeTaskSubmission } =
+  await import('../../../../services/src/classmoji/regradeTaskPayload.ts');
 
 type Runnable<P> = { run: (payload: P) => Promise<unknown> };
 const quizTask = quizRegradeResolvedTask as unknown as Runnable<{ request_id: string }>;
@@ -179,6 +190,53 @@ describe('quiz_regrade_resolved', () => {
       'Your regrade request for Quiz 1 in your classroom has been reviewed.\n\nScore adjusted 60 → 90'
     );
     expect(template.variables.SUBJECT).toBe('[Classmoji] - Regrade request resolved');
+  });
+});
+
+describe('request_regrade', () => {
+  const requestTask = requestRegradeTask as unknown as {
+    onSuccess: (args: { payload: unknown }) => Promise<void>;
+  };
+
+  it('emails every assigned grader with an address, from the payload the callers build', async () => {
+    mocks.classroomFindById.mockResolvedValue({
+      id: 'class-1',
+      git_namespace: null,
+      git_organization: { login: 'org', provider: 'GITHUB' },
+    });
+    mocks.userFindById.mockResolvedValue({ id: 'stu-1', name: 'Ada', login: 'ada' });
+    const gitRepoAssignment = regradeTaskSubmission({
+      id: 'gra-1',
+      provider_issue_number: null,
+      git_repo: { name: 'hw1-ada' },
+      assignment: { title: 'HW 1' },
+      graders: [
+        { grader: { name: 'Ta One', email: 'ta1@example.com' } },
+        { grader: { name: 'Ta Two', email: 'ta2@example.com' } },
+        { grader: { name: 'No Address', email: null } },
+      ],
+    });
+
+    await requestTask.onSuccess({
+      payload: {
+        classroom_id: 'class-1',
+        gitRepoAssignment,
+        student_id: 'stu-1',
+        student_comment: 'please',
+        previous_grade: ['+1'],
+      },
+    });
+
+    expect(mocks.sendBatch).toHaveBeenCalledTimes(1);
+    const { emails } = mocks.sendBatch.mock.calls[0][0] as {
+      emails: Array<{ to: string; template: { variables: Record<string, string> } }>;
+    };
+    expect(emails.map(e => e.to)).toEqual(['ta1@example.com', 'ta2@example.com']);
+    expect(emails[0].template.variables).toMatchObject({
+      ASSIGNMENT_TITLE: 'HW 1',
+      STUDENT_NAME: 'Ada',
+      ISSUE_URL: 'https://github.com/org/hw1-ada',
+    });
   });
 });
 

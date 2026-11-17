@@ -35,6 +35,7 @@ import {
   validateSlideFile,
 } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
+import { classroomWriteRefusal } from '~/utils/classroomWrites';
 import { webappClassUrl } from '~/utils/webappLinks';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
@@ -150,7 +151,11 @@ export const action = async ({
   // Its own authorization check, ahead of the body: the loader's gate is not a
   // mutation boundary, and a 35 MB upload should never be buffered for someone
   // who is not allowed to make it.
-  const { membership } = await authorizeFileSlide(request, classroomSlug, slideId);
+  const { slide, membership } = await authorizeFileSlide(request, classroomSlug, slideId);
+  // Replacing the file writes: in a LOCKED or UNPUBLISHED classroom only the
+  // owner may. Refused before the body is read.
+  const locked = classroomWriteRefusal(slide.classroom?.status, membership?.role);
+  if (locked) return locked;
 
   // A document already in the classroom's media arrives as its id alone — a few
   // bytes of url-encoded form, which holds no upload slot.

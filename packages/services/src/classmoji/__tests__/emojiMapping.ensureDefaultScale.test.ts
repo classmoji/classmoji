@@ -87,9 +87,11 @@ describe('saveEmojiMapping', () => {
 
     expect(calls).toEqual(['lock', 'upsert']);
     expect(queryRaw.mock.calls[0].slice(1)).toEqual(['emoji-scale:class-1']);
+    // The update writes the row's fields; the create also names the emoji and
+    // the caller's classroom.
     expect(upsert).toHaveBeenCalledWith({
       where: { classroom_id_emoji: { classroom_id: 'class-1', emoji: 'rocket' } },
-      update: values,
+      update: { grade: 100, extra_tokens: 0, description: 'Great' },
       create: { classroom_id: 'class-1', ...values },
     });
   });

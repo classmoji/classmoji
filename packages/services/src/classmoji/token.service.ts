@@ -1,4 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma, { USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import {
   effectiveTokensPerHour,
   openToStudents,
@@ -479,7 +479,7 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
     await getPrisma().tokenTransaction.findMany({
       where: query,
       include: {
-        student: { include: GIT_IDENTITY },
+        student: { select: USER_STAFF_VIEW_SELECT },
         git_repo_assignment: {
           include: {
             assignment: true,

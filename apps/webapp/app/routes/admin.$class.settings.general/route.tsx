@@ -12,6 +12,7 @@ import DefaultPageSection from './DefaultPageSection';
 import TimeZoneSection from './TimeZoneSection';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { pickSettings } from '~/utils/pickSettings';
+import { classroomForClient } from '~/utils/classroomForClient';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -34,8 +35,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // directly rather than off the sanitized settings, so it is always current.
   const timeZone = await ClassmojiService.classroom.getTimeZone(classroom.id);
 
-  // Return classroom for settings display (API keys stripped by assertClassroomAccess)
-  return { classroom, menuPages, timeZone, timeZones: listTimeZones() };
+  // Return classroom for settings display (API keys stripped by assertClassroomAccess;
+  // the git organization's credentials by classroomForClient)
+  return {
+    classroom: classroomForClient(classroom),
+    menuPages,
+    timeZone,
+    timeZones: listTimeZones(),
+  };
 };
 
 const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
