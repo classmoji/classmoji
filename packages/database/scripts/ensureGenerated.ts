@@ -5,9 +5,10 @@
  * tests, builds, dev servers and Trigger deploys; `db:generate` runs it with
  * `--force`, always generating.
  *
- * Out of date: an entry file below is missing, or `generated/.stamp` is not
- * the sha256 of schema.prisma, the installed `prisma` and `@prisma/client`
- * versions and the entry list. The stamp is removed before generating and
+ * Out of date: an entry file below is missing or newer than `generated/.stamp`
+ * (the Prisma CLI was run directly), or the stamp is not the sha256 of
+ * schema.prisma, the installed `prisma` and `@prisma/client` versions and the
+ * entry list. The stamp is removed before generating and
  * written only after a generate that succeeded. A lock directory makes a
  * second process wait, then find the stamp current. Plain Node: it runs before
  * anything is generated.
@@ -40,6 +41,11 @@ const STAMP = 'generated/.stamp';
 const LOCK = 'generated/.lock';
 /** A lock older than this, or whose owner is gone, was left by a killed run. */
 const STALE_LOCK_MS = 10 * 60_000;
+/** Longer than the gap between taking the lock and writing its pid file. */
+const PID_WRITE_MS = 5_000;
+const LOCK_POLL_MS = 200;
+/** A waiting run says so once it has waited this long. */
+const LOCK_NOTICE_MS = 1_000;
 
 export type EnsureOptions = {
   dir?: string;
@@ -67,11 +73,14 @@ export function fingerprint(dir: string, versions: string): string {
 }
 
 export function isUpToDate(dir: string, wanted: string): boolean {
-  if (!GENERATED_ENTRIES.every(file => existsSync(join(dir, file)))) return false;
   try {
-    return readFileSync(join(dir, STAMP), 'utf8').trim() === wanted;
+    if (readFileSync(join(dir, STAMP), 'utf8').trim() !== wanted) return false;
+    // An entry newer than the stamp was written by a generate this script did
+    // not run (the Prisma CLI called directly, maybe on another schema).
+    const stamped = statSync(join(dir, STAMP)).mtimeMs;
+    return GENERATED_ENTRIES.every(file => statSync(join(dir, file)).mtimeMs <= stamped);
   } catch {
-    return false;
+    return false; // no stamp, or an entry file is missing
   }
 }
 
@@ -82,19 +91,33 @@ function runPrismaGenerate(dir: string): boolean {
   );
 }
 
-function isStale(lock: string): boolean {
+/** The pid in the lock, or 0 while its owner has not written one. */
+function lockOwner(lock: string): number {
   try {
     const owner = Number(readFileSync(join(lock, 'pid'), 'utf8'));
+    return Number.isInteger(owner) && owner > 0 ? owner : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function isStale(lock: string): boolean {
+  const age = Date.now() - statSync(lock).mtimeMs;
+  const owner = lockOwner(lock);
+  // No pid: the owner writes it right after taking the lock, so a lock still
+  // without one after a few seconds was left by a run killed in between.
+  if (!owner) return age > PID_WRITE_MS;
+  try {
     process.kill(owner, 0); // throws when no such process
   } catch (error) {
-    // EPERM: alive, someone else's. Anything else (no pid file yet, ESRCH): judge by age.
+    // EPERM: alive, someone else's process; judge that one by age.
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
   }
-  return Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS;
+  return age > STALE_LOCK_MS;
 }
 
 function withLock<T>(lock: string, run: () => T): T {
-  for (;;) {
+  for (let waited = 0; ; waited += LOCK_POLL_MS) {
     try {
       mkdirSync(lock);
       break;
@@ -106,7 +129,12 @@ function withLock<T>(lock: string, run: () => T): T {
     } catch {
       // Released between the two calls: try again.
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    if (waited === LOCK_NOTICE_MS) {
+      console.error(
+        `[db:ensure] waiting for another prisma generate (pid ${lockOwner(lock) || 'unknown'}, lock ${lock})`
+      );
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
   }
   try {
     writeFileSync(join(lock, 'pid'), String(process.pid));

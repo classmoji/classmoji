@@ -129,6 +129,8 @@ export default async ({ command, mode }) => {
       exclude: [
         '@classmoji/database',
         '@classmoji/services',
+        // The generated client's browser entry imports its runtime from here.
+        '@prisma/client',
         'octokit',
         'stripe',
         'nanoid',

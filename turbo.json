@@ -116,9 +116,9 @@
     // Both write the Prisma clients into packages/database/generated (node/
     // and worker/, not in git; scripts/ensureGenerated.ts). Never cached: a
     // cache hit once restored neither. db:generate always generates (init,
-    // devport, CI); db:ensure generates only when the output is missing or
-    // older than schema.prisma or the installed Prisma, and otherwise writes
-    // nothing, so running dev servers are not restarted.
+    // devport, CI); db:ensure generates only when the output is missing, was
+    // written by a direct Prisma CLI run, or no longer matches schema.prisma
+    // and the installed Prisma, and otherwise writes nothing, so running dev servers are not restarted.
     "db:generate": {
       "cache": false
     },

@@ -13,6 +13,7 @@ import {
   statSync,
   writeFileSync,
   existsSync,
+  utimesSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -129,6 +130,27 @@ describe('ensureGenerated', () => {
       })
     ).toBe('generated');
     expect(calls).toBe(4);
+  });
+
+  it('generates again when an entry file is newer than the stamp (a direct CLI run)', () => {
+    ensureGenerated({ dir, versions: VERSIONS, generate: fakeGenerate() });
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(dir, GENERATED_ENTRIES[0]), later, later);
+    expect(ensureGenerated({ dir, versions: VERSIONS, generate: fakeGenerate() })).toBe(
+      'generated'
+    );
+    expect(calls).toBe(2);
+  });
+
+  it('takes over a lock that never got a pid file, once it is a few seconds old', () => {
+    const lock = join(dir, 'generated/.lock');
+    mkdirSync(lock, { recursive: true });
+    const earlier = new Date(Date.now() - 6_000);
+    utimesSync(lock, earlier, earlier);
+    expect(ensureGenerated({ dir, versions: VERSIONS, generate: fakeGenerate() })).toBe(
+      'generated'
+    );
+    expect(existsSync(lock)).toBe(false);
   });
 
   it('generates when forced, even if up to date', () => {
