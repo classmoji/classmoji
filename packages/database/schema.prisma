@@ -1,6 +1,7 @@
 // The Node client, imported everywhere as `@classmoji/database/client` (never
 // `@prisma/client`). Plain TypeScript generated into ./generated/node (not in
-// git) by `npm run db:generate`; `importFileExtension = "ts"` lets Node's
+// git) by `npm run db:generate` or `db:ensure` (README: "Generated clients");
+// `importFileExtension = "ts"` lets Node's
 // `--experimental-strip-types` load it as it is. Dockerfiles generate only
 // this one (`--generator client`).
 generator client {

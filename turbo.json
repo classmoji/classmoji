@@ -2,7 +2,10 @@
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": [".env"],
   "tasks": {
+    // `^db:ensure` (see db:ensure below): every task that reads the generated
+    // Prisma client generates it first, only when it is out of date.
     "build": {
+      "dependsOn": ["^db:ensure"],
       "outputs": []
     },
     // ACTION_ORIGIN_HOSTS picks the host baked into allowedActionOrigins
@@ -10,18 +13,25 @@
     // here, so without it a staging image build would quietly get the
     // production host.
     "web:build": {
+      "dependsOn": ["^db:ensure"],
       "env": ["ACTION_ORIGIN_HOSTS"]
     },
     "web:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     "web:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
-    "trigger:deploy": {},
-    "trigger:deploy:staging": {},
+    "trigger:deploy": {
+      "dependsOn": ["^db:ensure"]
+    },
+    "trigger:deploy:staging": {
+      "dependsOn": ["^db:ensure"]
+    },
     "trigger:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
@@ -38,67 +48,81 @@
       "cache": false
     },
     "hook:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     "hook:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
     "mcp:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     "mcp:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
     "dev": {
       "persistent": true,
       "cache": false
     },
     "start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
     "slides:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     // See web:build.
     "slides:build": {
+      "dependsOn": ["^db:ensure"],
       "env": ["ACTION_ORIGIN_HOSTS"]
     },
     "slides:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
     "pages:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
-    "pages:build": {},
+    "pages:build": {
+      "dependsOn": ["^db:ensure"]
+    },
     "pages:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
     "admin:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     "collab:dev": {
+      "dependsOn": ["^db:ensure"],
       "persistent": true,
       "cache": false
     },
     "collab:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
-    "admin:build": {},
+    "admin:build": {
+      "dependsOn": ["^db:ensure"]
+    },
     "admin:start": {
-      "dependsOn": ["^db:generate"]
+      "dependsOn": ["^db:ensure"]
     },
-    // Never cached: prisma generate writes both clients into
-    // packages/database/generated (node/ and worker/, not in git). A cache hit
-    // once restored neither, leaving a stale client and a missing
-    // generated/worker (admin's Cloudflare build fails without it); it takes a
-    // few seconds, so it simply always runs. typecheck and test depend on it
-    // (every import of `@classmoji/database/client` reads generated/node).
+    // Both write the Prisma clients into packages/database/generated (node/
+    // and worker/, not in git; scripts/ensureGenerated.ts). Never cached: a
+    // cache hit once restored neither. db:generate always generates (init,
+    // devport, CI); db:ensure generates only when the output is missing or
+    // older than schema.prisma or the installed Prisma, and otherwise writes
+    // nothing, so running dev servers are not restarted.
     "db:generate": {
+      "cache": false
+    },
+    "db:ensure": {
       "cache": false
     },
     "db:start": {},
@@ -118,8 +142,8 @@
       // when someone remembered. This makes the root `npm run test` run them
       // first: turbo resolves an unprefixed dependency within the SAME package,
       // and simply skips it for the workspaces that define no such script.
-      // And the generated Prisma client (see db:generate).
-      "dependsOn": ["web:test:unit", "^db:generate", "db:generate"],
+      // And the generated Prisma client (see db:ensure).
+      "dependsOn": ["web:test:unit", "^db:ensure", "db:ensure"],
       // turbo hands a task only the environment it has been told about, so an
       // E2E_* variable set on the command line simply does not reach Playwright
       // unless it is named here. The failure mode is quiet and expensive: the
@@ -154,6 +178,7 @@
     },
     "test:integration": {
       "cache": false,
+      "dependsOn": ["^db:ensure"],
       // apps/mcp's suites: which bearer they run on (internal or jwt), whether
       // the Trigger-backed tools' success paths run, and the server's port.
       // Unnamed here, a value set on the command line never reaches them.
@@ -173,13 +198,13 @@
     // Playwright's test-results/ and playwright-report/.
     "web:test:unit": {
       "cache": false,
-      "dependsOn": ["^db:generate"],
+      "dependsOn": ["^db:ensure"],
       "outputs": []
     },
     "typecheck": {
-      // The generated Prisma client first (see db:generate): `^` for the
+      // The generated Prisma client first (see db:ensure): `^` for the
       // workspaces that depend on @classmoji/database, plain for its own.
-      "dependsOn": ["^typecheck", "^db:generate", "db:generate"],
+      "dependsOn": ["^typecheck", "^db:ensure", "db:ensure"],
       "outputs": []
     }
   },

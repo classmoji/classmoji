@@ -59,9 +59,10 @@ export default async () => {
       include: ['react', 'react-dom', 'react-router'],
       entries: ['./app/root.tsx'],
       // Server-only. Leaving these in triggers a mid-session dep
-      // re-optimization whose reload can transiently fail to resolve
-      // @prisma/client during an in-flight SSR request.
-      exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
+      // re-optimization whose reload can transiently fail to resolve the
+      // generated Prisma client (@classmoji/database/client) during an
+      // in-flight SSR request.
+      exclude: ['@classmoji/database', '@classmoji/services', 'octokit'],
     },
     plugins: [tailwindcss(), ...workerPlugins, reactRouter()],
     server: {

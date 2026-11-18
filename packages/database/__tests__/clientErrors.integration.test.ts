@@ -1,16 +1,14 @@
 /**
- * Errors thrown by the generated client (`@classmoji/database/client`, the
- * `prisma-client` generator) on a real database, against the errors captured
- * from Prisma 7.10.1's `prisma-client-js` client (testing/prismaErrors.ts),
- * which every classifier's own tests run on.
- *
- * For each failure: the same class (`instanceof` the namespace's error
- * classes), and the same fields the classifiers read (name, code, the
- * driver adapter's cause), so a classifier tested on the captured error
- * recognises the live one. The two connection classifiers (task retries, the
- * MCP's 503) are also run on both. The error classes are the runtime's own
- * objects, whether the runtime is imported or required, so `instanceof` holds
- * in any code handed this client.
+ * What this proves: errors the generated client (`@classmoji/database/client`,
+ * the `prisma-client` generator) throws on a real database match the errors
+ * captured from Prisma 7.10.1's `prisma-client-js` client
+ * (testing/prismaErrors.ts) on the fields the classifiers read (name, code,
+ * the driver adapter's cause), are `instanceof` the namespace's error classes,
+ * and those classes are the runtime's own objects whether the runtime is
+ * imported or required under the `node` condition (as Node, vitest and the
+ * server bundles load it). Whether each classifier is right is covered by its
+ * unit tests, which run on the captured errors; the two connection
+ * classifiers are only checked to answer the same for live and captured.
  *
  * Skipped unless DATABASE_URL names a LOCAL, non-shared database, like
  * clientApi.integration.test.ts. Every row it writes is removed.

@@ -50,6 +50,12 @@
  * its own (`@classmoji/database/pg-client`), with a deliberately tiny
  * connection pool: it runs one narrow query per refresh interval and has no
  * business holding the default pool's worth of connections.
+ *
+ * It does load a second copy of the generated client MODULE: pg-client
+ * imports `@classmoji/database/client` from source, while the app bundle
+ * carries its own inlined copy (some 10 MB more memory once loaded). Both run
+ * on the one `@prisma/client` runtime in node_modules, so the error classes
+ * are shared.
  */
 
 /** custom hostname → tenant subdomain. */

@@ -89,7 +89,8 @@ export default async ({ command, mode }) => {
       // Pre-bundle the heavy editor deps on startup. Without this they're
       // discovered lazily on first page-editor load, which triggers a
       // mid-session dep re-optimization + reload; an in-flight SSR request can
-      // then transiently fail to resolve server-only @prisma/client.
+      // then transiently fail to resolve the server-only generated Prisma
+      // client (@classmoji/database/client).
       include: [
         'react',
         'react-dom',
@@ -104,7 +105,7 @@ export default async ({ command, mode }) => {
         '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
-      exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
+      exclude: ['@classmoji/database', '@classmoji/services', 'octokit'],
     },
     plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],
     server: {

@@ -3,8 +3,8 @@
  * or columns against the real schema (apps/mcp's prismaSchemaStub, packages/auth's
  * authSchema test).
  *
- * Prisma 7's generated client no longer carries it: `Prisma.dmmf` and the
- * client's `_runtimeDataModel` keep only each field's name, kind and type
+ * The generated client does not carry it: it has no `Prisma.dmmf`, and its
+ * `_runtimeDataModel` keeps only each field's name, kind and type
  * (no `isRequired`, `hasDefaultValue`, `isUpdatedAt`, unique indexes or
  * primary keys). So this asks Prisma's own schema engine, built to wasm and
  * published as `@prisma/prisma-schema-wasm`, for the same document Prisma 6's

@@ -232,9 +232,11 @@ export default defineConfig({
       // packages/database/generated/node (schema.prisma's `client` generator),
       // bundled with the tasks like any other source. The extension only keeps
       // `@prisma/client` (the client's runtime, `@prisma/client/runtime/*`)
-      // external, so the image installs it. It generates nothing: run
-      // `npm run db:generate` (or `prisma generate --generator client`) before
-      // `trigger deploy`; the deploy workflows do.
+      // external, so the image installs it. It generates nothing: the deploy
+      // workflows run `prisma generate --generator client` first, and the root
+      // `npm run trigger:deploy` / `trigger:deploy:staging` / `trigger:dev` go
+      // through turbo, which runs `db:ensure` first. Calling the CLI directly
+      // (`npx trigger.dev deploy`) bundles whatever generated/node holds.
       prismaExtension({ mode: 'modern' }),
       aptGet({
         // git-lfs: `gh-create_git_repo` copies templates that keep their

@@ -129,7 +129,6 @@ export default async ({ command, mode }) => {
       exclude: [
         '@classmoji/database',
         '@classmoji/services',
-        '@prisma/client',
         'octokit',
         'stripe',
         'nanoid',

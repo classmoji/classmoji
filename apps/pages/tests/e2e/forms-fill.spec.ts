@@ -1120,9 +1120,10 @@ test.describe('public fill — abuse surfaces', () => {
     //
     // Only the WRITE is asserted, not the status code: the dev server renders
     // this route's document through Vite, and that pipeline occasionally drops
-    // the connection on a ~1.3MB dev document (it emits the same
-    // `@prisma/client` resolve warning on every route in this app, including
-    // ones that predate forms). A reset connection is still a submission that
+    // the connection on a ~1.3MB dev document (while the Prisma client came
+    // from `@prisma/client`, it emitted that package's resolve warning on every
+    // route in this app, including ones that predate forms). A reset
+    // connection is still a submission that
     // did not happen, which is the whole claim.
     await page.request
       .post(fillPath, {

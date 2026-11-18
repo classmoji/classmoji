@@ -227,8 +227,9 @@
     // exemption for a module that only wanted the key shape used to be the way
     // those were reached, and it exempted that module from the signers too.
     //
-    // The allowlist (the override below that turns this rule off) is therefore
-    // down to the three files that legitimately MINT, plus tests:
+    // The allowlist (the override below that drops the content-signing entry,
+    // keeping only the Prisma ones) is therefore down to the three files that
+    // legitimately MINT, plus tests:
     //   - `contentDelivery.service.ts` — the gate itself;
     //   - `deckRenderToken.service.ts` — render tokens, a different signature over
     //     a deck id rather than a sha, with no asset map to check against;
@@ -239,8 +240,10 @@
     //   - tests, which have to reach the primitives to prove the gate's output.
     //
     // Globs are tail-matched (`**/classmoji/...`) so they hold wherever the
-    // services package lives. Dynamic `import()` is not checked (it was not
-    // under ESLint either).
+    // services package lives. A dynamic `import()` is checked by module name
+    // (so `import('@prisma/client')` is refused below), but not by the names it
+    // takes: `importNames` restrictions, like the signers here, do not reach it
+    // (they did not under ESLint either).
     //
     // The same rule keeps every import of the Prisma client on
     // `@classmoji/database/client`: `@prisma/client` no longer holds a client
@@ -535,6 +538,17 @@
       }
     },
     {
+      // `db:ensure` runs as a build step that must finish before turbo starts
+      // anything that depends on it: plain synchronous Node is the point.
+      "files": [
+        "packages/database/scripts/ensureGenerated.ts",
+        "packages/database/__tests__/ensureGenerated.test.ts"
+      ],
+      "rules": {
+        "node/no-sync": "off"
+      }
+    },
+    {
       "files": ["packages/tasks/**"],
       "rules": {
         "node/no-sync": "off"
@@ -668,7 +682,8 @@
       // override above, so it wins there): it may import the runtime itself
       // (`@prisma/client/runtime/client`: DMMF types in testing/schemaDmmf.ts,
       // the error classes in __tests__/clientErrors.integration.test.ts). The
-      // bare `@prisma/client` stays refused.
+      // bare `@prisma/client`, its other subpaths (`index-browser`, ...) and
+      // `.prisma/client` stay refused.
       "files": ["packages/database/**"],
       "rules": {
         "no-restricted-imports": [
@@ -692,6 +707,17 @@
               {
                 "name": "@prisma/client",
                 "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "@prisma/client/**",
+                  "!@prisma/client/runtime/**",
+                  ".prisma/client",
+                  ".prisma/client/**"
+                ],
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma); only @prisma/client/runtime/* is allowed here."
               }
             ]
           }

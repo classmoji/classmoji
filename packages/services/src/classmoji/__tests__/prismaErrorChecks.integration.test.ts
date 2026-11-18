@@ -1,15 +1,16 @@
 /**
- * The services' Prisma error checks on errors the generated client
- * (`@classmoji/database/client`) really throws: teamSet's `isDatabaseError`
- * (`instanceof` the namespace's error classes) and the unique-violation
- * reader every slug-collision check goes through. Their unit tests run on
- * captured errors; this proves the live ones are the same classes and shapes.
+ * What this proves: on errors the generated client
+ * (`@classmoji/database/client`) really throws, teamSet's `isDatabaseError`
+ * (`instanceof` the namespace's error classes) recognises them and the
+ * unique-violation reader finds the constraint, i.e. the live errors have the
+ * classes and shape those checks read. Whether the checks are right in
+ * general is covered by their unit tests on captured errors.
  *
  * Skipped unless DATABASE_URL names a LOCAL, non-shared database. Every row it
  * writes is removed.
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import getPrisma from '@classmoji/database';
+import { getPrisma } from '@classmoji/database';
 import { Prisma } from '@classmoji/database/client';
 import { uniqueViolationTarget } from '../uniqueViolation.ts';
 import { isClassroomSlugConflict } from '../classroomSlug.ts';

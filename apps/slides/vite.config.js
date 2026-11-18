@@ -88,7 +88,7 @@ export default async ({ command, mode }) => {
         '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
-      exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
+      exclude: ['@classmoji/database', '@classmoji/services', 'octokit'],
     },
     plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],
     server: {
