@@ -3,7 +3,6 @@
  */
 
 import {
-  IconLayoutDashboard,
   IconFileText,
   IconUsers,
   IconUserCheck,
@@ -22,7 +21,7 @@ import {
   IconForms,
   IconMessageChatbot,
 } from '@tabler/icons-react';
-import { IconCalendar } from '~/components/ui/display/tablerIcons';
+import { IconCalendar, IconLayoutDashboard } from '~/components/ui/display/tablerIcons';
 
 /**
  * Route categories for organized navigation

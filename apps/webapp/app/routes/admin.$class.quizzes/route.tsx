@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useFetcher, useLocation, useNavigate, useParams, Outlet } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
-import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
+import { IconSend, IconBook, IconTrash } from '@tabler/icons-react';
+import { IconCalendar } from '~/components/ui/display/tablerIcons';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
 import {

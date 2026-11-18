@@ -88,8 +88,10 @@ vi.mock('antd', () => ({
 vi.mock('@tabler/icons-react', () => ({
   IconSend: () => null,
   IconBook: () => null,
-  IconCalendar: () => null,
   IconTrash: () => null,
+}));
+vi.mock('~/components/ui/display/tablerIcons', () => ({
+  IconCalendar: () => null,
 }));
 vi.mock('react-router', () => ({
   useFetcher: () => ({ submit: vi.fn() }),

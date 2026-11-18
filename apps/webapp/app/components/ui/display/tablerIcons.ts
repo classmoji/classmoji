@@ -3,8 +3,9 @@ import { createReactComponent } from '@tabler/icons-react';
 /**
  * Tabler icons whose glyph Tabler 3 redrew, kept as Tabler 2.47 drew them so
  * the interface does not change: the calendar keeps its date mark, the apple
- * its round outline, the bar chart its rising bars. Same component API and
- * classes as the library's own icons.
+ * its round outline, the bar chart its rising bars, the dashboard its square
+ * corners. Same component API and classes as the library's own icons. Import
+ * these from here, never from `@tabler/icons-react` (lint enforces it).
  */
 export const IconApple = createReactComponent('outline', 'apple', 'Apple', [
   ['path', { d: 'M12 14m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0', key: 'svg-0' }],
@@ -51,3 +52,15 @@ export const IconChartBar = createReactComponent('outline', 'chart-bar', 'ChartB
   ],
   ['path', { d: 'M4 20l14 0', key: 'svg-3' }],
 ]);
+
+export const IconLayoutDashboard = createReactComponent(
+  'outline',
+  'layout-dashboard',
+  'LayoutDashboard',
+  [
+    ['path', { d: 'M4 4h6v8h-6z', key: 'svg-0' }],
+    ['path', { d: 'M4 16h6v4h-6z', key: 'svg-1' }],
+    ['path', { d: 'M14 12h6v8h-6z', key: 'svg-2' }],
+    ['path', { d: 'M14 4h6v4h-6z', key: 'svg-3' }],
+  ]
+);
