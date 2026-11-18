@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useFetcher, useNavigate } from 'react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { GlobeIcon, LinkIcon, XIcon } from 'lucide-react';
-import type { FeedbackCategory } from '@prisma/client';
+import type { FeedbackCategory } from '@classmoji/database/client';
 import {
   CATEGORY_EMOJI,
   CATEGORY_LABELS,
@@ -10,7 +10,7 @@ import {
   FEEDBACK_ACTION,
   STATUS_META,
 } from './feedback';
-import type { FeedbackStatus } from '@prisma/client';
+import type { FeedbackStatus } from '@classmoji/database/client';
 
 /** A post like the one being written, from GET /api/feedback?similar=. */
 interface SimilarPost {

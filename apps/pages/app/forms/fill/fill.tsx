@@ -42,8 +42,8 @@ import { canStartAnother, seedForNewResponse } from './manyResponses.ts';
 /**
  * From the import-free leaf, NEVER from `delivery.ts` itself — that module
  * imports Prisma, and an edge to it from this page (which has a client bundle)
- * drags `@prisma/client` into the browser build and breaks hydration for the
- * routes around it. See `deliveryState.ts`.
+ * drags its server-only imports into the browser build, which broke hydration
+ * for the routes around it. See `deliveryState.ts`.
  */
 import type { DeliveryState } from './deliveryState.ts';
 

@@ -6,7 +6,7 @@ import {
   IconPresentation,
   type Icon,
 } from '@tabler/icons-react';
-import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
+import type { FormAccess, FormStatus, ModuleItemType } from '@classmoji/database/client';
 import { formatCloseDate } from './ReadOnlyModulesTree';
 
 /**

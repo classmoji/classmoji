@@ -5,10 +5,14 @@
  * `delivery.ts` is a resource route, and it imports Prisma. Importing anything
  * from it — even `import type`, whose erasure is a compiler detail rather than
  * a graph one — puts an edge from the fill page into that module, and the fill
- * page HAS a client bundle. Vite then follows the edge, tries to resolve
- * `@prisma/client` for the browser, and fails:
+ * page HAS a client bundle. Vite then follows the edge and resolves the
+ * route's server-only imports for the browser. While the Prisma client was
+ * `@prisma/client` that failed outright:
  *
  *   Failed to resolve entry for package "@prisma/client"
+ *
+ * (`@classmoji/database/client` now has a browser entry, but the route's
+ * other server imports would follow the same edge.)
  *
  * The damage is not limited to this page. That failure breaks the client build
  * for the surrounding routes, so an unrelated admin page stops hydrating and

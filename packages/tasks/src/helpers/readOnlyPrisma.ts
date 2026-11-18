@@ -30,7 +30,7 @@
  * Takes the client as a parameter so the guard is testable with a fake.
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 
 export const DRY_RUN_ACK = 'read-only';

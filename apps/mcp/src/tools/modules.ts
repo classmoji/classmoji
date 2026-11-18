@@ -53,7 +53,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { withHiddenRows } from '@classmoji/utils';
-import type { ModuleItemType } from '@prisma/client';
+import type { ModuleItemType } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';

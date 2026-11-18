@@ -74,7 +74,7 @@ import {
   type AskMojiUserRowMetadata,
 } from '@classmoji/utils/ask-moji';
 import { containsReservedText } from '@classmoji/utils/quiz-agent';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import {
   resolve as resolveViewing,
   viewingRef,

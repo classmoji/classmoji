@@ -89,7 +89,7 @@ vi.mock('../../git/index.ts', async importOriginal => ({
 const notFound = () => Object.assign(new Error('Not Found'), { status: 404 });
 
 import getPrisma from '@classmoji/database';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import * as formService from '../form.service.ts';
 import * as responseService from '../formResponse.service.ts';
 import * as teamSetService from '../teamSet.service.ts';

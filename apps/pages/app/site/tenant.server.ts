@@ -1,5 +1,5 @@
 import { redirect, type RouterContextProvider } from 'react-router';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { highestRole } from '~/utils/classroomRole.ts';

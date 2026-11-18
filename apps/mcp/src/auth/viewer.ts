@@ -3,7 +3,7 @@
  * bearer token, plus the request hints routes/mcp.ts adds.
  */
 
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 export type Scope = 'read' | 'write';
 

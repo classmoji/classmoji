@@ -9,7 +9,7 @@ import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import * as auditService from '@classmoji/services/audit';
 import * as authEmailService from '@classmoji/services/auth-email';
 import * as classroomService from '@classmoji/services/classroom';

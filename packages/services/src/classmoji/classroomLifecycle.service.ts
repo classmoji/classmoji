@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { ClassroomStatus, Prisma } from '@prisma/client';
+import type { ClassroomStatus, Prisma } from '@classmoji/database/client';
 import * as auditService from './audit.service.ts';
 import { PLAN_ACTIVE_CLASSROOM_LIMITS } from './planLimits.ts';
 import * as planOwnerService from './planOwner.service.ts';

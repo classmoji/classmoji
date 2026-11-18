@@ -22,7 +22,7 @@
 
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import type { Prisma, Role } from '@prisma/client';
+import type { Prisma, Role } from '@classmoji/database/client';
 import { gradeToEmoji } from '@classmoji/utils';
 import { quizScaleForClassroom } from './emojiMapping.service.ts';
 import {

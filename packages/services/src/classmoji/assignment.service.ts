@@ -9,7 +9,7 @@
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { openToStudents, titleToIdentifier, withLogins } from '@classmoji/utils';
-import type { AssignmentType, Prisma } from '@prisma/client';
+import type { AssignmentType, Prisma } from '@classmoji/database/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import {

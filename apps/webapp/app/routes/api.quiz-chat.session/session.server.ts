@@ -4,7 +4,7 @@
  * re-joining) the attempt's Trigger chat session.
  */
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /** The Trigger task every quiz chat session runs. */
 export const QUIZ_CHAT_TASK_ID = 'quiz-attempt';

@@ -45,7 +45,7 @@ import {
   type AskMojiUIMessage,
   type AskMojiViewingKind,
 } from '@classmoji/utils/ask-moji';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import {
   CALENDAR_TITLE,
   resolve as resolveViewing,

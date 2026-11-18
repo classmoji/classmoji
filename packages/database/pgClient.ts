@@ -71,7 +71,7 @@
  * Importing this opens nothing; nothing connects until the first query.
  */
 import pg from 'pg';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@classmoji/database/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 export const DEFAULT_POOL_SIZE = 10;

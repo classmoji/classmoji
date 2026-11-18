@@ -16,7 +16,7 @@ import {
   type ClassroomLike,
   type GitWebContext,
 } from '@classmoji/utils';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { gitUsername, mirroredQuizStatus, type WithGitAccounts } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';

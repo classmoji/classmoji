@@ -12,7 +12,7 @@
  * Pure, so it can be shared by server modules and tested on its own.
  */
 
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 /** Higher is more privileged. */
 export const ROLE_PRIORITY: Record<Role, number> = {

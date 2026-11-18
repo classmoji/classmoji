@@ -78,9 +78,6 @@ export default async ({ command, mode }) => {
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
     },
     resolve: {
-      alias: {
-        '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
-      },
       // yjs too: two copies in one bundle break live editing ("Yjs was
       // already imported") — the editor's fragment and the provider's document
       // would come from different copies.
@@ -92,7 +89,8 @@ export default async ({ command, mode }) => {
       // Pre-bundle the heavy editor deps on startup. Without this they're
       // discovered lazily on first page-editor load, which triggers a
       // mid-session dep re-optimization + reload; an in-flight SSR request can
-      // then transiently fail to resolve server-only @prisma/client.
+      // then transiently fail to resolve the server-only generated Prisma
+      // client (@classmoji/database/client).
       include: [
         'react',
         'react-dom',
@@ -107,6 +105,7 @@ export default async ({ command, mode }) => {
         '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
+      // @prisma/client: the generated client's browser entry imports its runtime from it.
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
     plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],

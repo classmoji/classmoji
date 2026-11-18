@@ -78,7 +78,7 @@ import {
   personalCheckListItemIds,
   redactLockedSections,
 } from '@classmoji/page-schema/sections';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';

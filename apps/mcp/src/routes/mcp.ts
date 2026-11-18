@@ -66,7 +66,7 @@ import { registerAllResources } from '../resources/index.ts';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { normalizeAgentSession } from '@classmoji/collab';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { randomUUID } from 'node:crypto';
 import { parseRoleCeiling, ROLE_CEILING_VALUES } from '../authz/pure.ts';
 

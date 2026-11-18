@@ -16,7 +16,13 @@ import {
   type FormField,
   type FormOption,
 } from './formContract.ts';
-import type { Prisma, FormAccess, FormResponsesPerPerson, FormStatus, Role } from '@prisma/client';
+import type {
+  Prisma,
+  FormAccess,
+  FormResponsesPerPerson,
+  FormStatus,
+  Role,
+} from '@classmoji/database/client';
 
 /**
  * Form Service

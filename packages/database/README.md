@@ -6,6 +6,33 @@ with (`pgClient.ts`, exported as `@classmoji/database/pg-client`).
 
 ## Prisma 7
 
+- **Generated clients.** `schema.prisma` has two `prisma-client` generators,
+  both writing TypeScript into `generated/` (gitignored). `npm run db:generate`
+  always writes both. `db:ensure` (`scripts/ensureGenerated.ts`) writes them
+  only when they are missing or `generated/.stamp` no longer matches
+  `schema.prisma` and the installed Prisma, and otherwise touches nothing, so
+  watching dev servers do not restart; turbo runs it before typecheck, tests,
+  builds, dev servers and `trigger:deploy`, and `npm run dev` before it starts
+  anything.
+  - `client` → `generated/node`, the Node client. Everything imports it as
+    `@classmoji/database/client` (the client, `Prisma`, model types, enums),
+    never `@prisma/client`, which a lint rule refuses (`@prisma/client` is
+    now only the client's runtime, a dependency of this package). In browser
+    bundles the same specifier resolves to `generated/node/browser.ts` (the
+    `browser` export condition): enums and types, no server code. Its imports
+    end in `.ts` (`importFileExtension`) so `node --experimental-strip-types`
+    loads it as it is. Like any ESM build of Prisma's Node client, it sets
+    `globalThis.__dirname` when it loads.
+  - `workerClient` → `generated/worker`, for Cloudflare Workers:
+    `classmojiWorkerSwaps` (@classmoji/workers/vite) puts it in place of
+    `@classmoji/database/client`. That is why `index.ts` and `pgClient.ts`
+    import the client by that specifier, never by a relative path.
+
+  Docker images and the deploy workflows (before `trigger deploy`) generate
+  only `client` (`--generator client`). The webapp, pages, slides and admin
+  images then build through turbo with `DB_ENSURE=off`, which makes
+  `db:ensure` do nothing (`--force`, i.e. `db:generate`, ignores it), so they
+  carry no Workers client.
 - **CLI.** `prisma.config.ts` names the schema, the migrations, the seed and the
   URL (`DATABASE_URL`). Prisma finds it in the current directory only, so run
   `npx prisma …` here, or pass `--config packages/database/prisma.config.ts`
@@ -54,8 +81,9 @@ with (`pgClient.ts`, exported as `@classmoji/database/pg-client`).
   these `timestamp(3)` columns), which applies to a raw INSERT that leaves the
   column out, is stored in the session's local time, so in a non-UTC session
   it is shifted too.
-- **Schema description in tests.** The generated `Prisma.dmmf` keeps only field
-  names and types. `testing/schemaDmmf.ts` reads the full one from
+- **Schema description in tests.** The generated client has no `Prisma.dmmf`
+  (`prisma-client-js`'s kept only field names and types).
+  `testing/schemaDmmf.ts` reads the full description from
   `schema.prisma` with `@prisma/prisma-schema-wasm`, whose version ends in the
   engines hash of the installed Prisma: bump it with Prisma
   (`__tests__/schemaDmmf.test.ts` fails until you do). It is a dev dependency

@@ -5,9 +5,10 @@
  * untouched (the plugin is only added when BUILD_TARGET=cloudflare).
  *
  * Swaps:
- * - `@prisma/client` → `@classmoji/database/worker-client`, the client
- *   schema.prisma's `workerClient` generator emits (no engine binary; a driver
- *   adapter per request). Run `npm run db:generate` first.
+ * - `@classmoji/database/client` (the Node client every module imports) →
+ *   `@classmoji/database/worker-client`, the client schema.prisma's
+ *   `workerClient` generator emits (no engine binary; a driver adapter per
+ *   request). Run `npm run db:generate` first.
  * - `@better-auth/cimd/node` → `@classmoji/auth/cimd-worker`, a fetch()
  *   transport with the same contract (the Node one loads node:dns/https/net).
  *
@@ -19,7 +20,7 @@
 import type { Plugin } from 'vite';
 
 export const WORKER_SWAPS: Readonly<Record<string, string>> = {
-  '@prisma/client': '@classmoji/database/worker-client',
+  '@classmoji/database/client': '@classmoji/database/worker-client',
   '@better-auth/cimd/node': '@classmoji/auth/cimd-worker',
 };
 
@@ -96,7 +97,7 @@ export function classmojiWorkerSwaps(options: ClassmojiWorkerSwapsOptions = {}):
         if (!resolved) {
           this.error(
             `[workers] cannot resolve ${target} (swapped in for ${source}).` +
-              (source === '@prisma/client'
+              (source === '@classmoji/database/client'
                 ? ' Generate the Workers Prisma client first: npm run db:generate.'
                 : '')
           );

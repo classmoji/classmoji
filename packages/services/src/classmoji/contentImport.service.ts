@@ -46,7 +46,7 @@ import {
   SLIDE_FILE_TOO_LARGE_MESSAGE,
   isCommitTooLargeRefusal,
 } from '../slides/slideSource.ts';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /** Cap on retained warnings and on per-warning detail length (bounded output). */
 const MAX_WARNINGS = 50;

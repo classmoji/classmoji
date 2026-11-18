@@ -377,6 +377,12 @@ jobs:
             }
           '
 
+      # The worker bundles the generated Node client
+      # (packages/database/generated/node); prismaExtension's `modern` mode
+      # generates nothing itself.
+      - name: Generate the Prisma client
+        run: ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma --generator client
+
       - name: Deploy to Trigger.dev (preview/dev)
         working-directory: packages/tasks
         run: npx trigger.dev@$TRIGGER_CLI_VERSION deploy --push -e preview --branch dev

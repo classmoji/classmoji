@@ -5,9 +5,11 @@
  * failure through the client of that version, then serialized: every own
  * property plus `name` and `message`, with host, port, user and database
  * names redacted.
- * - 6.19.3: `prisma-client-js` on the Rust query engine (today's client).
+ * - 6.19.3: `prisma-client-js` on the Rust query engine (before Prisma 7).
  * - 7.10.1: `prisma-client-js` on `@prisma/adapter-pg` (node-postgres), the
- *   client after the Prisma 7 upgrade.
+ *   client right after the Prisma 7 upgrade. Today's generated client
+ *   (`prisma-client`) throws errors that match these on the fields
+ *   classifiers read (__tests__/clientErrors.integration.test.ts).
  *
  * Keys: `p2002_<constraint>` (one per unique index a call site checks for),
  * `p2003_fk`, `unreachable`, `wrong_password`, `missing_database`,

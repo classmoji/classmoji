@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from 'react-router';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { healthOf, loadPlans, loadSignals } from '~/utils/classroomHealth.server';
 import { platformAudit } from '~/utils/audit.server';

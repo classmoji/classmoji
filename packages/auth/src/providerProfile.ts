@@ -10,7 +10,7 @@
  * other Github accounts' usernames, never with another provider's.
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { parseGitlabId, scopeGitlabId } from '@classmoji/utils';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;

@@ -9,7 +9,7 @@
  * in pageComments.integration.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { ClassroomStatus, Role } from '@classmoji/database/client';
 
 import { canEnterClassroom, canMutateClassroom } from '@classmoji/auth/predicates';
 

@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { ToolError } from '../../mcp/errors.ts';
 import { toolAnnotations, type ToolContext, type ToolDefinition } from '../../mcp/registry.ts';
 import { requireRole } from '../../authz/pure.ts';

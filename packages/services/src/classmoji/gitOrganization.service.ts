@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { GitOrganization, GitProvider, Prisma } from '@prisma/client';
+import type { GitOrganization, GitProvider, Prisma } from '@classmoji/database/client';
 import type { Octokit } from 'octokit';
 import { GitHubProvider } from '../git/GitHubProvider.ts';
 

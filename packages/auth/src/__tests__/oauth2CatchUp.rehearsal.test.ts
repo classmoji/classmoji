@@ -22,7 +22,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { REHEARSAL_MARKER_USER_ID, assertRehearsalTarget } from './support/rehearsalTarget.ts';
 

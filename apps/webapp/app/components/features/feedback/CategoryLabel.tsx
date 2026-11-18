@@ -1,4 +1,4 @@
-import type { FeedbackCategory } from '@prisma/client';
+import type { FeedbackCategory } from '@classmoji/database/client';
 import { CATEGORY_EMOJI, CATEGORY_LABELS } from './feedback';
 
 export function CategoryLabel({

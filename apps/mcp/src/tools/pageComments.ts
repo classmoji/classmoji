@@ -53,7 +53,7 @@ import {
   normalizeQuoteText,
   quoteOccurrenceIndex,
 } from '@classmoji/page-schema/sections';
-import type { ClassroomStatus } from '@prisma/client';
+import type { ClassroomStatus } from '@classmoji/database/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';

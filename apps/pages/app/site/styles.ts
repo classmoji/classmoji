@@ -7,8 +7,8 @@
  * idiomatic React Router way — and it silently did not ship. Route-module CSS
  * reaches the document through `<Links/>`, which in dev means React Router
  * walking the route's import graph to collect styles; on the site routes that
- * walk fails (it resolves into `@classmoji/database` → `@prisma/client`, which
- * has no browser entry point). The page still got the ~600KB of critical CSS
+ * walk failed (it resolved into `@classmoji/database` → `@prisma/client`, which
+ * had no browser entry point then). The page still got the ~600KB of critical CSS
  * that `root.tsx` imports, so nothing looked broken — the only symptom was
  * that these particular rules were absent, which is exactly the kind of
  * failure that survives review.

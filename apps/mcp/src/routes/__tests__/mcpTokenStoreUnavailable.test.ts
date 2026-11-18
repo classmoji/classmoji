@@ -10,7 +10,7 @@
 
 import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/server';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TokenStoreUnavailableError, UnauthorizedError } from '../../mcp/errors.ts';
 

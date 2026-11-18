@@ -23,8 +23,8 @@
  * Every `select`, `include`, `where`, `orderBy` and `data` key of every query
  * is resolved against the full description of schema.prisma
  * (`@classmoji/database/testing/schema-dmmf`, read from the schema itself by
- * Prisma's schema engine, since Prisma 7's `Prisma.dmmf` keeps only names and
- * types), so it moves with each migration for free:
+ * Prisma's schema engine, since the generated client has no `Prisma.dmmf`),
+ * so it moves with each migration for free:
  *   - unknown field   -> `Unknown field \`x\` for where statement on model \`Page\`.`
  *   - unknown model   -> `Unknown model \`prisma.repositoryAssignment\`.`
  *   - nested `select` on a scalar -> `\`Page.title\` is scalar and cannot take a nested select.`

@@ -99,7 +99,7 @@ import {
   openAssignmentInExistingRepos,
   type OpenAssignmentSkipReason,
 } from '@classmoji/tasks/assignment-release';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';

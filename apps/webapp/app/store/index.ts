@@ -9,7 +9,7 @@ import type {
   TourPhase,
   AskMojiViewingState,
 } from '~/types';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 type SetState = (fn: ((state: StoreState) => Partial<StoreState>) | Partial<StoreState>) => void;
 

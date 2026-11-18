@@ -1,7 +1,7 @@
 // Git identity query helpers. Pure (no Prisma client, no process handlers), so
 // tests that mock `@classmoji/database` can re-export the real ones with
 // `vi.importActual('@classmoji/database/gitIdentity')`.
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /**
  * Loads a user's git identity (Github / GitLab username, id, avatar) from their

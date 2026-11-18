@@ -22,7 +22,7 @@
  * read. A seeded user with an email is marked verified: the app sends
  * unverified users to registration.
  *
- * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {import('@classmoji/database/client').PrismaClient} prisma
  * @param {{ login: string, githubId: string, name?: string, email?: string,
  *   image?: string | null, school_id?: string, accessToken?: string,
  *   keepImage?: boolean }} identity `keepImage` leaves an existing user's avatar alone.
@@ -85,7 +85,7 @@ export async function upsertGithubUser(
  *   - a GitRepoAssignment linking the GitRepo to the Assignment (ungraded —
  *     a live target for group-grading tests)
  *
- * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {import('@classmoji/database/client').PrismaClient} prisma
  * @param {{ classroom: { id: string }, students: { id: string, login: string }[] }} opts
  */
 export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
@@ -198,7 +198,7 @@ export async function seedTeamWithGroupRepo(prisma, { classroom, students }) {
  *   (b) cross-classroom UUID rejection (S1) — its container/GitRepo/
  *       GitRepoAssignment chain provides real foreign records to aim at
  *
- * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {import('@classmoji/database/client').PrismaClient} prisma
  * @param {{ org: { id: string } }} opts
  */
 export async function seedForeignClassroom(prisma, { org }) {

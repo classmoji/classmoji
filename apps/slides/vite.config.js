@@ -70,9 +70,6 @@ export default async ({ command, mode }) => {
       noExternal: ['reveal.js'],
     },
     resolve: {
-      alias: {
-        '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
-      },
       // yjs too: two copies in one bundle break live editing ("Yjs was
       // already imported") — the bridge's doc and the provider's would differ.
       dedupe: ['react', 'react-dom', 'react-router', 'yjs'],
@@ -91,6 +88,7 @@ export default async ({ command, mode }) => {
         '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
+      // @prisma/client: the generated client's browser entry imports its runtime from it.
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
     plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],

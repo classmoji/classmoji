@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { ClassroomStatus, Role } from '@classmoji/database/client';
 import {
   applyRoleCeiling,
   assertEntryAllowed,

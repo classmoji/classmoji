@@ -15,7 +15,7 @@
  */
 import getPrisma from '@classmoji/database';
 import { mirroredQuizStatus, mirroredQuizWeight, openToStudents } from '@classmoji/utils';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 

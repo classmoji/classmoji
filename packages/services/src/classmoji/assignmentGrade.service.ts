@@ -5,7 +5,7 @@
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogins } from '@classmoji/utils';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /**
  * The functions that take an optional `tx` run inside the caller's transaction

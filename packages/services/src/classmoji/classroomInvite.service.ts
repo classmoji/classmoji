@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster

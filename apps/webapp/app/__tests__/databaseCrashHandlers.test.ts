@@ -26,7 +26,7 @@ const { disconnectMock } = vi.hoisted(() => ({
 // Avoid constructing a real PrismaClient (and any DB connection). The module
 // calls `new PrismaClient().$extends(...)` and stores the result as `_prisma`,
 // then disconnects via `_prisma.$disconnect()`.
-vi.mock('@prisma/client', () => ({
+vi.mock('@classmoji/database/client', () => ({
   PrismaClient: class {
     $extends() {
       return { $disconnect: disconnectMock };

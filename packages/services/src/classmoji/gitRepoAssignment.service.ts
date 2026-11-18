@@ -18,7 +18,7 @@ import {
   withLogins,
 } from '@classmoji/utils';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
-import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
+import type { GitProvider, IssueStatus, Prisma } from '@classmoji/database/client';
 import { getGitProvider } from '../git/index.ts';
 
 interface GitRepoAssignmentCreateData extends Omit<

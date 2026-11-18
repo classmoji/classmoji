@@ -7,7 +7,7 @@
  */
 import WebSocket from 'ws';
 import * as Y from 'yjs';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import type { CollabActor, CollabKind, ContentCheckpointPayload } from '@classmoji/collab';
 import { SCHEMA_VERSION } from '@classmoji/page-schema';

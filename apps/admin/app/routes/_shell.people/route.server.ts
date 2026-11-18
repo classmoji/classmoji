@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from 'react-router';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername } from '@classmoji/utils';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';

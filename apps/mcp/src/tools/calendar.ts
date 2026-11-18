@@ -43,7 +43,7 @@ import {
   isMeetingLinkUrl,
   MEETING_LINK_MESSAGE,
 } from '@classmoji/services/calendar-policy';
-import type { EventType, Prisma } from '@prisma/client';
+import type { EventType, Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';

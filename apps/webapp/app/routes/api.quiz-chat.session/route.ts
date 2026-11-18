@@ -43,7 +43,7 @@ import {
   startQuizChatSession,
   writeChatGrant,
 } from './session.server';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import type { Route } from './+types/route';
 
 const ALLOWED_ROLES: Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];

@@ -227,8 +227,9 @@
     // exemption for a module that only wanted the key shape used to be the way
     // those were reached, and it exempted that module from the signers too.
     //
-    // The allowlist (the override below that turns this rule off) is therefore
-    // down to the three files that legitimately MINT, plus tests:
+    // The allowlist (the override below that drops the content-signing entry,
+    // keeping only the Prisma ones) is therefore down to the three files that
+    // legitimately MINT, plus tests:
     //   - `contentDelivery.service.ts` — the gate itself;
     //   - `deckRenderToken.service.ts` — render tokens, a different signature over
     //     a deck id rather than a sha, with no asset map to check against;
@@ -239,8 +240,18 @@
     //   - tests, which have to reach the primitives to prove the gate's output.
     //
     // Globs are tail-matched (`**/classmoji/...`) so they hold wherever the
-    // services package lives. Dynamic `import()` is not checked (it was not
-    // under ESLint either).
+    // services package lives. A dynamic `import()` is checked by module name
+    // (so `import('@prisma/client')` is refused below), but not by the names it
+    // takes: `importNames` restrictions, like the signers here, do not reach it
+    // (they did not under ESLint either).
+    //
+    // The same rule keeps every import of the Prisma client on
+    // `@classmoji/database/client`: `@prisma/client` no longer holds a client
+    // (schema.prisma generates it into packages/database/generated), and
+    // Workers builds swap only that specifier. An override can't add to this
+    // rule, only replace it, so every override below that sets it repeats the
+    // `@prisma/client` entries; packages/database itself may import the
+    // runtime's own types.
     "no-restricted-imports": [
       "error",
       {
@@ -258,6 +269,16 @@
               "deriveKey"
             ],
             "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+          },
+          {
+            "name": "@prisma/client",
+            "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+          }
+        ],
+        "patterns": [
+          {
+            "group": ["@prisma/client/**", ".prisma/client", ".prisma/client/**"],
+            "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
           }
         ]
       }
@@ -517,6 +538,17 @@
       }
     },
     {
+      // `db:ensure` runs as a build step that must finish before turbo starts
+      // anything that depends on it: plain synchronous Node is the point.
+      "files": [
+        "packages/database/scripts/ensureGenerated.ts",
+        "packages/database/__tests__/ensureGenerated.test.ts"
+      ],
+      "rules": {
+        "node/no-sync": "off"
+      }
+    },
+    {
       "files": ["packages/tasks/**"],
       "rules": {
         "node/no-sync": "off"
@@ -527,9 +559,9 @@
       // (`@classmoji/services/<name>`): once the ClassmojiService object is
       // imported, the bundler keeps every service it names, which tripled the
       // admin Worker. An override replaces the rule's options, so the
-      // content-signing entry above is repeated. Type-only imports are fine.
-      // Tests are switched off by the override below, mediaHttp.ts by the one
-      // after this.
+      // content-signing and Prisma entries above are repeated. Type-only
+      // imports are fine. Tests get the signers override below (Prisma entries
+      // only), mediaHttp.ts the one right after this.
       "files": ["apps/admin/app/**", "packages/auth/src/**"],
       "rules": {
         "no-restricted-imports": [
@@ -555,6 +587,16 @@
                 "importNames": ["ClassmojiService", "HelperService"],
                 "allowTypeImports": true,
                 "message": "Import the service module itself (e.g. `import * as feedbackService from '@classmoji/services/feedback'`; add a subpath export if it has none). The ClassmojiService object pulls every service into this bundle."
+              },
+              {
+                "name": "@prisma/client",
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@prisma/client/**", ".prisma/client", ".prisma/client/**"],
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
               }
             ]
           }
@@ -564,7 +606,7 @@
     {
       // Only the webapp, pages and slides import @classmoji/auth/media-http,
       // and they load the ClassmojiService object anyway: back to the
-      // content-signing rule alone.
+      // content-signing rule alone (and the Prisma one).
       "files": ["packages/auth/src/mediaHttp.ts"],
       "rules": {
         "no-restricted-imports": [
@@ -584,6 +626,16 @@
                   "deriveKey"
                 ],
                 "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+              },
+              {
+                "name": "@prisma/client",
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@prisma/client/**", ".prisma/client", ".prisma/client/**"],
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
               }
             ]
           }
@@ -593,6 +645,7 @@
     {
       // The other half of the content-signing choke point (see
       // no-restricted-imports above): the files allowed to import the signers.
+      // The Prisma entries still apply to them, tests included.
       "files": [
         "**/classmoji/contentDelivery.service.ts",
         "**/classmoji/deckRenderToken.service.ts",
@@ -605,7 +658,70 @@
         "**/*.spec.{js,jsx,ts,tsx}"
       ],
       "rules": {
-        "no-restricted-imports": "off"
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@prisma/client",
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@prisma/client/**", ".prisma/client", ".prisma/client/**"],
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // packages/database owns the Prisma dependency, tests included (after the
+      // override above, so it wins there): it may import the runtime itself
+      // (`@prisma/client/runtime/client`: DMMF types in testing/schemaDmmf.ts,
+      // the error classes in __tests__/clientErrors.integration.test.ts). The
+      // bare `@prisma/client`, its other subpaths (`index-browser`, ...) and
+      // `.prisma/client` stay refused.
+      "files": ["packages/database/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@classmoji/content-signing",
+                "importNames": [
+                  "signBlobUrl",
+                  "signSrcSet",
+                  "signThemeBase",
+                  "signFilesBase",
+                  "signMediaUrl",
+                  "signRenderToken",
+                  "signCanonical",
+                  "deriveKey"
+                ],
+                "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+              },
+              {
+                "name": "@prisma/client",
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "@prisma/client/**",
+                  "!@prisma/client/runtime/**",
+                  ".prisma/client",
+                  ".prisma/client/**"
+                ],
+                "message": "Import the Prisma client, its types and enums from @classmoji/database/client (generated from packages/database/schema.prisma); only @prisma/client/runtime/* is allowed here."
+              }
+            ]
+          }
+        ]
       }
     },
     {

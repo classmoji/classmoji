@@ -26,7 +26,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolError } from '../../mcp/errors.ts';
 import {
