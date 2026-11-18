@@ -13,7 +13,7 @@
  * `classroom.collab_enabled`.
  */
 import type * as Y from 'yjs';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import { canMutateClassroom } from '@classmoji/auth/predicates';

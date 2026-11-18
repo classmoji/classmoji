@@ -17,7 +17,7 @@
  * the single exchange read are in askMojiInsights.
  */
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import type { AskMojiScope } from './askMojiChat.service.ts';
 import { findOwned, validMessageId } from './askMojiChat.service.ts';
 

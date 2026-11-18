@@ -21,7 +21,7 @@
 import { createHash } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { isReleased } from '@classmoji/utils';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import {
   CodeSubmissionInputSchema,
   CodeSubmissionPartSchema,

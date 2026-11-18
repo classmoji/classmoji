@@ -44,7 +44,7 @@ import {
 } from '@classmoji/page-schema/sections';
 
 import { canEnterClassroom } from '@classmoji/auth/predicates';
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { ClassroomStatus, Role } from '@classmoji/database/client';
 
 import { checkOrigin, readCappedBody } from './originCheck.server.ts';
 

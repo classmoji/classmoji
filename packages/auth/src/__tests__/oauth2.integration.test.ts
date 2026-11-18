@@ -44,7 +44,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { serializeSignedCookie } from 'better-call';
 import { withConfigArgs } from './helpers/prismaCliArgs.ts';

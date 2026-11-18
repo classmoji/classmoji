@@ -1,4 +1,4 @@
-import type { FeedbackCategory, FeedbackStatus } from '@prisma/client';
+import type { FeedbackCategory, FeedbackStatus } from '@classmoji/database/client';
 
 /** What the board shows about a person: never more than a name and a picture. */
 export interface FeedbackAuthor {

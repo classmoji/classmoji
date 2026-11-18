@@ -96,7 +96,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@classmoji/database/client';
 
 const MIGRATION = '20261107180000_oauth2_provider_tables';
 /** The platform_audit_logs action of a --write run (RECORD). */

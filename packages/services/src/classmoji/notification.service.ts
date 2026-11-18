@@ -1,6 +1,10 @@
 import getPrisma from '@classmoji/database';
-import { Prisma } from '@prisma/client';
-import type { Notification, NotificationPreference, NotificationType } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type {
+  Notification,
+  NotificationPreference,
+  NotificationType,
+} from '@classmoji/database/client';
 import { tasks } from '@trigger.dev/sdk';
 import * as entitlementService from './entitlement.service.ts';
 import { renderEmail } from './notificationEmails.ts';

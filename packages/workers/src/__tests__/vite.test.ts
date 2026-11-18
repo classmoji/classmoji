@@ -57,34 +57,39 @@ describe('classmojiWorkerSwaps', () => {
   it('resolves from the app root when there is no importer', async () => {
     const { resolveId } = hooks();
     const ctx = context('ssr');
-    await resolveId(ctx, '@prisma/client');
+    await resolveId(ctx, '@classmoji/database/client');
     expect(ctx.resolve.mock.calls[0]).toContain('/repo/apps/admin/index.html');
   });
 
   it('leaves the client environment and other modules alone', async () => {
     const { resolveId } = hooks({ stubs: ['jsdom'] });
     const client = context('client');
-    await expect(resolveId(client, '@prisma/client', '/x.ts')).resolves.toBeNull();
+    await expect(resolveId(client, '@classmoji/database/client', '/x.ts')).resolves.toBeNull();
     await expect(resolveId(client, 'jsdom', '/x.ts')).resolves.toBeNull();
     expect(client.resolve).not.toHaveBeenCalled();
     const ssr = context('ssr');
     await expect(resolveId(ssr, 'react', '/x.ts')).resolves.toBeNull();
-    await expect(resolveId(ssr, '@prisma/client/runtime/library', '/x.ts')).resolves.toBeNull();
+    // The runtime the generated clients import is never swapped.
+    await expect(resolveId(ssr, '@prisma/client/runtime/client', '/x.ts')).resolves.toBeNull();
   });
 
   it('honours a custom Worker environment name', async () => {
     const { resolveId } = hooks({ environment: 'worker' });
-    await expect(resolveId(context('ssr'), '@prisma/client', '/x.ts')).resolves.toBeNull();
-    await expect(resolveId(context('worker'), '@prisma/client', '/x.ts')).resolves.toEqual({
+    await expect(
+      resolveId(context('ssr'), '@classmoji/database/client', '/x.ts')
+    ).resolves.toBeNull();
+    await expect(
+      resolveId(context('worker'), '@classmoji/database/client', '/x.ts')
+    ).resolves.toEqual({
       id: '/resolved',
     });
   });
 
   it('fails the build with a hint when the Workers Prisma client is not generated', async () => {
     const { resolveId } = hooks();
-    await expect(resolveId(context('ssr', null), '@prisma/client', '/x.ts')).rejects.toThrow(
-      /npm run db:generate/
-    );
+    await expect(
+      resolveId(context('ssr', null), '@classmoji/database/client', '/x.ts')
+    ).rejects.toThrow(/npm run db:generate/);
   });
 
   it('serves a throwing stand-in for a stubbed module', async () => {

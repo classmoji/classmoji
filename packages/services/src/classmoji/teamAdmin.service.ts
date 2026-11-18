@@ -33,7 +33,7 @@ import getPrisma, {
   type GitUsernameScope,
 } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
-import type { GitProvider as GitProviderEnum } from '@prisma/client';
+import type { GitProvider as GitProviderEnum } from '@classmoji/database/client';
 
 import { getGitProvider } from '../git/index.ts';
 import type { GitHubProvider } from '../git/GitHubProvider.ts';

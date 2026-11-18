@@ -1,6 +1,6 @@
 import getPrisma, { GIT_IDENTITY, USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import { sortNaturallyBy, withLogins } from '@classmoji/utils';
-import type { GitProvider, Prisma } from '@prisma/client';
+import type { GitProvider, Prisma } from '@classmoji/database/client';
 
 interface TeamCreatePayload {
   providerId?: string | number | null;

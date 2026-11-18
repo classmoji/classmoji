@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { deckSlides, roomName } from '@classmoji/collab';
 import { pageView, type ItemView } from '@classmoji/collab/hash';
 import { FRAGMENT } from '@classmoji/page-schema';

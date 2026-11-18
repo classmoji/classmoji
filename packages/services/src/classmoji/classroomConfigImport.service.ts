@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
-import { ModuleItemType } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
+import { ModuleItemType } from '@classmoji/database/client';
 import { isAllowedModel } from '@classmoji/utils/ai-models';
 import { meetingLinkForCopy } from './calendarPolicy.ts';
 import * as entitlementService from './entitlement.service.ts';

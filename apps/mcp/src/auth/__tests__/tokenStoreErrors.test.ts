@@ -9,7 +9,7 @@
  * Anything not on the allowlist must stay a 401.
  */
 
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import { describe, expect, it } from 'vitest';
 import { isTokenStoreUnavailable } from '../tokenStoreErrors.ts';
 

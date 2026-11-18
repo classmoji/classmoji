@@ -19,7 +19,7 @@ import {
   previewBranchName,
 } from './pageContent.service.ts';
 import { convertPageHtml, storeCommittedAssetPaths } from './pageHtmlBlocks.ts';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import * as gitlabInstanceService from './gitlabInstance.service.ts';
 
 interface PageQueryOptions {

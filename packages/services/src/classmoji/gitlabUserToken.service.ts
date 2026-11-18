@@ -12,7 +12,7 @@
 
 import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
-import type { Account as PrismaAccount } from '@prisma/client';
+import type { Account as PrismaAccount } from '@classmoji/database/client';
 import { gitlabFetch, oauthClient } from './gitlabInstance.service.ts';
 
 export interface GitLabTokenResult {

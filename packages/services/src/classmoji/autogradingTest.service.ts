@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { AutogradingComparison, AutogradingMethod } from '@prisma/client';
+import type { AutogradingComparison, AutogradingMethod } from '@classmoji/database/client';
 
 export interface AutogradingTestInput {
   name: string;

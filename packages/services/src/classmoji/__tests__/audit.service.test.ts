@@ -20,7 +20,7 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@prisma/client', () => ({
+vi.mock('@classmoji/database/client', () => ({
   Prisma: { JsonNull: Symbol('JsonNull') },
 }));
 

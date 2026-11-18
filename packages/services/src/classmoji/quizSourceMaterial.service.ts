@@ -33,8 +33,8 @@
  * staff views only: a student's prompt must never learn that a draft exists.
  */
 import getPrisma from '@classmoji/database';
-import { Prisma } from '@prisma/client';
-import type { Role } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type { Role } from '@classmoji/database/client';
 
 import {
   ContentNotFoundError,

@@ -15,7 +15,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { resolveEffectiveTimeZone, type EffectiveTimeZone } from '@classmoji/utils';
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { ClassroomStatus, Role } from '@classmoji/database/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { Viewer } from '../auth/resolveViewer.ts';
 import { applyRoleCeiling, assertEntryAllowed, parseClassroomRef, requireRole } from './pure.ts';

@@ -40,5 +40,6 @@ apps/*/fly.autostop.generated.toml
 packages/tasks/python/.venv/
 __pycache__/
 
-# Prisma's Workers client (packages/database/schema.prisma, generator workerClient)
+# Prisma's generated clients (packages/database/schema.prisma: `client` → node/,
+# `workerClient` → worker/); `npm run db:generate` writes them
 packages/database/generated/

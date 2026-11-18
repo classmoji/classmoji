@@ -20,7 +20,7 @@
  */
 
 import { slideService } from '@classmoji/services/slides';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';

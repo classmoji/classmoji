@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /** What `ClassmojiService.classroom.updateSettings` accepts. */
 type SettingsInput = Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput;

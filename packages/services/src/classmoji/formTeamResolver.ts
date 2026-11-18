@@ -1,7 +1,7 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername } from '@classmoji/utils';
 import { repeatGroups, type FormField, type ResolvedTargetRef } from './formContract.ts';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 /**
  * Forms — the TIER-2 resolver: who a `repeat_group` repeats over, for ONE

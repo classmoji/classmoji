@@ -58,10 +58,11 @@ describe('cloudinaryDryRun import graph', () => {
     // node:crypto hashes the plan (planHash); it opens nothing.
     // @classmoji/database/pg-client builds only the one-session client the
     // script asks for (unlike `@classmoji/database`, which opens the shared
-    // client at import); @prisma/client is a type import there.
+    // client at import); @classmoji/database/client (the generated Prisma
+    // client) is a type import there.
     expect(packages).toEqual([
+      '@classmoji/database/client',
       '@classmoji/database/pg-client',
-      '@prisma/client',
       'jsonwebtoken',
       'node:crypto',
     ]);

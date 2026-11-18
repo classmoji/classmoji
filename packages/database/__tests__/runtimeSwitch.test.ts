@@ -1,7 +1,7 @@
 /**
- * index.ts on Node vs on Cloudflare Workers. `@prisma/client` is replaced by a
- * recording fake, and `process.on` is spied on (and swallowed, so the real
- * crash handlers never land in the test worker).
+ * index.ts on Node vs on Cloudflare Workers. `@classmoji/database/client` is
+ * replaced by a recording fake, and `process.on` is spied on (and swallowed,
+ * so the real crash handlers never land in the test worker).
  *
  * Node: exactly as before Workers support: one client at import, built
  * without an adapter; the five process handlers; getPrisma() is that client;
@@ -31,7 +31,7 @@ const fake = vi.hoisted(() => {
   return { constructed, PrismaClient };
 });
 
-vi.mock('@prisma/client', () => ({ PrismaClient: fake.PrismaClient, Prisma: {} }));
+vi.mock('@classmoji/database/client', () => ({ PrismaClient: fake.PrismaClient, Prisma: {} }));
 
 let processOn: ReturnType<typeof vi.spyOn>;
 

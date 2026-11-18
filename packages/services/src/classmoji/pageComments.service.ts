@@ -40,7 +40,7 @@ import {
   quoteOccurrenceIndex,
   redactLockedSections,
 } from '@classmoji/page-schema/sections';
-import type { AuditLogAction, ClassroomStatus, Prisma, Role } from '@prisma/client';
+import type { AuditLogAction, ClassroomStatus, Prisma, Role } from '@classmoji/database/client';
 
 import {
   isBlockId,

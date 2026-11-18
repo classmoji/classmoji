@@ -7,7 +7,7 @@ import { IconPlus } from '@tabler/icons-react';
 import { SearchInput, ButtonNew, RequireRole } from '~/components';
 import { useDragReorder, dragRowClass } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
-import type { ModuleItemType } from '@prisma/client';
+import type { ModuleItemType } from '@classmoji/database/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { addClassroomAuditLog, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';

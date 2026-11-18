@@ -1,7 +1,7 @@
 import { useFetcher, useRouteLoaderData } from 'react-router';
 import { requireAuth } from '@classmoji/auth/server';
 import { notificationService } from '@classmoji/services';
-import type { NotificationPreference } from '@prisma/client';
+import type { NotificationPreference } from '@classmoji/database/client';
 import type { Route } from './+types/route';
 import { gitTerms } from '~/utils/gitWeb';
 

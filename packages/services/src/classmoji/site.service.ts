@@ -13,7 +13,7 @@ import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
-import type { ModuleItemType, Prisma, Role } from '@prisma/client';
+import type { ModuleItemType, Prisma, Role } from '@classmoji/database/client';
 
 /**
  * Public course sites: subdomain claiming, site settings, and every visibility

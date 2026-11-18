@@ -1,5 +1,5 @@
 import getPrisma, { USER_STAFF_VIEW_SELECT } from '@classmoji/database';
-import type { MessageRole, Prisma, Role } from '@prisma/client';
+import type { MessageRole, Prisma, Role } from '@classmoji/database/client';
 import {
   effectivePercentage,
   isClosed,

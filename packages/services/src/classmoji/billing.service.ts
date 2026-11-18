@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { BillingEventAction, Prisma } from '@prisma/client';
+import type { BillingEventAction, Prisma } from '@classmoji/database/client';
 import type Stripe from 'stripe';
 import { checkoutPriceId as checkoutPriceIdFromEnv } from '@classmoji/utils';
 

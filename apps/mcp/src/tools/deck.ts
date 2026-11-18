@@ -74,7 +74,7 @@ import type { SnapshotResponse } from '@classmoji/collab';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { appFrameHosts } from '@classmoji/services/slides/frame-refs';
 import { ClassmojiService, ContentService } from '@classmoji/services';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import {

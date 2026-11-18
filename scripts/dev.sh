@@ -132,6 +132,11 @@ DEVPORT_ID=${DEVPORT_ID:-0}
 - View: tail -f $LOG_FILE
 EOF
 
+# The generated Prisma clients, once, before a dozen turbo runs start together
+# (each also depends on db:ensure, which then finds them current). Writes
+# nothing when they are up to date.
+npm run db:ensure --silent -w @classmoji/database
+
 # Build the concurrently command
 # Since we've already exported all env vars (.env + devport overrides),
 # we can call turbo directly.

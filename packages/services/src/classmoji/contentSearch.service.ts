@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
-import type { Role } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type { Role } from '@classmoji/database/client';
 import getPrisma from '@classmoji/database';
 
 /**

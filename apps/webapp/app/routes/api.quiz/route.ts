@@ -33,7 +33,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import type { Route } from './+types/route';
 
 const extractDurationMetrics = (payload: Record<string, unknown> | null) => {

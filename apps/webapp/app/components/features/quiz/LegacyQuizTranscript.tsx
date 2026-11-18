@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { checkForCompletion } from '~/utils/quizUtils';
 import type { QuizEvaluation } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';

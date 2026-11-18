@@ -602,7 +602,7 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       # Both clients: the Node one (tests) and the Workers one, which
-      # @classmoji/workers/vite swaps in for @prisma/client.
+      # @classmoji/workers/vite swaps in for @classmoji/database/client.
       - name: Generate Prisma clients
         run: ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
@@ -873,6 +873,12 @@ jobs:
               process.exit(1);
             }
           '
+
+      # The worker bundles the generated Node client
+      # (packages/database/generated/node); prismaExtension's `modern` mode
+      # generates nothing itself.
+      - name: Generate the Prisma client
+        run: ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma --generator client
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks

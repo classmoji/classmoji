@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 import getPrisma from '@classmoji/database';
 import * as comments from '../pageComments.service.ts';

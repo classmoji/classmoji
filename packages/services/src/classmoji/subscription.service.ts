@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { pickEffectivePlanOwner } from './planOwnerPick.ts';
-import type { Prisma, SubscriptionTier } from '@prisma/client';
+import type { Prisma, SubscriptionTier } from '@classmoji/database/client';
 
 type SubscriptionRecord = Prisma.SubscriptionGetPayload<Record<string, never>>;
 

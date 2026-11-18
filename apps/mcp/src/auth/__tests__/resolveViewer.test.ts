@@ -20,7 +20,7 @@
  */
 
 import { createHash, createHmac, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TokenStoreUnavailableError, UnauthorizedError } from '../../mcp/errors.ts';
 

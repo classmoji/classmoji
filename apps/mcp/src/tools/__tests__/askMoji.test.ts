@@ -17,7 +17,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { z } from 'zod';
 import type { Viewer } from '../../auth/resolveViewer.ts';
 

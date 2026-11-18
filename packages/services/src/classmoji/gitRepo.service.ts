@@ -4,7 +4,7 @@ import getPrisma, {
   USER_STAFF_VIEW_SELECT,
 } from '@classmoji/database';
 import { displayUsername, sortNaturallyBy, withLogins } from '@classmoji/utils';
-import type { GitProvider, Prisma } from '@prisma/client';
+import type { GitProvider, Prisma } from '@classmoji/database/client';
 
 interface RepositoryCreatePayload {
   repositoryId: string;

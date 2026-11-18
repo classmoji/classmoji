@@ -23,8 +23,8 @@ import {
 import { boundIssue, issuePath, MAX_SHOWN_ISSUES } from '@classmoji/utils/input-caps';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
-import { Prisma } from '@prisma/client';
-import type { FormResponsesPerPerson, Role, SubmissionState } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type { FormResponsesPerPerson, Role, SubmissionState } from '@classmoji/database/client';
 
 /**
  * Form Response Service

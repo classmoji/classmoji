@@ -40,9 +40,6 @@ export default async () => {
   return defineConfig({
     css: { lightningcss: { include: LOWER_MEDIA_RANGE_SYNTAX } },
     resolve: {
-      alias: {
-        '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
-      },
       dedupe: ['react', 'react-dom', 'react-router'],
       // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
       tsconfigPaths: true,
@@ -62,8 +59,10 @@ export default async () => {
       include: ['react', 'react-dom', 'react-router'],
       entries: ['./app/root.tsx'],
       // Server-only. Leaving these in triggers a mid-session dep
-      // re-optimization whose reload can transiently fail to resolve
-      // @prisma/client during an in-flight SSR request.
+      // re-optimization whose reload can transiently fail to resolve the
+      // generated Prisma client (@classmoji/database/client) during an
+      // in-flight SSR request. @prisma/client: the generated client's browser
+      // entry imports its runtime from it.
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
     plugins: [tailwindcss(), ...workerPlugins, reactRouter()],
