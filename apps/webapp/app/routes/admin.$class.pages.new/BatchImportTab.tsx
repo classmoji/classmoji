@@ -27,6 +27,8 @@ export default function BatchImportTab({ onPagesChange }: BatchImportTabProps) {
   const [extractError, setExtractError] = useState<string | null>(null);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    // Files arrive by drop or the picker only, not by pasting.
+    noPaste: true,
     accept: {
       'application/zip': ['.zip'],
       'application/x-zip-compressed': ['.zip'],

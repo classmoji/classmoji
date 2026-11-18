@@ -10,9 +10,9 @@ import {
   IconClipboardList,
   IconClockExclamation,
   IconListDetails,
-  IconChartBar,
   IconChevronDown,
 } from '@tabler/icons-react';
+import { IconChartBar } from '~/components/ui/display/tablerIcons';
 import {
   GitHubStatsPanel,
   CommitCount,

@@ -143,6 +143,8 @@ vi.mock('@tabler/icons-react', () => ({
   IconArrowLeft: () => null,
   IconClock: () => null,
   IconTrophy: () => null,
+}));
+vi.mock('~/components/ui/display/tablerIcons', () => ({
   IconChartBar: () => null,
 }));
 vi.mock('react-router', () => ({

@@ -38,6 +38,8 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    // Files arrive by drop or the picker only, not by pasting.
+    noPaste: true,
     onDrop: async droppedFiles => {
       const acceptedFiles = droppedFiles.filter(isValidFile);
 

@@ -68,6 +68,11 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
     fi; \
     npx turbo run web:build
 
+# Every package the server bundle leaves external must resolve the same from
+# what the production stage copies (root node_modules, packages/) as it did
+# for the build; a lockfile that nests one under apps/webapp fails here.
+RUN node scripts/check-server-externals.mjs apps/webapp/Dockerfile
+
 
 # ======================
 # Production stage
