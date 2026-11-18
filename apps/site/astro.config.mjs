@@ -87,12 +87,18 @@ export default defineConfig({
   // together inline elements in our templates (nav links, footer links, post
   // bylines). Keep the HTML-aware compression the site was written for.
   compressHTML: true,
+  // Scoped styles as :where(.astro-HASH) selectors (zero specificity), on every
+  // page. Starlight forced this until 0.43; since then it follows Astro's
+  // default ('attribute', higher specificity), which would reorder which of
+  // our styles win over Starlight's and the theme's.
+  scopedStyleStrategy: 'where',
   // Astro's default Markdown processor, plus heading ids that stay the same as
   // before Astro 7 so existing links to headings keep working (headingIds.mjs).
   // Starlight adds its own plugins to this processor.
-  // Keep @astrojs/markdown-satteri in package.json at the exact version astro
-  // pins internally (0.4.6 for astro 7.4.5) and move the two together;
-  // otherwise this processor and astro's own come from different copies.
+  // Keep @astrojs/markdown-satteri in package.json at the lowest version
+  // astro's own range admits (^0.4.10 for astro 7.4.12) and move the two
+  // together; otherwise this processor and astro's own come from different
+  // copies.
   markdown: {
     processor: satteri({ hastPlugins: [legacyHeadingIds()] }),
   },
