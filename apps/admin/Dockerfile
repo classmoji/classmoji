@@ -56,6 +56,11 @@ COPY . .
 # Build the admin app
 RUN npx turbo run admin:build
 
+# Every package the server bundle and server.ts leave external must resolve the
+# same from what the production stage copies (root node_modules, packages/) as
+# it did for the build; a lockfile that nests one under apps/admin fails here.
+RUN node scripts/check-server-externals.mjs apps/admin/Dockerfile
+
 
 # ======================
 # Production stage
