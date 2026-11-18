@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 export const create = async (classroomId: string, name: string) => {
   return getPrisma().tag.create({

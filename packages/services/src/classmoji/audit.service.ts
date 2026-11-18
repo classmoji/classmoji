@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { Prisma, type AuditLogAction, type Role } from '@prisma/client';
+import { Prisma, type AuditLogAction, type Role } from '@classmoji/database/client';
 
 // Valid AuditLogAction values from Prisma schema
 const VALID_ACTIONS = [

@@ -119,9 +119,6 @@ export default async ({ command, mode }) => {
         : ['use-sound'],
     },
     resolve: {
-      alias: {
-        '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
-      },
       dedupe: ['react', 'react-dom', 'react-router'],
       // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
       tsconfigPaths: true,

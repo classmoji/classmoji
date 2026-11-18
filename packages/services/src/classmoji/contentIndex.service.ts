@@ -57,7 +57,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import getPrisma from '@classmoji/database';
 
 // The read side owns the vocabulary the two halves have to agree on — the kind

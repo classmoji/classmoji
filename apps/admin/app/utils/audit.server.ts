@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { prisma } from '~/utils/db.server';
 
 /**

@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { AutogradingResult, Prisma } from '@prisma/client';
+import type { AutogradingResult, Prisma } from '@classmoji/database/client';
 
 export interface RecordResultInput {
   gitRepoId: string;

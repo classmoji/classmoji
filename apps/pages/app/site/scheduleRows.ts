@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import type { ModuleItemType } from '@prisma/client';
+import type { ModuleItemType } from '@classmoji/database/client';
 
 // Both plugins, because this file must never read the PROCESS zone. `utc` is
 // what makes a stored instant parse as the instant it is; `timezone` is what

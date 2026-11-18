@@ -5,7 +5,7 @@
  * the classroom mutation rule, the chat grant, and the two reads behind the
  * re-delivery rule. Each service keeps its own policy on top of these.
  */
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { MIN_TURN_INTERVAL_MS } from '@classmoji/utils/agents/limits';
 
 export type Tx = Prisma.TransactionClient;

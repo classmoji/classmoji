@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

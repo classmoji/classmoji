@@ -32,7 +32,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';

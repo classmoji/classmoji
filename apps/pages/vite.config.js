@@ -78,9 +78,6 @@ export default async ({ command, mode }) => {
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
     },
     resolve: {
-      alias: {
-        '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
-      },
       // yjs too: two copies in one bundle break live editing ("Yjs was
       // already imported") — the editor's fragment and the provider's document
       // would come from different copies.

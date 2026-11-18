@@ -1,4 +1,4 @@
-import type { FeedbackStatus } from '@prisma/client';
+import type { FeedbackStatus } from '@classmoji/database/client';
 import { STATUS_META } from './feedback';
 
 /** A status as a coloured badge with its emoji: ◌ Planned, ✓ Fixed… */

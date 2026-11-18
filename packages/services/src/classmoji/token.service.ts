@@ -6,8 +6,8 @@ import {
   titleFromQuizExtensionDescription,
   withLogins,
 } from '@classmoji/utils';
-import { Prisma } from '@prisma/client';
-import type { TokenTransactionType } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type { TokenTransactionType } from '@classmoji/database/client';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import { recordPushAfterExtension } from './gitRepoAssignment.service.ts';
 

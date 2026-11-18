@@ -33,7 +33,7 @@
 import { UriTemplate } from '@modelcontextprotocol/server';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
-import { IssueStatus, type Role } from '@prisma/client';
+import { IssueStatus, type Role } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import type { ResourceDefinition, ToolDefinition, ToolInputShape } from '../mcp/registry.ts';

@@ -12,7 +12,7 @@ import {
 } from '@classmoji/utils';
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import { checkHintCost, checkMaxAnswers } from '@classmoji/utils/quiz-agent';
-import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
+import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@classmoji/database/client';
 import * as assignmentService from './assignment.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import {

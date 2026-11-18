@@ -7,7 +7,7 @@ import getPrisma, {
 } from '@classmoji/database';
 import { claimPendingInvites } from './classroomInvite.service.ts';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
-import type { GitProvider, Prisma, GitRepo } from '@prisma/client';
+import type { GitProvider, Prisma, GitRepo } from '@classmoji/database/client';
 import {
   accountProviderId,
   withLogin,

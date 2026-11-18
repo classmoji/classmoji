@@ -36,7 +36,7 @@
  */
 import getPrisma from '@classmoji/database';
 import { effectivePercentage, quizAttemptGrade, type QuizAttemptGrade } from '@classmoji/utils';
-import type { Prisma, Role } from '@prisma/client';
+import type { Prisma, Role } from '@classmoji/database/client';
 
 import * as audit from './audit.service.ts';
 import { TEACHING_TEAM_ROLES } from './classroomStudents.ts';

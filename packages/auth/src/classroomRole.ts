@@ -13,7 +13,7 @@
  * collab server can run the same page edit rule. Its own subpath with no
  * better-auth instance behind it: `@classmoji/auth/classroom-role`.
  */
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import getPrisma from '@classmoji/database';
 
 /** Higher is more privileged. */

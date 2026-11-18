@@ -27,7 +27,7 @@
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername, type GitIdentityAccount } from '@classmoji/utils';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import { TEACHING_TEAM_ROLES, currentStudentIds } from './classroomStudents.ts';

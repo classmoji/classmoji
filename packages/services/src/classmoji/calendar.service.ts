@@ -9,8 +9,8 @@ import {
   zonedWallClockToInstant,
   type ClassroomLike,
 } from '@classmoji/utils';
-import { Prisma } from '@prisma/client';
-import type { AssignmentType, EventType } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
+import type { AssignmentType, EventType } from '@classmoji/database/client';
 import { pagesUrl } from '../emails/escape.ts';
 import * as entitlementService from './entitlement.service.ts';
 import {

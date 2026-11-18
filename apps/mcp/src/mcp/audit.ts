@@ -19,7 +19,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import type { AuditLogAction, Prisma, Role } from '@prisma/client';
+import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
 import type { ToolContext } from './registry.ts';

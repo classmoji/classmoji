@@ -17,11 +17,14 @@
  * with it. Test-only: nothing outside tests may import it.
  */
 import { readFileSync } from 'node:fs';
-import type { Prisma } from '@prisma/client';
+// The generated client's `Prisma.DMMF` is `typeof runtime.DMMF`, a value type
+// with no member types; the types are the runtime's own (what Prisma 6's
+// `Prisma.DMMF` re-exported).
+import type { DMMF } from '@prisma/client/runtime/client';
 import { get_dmmf } from '@prisma/prisma-schema-wasm';
 
-export type SchemaModel = Prisma.DMMF.Model;
-export type SchemaField = Prisma.DMMF.Field;
+export type SchemaModel = DMMF.Model;
+export type SchemaField = DMMF.Field;
 
 const schema = readFileSync(new URL('../schema.prisma', import.meta.url), 'utf8');
 const document = JSON.parse(get_dmmf(JSON.stringify({ prismaSchema: schema }))) as {

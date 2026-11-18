@@ -10,7 +10,7 @@ import * as entitlementService from './entitlement.service.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
 // classroom is actually deleted.
 import { purgeClassroomMedia } from '../media/index.ts';
-import type { Prisma, Role } from '@prisma/client';
+import type { Prisma, Role } from '@classmoji/database/client';
 
 /**
  * Thrown when a settings write is refused on plan grounds. A distinct class so

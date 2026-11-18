@@ -6,7 +6,7 @@
  * a student. Rows of people who left drop out because their membership did.
  */
 import getPrisma from '@classmoji/database';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 /** Roles that make a member part of the teaching team. */
 export const TEACHING_TEAM_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT'];

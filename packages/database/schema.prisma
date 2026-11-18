@@ -1,14 +1,23 @@
+// The Node client, imported everywhere as `@classmoji/database/client` (never
+// `@prisma/client`). Plain TypeScript generated into ./generated/node (not in
+// git) by `npm run db:generate`; `importFileExtension = "ts"` lets Node's
+// `--experimental-strip-types` load it as it is. Dockerfiles generate only
+// this one (`--generator client`).
 generator client {
-  provider = "prisma-client-js"
+  provider            = "prisma-client"
+  output              = "./generated/node"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
 }
 
-// The client Cloudflare Workers builds use instead of `@prisma/client`
-// (`classmojiWorkerSwaps` in @classmoji/workers/vite aliases it in), built for
-// workerd, with a driver adapter per request (`runWithPrisma` in index.ts).
-// Neither client has a query engine binary on Prisma 7: both run Prisma's WASM
-// query compiler on a driver adapter (the Node one on `@prisma/adapter-pg`,
-// pgClient.ts). Node services never load this one; Dockerfiles and the Trigger
-// build generate only `client` (`--generator client`).
+// The client Cloudflare Workers builds use instead of the Node one
+// (`classmojiWorkerSwaps` in @classmoji/workers/vite swaps
+// `@classmoji/database/client` for it), built for workerd, with a driver
+// adapter per request (`runWithPrisma` in index.ts). Neither client has a
+// query engine binary on Prisma 7: both run Prisma's WASM query compiler on a
+// driver adapter (the Node one on `@prisma/adapter-pg`, pgClient.ts). Node
+// services never load this one.
 generator workerClient {
   provider     = "prisma-client"
   output       = "./generated/worker"

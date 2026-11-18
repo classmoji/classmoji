@@ -1,5 +1,5 @@
 import { tasks } from '@trigger.dev/sdk';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import getPrisma from '@classmoji/database';
 import { GITLAB_PROJECTS_SUBGROUP, parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';

@@ -1,4 +1,4 @@
-import type { GitProvider } from '@prisma/client';
+import type { GitProvider } from '@classmoji/database/client';
 
 import { useUser } from './useUser';
 

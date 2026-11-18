@@ -13,7 +13,7 @@
  * without the interleaving it describes proves nothing.
  */
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 export type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 

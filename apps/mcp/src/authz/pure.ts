@@ -12,7 +12,7 @@
  * presentation (`ToolError`) on top.
  */
 
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import {
   canEnterClassroom,
   canMutateClassroom,

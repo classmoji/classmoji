@@ -2,7 +2,7 @@ import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
 import { sentryBrowserConfig } from '@classmoji/utils/sentry';
 import { getAuthSession } from '@classmoji/auth/server';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { redirect } from 'react-router';
 
 /**

@@ -15,7 +15,7 @@
 
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {

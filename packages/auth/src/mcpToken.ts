@@ -49,7 +49,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@classmoji/database/client';
 
 /**
  * The client every Ask Moji and quiz-agent token names. apps/mcp tells an

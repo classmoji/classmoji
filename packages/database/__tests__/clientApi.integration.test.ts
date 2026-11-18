@@ -9,7 +9,7 @@
  * pgClient.integration.test.ts. Every row it writes is removed.
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import { getPrisma } from '../index.ts';
 import { createPgPrismaClient } from '../pgClient.ts';
 
@@ -32,21 +32,24 @@ describe.skipIf(!RUN)('the Prisma client API on a real database', () => {
   });
 
   it('keeps the namespace helpers and error classes', () => {
-    for (const name of [
-      'PrismaClientKnownRequestError',
-      'PrismaClientUnknownRequestError',
-      'PrismaClientInitializationError',
-      'PrismaClientValidationError',
-      'Decimal',
-      'DbNull',
-      'JsonNull',
-      'AnyNull',
-      'sql',
-      'join',
-      'raw',
-      'empty',
-    ]) {
-      expect(Prisma[name as keyof typeof Prisma], name).toBeDefined();
+    // Named one by one: `Prisma` is a module namespace in the generated
+    // client, and lint refuses computed reads of one.
+    const helpers = {
+      PrismaClientKnownRequestError: Prisma.PrismaClientKnownRequestError,
+      PrismaClientUnknownRequestError: Prisma.PrismaClientUnknownRequestError,
+      PrismaClientInitializationError: Prisma.PrismaClientInitializationError,
+      PrismaClientValidationError: Prisma.PrismaClientValidationError,
+      Decimal: Prisma.Decimal,
+      DbNull: Prisma.DbNull,
+      JsonNull: Prisma.JsonNull,
+      AnyNull: Prisma.AnyNull,
+      sql: Prisma.sql,
+      join: Prisma.join,
+      raw: Prisma.raw,
+      empty: Prisma.empty,
+    };
+    for (const [name, value] of Object.entries(helpers)) {
+      expect(value, name).toBeDefined();
     }
   });
 

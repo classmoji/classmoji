@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { buildSuggestions, FACULTY_SUGGESTIONS, STUDENT_SUGGESTIONS } from '../suggestions.ts';
 
 describe('buildSuggestions', () => {

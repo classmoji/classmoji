@@ -52,7 +52,7 @@ import {
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';

@@ -1,5 +1,5 @@
 import { tasks } from '@trigger.dev/sdk';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { ClassmojiService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
 import { gitAccountId, gitUsername } from '@classmoji/utils';

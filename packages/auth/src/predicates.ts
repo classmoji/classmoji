@@ -11,7 +11,7 @@
  *     `apps/mcp/src/authz/pure.ts` throw JSON-RPC `ToolError`s
  */
 
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { ClassroomStatus, Role } from '@classmoji/database/client';
 
 export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
 

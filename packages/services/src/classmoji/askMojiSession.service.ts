@@ -32,7 +32,7 @@
  * `startSession` callback, reached on composer focus (`transport.preload`)
  * or the first send. Ended and replaced conversations get `sessions.close`.
  */
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import {
   ASK_MOJI_WELCOME,
   isAskMojiRole,

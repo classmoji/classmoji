@@ -7,7 +7,7 @@ import getPrisma, {
 import { withLogin, withLogins } from '@classmoji/utils';
 import { findClassroomGitProvider, findClassroomGitScope } from './classroomGitProvider.ts';
 import * as planOwnerService from './planOwner.service.ts';
-import type { Prisma, Role } from '@prisma/client';
+import type { Prisma, Role } from '@classmoji/database/client';
 
 interface ClassroomMembershipUpsertData {
   role: Role;

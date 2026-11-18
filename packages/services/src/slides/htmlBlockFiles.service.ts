@@ -27,7 +27,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { ContentService } from '../content/ContentService.ts';
 import { create as createAudit } from '../classmoji/audit.service.ts';
 import {

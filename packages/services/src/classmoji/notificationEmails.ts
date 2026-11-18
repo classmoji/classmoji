@@ -1,4 +1,4 @@
-import type { NotificationType } from '@prisma/client';
+import type { NotificationType } from '@classmoji/database/client';
 import { appUrl, escapeHtml } from '../emails/escape.ts';
 
 interface EmailContext {

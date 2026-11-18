@@ -1,7 +1,7 @@
 import getPrisma from '@classmoji/database';
 import { openToStudents, scheduledForStudents, titleToIdentifier } from '@classmoji/utils';
 import { uniqueViolationTarget } from './uniqueViolation.ts';
-import { ModuleItemType, type Prisma } from '@prisma/client';
+import { ModuleItemType, type Prisma } from '@classmoji/database/client';
 
 interface ModuleWriteInput {
   title: string;

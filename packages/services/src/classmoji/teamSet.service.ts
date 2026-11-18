@@ -99,12 +99,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tasks } from '@trigger.dev/sdk';
 import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
 import { gitUsername, titleToIdentifier } from '@classmoji/utils';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import type {
   TeamSet as TeamSetDbRow,
   TeamSetRun as TeamSetRunDbRow,
   TeamSetRunStatus,
-} from '@prisma/client';
+} from '@classmoji/database/client';
 
 import { getGitHubProvider } from '../git/index.ts';
 import { isTriggerConfigured } from '../helper/triggerConfig.ts';

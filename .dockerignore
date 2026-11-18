@@ -19,6 +19,11 @@ playwright-report
 # the cost. Workflows deploy via `trigger.dev deploy`, never from this dir.
 packages/tasks/.trigger
 
+# Prisma clients generated on a developer machine. Each image generates its own
+# Node client (`prisma generate --generator client`) BEFORE `COPY . .`; a local
+# copy in the context would overwrite it with whatever schema it was built from.
+packages/database/generated
+
 # The Astro marketing site builds from its OWN context (CI runs flyctl with
 # working-directory: apps/site, so apps/site/.dockerignore applies there, not
 # this file). Nothing built from the repo root serves it.

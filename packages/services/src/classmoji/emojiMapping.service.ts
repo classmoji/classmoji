@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@classmoji/database/client';
 import { SCORE_EMOJI_MAPPINGS } from '@classmoji/utils';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;

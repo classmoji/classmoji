@@ -18,6 +18,10 @@
     "./seed-fixtures": "./scripts/seed-fixtures.js",
     "./pg-adapter": "./pgAdapter.ts",
     "./pg-client": "./pgClient.ts",
+    "./client": {
+      "browser": "./generated/node/browser.ts",
+      "default": "./generated/node/client.ts"
+    },
     "./worker-client": "./generated/worker/client.ts",
     "./wait-until": "./requestContext.ts",
     "./testing/prisma-errors": "./testing/prismaErrors.ts",

@@ -228,13 +228,14 @@ export default defineConfig({
     extensions: [
       // First, so a deploy without the private agents fails before any layer.
       requirePrivateAgentsOnDeploy(),
-      prismaExtension({
-        schema: '../database/schema.prisma',
-        mode: 'legacy',
-        // Only the Node client. schema.prisma's `workerClient` generator is
-        // the Cloudflare Workers client, which the worker never loads.
-        clientGenerator: 'client',
-      }),
+      // `modern`: the Node client is generated TypeScript in
+      // packages/database/generated/node (schema.prisma's `client` generator),
+      // bundled with the tasks like any other source. The extension only keeps
+      // `@prisma/client` (the client's runtime, `@prisma/client/runtime/*`)
+      // external, so the image installs it. It generates nothing: run
+      // `npm run db:generate` (or `prisma generate --generator client`) before
+      // `trigger deploy`; the deploy workflows do.
+      prismaExtension({ mode: 'modern' }),
       aptGet({
         // git-lfs: `gh-create_git_repo` copies templates that keep their
         // files in Git LFS (see helpers/templatePush.ts).

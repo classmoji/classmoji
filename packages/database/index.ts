@@ -1,5 +1,7 @@
 import { createDecipheriv, createHash } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+// By the package's own specifier, never a relative path into generated/:
+// Workers builds swap this specifier for the workerd client.
+import { PrismaClient } from '@classmoji/database/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
 import { workerScope as sharedWorkerScope } from './requestContext.ts';

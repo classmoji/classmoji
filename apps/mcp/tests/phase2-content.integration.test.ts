@@ -38,7 +38,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 import {
   callTool,
   deleteMintedTokens,

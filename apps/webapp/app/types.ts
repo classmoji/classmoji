@@ -1,4 +1,4 @@
-import type { Prisma, Role, SubscriptionTier } from '@prisma/client';
+import type { Prisma, Role, SubscriptionTier } from '@classmoji/database/client';
 import { GIT_IDENTITY } from '@classmoji/database';
 
 // Classroom-settings projection shared by the root loader's user queries. Single

@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@classmoji/database/client';
 import { createPgPrismaClient, type PgClientOptions } from '../pgClient.ts';
 import { isTransientDatabaseError } from '../../tasks/src/helpers/databaseRetry.ts';
 import { isTokenStoreUnavailable } from '../../../apps/mcp/src/auth/tokenStoreErrors.ts';
@@ -59,7 +59,7 @@ async function until<T>(
  */
 const startupFatalScript = (databaseUrl: string, mode: 'factory' | 'plain') => `
 import net from 'node:net';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@classmoji/database/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { createPgPrismaClient } from './packages/database/pgClient.ts';
 const upstreamUrl = new URL(${JSON.stringify(databaseUrl)});

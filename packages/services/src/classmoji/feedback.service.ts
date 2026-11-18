@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { FeedbackCategory, FeedbackStatus } from '@prisma/client';
+import type { FeedbackCategory, FeedbackStatus } from '@classmoji/database/client';
 import { createNotifications } from './notification.service.ts';
 
 /**

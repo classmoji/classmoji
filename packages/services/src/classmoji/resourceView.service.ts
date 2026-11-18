@@ -1,6 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername } from '@classmoji/utils';
-import type { Prisma, Role } from '@prisma/client';
+import type { Prisma, Role } from '@classmoji/database/client';
 
 /**
  * Resource View Service

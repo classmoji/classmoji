@@ -14,7 +14,7 @@
  * caller (their own attempt, or staff of its quiz's classroom). The actor is
  * the signed-in caller, from the session and their membership.
  */
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 export interface ExpirableAttempt {
   id: string;

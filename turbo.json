@@ -92,12 +92,12 @@
     "admin:start": {
       "dependsOn": ["^db:generate"]
     },
-    // Never cached: prisma generate writes the Node client to the root
-    // node_modules/.prisma (outside the package, so turbo can't restore it)
-    // and the Workers client to packages/database/generated. A cache hit used
-    // to restore neither, leaving a stale client and a missing
-    // generated/worker (admin's Cloudflare build fails without it). It takes
-    // a few seconds.
+    // Never cached: prisma generate writes both clients into
+    // packages/database/generated (node/ and worker/, not in git). A cache hit
+    // once restored neither, leaving a stale client and a missing
+    // generated/worker (admin's Cloudflare build fails without it); it takes a
+    // few seconds, so it simply always runs. typecheck and test depend on it
+    // (every import of `@classmoji/database/client` reads generated/node).
     "db:generate": {
       "cache": false
     },
@@ -118,7 +118,8 @@
       // when someone remembered. This makes the root `npm run test` run them
       // first: turbo resolves an unprefixed dependency within the SAME package,
       // and simply skips it for the workspaces that define no such script.
-      "dependsOn": ["web:test:unit"],
+      // And the generated Prisma client (see db:generate).
+      "dependsOn": ["web:test:unit", "^db:generate", "db:generate"],
       // turbo hands a task only the environment it has been told about, so an
       // E2E_* variable set on the command line simply does not reach Playwright
       // unless it is named here. The failure mode is quiet and expensive: the
@@ -172,10 +173,13 @@
     // Playwright's test-results/ and playwright-report/.
     "web:test:unit": {
       "cache": false,
+      "dependsOn": ["^db:generate"],
       "outputs": []
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
+      // The generated Prisma client first (see db:generate): `^` for the
+      // workspaces that depend on @classmoji/database, plain for its own.
+      "dependsOn": ["^typecheck", "^db:generate", "db:generate"],
       "outputs": []
     }
   },

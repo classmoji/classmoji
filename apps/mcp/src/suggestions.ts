@@ -7,7 +7,7 @@
  * nothing and grant nothing.
  */
 
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 
 export interface Suggestions {
   /** Present iff the caller holds OWNER/TEACHER/ASSISTANT in any classroom. */

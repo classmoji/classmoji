@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { gitTerms, resolveTemplateRef, titleToIdentifier } from '@classmoji/utils';
-import type { RepositoryType, Prisma } from '@prisma/client';
+import type { RepositoryType, Prisma } from '@classmoji/database/client';
 import { getGitProvider } from '../git/index.ts';
 import * as notificationService from './notification.service.ts';
 

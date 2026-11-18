@@ -22,7 +22,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import { ToolError } from '../../mcp/errors.ts';
 import type { Viewer } from '../../auth/resolveViewer.ts';
 

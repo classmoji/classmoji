@@ -14,7 +14,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import type { Account as PrismaAccount } from '@prisma/client';
+import type { Account as PrismaAccount } from '@classmoji/database/client';
 
 export interface GitHubTokenResult {
   token: string;

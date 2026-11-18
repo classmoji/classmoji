@@ -46,10 +46,10 @@
  * inlines `@classmoji/database` — verified against `build/server/index.js`.
  * Importing that package here would construct a SECOND extended client and, far
  * worse, install a second set of SIGINT/SIGTERM/uncaughtException handlers, two
- * process-exiting shutdown paths racing each other. So this talks to
- * `@prisma/client` directly, with a deliberately tiny connection pool: it runs
- * one narrow query per refresh interval and has no business holding the default
- * pool's worth of connections.
+ * process-exiting shutdown paths racing each other. So this builds a client of
+ * its own (`@classmoji/database/pg-client`), with a deliberately tiny
+ * connection pool: it runs one narrow query per refresh interval and has no
+ * business holding the default pool's worth of connections.
  */
 
 /** custom hostname → tenant subdomain. */
@@ -100,7 +100,7 @@ function createDefaultLoader(): () => Promise<Array<readonly [string, string]>> 
   // Structurally typed to the ONE query this makes, rather than to
   // `PrismaClient`. That type comes from the generated client, which this file
   // deliberately does not depend on the shape of — and naming it here would
-  // also mean importing `@prisma/client` eagerly, which is exactly what the
+  // also mean importing the Prisma client eagerly, which is exactly what the
   // dynamic import below avoids.
   type RoutingClient = {
     classroomSite: {

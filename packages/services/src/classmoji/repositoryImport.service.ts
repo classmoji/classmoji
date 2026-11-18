@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { mirroredQuizStatus, mirroredQuizWeight, titleToIdentifier } from '@classmoji/utils';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@classmoji/database/client';
 
 export type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 

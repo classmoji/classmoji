@@ -25,7 +25,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@classmoji/database/client';
 
 import getPrisma from '@classmoji/database';
 import {

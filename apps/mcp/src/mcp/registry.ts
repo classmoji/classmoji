@@ -45,7 +45,7 @@ import {
 } from '@modelcontextprotocol/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import type { z } from 'zod';
 import type { Viewer } from '../auth/resolveViewer.ts';
 import { resolveClassroomContext, type ClassroomContext } from '../authz/classroomContext.ts';

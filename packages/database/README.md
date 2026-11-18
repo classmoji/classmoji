@@ -6,6 +6,25 @@ with (`pgClient.ts`, exported as `@classmoji/database/pg-client`).
 
 ## Prisma 7
 
+- **Generated clients.** `schema.prisma` has two `prisma-client` generators,
+  both writing TypeScript into `generated/` (gitignored; `npm run db:generate`
+  writes both, and turbo's `typecheck` and `test` run it first):
+  - `client` → `generated/node`, the Node client. Everything imports it as
+    `@classmoji/database/client` (the client, `Prisma`, model types, enums),
+    never `@prisma/client`, which a lint rule refuses (`@prisma/client` is
+    now only the client's runtime, a dependency of this package). In browser
+    bundles the same specifier resolves to `generated/node/browser.ts` (the
+    `browser` export condition): enums and types, no server code. Its imports
+    end in `.ts` (`importFileExtension`) so `node --experimental-strip-types`
+    loads it as it is. Like any ESM build of Prisma's Node client, it sets
+    `globalThis.__dirname` when it loads.
+  - `workerClient` → `generated/worker`, for Cloudflare Workers:
+    `classmojiWorkerSwaps` (@classmoji/workers/vite) puts it in place of
+    `@classmoji/database/client`. That is why `index.ts` and `pgClient.ts`
+    import the client by that specifier, never by a relative path.
+
+  Docker images and the deploy workflows (before `trigger deploy`) generate
+  only `client` (`--generator client`).
 - **CLI.** `prisma.config.ts` names the schema, the migrations, the seed and the
   URL (`DATABASE_URL`). Prisma finds it in the current directory only, so run
   `npx prisma …` here, or pass `--config packages/database/prisma.config.ts`

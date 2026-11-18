@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import type { Role } from '@prisma/client';
+import type { Role } from '@classmoji/database/client';
 import {
   LOCK_DISCONNECT_GRACE_MS,
   LOCK_TAKEOVER_IDLE_MS,

@@ -35,7 +35,7 @@ import {
   type QuizAttemptGrade,
   type QuizEmojiScale,
 } from '@classmoji/utils';
-import { Prisma, type RegradeRequest, type Role } from '@prisma/client';
+import { Prisma, type RegradeRequest, type Role } from '@classmoji/database/client';
 import * as audit from './audit.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
