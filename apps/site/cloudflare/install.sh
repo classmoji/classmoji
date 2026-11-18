@@ -14,12 +14,14 @@
 # only place their versions live (CI's deploy-site-worker job calls this
 # script; build.sh calls it for local builds).
 #
-# The three move together: @astrojs/cloudflare 14.4.4 is the release paired
-# with astro 7.4.5 whose @cloudflare/vite-plugin range (^1.63.1) admits 1.65.0,
-# which pins exactly wrangler 4.152.0, the root's (apps/admin's) version. A
-# newer adapter pulls a newer vite plugin and with it a second wrangler and
-# workerd. Every pin must also predate the `before=` date in apps/site/.npmrc,
-# which this install respects.
+# The three move together: @astrojs/cloudflare 14.4.4 (released with astro
+# 7.4.5; its astro peer range ^7.4.0 covers the site's astro) has a
+# @cloudflare/vite-plugin range (^1.63.1) that admits 1.65.0, which pins
+# exactly wrangler 4.152.0 (apps/admin has since moved on to the vite plugin
+# 1.67.0 and wrangler 4.156.1). Moving the adapter on (14.4.8 needs the vite
+# plugin ^1.67.0) means moving the other two with it, or the vite plugin brings
+# a second wrangler and workerd. Every pin must also predate the `before=` date
+# in apps/site/.npmrc, which this install respects.
 set -eu
 
 ADAPTER=@astrojs/cloudflare@14.4.4

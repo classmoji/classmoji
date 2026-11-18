@@ -71,11 +71,6 @@
   }
 </style>
 
-{/* Inlined to avoid a flash of the wrong icon; StarlightThemeProvider is Starlight's. */}
-<script is:inline>
-  StarlightThemeProvider.updatePickers();
-</script>
-
 <script>
   type Theme = 'auto' | 'dark' | 'light';
 
@@ -100,14 +95,13 @@
     return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
 
-  /** Starlight's ThemeProvider defines this global. */
-  const themeProvider = (
-    window as unknown as { StarlightThemeProvider: { updatePickers(theme?: Theme): void } }
-  ).StarlightThemeProvider;
-
-  /** Update the pickers, the document's theme and the stored preference. */
+  /**
+   * Update the document's theme and the stored preference. The icons follow
+   * `data-theme` (CSS above), so there is no picker state to update: Starlight
+   * 0.43 removed its `StarlightThemeProvider.updatePickers()`, which only ever
+   * touched Starlight's own `<starlight-theme-select>`.
+   */
   function onThemeChange(theme: Theme): void {
-    themeProvider.updatePickers(theme);
     document.documentElement.dataset.theme = theme === 'auto' ? getPreferredColorScheme() : theme;
     storeTheme(theme);
   }
