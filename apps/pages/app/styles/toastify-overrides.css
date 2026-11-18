@@ -1,0 +1,43 @@
+/*
+ * react-toastify 11 lays a toast out differently from 10: no padding on the
+ * container, one padding on the toast instead of toast + body, a close button
+ * placed absolutely, a 22px icon slot, and the message is no longer wrapped in
+ * an element (so the page's `*` font rule no longer reaches it). These rules
+ * keep the 10.x look: same width, offsets, text box, font and close button.
+ */
+:root {
+  /* 11.x moved the error red to hsl(6, 78%, 57%), one step off this. */
+  --toastify-color-error: #e74c3c;
+}
+
+.Toastify__toast-container {
+  padding: 4px;
+}
+
+.Toastify__toast {
+  --toastify-toast-width: 312px;
+  padding: 14px;
+  font-family: inherit;
+  cursor: default;
+  overflow: hidden;
+}
+
+.Toastify__toast-icon {
+  width: 20px;
+}
+
+.Toastify__close-button {
+  position: static;
+  align-self: flex-start;
+  margin: -6px -6px 0 auto;
+  padding-left: 6px;
+}
+
+@media only screen and (max-width: 480px) {
+  .Toastify__toast-container {
+    padding: 0;
+  }
+  .Toastify__toast {
+    --toastify-toast-width: 100%;
+  }
+}

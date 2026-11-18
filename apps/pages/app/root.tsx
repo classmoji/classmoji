@@ -37,6 +37,7 @@ export function useUser() {
 }
 
 import 'react-toastify/dist/ReactToastify.css';
+import '~/styles/toastify-overrides.css';
 import '@mantine/core/styles.css';
 import '@blocknote/core/fonts/inter.css';
 import '@blocknote/mantine/style.css';
