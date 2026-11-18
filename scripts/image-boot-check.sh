@@ -153,7 +153,8 @@ for app in "${APPS[@]}"; do
   # A package that starts fine can still be the wrong version in the image:
   # the same check the image build runs.
   if ! node scripts/check-server-externals.mjs "apps/$app/Dockerfile" >"$LOGS/externals-$app.log" 2>&1; then
-    echo "FAIL $app: an external import resolves differently in the image (see $LOGS/externals-$app.log)"
+    echo "FAIL $app: the server externals check did not pass:"
+    cat "$LOGS/externals-$app.log"
     FAILED+=("$app")
     continue
   fi

@@ -21,26 +21,51 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isBuiltin } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
 const IMPORT_RES = [
   /^\s*(?:import|export)\b[^'"`;]*?\bfrom\s*["']([^"']+)["']/gm,
   /^\s*import\s*["']([^"']+)["']/gm,
   /\bimport\(\s*["']([^"']+)["']\s*\)/g,
   /\brequire\(\s*["']([^"']+)["']\s*\)/g,
+  // require.resolve(), createRequire(...).resolve(), import.meta.resolve()
+  /\.resolve\(\s*["']([^"']+)["']\s*\)/g,
 ];
 const CODE = /\.(m?js|cjs|m?ts|cts)$/;
 
-/** Source paths (relative to the repo root) the Dockerfile's runtime stage copies from the build stage. */
+/**
+ * Source paths (relative to the repo root) the Dockerfile's last stage copies:
+ * from an earlier stage (`COPY --from=<stage> /app/<path> <dest>`) or from the
+ * build context. '.' means everything. Throws on a COPY it cannot read (a
+ * variable, the JSON form, a stage path outside /app): guessing would either
+ * check nothing or report every import as missing.
+ */
 export function keptPaths(dockerfile) {
-  const kept = [];
-  for (const m of fs
+  const lines = fs
     .readFileSync(dockerfile, 'utf8')
-    .matchAll(/^COPY\s+--from=build\s+\/app\/(\S+)\s+\S+/gm))
-    kept.push(path.normalize(m[1]));
-  return kept;
+    .replace(/\\\r?\n/g, ' ')
+    .split(/\r?\n/)
+    .map(line => line.trim());
+  const runtime = lines.slice(lines.findLastIndex(line => /^FROM\s/i.test(line)) + 1);
+  const kept = [];
+  for (const line of runtime) {
+    if (!/^COPY\s/i.test(line)) continue;
+    const args = line.split(/\s+/).slice(1);
+    const fromStage = args.some(a => /^--from=/i.test(a));
+    const sources = args.filter(a => !a.startsWith('--')).slice(0, -1);
+    if (!sources.length || sources.some(s => s.includes('$') || s.startsWith('[')))
+      throw new Error(`${dockerfile}: cannot read "${line}"`);
+    for (const source of sources) {
+      if (!fromStage) kept.push(path.normalize(source));
+      else if (source === '/app' || source === '/app/') kept.push('.');
+      else if (source.startsWith('/app/')) kept.push(path.normalize(source.slice(5)));
+      else throw new Error(`${dockerfile}: "${line}" copies from outside /app`);
+    }
+  }
+  return kept.map(k => (k.length > 1 ? k.replace(/[\\/]$/, '') : k));
 }
 
-const inside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
+const inside = (p, dir) => dir === '.' || p === dir || p.startsWith(dir + path.sep);
 
 /** Package name and subpath of a bare specifier (`@scope/pkg/sub` -> ['@scope/pkg', 'sub']). */
 const splitSpec = spec => {
@@ -119,16 +144,27 @@ function* codeFiles(p) {
     if (e !== 'node_modules' && e !== 'client') yield* codeFiles(path.join(p, e));
 }
 
-/** Problems for the app whose Dockerfile is given, checked from repo root `root`. */
+/**
+ * Checks the app whose Dockerfile is given, from repo root `root`. Returns the
+ * problems (one line per specifier) and how much was looked at. Throws when the
+ * Dockerfile's image has no root node_modules or no server file was found:
+ * the check would pass without checking anything.
+ */
 export function checkApp(root, dockerfile) {
   const kept = keptPaths(path.join(root, dockerfile));
   const appDir = path.dirname(dockerfile);
-  const scan = kept.filter(k => inside(k, appDir) && !k.endsWith('.json'));
+  const scan = kept.includes('.')
+    ? [appDir]
+    : kept.filter(k => inside(k, appDir) && !k.endsWith('.json'));
   const inImage = nm => kept.some(k => inside(nm, k));
+  if (!inImage('node_modules'))
+    throw new Error(`${dockerfile}: its last stage copies no root node_modules`);
   const problems = new Map(); // one line per package specifier
   const seen = new Set();
+  let files = 0;
   for (const s of scan)
     for (const file of codeFiles(path.join(root, s))) {
+      files += 1;
       const src = fs.readFileSync(file, 'utf8');
       for (const re of IMPORT_RES)
         for (const m of src.matchAll(re)) {
@@ -151,16 +187,24 @@ export function checkApp(root, dockerfile) {
             );
         }
     }
-  return [...problems.values()].sort();
+  if (!files) throw new Error(`${dockerfile}: no server file found under ${scan.join(', ')}`);
+  return { problems: [...problems.values()].sort(), files, specifiers: seen.size };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const dockerfile = process.argv[2];
   if (!dockerfile) {
     console.error('usage: node scripts/check-server-externals.mjs apps/<app>/Dockerfile');
     process.exit(2);
   }
-  const problems = checkApp(process.cwd(), dockerfile);
+  let result;
+  try {
+    result = checkApp(process.cwd(), dockerfile);
+  } catch (error) {
+    console.error(`check-server-externals: ${error.message}`);
+    process.exit(2);
+  }
+  const { problems, files, specifiers } = result;
   if (problems.length) {
     console.error(
       `check-server-externals: ${dockerfile}: ${problems.length} import(s) resolve differently in the image:`
@@ -172,6 +216,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   process.stdout.write(
-    `check-server-externals: ${dockerfile}: every external import resolves the same in the image\n`
+    `check-server-externals: ${dockerfile}: every external import resolves the same in the image (${specifiers} imports in ${files} files)\n`
   );
 }
