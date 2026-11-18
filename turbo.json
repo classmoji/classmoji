@@ -123,7 +123,11 @@
       "cache": false
     },
     "db:ensure": {
-      "cache": false
+      "cache": false,
+      // DB_ENSURE=off skips it: the app images' build stages set it, having
+      // generated only the Node client themselves. Named here or turbo's
+      // strict env mode keeps it from the script.
+      "env": ["DB_ENSURE"]
     },
     "db:start": {},
     "db:deploy": {

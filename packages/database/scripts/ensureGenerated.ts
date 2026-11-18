@@ -11,6 +11,10 @@
  * written only after a generate that succeeded. A lock directory makes a
  * second process wait, then find the stamp current. Plain Node: it runs before
  * anything is generated.
+ *
+ * `DB_ENSURE=off` skips it (no lock, no stamp, no generate): the app images
+ * generate only the Node client themselves, then build through turbo.
+ * `--force` ignores it.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -40,6 +44,8 @@ const STALE_LOCK_MS = 10 * 60_000;
 export type EnsureOptions = {
   dir?: string;
   force?: boolean;
+  /** The environment `DB_ENSURE` is read from (default `process.env`). */
+  env?: Record<string, string | undefined>;
   versions?: string;
   generate?: () => boolean;
 };
@@ -111,7 +117,10 @@ function withLock<T>(lock: string, run: () => T): T {
 }
 
 /** Generates when out of date (or forced); throws when the generate fails. */
-export function ensureGenerated(options: EnsureOptions = {}): 'up-to-date' | 'generated' {
+export function ensureGenerated(
+  options: EnsureOptions = {}
+): 'skipped' | 'up-to-date' | 'generated' {
+  if (!options.force && (options.env ?? process.env).DB_ENSURE === 'off') return 'skipped';
   const dir = options.dir ?? PACKAGE_DIR;
   const generate = options.generate ?? (() => runPrismaGenerate(dir));
   const wanted = fingerprint(dir, options.versions ?? installedVersions());
@@ -134,6 +143,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
   try {
     const result = ensureGenerated({ force: process.argv.includes('--force') });
     if (result === 'up-to-date') console.log('[db:ensure] Prisma clients are up to date');
+    if (result === 'skipped') console.log('[db:ensure] skipped (DB_ENSURE=off)');
   } catch (error) {
     console.error((error as Error).message);
     process.exitCode = 1;

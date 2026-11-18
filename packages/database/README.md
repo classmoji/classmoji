@@ -29,7 +29,10 @@ with (`pgClient.ts`, exported as `@classmoji/database/pg-client`).
     import the client by that specifier, never by a relative path.
 
   Docker images and the deploy workflows (before `trigger deploy`) generate
-  only `client` (`--generator client`).
+  only `client` (`--generator client`). The webapp, pages, slides and admin
+  images then build through turbo with `DB_ENSURE=off`, which makes
+  `db:ensure` do nothing (`--force`, i.e. `db:generate`, ignores it), so they
+  carry no Workers client.
 - **CLI.** `prisma.config.ts` names the schema, the migrations, the seed and the
   URL (`DATABASE_URL`). Prisma finds it in the current directory only, so run
   `npx prisma …` here, or pass `--config packages/database/prisma.config.ts`

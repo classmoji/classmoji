@@ -2,7 +2,7 @@
  * scripts/ensureGenerated.ts (`db:ensure`) in a scratch package directory,
  * with a stand-in for `prisma generate` that writes the entry files.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   mkdirSync,
@@ -17,7 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureGenerated, GENERATED_ENTRIES } from '../scripts/ensureGenerated.ts';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ensureGenerated.ts', import.meta.url));
@@ -55,8 +55,14 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'db-ensure-'));
   writeFileSync(join(dir, 'schema.prisma'), 'model A { id Int @id }\n');
   calls = 0;
+  // The cases below read process.env: an image-style opt-out in the shell
+  // running the tests must not turn them into skips.
+  vi.stubEnv('DB_ENSURE', '');
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe('ensureGenerated', () => {
   it('generates when the output is missing, and stamps it', () => {
@@ -65,6 +71,33 @@ describe('ensureGenerated', () => {
     );
     expect(calls).toBe(1);
     expect(existsSync(join(dir, 'generated/.stamp'))).toBe(true);
+  });
+
+  it('skips with DB_ENSURE=off, creating nothing (no lock, no stamp)', () => {
+    const env = { DB_ENSURE: 'off' };
+    expect(ensureGenerated({ dir, env, versions: VERSIONS, generate: fakeGenerate() })).toBe(
+      'skipped'
+    );
+    expect(calls).toBe(0);
+    expect(readdirSync(dir)).toEqual(['schema.prisma']);
+  });
+
+  it('generates when forced, even with DB_ENSURE=off', () => {
+    const env = { DB_ENSURE: 'off' };
+    expect(
+      ensureGenerated({ dir, env, force: true, versions: VERSIONS, generate: fakeGenerate() })
+    ).toBe('generated');
+    expect(calls).toBe(1);
+    expect(existsSync(join(dir, 'generated/.stamp'))).toBe(true);
+  });
+
+  it('as a script with DB_ENSURE=off: prints the skip and exits 0', () => {
+    const run = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT], {
+      env: { ...process.env, DB_ENSURE: 'off' },
+      encoding: 'utf8',
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe('[db:ensure] skipped (DB_ENSURE=off)');
   });
 
   it('does nothing, and changes no file, when up to date', async () => {

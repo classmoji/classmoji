@@ -48,6 +48,8 @@ RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --legacy-peer-deps --no-audit 
 COPY packages/database/schema.prisma packages/database/
 # Only the Node client (`client`); `workerClient` is for Cloudflare Workers builds.
 RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma --generator client
+# turbo's db:ensure would regenerate both clients (the Workers one too): skip it.
+ENV DB_ENSURE=off
 
 COPY . .
 
