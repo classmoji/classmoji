@@ -125,6 +125,8 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
       'image/webp': ['.webp'],
     },
     maxFiles: 1,
+    // Files arrive by drop or the picker only, not by pasting.
+    noPaste: true,
   });
 
   // Process and upload
