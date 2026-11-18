@@ -5,13 +5,13 @@ import { navGridConfig } from '@classmoji/page-schema';
 import {
   IconArrowUp,
   IconArrowDown,
-  IconCalendar,
   IconExternalLink,
   IconFileText,
   IconLayoutColumns,
   IconPlus,
   IconX,
 } from '@tabler/icons-react';
+import { IconCalendar } from '~/components/ui/tablerIcons.ts';
 
 import {
   NAV_GRID_SCHEDULE_PATH,

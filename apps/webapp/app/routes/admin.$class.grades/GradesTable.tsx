@@ -10,7 +10,7 @@ import {
 } from '@tabler/icons-react';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import dayjs from 'dayjs';
-import { mean, median } from 'simple-statistics';
+import { mean } from 'simple-statistics';
 
 import { UserThumbnailView } from '~/components';
 import GradeSettings from './GradeSettings';
@@ -198,6 +198,18 @@ const findSubmissionWithRepo = (
 
 const findSubmission = (student: Student, assignmentId: string): Submission | undefined =>
   findSubmissionWithRepo(student, assignmentId)?.sub;
+
+/**
+ * The class median: the middle value, or the mean of the two middle values.
+ * Not simple-statistics' `median`, which since 7.8.9 interpolates
+ * (`a + 0.5 * (b - a)`) and can land one ulp off `(a + b) / 2`, enough to flip
+ * the one-decimal display (0.99 and 28.11: 14.5 here, 14.6 there).
+ */
+export const classMedian = (values: number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
 
 const isGraded = (s: Submission | undefined) => Boolean(s && (s.grades?.length ?? 0) > 0);
 const isLate = (s: Submission | undefined) => Boolean(s?.is_late && !s.is_late_override);
@@ -1179,7 +1191,7 @@ const GradesTable = (props: GradesTableProps) => {
               <span className="text-xs text-ink-2 whitespace-nowrap">
                 mean {mean(finals).toFixed(1)}
                 <br />
-                median {median(finals).toFixed(1)}
+                median {classMedian(finals).toFixed(1)}
               </span>
             </Table.Summary.Cell>
             <Table.Summary.Cell index={summaryCells.length + 2}></Table.Summary.Cell>
