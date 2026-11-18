@@ -45,6 +45,10 @@ import 'highlight.js/styles/atom-one-dark.css';
 import '~/styles/blocknote-overrides.css';
 import '~/styles/tailwind.css';
 
+// react-toastify 11 moves focus to the first toast on Alt+T, which takes it
+// out of whatever field the reader is typing in. Keep 10.x behaviour: none.
+const noToastHotKey = () => false;
+
 export const meta = (): Array<{ title: string }> => {
   return [{ title: 'Pages - Classmoji' }];
 };
@@ -392,6 +396,8 @@ const App = () => {
             draggable
             pauseOnHover
             theme="colored"
+            hotKeys={noToastHotKey}
+            aria-label="Notifications"
           />
           <Outlet />
         </MantineProvider>

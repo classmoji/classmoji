@@ -22,6 +22,11 @@
   overflow: hidden;
 }
 
+/* After the rule above, as in 10.x: a click-to-close toast shows the hand. */
+.Toastify__toast--close-on-click {
+  cursor: pointer;
+}
+
 .Toastify__toast-icon {
   width: 20px;
 }
