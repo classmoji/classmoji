@@ -561,13 +561,6 @@
     font-family: inherit;
   }
 
-  /* The search field's placeholder in Pagefind's faint style (the input's
-     text colour at 20%), as before Starlight 0.42.10 set it to gray-3. */
-  #starlight__search .pagefind-ui__search-input::placeholder {
-    color: unset;
-    opacity: 0.2;
-  }
-
   /* --- On this page ------------------------------------------------------------- */
 
   starlight-toc h2 {
