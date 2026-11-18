@@ -655,3 +655,17 @@ header starlight-theme-black-select button.button:hover {
     width: 100%;
   }
 }
+
+/* Printed tables: Starlight 0.42.9's print.css lets table cells and
+   everything in them break anywhere, which squeezes the first columns and
+   splits identifiers mid-word. That rule is unlayered (it only beats our
+   layered rules), so this one is unlayered too, with the same selectors; it
+   wins by coming later (the customCss bundle loads after print.css).
+   revert-layer drops back to the layered rules, i.e. the cells inherit and
+   inline code keeps Starlight's break-word, as before. */
+@media print {
+  .sl-markdown-content :is(th, td):not(:where(.not-content *)),
+  .sl-markdown-content :is(th, td) :not(:where(.not-content *)) {
+    overflow-wrap: revert-layer;
+  }
+}
