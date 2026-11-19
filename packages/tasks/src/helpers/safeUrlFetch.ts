@@ -36,8 +36,8 @@
  *
  * ── Why undici's `request`, not `fetch` ───────────────────────────────────
  * Both accept a `dispatcher`, but they differ in two ways that matter here:
- *  - `request` never follows redirects (in undici 7 that is opt-in via the
- *    `redirect` interceptor, which we do not compose), so a 3xx simply comes
+ *  - `request` never follows redirects (in undici 7 and 8 that is opt-in via
+ *    the `redirect` interceptor, which we do not compose), so a 3xx simply comes
  *    back as a status code. Nothing to configure, nothing to get wrong.
  *  - `request` does not decompress. We send `accept-encoding: identity`, and
  *    whatever the server sends is what we store, byte for byte — so the cap
@@ -412,6 +412,10 @@ export function createPinnedAgent(
     bodyTimeout: timeouts.bodyIdleTimeoutMs,
     // One request per Agent; nothing to keep alive for.
     pipelining: 0,
+    // HTTP/1.1 only, as under undici 7: from undici 8 an Agent offers h2 in
+    // ALPN unless this is false, and the timeouts, cap and refusals above
+    // are the HTTP/1.1 behaviour.
+    allowH2: false,
   });
 }
 
