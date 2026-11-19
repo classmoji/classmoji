@@ -19,6 +19,8 @@
  *    between check and connect (rebinding) walks straight past the check. The
  *    real-socket test uses a `.test` hostname, which cannot resolve, so a
  *    response at all proves the pinned lookup was used.
+ *  - THE PROTOCOL. The pinned Agent offers HTTP/1.1 only in ALPN (undici 8
+ *    offers h2 by default); read from the ClientHello it sends.
  *  - THE BYTE CAP. It must hold against a lying or absent Content-Length:
  *    the header is a claim, the stream is the fact.
  */
@@ -26,9 +28,10 @@
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer as createNetServer } from 'node:net';
+import type { AddressInfo, Server as NetServer } from 'node:net';
 
-import { MockAgent, request } from 'undici';
+import { Agent, MockAgent, request } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -382,6 +385,100 @@ describe('createPinnedAgent (real socket)', () => {
     } finally {
       await agent.destroy();
     }
+  });
+});
+
+/**
+ * The protocols a TLS ClientHello offers in its ALPN extension, or null when
+ * the bytes are not a complete ClientHello yet. Enough of RFC 8446 §4.1.2 to
+ * walk to the extensions; nothing here needs a certificate.
+ */
+function offeredAlpn(hello: Buffer): string[] | null {
+  if (hello.length < 5 || hello[0] !== 0x16) return null;
+  const recordEnd = 5 + hello.readUInt16BE(3);
+  if (hello.length < recordEnd || hello[5] !== 0x01) return null;
+  let p = 5 + 4 + 2 + 32; // record header, handshake header, version, random
+  p += 1 + hello[p]; // session id
+  p += 2 + hello.readUInt16BE(p); // cipher suites
+  p += 1 + hello[p]; // compression methods
+  const extensionsEnd = p + 2 + hello.readUInt16BE(p);
+  p += 2;
+  while (p + 4 <= extensionsEnd) {
+    const type = hello.readUInt16BE(p);
+    const len = hello.readUInt16BE(p + 2);
+    if (type === 0x0010) {
+      const out: string[] = [];
+      let q = p + 4 + 2;
+      while (q < p + 4 + len) {
+        const n = hello[q];
+        out.push(hello.subarray(q + 1, q + 1 + n).toString('latin1'));
+        q += 1 + n;
+      }
+      return out;
+    }
+    p += 4 + len;
+  }
+  return [];
+}
+
+describe('createPinnedAgent (TLS ClientHello)', () => {
+  let server: NetServer;
+  let port: number;
+  let offered: (string[] | null)[];
+
+  beforeEach(async () => {
+    offered = [];
+    // Reads the client's first TLS record and hangs up: what was OFFERED is
+    // the whole question, so no certificate or handshake is needed.
+    server = createNetServer(socket => {
+      let hello = Buffer.alloc(0);
+      socket.on('data', chunk => {
+        hello = Buffer.concat([hello, chunk]);
+        const alpn = offeredAlpn(hello);
+        if (alpn !== null) {
+          offered.push(alpn);
+          socket.destroy();
+        }
+      });
+      socket.on('error', () => {});
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    server.close();
+    await once(server, 'close');
+  });
+
+  async function offeredBy(dispatcher: Agent): Promise<string[] | null> {
+    try {
+      await expect(
+        request(`https://pinned.test:${port}/`, { dispatcher, method: 'GET' })
+      ).rejects.toThrow();
+    } finally {
+      await dispatcher.destroy();
+    }
+    expect(offered).toHaveLength(1);
+    return offered[0];
+  }
+
+  it('offers HTTP/1.1 only, never h2', async () => {
+    const agent = createPinnedAgent(
+      'pinned.test',
+      { address: '127.0.0.1', family: 4 },
+      { connectTimeoutMs: 2000, headersTimeoutMs: 2000, bodyIdleTimeoutMs: 2000 }
+    );
+    expect(await offeredBy(agent)).toEqual(['http/1.1']);
+  });
+
+  it('sees h2 when an Agent does offer it (the check above can fail)', async () => {
+    const agent = new Agent({
+      connect: { lookup: createPinnedLookup('pinned.test', { address: '127.0.0.1', family: 4 }) },
+      allowH2: true,
+    });
+    expect(await offeredBy(agent)).toContain('h2');
   });
 });
 

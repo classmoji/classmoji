@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
+import { Readable } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 
@@ -520,6 +521,48 @@ describe('github webhook route', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts a signature over a body whose 4-byte UTF-8 characters arrive split across chunks', async () => {
+      const rawBody = JSON.stringify({
+        action: 'closed',
+        issue: { id: 1, number: 7, title: 'xx🎓yy🪝zz' },
+      });
+      const bytes = Buffer.from(rawBody, 'utf8');
+      const first = bytes.indexOf(Buffer.from('🎓'));
+      const second = bytes.indexOf(Buffer.from('🪝'));
+      // Cut inside both 4-byte sequences, so no chunk decodes on its own.
+      // inject() hands a stream payload to the request one chunk per 'data'
+      // event, so a decoder that is not carried across chunks would turn the
+      // halves into U+FFFD and the signature would fail.
+      const cuts = [0, first + 1, first + 3, second + 2, bytes.length];
+      const chunks = cuts.slice(1).map((end, i) => bytes.subarray(cuts[i], end));
+      expect(chunks.every(c => c.length > 0)).toBe(true);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('issues', rawBody),
+        payload: Readable.from(chunks),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a correctly signed body over the body limit with 413, before any handler runs', async () => {
+      // Fastify's default bodyLimit (1 MiB); the route sets none of its own.
+      const rawBody = JSON.stringify({
+        action: 'closed',
+        issue: { id: 1, number: 7, title: 'a'.repeat(1024 * 1024) },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: headersFor('issues', rawBody),
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(413);
+      expect(triggers.closed).not.toHaveBeenCalled();
     });
 
     it('returns 401 when the x-hub-signature-256 header is absent even with a valid body', async () => {
