@@ -9,11 +9,7 @@ import {
 } from '@classmoji/services/slides/hidden';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 import type { EditorFrames } from '~/utils/editorFrames';
-import {
-  editorSlidesFragment,
-  storedSectionsHtml,
-  viewerSlidesFragment,
-} from '~/utils/slideMarkup';
+import { editorSlidesFragment, storedDeckHtml, viewerSlidesFragment } from '~/utils/slideMarkup';
 import {
   REVEAL_LOCKED_OPTIONS,
   installRevealMessageGuard,
@@ -689,27 +685,14 @@ const RevealSlides = forwardRef(function RevealSlides(
     const slidesDiv = deckRef.current.querySelector('.slides');
     if (!slidesDiv) return null;
 
-    // Build data attributes for theme settings (single theme)
-    const revealDiv = deckRef.current;
-    const dataAttrs = [];
-    if (revealDiv.hasAttribute('data-theme')) {
-      dataAttrs.push(`data-theme="${revealDiv.getAttribute('data-theme')}"`);
-    }
-    if (revealDiv.hasAttribute('data-code-theme')) {
-      dataAttrs.push(`data-code-theme="${revealDiv.getAttribute('data-code-theme')}"`);
-    }
-
-    // A copy of the slides through the one write cleanup: editor/runtime
-    // additions stripped (contenteditable, hljs spans, the live Sandpack
-    // mounts, Reveal paint — the same cleanup the diff-at-save snapshot runs),
-    // display-only renames undone, frames back to their stored references.
-    const sectionsHtml = storedSectionsHtml(slidesDiv, displayRef.current.frames);
-
-    // Return a thin wrapper with data attributes + slide sections
-    // The save action parses this via parseSlidesFragment (themes from the
-    // wrapper's data attributes, sections into structured DeckSlides)
-    const attrsStr = dataAttrs.length > 0 ? ' ' + dataAttrs.join(' ') : '';
-    return `<div class="slides"${attrsStr}>\n${sectionsHtml}\n</div>`;
+    // Theme settings on a thin wrapper around a copy of the slides through the
+    // one write cleanup: editor/runtime additions stripped (contenteditable,
+    // hljs spans, the live Sandpack mounts, Reveal paint — the same cleanup
+    // the diff-at-save snapshot runs), display-only renames undone, frames
+    // back to their stored references. The save action parses it via
+    // parseSlidesFragment (themes from the wrapper's data attributes, sections
+    // into structured DeckSlides).
+    return storedDeckHtml(deckRef.current, slidesDiv, displayRef.current.frames);
   }, []);
 
   // Expose methods to parent via ref

@@ -164,6 +164,16 @@ test.describe('serializeSection', () => {
     expect(ser.html).toContain('<video data-autoplay="" src="clip.webm"></video>');
   });
 
+  test("reveal.js 6's inert on a section inside a slide's content is not content either", () => {
+    // reveal.js 6 marks every `.slides section` but the current slide inert.
+    const doc = dom(`<div class="slides"><section data-cm-id="s2" inert="">
+      <div class="box"><section inert=""><p>inside</p></section></div>
+    </section></div>`);
+    const ser = serializeSection(doc.querySelector('section') as HTMLElement);
+    expect(ser.html).toContain('<div class="box"><section><p>inside</p></section></div>');
+    expect(ser.html).not.toContain('inert');
+  });
+
   test('a stack container has no html', () => {
     const doc = dom(
       `<div class="slides"><section data-cm-id="st"><section data-cm-id="c"><p>c</p></section></section></div>`
