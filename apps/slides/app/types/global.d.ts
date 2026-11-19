@@ -3,7 +3,8 @@
 /**
  * Minimal Reveal.js API surface used across the slides app. Instances are
  * created from reveal.js's own types and assigned to this, so it must stay a
- * subset of them (plus `isScrollView`, which reveal has but does not declare).
+ * subset of them (plus `isScrollView` and `stopEmbeddedContent`, which reveal
+ * has but does not declare).
  */
 interface RevealApi {
   initialize(): Promise<unknown>;
@@ -30,6 +31,10 @@ interface RevealApi {
   isScrollView?(): boolean;
   getScale(): number;
   configure(options: Record<string, unknown>): void;
+  /** Sends a reveal.js event from the deck element, the way reveal.js sends its own. */
+  dispatchEvent(event: { type: string; data?: unknown }): Event;
+  /** Pauses the media of the slide reveal.js holds as current. */
+  stopEmbeddedContent?(): void;
 }
 
 interface Window {

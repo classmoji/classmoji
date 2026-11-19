@@ -5,7 +5,7 @@ import { blockMarkup, mintBlockId, type BlockBox } from '@classmoji/services/sli
 
 import { useToast } from '~/hooks';
 import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';
-import { syncShowing } from '~/utils/revealSync';
+import { addSlideLeftOf, syncShowing } from '~/utils/revealSync';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 import { DEFAULT_IFRAME_SANDBOX } from '~/utils/editorFrames';
@@ -261,23 +261,11 @@ export default function SlideToolbar({
 
   const addSlideLeft = useCallback(() => {
     const currentSlide = getCurrentSlide();
-    if (!currentSlide || !revealInstance) return;
+    if (!currentSlide?.parentElement || !revealInstance) return;
 
-    const newSlide = createNewSlide();
-
-    // If current slide is in a vertical stack, add before the stack
-    const parent = currentSlide.parentElement;
-    if (!parent) return;
-    if (parent.tagName === 'SECTION') {
-      // In vertical stack - add before the parent stack
-      parent.parentElement?.insertBefore(newSlide, parent);
-    } else {
-      // Top-level slide - add before current
-      parent.insertBefore(newSlide, currentSlide);
-    }
-
-    revealInstance.sync();
-    revealInstance.left(); // Navigate to new slide
+    // Before the current slide (before its stack when it is a stack child),
+    // and shown: the new slide takes the current one's place on screen.
+    addSlideLeftOf(revealInstance, currentSlide, createNewSlide());
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
   }, [getCurrentSlide, revealInstance, onContentChange]);
