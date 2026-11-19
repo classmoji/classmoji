@@ -292,8 +292,8 @@ test.describe('where the host is mounted', () => {
   });
 
   test('every deck key and click handler ignores the launcher and panel', () => {
-    expect(source('../../app/components/RevealSlides.tsx')).toContain(
-      'keyboardCondition: (event: KeyboardEvent) => !isAskMojiTarget(event.target),'
+    expect(source('../../app/components/RevealSlides.tsx')).toMatch(
+      /keyboardCondition: \(event: KeyboardEvent\) =>\s+!isAskMojiTarget\(event\.target\) &&/
     );
     for (const relative of [
       '../../app/components/SpeakerView.tsx',

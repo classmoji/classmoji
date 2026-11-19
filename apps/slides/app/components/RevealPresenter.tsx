@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { RevealConfig } from 'reveal.js';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
@@ -302,7 +303,7 @@ export default function RevealPresenter({
     const initReveal = async () => {
       const [{ default: Reveal }, { default: RevealHighlight }] = await Promise.all([
         import('reveal.js'),
-        import('reveal.js/plugin/highlight/highlight'),
+        import('reveal.js/plugin/highlight'),
       ]);
 
       if (!mounted || !deckRef.current) return;
@@ -323,7 +324,7 @@ export default function RevealPresenter({
         slidesContainer.replaceChildren(fragment);
       }
 
-      const config = {
+      const config: RevealConfig = {
         hash: true,
         history: true,
         // In preview mode, hide all UI elements - the slide content fills the frame
@@ -339,8 +340,6 @@ export default function RevealPresenter({
         autoSlide: 0,
         // Show slide number (except in preview mode)
         slideNumber: previewMode ? false : 'c/t',
-        // Hide controls after 3 seconds of inactivity
-        controlsAutoHide: true,
         // Syntax highlighting only. Speaker notes are this app's own /speaker
         // route ('S' below opens it); Reveal's notes window is not used.
         plugins: [RevealHighlight],
@@ -353,7 +352,7 @@ export default function RevealPresenter({
       stripRevealQueryConfig();
       installRevealMessageGuard();
 
-      const deck = new Reveal(deckRef.current, config);
+      const deck: RevealApi = new Reveal(deckRef.current, config);
       await deck.initialize();
       lockRevealAfterInit(deck);
 

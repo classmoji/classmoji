@@ -454,9 +454,11 @@ test.describe('slide markup is cleaned where it is inserted', () => {
     expect(slides).not.toMatch(/\.innerHTML\s*=\s*htmlContent/);
     expect(slides).toContain('slidesContainer.replaceChildren(');
     // Reveal's cross-window API stays off: locked options last, guards first.
-    const init = slides.slice(slides.indexOf('const deck = new Reveal('));
+    const start = slides.indexOf('const deck: RevealApi = new Reveal(');
+    expect(start).toBeGreaterThan(-1);
+    const init = slides.slice(start);
     expect(init.slice(0, init.indexOf('});'))).toMatch(/\.\.\.REVEAL_LOCKED_OPTIONS,\s*$/);
-    const before = slides.slice(0, slides.indexOf('const deck = new Reveal('));
+    const before = slides.slice(0, start);
     expect(before).toContain('stripRevealQueryConfig();');
     expect(before).toContain('installRevealMessageGuard();');
 

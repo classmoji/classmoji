@@ -450,7 +450,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       // Dynamically import Reveal.js and highlight plugin (client-side only)
       const [{ default: Reveal }, { default: RevealHighlight }] = await Promise.all([
         import('reveal.js'),
-        import('reveal.js/plugin/highlight/highlight'),
+        import('reveal.js/plugin/highlight'),
       ]);
 
       if (!mounted || !deckRef.current) return;
@@ -489,7 +489,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       // current and rewrites the hash before the layout settles (#763).
       const openedHash = window.location.hash;
 
-      const deck = new Reveal(deckRef.current, {
+      const deck: RevealApi = new Reveal(deckRef.current, {
         hash: true,
         history: true,
         controls: true,
@@ -499,7 +499,11 @@ const RevealSlides = forwardRef(function RevealSlides(
         // Disable keyboard when editing to allow normal text editing
         keyboard: !isEditing,
         // Keys pressed on the Ask Moji launcher or panel never turn the slide.
-        keyboardCondition: (event: KeyboardEvent) => !isAskMojiTarget(event.target),
+        // Enter in the overview stays a no-op, as before reveal.js 6 (which
+        // made it close the overview).
+        keyboardCondition: (event: KeyboardEvent) =>
+          !isAskMojiTarget(event.target) &&
+          !(event.key === 'Enter' && deckRef.current?.classList.contains('overview')),
         // Touch gestures
         touch: !isEditing,
         // Disable cursor auto-hide in edit and view mode (only used in presenter mode)
