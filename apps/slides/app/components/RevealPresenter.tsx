@@ -5,6 +5,7 @@ import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
 import { deckSlidesFragment, hasVisibleSlides, renderSpeakerNotes } from '~/utils/presenterMarkup';
 import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
+import { keepRefusedAutoplayPaused } from '~/utils/previewMedia';
 import {
   REVEAL_LOCKED_OPTIONS,
   installRevealMessageGuard,
@@ -299,6 +300,7 @@ export default function RevealPresenter({
 
     let mounted = true;
     let unmountLegacyBlocks: () => void = () => {};
+    let stopPreviewMedia: () => void = () => {};
 
     const initReveal = async () => {
       const [{ default: Reveal }, { default: RevealHighlight }] = await Promise.all([
@@ -351,6 +353,12 @@ export default function RevealPresenter({
       // Reveal API messages are stopped before any listener sees them.
       stripRevealQueryConfig();
       installRevealMessageGuard();
+      // Nobody can click in a preview: a video whose autoplay with sound is
+      // refused stays paused, as before reveal.js 6 (previewMedia.ts).
+      if (previewMode) {
+        stopPreviewMedia();
+        stopPreviewMedia = keepRefusedAutoplayPaused(deckRef.current);
+      }
 
       const deck: RevealApi = new Reveal(deckRef.current, config);
       await deck.initialize();
@@ -381,6 +389,7 @@ export default function RevealPresenter({
       mounted = false;
       setIsRevealReady(false);
       unmountLegacyBlocks();
+      stopPreviewMedia();
       if (revealRef.current) {
         revealRef.current.destroy();
         revealRef.current = null;
@@ -662,6 +671,7 @@ export default function RevealPresenter({
         style={{ height: '100vh' }}
         data-theme-light={themeLight}
         data-theme-dark={themeDark}
+        data-preview={previewMode ? '' : undefined}
       >
         <div className="slides" />
       </div>

@@ -30,6 +30,10 @@
 .reveal.overview .slides section:not(.stack).present {
   outline: 10px solid rgba(150, 150, 150, 0.4);
 }
+/* A preview deck cannot be clicked: no play/unmute button (previewMedia.ts). */
+.reveal[data-preview] .r-media-play-button {
+  display: none;
+}
 
 /* Slides navbar */
 .slides-navbar {
