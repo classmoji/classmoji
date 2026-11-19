@@ -5,6 +5,7 @@ import { blockMarkup, mintBlockId, type BlockBox } from '@classmoji/services/sli
 
 import { useToast } from '~/hooks';
 import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';
+import { syncShowing } from '~/utils/revealSync';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 import { DEFAULT_IFRAME_SANDBOX } from '~/utils/editorFrames';
@@ -396,9 +397,10 @@ export default function SlideToolbar({
     }
 
     // No longer the slide on screen: take it out where it is, stay put.
-    if (currentSlide !== getCurrentSlide()) {
+    const onScreen = getCurrentSlide();
+    if (currentSlide !== onScreen) {
       removeSlideElement(currentSlide);
-      revealInstance.sync();
+      syncShowing(revealInstance, onScreen);
       revealInstance.layout();
       onContentChange?.();
       afterBlocksRemoved([currentSlide]);
@@ -444,7 +446,9 @@ export default function SlideToolbar({
       currentSlide.remove();
     }
 
-    revealInstance.sync();
+    // Stay on the slide navigated to above (now one index lower when it
+    // followed the deleted one).
+    syncShowing(revealInstance, getCurrentSlide());
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
     afterBlocksRemoved([currentSlide]);

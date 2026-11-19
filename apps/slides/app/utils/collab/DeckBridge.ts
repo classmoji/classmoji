@@ -70,6 +70,7 @@ import {
 import type { DeckSlide } from '@classmoji/services/slides';
 
 import { canonicalMediaUrls } from '../mediaRefs.ts';
+import { showAgain } from '../revealSync.ts';
 import { displaySectionAttrs, type EditorFrames } from '../editorFrames.ts';
 import {
   LOCKED_BY_ATTR,
@@ -1114,7 +1115,9 @@ export class DeckBridge {
       // not an edit — the DOM baselines take it in.
       this.mutateDom(() => reveal.sync());
       this.rebaseDomSerializations();
-      this.goTo(currentId);
+      // The slide on screen went with the change: settle Reveal on the one it
+      // shows now (revealSync.ts), or reveal.js 6 leaves that slide inert.
+      if (!this.goTo(currentId)) showAgain(reveal, null);
       reveal.layout();
     }
     // Someone typing must not notice: Reveal's slide() blurs the active
@@ -1243,16 +1246,18 @@ export class DeckBridge {
    * `v` is undefined from getIndices(el), 0 in the cache) and re-point Reveal
    * when they differ — slide number, progress, hash and arrows follow. Its
    * slide() blurs the editor; the caller restores focus and the caret.
+   * False when that slide is no longer in the deck.
    */
-  private goTo(slideId: string | null): void {
-    if (!slideId || !this.reveal || !this.slidesEl) return;
+  private goTo(slideId: string | null): boolean {
+    if (!slideId || !this.reveal || !this.slidesEl) return false;
     const el = this.slidesEl.querySelector(`section[data-cm-id="${CSS.escape(slideId)}"]`);
-    if (!el) return;
+    if (!el) return false;
     const indices = this.reveal.getIndices(el as HTMLElement);
     const now = this.reveal.getIndices();
     if (indices.h !== now.h || (indices.v ?? 0) !== (now.v ?? 0)) {
       this.reveal.slide(indices.h, indices.v ?? 0);
     }
+    return true;
   }
 
   private caretSlideId(): string | null {

@@ -5,6 +5,7 @@ import {
   removeSlideElement,
   type SlideKeyer,
 } from '../../blocks/slideBlocks';
+import { syncShowing } from '~/utils/revealSync';
 
 export interface SlideData {
   /** Stable key: the slide's data-cm-id, else one per element (never its position). */
@@ -177,8 +178,10 @@ export function useSlideStructure(
       if (!target) return;
       if (countLeafSlides(slidesContainer) <= 1) return;
 
+      // Another slide than the one on screen keeps that one on screen.
+      const onScreen = revealInstance.getCurrentSlide();
       removeSlideElement(target);
-      revealInstance.sync();
+      syncShowing(revealInstance, onScreen === target ? null : onScreen);
       revealInstance.layout();
       onContentChange?.();
       setStacks(parseSlideStructure(slidesContainer, keyer));
