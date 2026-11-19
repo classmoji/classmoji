@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Modal, Slider, Button, Spin } from 'antd';
 
 import { useToast } from '~/hooks';
-import { useDropzone } from 'react-dropzone';
+import { useDropzone, type FileRejection } from 'react-dropzone';
 import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { useImageProcessor } from '~/hooks/useImageProcessor';
@@ -73,7 +73,9 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
 
   // Handle file drop
   const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
+    async (acceptedFiles: File[], fileRejections: FileRejection[]) => {
+      // More than one file is refused as a whole, not narrowed to the first.
+      if (fileRejections.some(r => r.errors.some(e => e.code === 'too-many-files'))) return;
       const selectedFile = acceptedFiles[0];
       if (!selectedFile) return;
 
@@ -112,10 +114,19 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    // Any image type, plus these extensions for files the browser gives no
+    // type. `image/*` stays on a key of its own: paired with extensions,
+    // react-dropzone accepts only those extensions.
     accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+      'image/*': [],
+      'image/png': ['.png'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/gif': ['.gif'],
+      'image/webp': ['.webp'],
     },
     maxFiles: 1,
+    // Files arrive by drop or the picker only, not by pasting.
+    noPaste: true,
   });
 
   // Process and upload

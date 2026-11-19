@@ -1,4 +1,3 @@
-import pWaitFor from 'p-wait-for';
 import { runs } from '@trigger.dev/sdk';
 import { redirect } from 'react-router';
 
@@ -10,19 +9,6 @@ export const sleep = async (ms: number) => {
 };
 
 export const roundToTwo = (num: number) => Math.round((num + Number.EPSILON) * 100) / 100;
-
-// Server functions
-export const pollRunStatus = async (runId: string, interval = 1000) => {
-  return pWaitFor(
-    async () => {
-      const { status } = await runs.retrieve(runId); // Retrieve the current task status
-      return status === 'COMPLETED'; // Resolve when the status is 'completed'
-    },
-    {
-      interval: interval,
-    }
-  );
-};
 
 export const removeUsers = (data: Array<{ login: string; [key: string]: unknown }>, num = 8) => {
   const testUsers = ['traorefly', 'papeturtle', 'jabbascript'];

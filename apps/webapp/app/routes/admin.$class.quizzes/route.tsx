@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useFetcher, useLocation, useNavigate, useParams, Outlet } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
-import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
+import { IconSend, IconBook, IconTrash } from '@tabler/icons-react';
+import { IconCalendar } from '~/components/ui/display/tablerIcons';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
 import {
@@ -31,7 +32,7 @@ import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import type React from 'react';
-import type { TablerIconsProps } from '@tabler/icons-react';
+import type { IconProps } from '@tabler/icons-react';
 
 const { Text } = Typography;
 
@@ -120,7 +121,7 @@ interface AdminQuiz {
 }
 
 interface ActionButtonProps {
-  icon: React.ComponentType<TablerIconsProps>;
+  icon: React.ComponentType<IconProps>;
   tooltip: string;
   color?: string;
   onClick?: () => void;

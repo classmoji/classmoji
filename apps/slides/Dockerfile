@@ -68,6 +68,11 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
     fi; \
     npx turbo run slides:build
 
+# Every package the server bundle and server.ts leave external must resolve the
+# same from what the production stage copies (root node_modules, packages/) as
+# it did for the build; a lockfile that nests one under apps/slides fails here.
+RUN node scripts/check-server-externals.mjs apps/slides/Dockerfile
+
 
 # ======================
 # Production stage
