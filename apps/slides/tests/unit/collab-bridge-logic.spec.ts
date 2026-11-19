@@ -155,6 +155,15 @@ test.describe('serializeSection', () => {
     expect(el.getAttribute('contenteditable')).toBe('true');
   });
 
+  test("reveal.js 6's inert and data-muted-by-reveal are playback state, never content", () => {
+    const doc = dom(`<div class="slides"><section data-cm-id="s2" inert="" data-transition="fade">
+      <video data-autoplay="" src="clip.webm" data-muted-by-reveal="true"></video>
+    </section></div>`);
+    const ser = serializeSection(doc.querySelector('section') as HTMLElement);
+    expect(ser.attrs).toEqual({ 'data-transition': 'fade' });
+    expect(ser.html).toContain('<video data-autoplay="" src="clip.webm"></video>');
+  });
+
   test('a stack container has no html', () => {
     const doc = dom(
       `<div class="slides"><section data-cm-id="st"><section data-cm-id="c"><p>c</p></section></section></div>`
