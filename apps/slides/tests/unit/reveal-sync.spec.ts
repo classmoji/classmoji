@@ -81,11 +81,20 @@ const deck = new Reveal(document.querySelector('.reveal'), {
 });
 await deck.initialize();
 const events = [];
-window.revealSyncTest = { deck, revealSync, events };
+const fragmentEvents = [];
+window.revealSyncTest = { deck, revealSync, events, fragmentEvents };
 const label = s => s ? s.id || s.dataset.name || null : null;
 deck.on('slidechanged', e => {
   events.push({ h: e.indexh, v: e.indexv, prev: label(e.previousSlide), cur: label(e.currentSlide) });
 });
+// Heard where Reveal's own listeners hear them: on the deck, and on each
+// fragment (its non-bubbling 'visible' / 'hidden').
+for (const type of ['fragmentshown', 'fragmenthidden']) deck.on(type, () => fragmentEvents.push(type));
+for (const fragment of document.querySelectorAll('.fragment')) {
+  for (const type of ['visible', 'hidden']) {
+    fragment.addEventListener(type, () => fragmentEvents.push(type + ' ' + label(fragment)));
+  }
+}
 document.documentElement.dataset.ready = '';
 ${script}
 </script></body></html>`;
@@ -160,9 +169,12 @@ interface SlideChanged {
 }
 /** What the page puts on `window.revealSyncTest`. */
 interface TestWindow {
-  deck: RevealApi;
+  /** Reveal, with the steps a presenter's Next / Prev take. */
+  deck: RevealApi & { next(): void; prev(): void };
   revealSync: typeof import('../../app/utils/revealSync.ts');
   events: SlideChanged[];
+  /** Fragment events Reveal sent: `fragmentshown`, `fragmenthidden`, `visible <id>`, `hidden <id>`. */
+  fragmentEvents: string[];
   /** Set by a page script: the media button and mark before its steps… */
   before?: { button: boolean; mark: string | null };
   /** …and the slide it took out. */
@@ -189,6 +201,41 @@ async function state(page: Page) {
       shownInert: !!shown?.closest('[inert]'),
       indices: w.deck.getIndices(),
       events: w.events.splice(0),
+    };
+  });
+}
+
+/**
+ * The slides in the deck, in order, as ids: a section left behind (or a
+ * second copy of an id) shows up here.
+ */
+async function sections(page: Page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('.reveal .slides section')).map(
+      s => s.id || (s as HTMLElement).dataset.name || '(none)'
+    )
+  );
+}
+
+/**
+ * The fragments of the slide Reveal holds as current, in order: `V` shown,
+ * `-` hidden, `*` after the one marked current. `V*--` is the first of three
+ * shown.
+ */
+async function fragmentStep(page: Page) {
+  return page.evaluate(() => {
+    const w = window.revealSyncTest as TestWindow;
+    const fragments = Array.from(w.deck.getCurrentSlide().querySelectorAll('.fragment'));
+    return {
+      classes: fragments
+        .map(
+          f =>
+            (f.classList.contains('visible') ? 'V' : '-') +
+            (f.classList.contains('current-fragment') ? '*' : '')
+        )
+        .join(''),
+      f: w.deck.getIndices().f,
+      heard: w.fragmentEvents.splice(0),
     };
   });
 }
@@ -563,8 +610,9 @@ test.describe('deleting a slide before the one on screen', () => {
    * toolbar's, when the slide it was opened on is no longer on screen): the
    * slide (or its emptied stack) goes, syncShowing keeps the one on screen.
    */
-  const removeOther = (page: Page, id: string) =>
-    page.evaluate(id => {
+  const removeOther = async (page: Page, id: string) => {
+    const before = await sections(page);
+    const gone = await page.evaluate(id => {
       const w = window.revealSyncTest as TestWindow;
       const onScreen = w.deck.getCurrentSlide();
       const target = (document.getElementById(id) ??
@@ -573,10 +621,18 @@ test.describe('deleting a slide before the one on screen', () => {
       const onlyChild =
         parent.localName === 'section' &&
         Array.from(parent.children).filter(k => k.localName === 'section').length <= 1;
-      (onlyChild ? parent : target).remove();
+      const taken = onlyChild ? parent : target;
+      const ids = [taken, ...Array.from(taken.querySelectorAll('section'))].map(
+        s => s.id || (s as HTMLElement).dataset.name || '(none)'
+      );
+      taken.remove();
       w.revealSync.syncShowing(w.deck, onScreen);
       w.deck.layout();
+      return ids;
     }, id);
+    // Only the slide taken out is gone: nothing put in for the move is left.
+    expect(await sections(page)).toEqual(before.filter(s => !gone.includes(s)));
+  };
 
   // A slide follows the one on screen in each deck: were it the last, sync()
   // would clamp Reveal's old index onto it and nothing would move.
@@ -634,6 +690,179 @@ test.describe('deleting a slide before the one on screen', () => {
       const next = await state(page);
       expect(next.current).not.toBe(shown);
       expect(next.events).toEqual([expect.objectContaining({ prev: shown, cur: next.current })]);
+    });
+  }
+
+  /** Three fragments on `id`, the first two `${id}-f0`… */
+  const fragmented = (id: string) =>
+    slide(id, [0, 1, 2].map(i => `<p class="fragment" id="${id}-f${i}">${i}</p>`).join(''));
+  /** The fragment step string of `fragmentStep` with fragments 0…f of three shown. */
+  const upTo = (f: number) => [0, 1, 2].map(i => (i < f ? 'V' : i === f ? 'V*' : '-')).join('');
+
+  for (const [name, slides, at, steps, gone, h, v] of [
+    [
+      'a slide, one fragment shown',
+      slide('a') + slide('b') + fragmented('c') + slide('d'),
+      [2, 0],
+      1,
+      'a',
+      1,
+      0,
+    ],
+    [
+      'a slide, no fragment shown yet',
+      slide('a') + slide('b') + fragmented('c') + slide('d'),
+      [2, 0],
+      0,
+      'a',
+      1,
+      0,
+    ],
+    [
+      'a slide, two fragments shown',
+      slide('a') + slide('b') + fragmented('c') + slide('d'),
+      [2, 0],
+      2,
+      'a',
+      1,
+      0,
+    ],
+    [
+      'a stack child above it',
+      slide('a') +
+        `<section id="st">${slide('s1')}${slide('s2')}${fragmented('s3')}${slide('s4')}</section>` +
+        slide('c'),
+      [1, 2],
+      1,
+      's1',
+      1,
+      1,
+    ],
+    [
+      'a slide before the stack it is in',
+      slide('a') +
+        slide('b') +
+        `<section id="st">${slide('s1')}${fragmented('s2')}${slide('s3')}</section>` +
+        slide('c'),
+      [2, 1],
+      1,
+      'a',
+      1,
+      1,
+    ],
+    [
+      "a stack's only child (the stack goes)",
+      `<section id="st">${slide('s1')}</section>` + slide('b') + fragmented('c') + slide('d'),
+      [2, 0],
+      1,
+      's1',
+      1,
+      0,
+    ],
+    [
+      'a slide, when the one on screen is the last (sync() keeps Reveal on it)',
+      slide('a') + slide('b') + fragmented('c'),
+      [2, 0],
+      1,
+      'a',
+      1,
+      0,
+    ],
+  ] as const) {
+    test(`${name}: its fragments stay as they were, quietly, and Next / Prev go on from there`, async ({
+      page,
+    }) => {
+      await open(page, slides, [...at]);
+      await page.evaluate(steps => {
+        const w = window.revealSyncTest as TestWindow;
+        for (let i = 0; i < steps; i++) w.deck.next();
+        w.events.length = 0;
+        w.fragmentEvents.length = 0;
+      }, steps);
+      const f = steps - 1;
+      expect(await fragmentStep(page)).toEqual({ classes: upTo(f), f, heard: [] });
+      const onScreen = (await state(page)).current;
+
+      await removeOther(page, gone);
+      const after = await state(page);
+      expect({
+        current: after.current,
+        indices: { h: after.indices.h, v: after.indices.v },
+        events: after.events,
+      }).toEqual({ current: onScreen, indices: { h, v }, events: [] });
+      // As it was, and nothing heard: the step on screen did not change.
+      expect(await fragmentStep(page)).toEqual({ classes: upTo(f), f, heard: [] });
+
+      await page.evaluate(() => (window.revealSyncTest as TestWindow).deck.next());
+      expect(await fragmentStep(page)).toMatchObject({ classes: upTo(f + 1), f: f + 1 });
+      await page.evaluate(() => (window.revealSyncTest as TestWindow).deck.prev());
+      expect(await fragmentStep(page)).toMatchObject({ classes: upTo(f), f });
+      expect((await state(page)).current).toBe(onScreen);
+    });
+  }
+
+  test('media in a fragment not shown yet stay stopped', async ({ page }) => {
+    await open(
+      page,
+      slide('a') +
+        slide('b') +
+        slide(
+          'c',
+          '<p class="fragment" id="c-f0">0</p><div class="fragment" id="c-f1">' +
+            CLIP +
+            '<iframe id="lazy" data-src="/frame.html"></iframe></div>'
+        ) +
+        slide('d'),
+      [2, 0]
+    );
+    await watchClip(page);
+    await page.evaluate(() => {
+      const w = window.revealSyncTest as TestWindow;
+      w.deck.next();
+      const clip = document.getElementById('clip') as HTMLVideoElement & { plays?: number };
+      clip.plays = 0;
+      clip.addEventListener('play', () => (clip.plays = (clip.plays ?? 0) + 1));
+    });
+    expect(await fragmentStep(page)).toMatchObject({ classes: 'V*-', f: 0 });
+    await removeOther(page, 'a');
+    await page.waitForTimeout(600);
+    expect(await fragmentStep(page)).toMatchObject({ classes: 'V*-', f: 0 });
+    expect(
+      await page.evaluate(() => {
+        const clip = document.getElementById('clip') as HTMLVideoElement & { plays?: number };
+        return {
+          paused: clip.paused,
+          plays: clip.plays,
+          lazy: document.getElementById('lazy')?.getAttribute('src') ?? null,
+        };
+      })
+    ).toEqual({ paused: true, plays: 0, lazy: null });
+  });
+
+  for (const [name, slides, at, gone] of [
+    [
+      'the last slide (sync() keeps Reveal on it)',
+      slide('a') + slide('b') + slide('c', CLIP),
+      [2, 0],
+      'a',
+    ],
+    ['a slide after it going', slide('a') + slide('b', CLIP) + slide('c'), [1, 0], 'c'],
+  ] as const) {
+    test(`${name}: a video paused on the slide on screen stays paused where it was`, async ({
+      page,
+    }) => {
+      await open(page, slides, [...at]);
+      await watchClip(page, { playing: true });
+      const time = await page.evaluate(() => {
+        const clip = document.getElementById('clip') as HTMLVideoElement;
+        clip.pause();
+        return clip.currentTime;
+      });
+      await removeOther(page, gone);
+      const clip = await clipPlayback(page);
+      expect(clip).toMatchObject({ paused: true, stamped: false });
+      expect(clip.time).toBeCloseTo(time, 3);
+      expect(await state(page)).toMatchObject({ shown: at[0] === 2 ? 'c' : 'b', events: [] });
     });
   }
 
