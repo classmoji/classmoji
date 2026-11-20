@@ -9,11 +9,7 @@ import {
 } from '@classmoji/services/slides/hidden';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 import type { EditorFrames } from '~/utils/editorFrames';
-import {
-  editorSlidesFragment,
-  storedSectionsHtml,
-  viewerSlidesFragment,
-} from '~/utils/slideMarkup';
+import { editorSlidesFragment, storedDeckHtml, viewerSlidesFragment } from '~/utils/slideMarkup';
 import {
   REVEAL_LOCKED_OPTIONS,
   installRevealMessageGuard,
@@ -450,7 +446,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       // Dynamically import Reveal.js and highlight plugin (client-side only)
       const [{ default: Reveal }, { default: RevealHighlight }] = await Promise.all([
         import('reveal.js'),
-        import('reveal.js/plugin/highlight/highlight'),
+        import('reveal.js/plugin/highlight'),
       ]);
 
       if (!mounted || !deckRef.current) return;
@@ -489,7 +485,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       // current and rewrites the hash before the layout settles (#763).
       const openedHash = window.location.hash;
 
-      const deck = new Reveal(deckRef.current, {
+      const deck: RevealApi = new Reveal(deckRef.current, {
         hash: true,
         history: true,
         controls: true,
@@ -499,7 +495,11 @@ const RevealSlides = forwardRef(function RevealSlides(
         // Disable keyboard when editing to allow normal text editing
         keyboard: !isEditing,
         // Keys pressed on the Ask Moji launcher or panel never turn the slide.
-        keyboardCondition: (event: KeyboardEvent) => !isAskMojiTarget(event.target),
+        // Enter in the overview stays a no-op, as before reveal.js 6 (which
+        // made it close the overview).
+        keyboardCondition: (event: KeyboardEvent) =>
+          !isAskMojiTarget(event.target) &&
+          !(event.key === 'Enter' && deckRef.current?.classList.contains('overview')),
         // Touch gestures
         touch: !isEditing,
         // Disable cursor auto-hide in edit and view mode (only used in presenter mode)
@@ -685,27 +685,14 @@ const RevealSlides = forwardRef(function RevealSlides(
     const slidesDiv = deckRef.current.querySelector('.slides');
     if (!slidesDiv) return null;
 
-    // Build data attributes for theme settings (single theme)
-    const revealDiv = deckRef.current;
-    const dataAttrs = [];
-    if (revealDiv.hasAttribute('data-theme')) {
-      dataAttrs.push(`data-theme="${revealDiv.getAttribute('data-theme')}"`);
-    }
-    if (revealDiv.hasAttribute('data-code-theme')) {
-      dataAttrs.push(`data-code-theme="${revealDiv.getAttribute('data-code-theme')}"`);
-    }
-
-    // A copy of the slides through the one write cleanup: editor/runtime
-    // additions stripped (contenteditable, hljs spans, the live Sandpack
-    // mounts, Reveal paint — the same cleanup the diff-at-save snapshot runs),
-    // display-only renames undone, frames back to their stored references.
-    const sectionsHtml = storedSectionsHtml(slidesDiv, displayRef.current.frames);
-
-    // Return a thin wrapper with data attributes + slide sections
-    // The save action parses this via parseSlidesFragment (themes from the
-    // wrapper's data attributes, sections into structured DeckSlides)
-    const attrsStr = dataAttrs.length > 0 ? ' ' + dataAttrs.join(' ') : '';
-    return `<div class="slides"${attrsStr}>\n${sectionsHtml}\n</div>`;
+    // Theme settings on a thin wrapper around a copy of the slides through the
+    // one write cleanup: editor/runtime additions stripped (contenteditable,
+    // hljs spans, the live Sandpack mounts, Reveal paint — the same cleanup
+    // the diff-at-save snapshot runs), display-only renames undone, frames
+    // back to their stored references. The save action parses it via
+    // parseSlidesFragment (themes from the wrapper's data attributes, sections
+    // into structured DeckSlides).
+    return storedDeckHtml(deckRef.current, slidesDiv, displayRef.current.frames);
   }, []);
 
   // Expose methods to parent via ref

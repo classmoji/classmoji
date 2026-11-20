@@ -155,6 +155,25 @@ test.describe('serializeSection', () => {
     expect(el.getAttribute('contenteditable')).toBe('true');
   });
 
+  test("Reveal's inert, data-muted-by-reveal and data-paused-by-reveal are playback state, never content", () => {
+    const doc = dom(`<div class="slides"><section data-cm-id="s2" inert="" data-transition="fade">
+      <video data-autoplay="" src="clip.webm" data-muted-by-reveal="true" data-paused-by-reveal=""></video>
+    </section></div>`);
+    const ser = serializeSection(doc.querySelector('section') as HTMLElement);
+    expect(ser.attrs).toEqual({ 'data-transition': 'fade' });
+    expect(ser.html).toContain('<video data-autoplay="" src="clip.webm"></video>');
+  });
+
+  test("reveal.js 6's inert on a section inside a slide's content is not content either", () => {
+    // reveal.js 6 marks every `.slides section` but the current slide inert.
+    const doc = dom(`<div class="slides"><section data-cm-id="s2" inert="">
+      <div class="box"><section inert=""><p>inside</p></section></div>
+    </section></div>`);
+    const ser = serializeSection(doc.querySelector('section') as HTMLElement);
+    expect(ser.html).toContain('<div class="box"><section><p>inside</p></section></div>');
+    expect(ser.html).not.toContain('inert');
+  });
+
   test('a stack container has no html', () => {
     const doc = dom(
       `<div class="slides"><section data-cm-id="st"><section data-cm-id="c"><p>c</p></section></section></div>`

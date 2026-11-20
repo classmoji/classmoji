@@ -2,13 +2,38 @@
 @import 'tailwindcss';
 
 /* Import Reveal.js base styles */
-@import 'reveal.js/dist/reveal.css';
+@import 'reveal.js/reveal.css';
 
 /* Theme is loaded dynamically based on data-theme-light/data-theme-dark attributes */
 /* See RevealSlides.jsx for dynamic theme loading logic */
 
 /* Import highlight.js theme for code syntax highlighting */
 @import 'highlight.js/styles/github-dark.css';
+
+/*
+ * reveal.js 6 redraws a little of its own chrome. Kept as reveal.js 5 drew it,
+ * so decks look the same as before the upgrade:
+ * - touch screens: the arrows and the progress bar keep their fixed size
+ *   instead of growing with the viewport;
+ * - overview: the current slide and the hovered one share the light grey
+ *   outline (not the theme's link colour).
+ */
+@media (pointer: coarse) {
+  .reveal .controls {
+    font-size: 10px;
+  }
+  .reveal .progress {
+    height: 3px;
+  }
+}
+.reveal.overview .slides section:not(.stack):hover,
+.reveal.overview .slides section:not(.stack).present {
+  outline: 10px solid rgba(150, 150, 150, 0.4);
+}
+/* A preview deck cannot be clicked: no play/unmute button (previewMedia.ts). */
+.reveal[data-preview] .r-media-play-button {
+  display: none;
+}
 
 /* Slides navbar */
 .slides-navbar {

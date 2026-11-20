@@ -292,8 +292,14 @@ test.describe('where the host is mounted', () => {
   });
 
   test('every deck key and click handler ignores the launcher and panel', () => {
+    // The whole condition: the Ask Moji check, and nothing else but the one
+    // other key kept from Reveal (Enter in the overview).
     expect(source('../../app/components/RevealSlides.tsx')).toContain(
-      'keyboardCondition: (event: KeyboardEvent) => !isAskMojiTarget(event.target),'
+      [
+        'keyboardCondition: (event: KeyboardEvent) =>',
+        '          !isAskMojiTarget(event.target) &&',
+        "          !(event.key === 'Enter' && deckRef.current?.classList.contains('overview')),",
+      ].join('\n')
     );
     for (const relative of [
       '../../app/components/SpeakerView.tsx',

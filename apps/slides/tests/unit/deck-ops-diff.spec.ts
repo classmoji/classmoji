@@ -392,6 +392,11 @@ test.describe('cleanSectionAttrs — Reveal runtime paint', () => {
       { class: 'mine' },
     ],
     [
+      "reveal.js 6's inert on an off-screen slide goes",
+      { inert: '', 'data-background-color': '#123456' },
+      { 'data-background-color': '#123456' },
+    ],
+    [
       'the themed-background contrast class goes',
       { class: 'has-dark-background mine' },
       { class: 'mine' },

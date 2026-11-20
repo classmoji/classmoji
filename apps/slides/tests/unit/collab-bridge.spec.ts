@@ -103,7 +103,11 @@ class FakeSession implements BridgeSession {
     this.readyListeners.add(listener);
     return () => this.readyListeners.delete(listener);
   }
-  setCurrentSlide() {}
+  /** Every slide this editor announced as the one it shows (awareness). */
+  currentSlides: Array<string | null> = [];
+  setCurrentSlide(id: string | null) {
+    this.currentSlides.push(id);
+  }
   /** Deliver everything to the server (whose answers come straight back). */
   ack() {
     const queued = this.queue;
@@ -177,43 +181,87 @@ function setup(deck: DeckJson = DECK, extra: Partial<DeckBridgeOptions> = {}) {
     section.classList.add('editing-mode');
   }
 
-  // A Reveal stand-in with Reveal's index semantics: a CACHED current index
-  // (stale after slides move until slide() is called), getIndices(el) computed
-  // from the DOM (v undefined for a horizontal slide), and slide() that moves
-  // the current slide and blurs the editor, as the real one does.
+  // A Reveal stand-in with reveal.js 6.0.2's index semantics: a CACHED current
+  // index and a REMEMBERED current slide (both stale after slides move until
+  // slide() is called), getIndices(el) computed from the DOM (v undefined for
+  // a horizontal slide), sync() putting `present` back at the cached indices,
+  // clamped (js/reveal.js:1556-1562, updateSlides :1682-1708), and slide()
+  // that moves the current slide, blurs the editor and sends `slidechanged`
+  // only when the indices changed (:1318-1322, :1412-1415).
   let current = slidesEl.querySelector('section') as HTMLElement;
   const cached = { h: 0, v: 0 };
   const horizontal = () => Array.from(slidesEl.children) as HTMLElement[];
+  const vertical = (top: HTMLElement | undefined) =>
+    top ? (Array.from(top.children).filter(c => c.tagName === 'SECTION') as HTMLElement[]) : [];
   const indicesOf = (el: HTMLElement) => {
-    const vertical = el.parentElement !== slidesEl;
-    const h = Math.max(horizontal().indexOf(vertical ? (el.parentElement as HTMLElement) : el), 0);
-    const v = vertical
+    const isVertical = el.parentElement !== slidesEl;
+    const h = Math.max(
+      horizontal().indexOf(isVertical ? (el.parentElement as HTMLElement) : el),
+      0
+    );
+    const v = isVertical
       ? Array.from((el.parentElement as HTMLElement).children).indexOf(el)
       : undefined;
     return { h, v };
   };
+  const clamp = (index: number, length: number) => Math.max(Math.min(index, length - 1), 0);
+  /** updateSlides for both levels: `present` on the slide at h/v, clamped indices back. */
+  const present = (h: number, v: number) => {
+    for (const el of Array.from(slidesEl.querySelectorAll('section'))) {
+      el.classList.remove('present');
+    }
+    const tops = horizontal();
+    const hh = clamp(h, tops.length);
+    tops[hh]?.classList.add('present');
+    const kids = vertical(tops[hh]);
+    const vv = kids.length > 0 ? clamp(v, kids.length) : 0;
+    kids[vv]?.classList.add('present');
+    return { h: hh, v: vv, el: kids[vv] ?? tops[hh] };
+  };
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- RevealApi's listener type
+  const listeners = new Set<Function>();
   const slideCalls: Array<[number, number]> = [];
   const reveal = {
     getSlidesElement: () => slidesEl,
     getRevealElement: () => revealEl,
     getCurrentSlide: () => current,
     getIndices: (el?: HTMLElement) => (el ? indicesOf(el) : { ...cached }),
-    on() {},
-    off() {},
-    sync() {},
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- RevealApi's listener type
+    on(type: string, listener: Function) {
+      if (type === 'slidechanged') listeners.add(listener);
+    },
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- RevealApi's listener type
+    off(type: string, listener: Function) {
+      if (type === 'slidechanged') listeners.delete(listener);
+    },
+    dispatchEvent({ type, data }: { type: string; data?: unknown }) {
+      if (type === 'slidechanged') for (const listener of [...listeners]) listener(data);
+    },
+    stopEmbeddedContent() {},
+    sync() {
+      const at = present(cached.h, cached.v);
+      cached.h = at.h;
+      cached.v = at.v;
+    },
     layout() {},
     slide(h: number, v = 0) {
       slideCalls.push([h, v]);
-      cached.h = h;
-      cached.v = v;
-      const top = horizontal()[h];
-      const kids = top
-        ? (Array.from(top.children).filter(c => c.tagName === 'SECTION') as HTMLElement[])
-        : [];
-      current = kids.length > 0 ? kids[v] : top;
+      const before = { ...cached };
+      const at = present(h, v);
+      cached.h = at.h;
+      cached.v = at.v;
+      const previousSlide = current;
+      current = at.el;
       (document.activeElement as HTMLElement | null)?.blur?.();
+      if (cached.h !== before.h || cached.v !== before.v) {
+        reveal.dispatchEvent({
+          type: 'slidechanged',
+          data: { indexh: cached.h, indexv: cached.v, previousSlide, currentSlide: current },
+        });
+      }
     },
   } as unknown as RevealApi;
+  present(0, 0);
   bridge.deferOffscreen = false;
   bridge.attach(reveal, {
     setThemes: next => {
@@ -246,6 +294,7 @@ function setup(deck: DeckJson = DECK, extra: Partial<DeckBridgeOptions> = {}) {
       const at = indicesOf(current);
       cached.h = at.h;
       cached.v = at.v ?? 0;
+      present(cached.h, cached.v);
     },
     cached,
     slideCalls,
@@ -573,6 +622,40 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test("Reveal's playback marks on media claim nothing and write nothing, stored or new", async () => {
+    const t = setup();
+    // A deck stored with Reveal's mark on a video (saved before it was
+    // stripped), and one without, which Reveal marks as it stops and mutes.
+    insertSlide(
+      t.remote,
+      'vid00001',
+      { html: '<video data-autoplay="" src="/a.webm" data-paused-by-reveal=""></video>' },
+      { parent: null, after: 'aaaa0003' }
+    );
+    insertSlide(
+      t.remote,
+      'vid00002',
+      { html: '<video data-autoplay="" src="/b.webm"></video><audio src="/c.mp3"></audio>' },
+      { parent: null, after: 'vid00001' }
+    );
+    await tick();
+    const before = t.session.pending;
+    for (const id of ['vid00001', 'vid00002']) {
+      for (const media of Array.from(t.section(id).querySelectorAll('video, audio'))) {
+        media.setAttribute('data-paused-by-reveal', '');
+      }
+    }
+    t.section('vid00002').querySelector('video')?.setAttribute('data-muted-by-reveal', 'true');
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(before);
+    expect(t.remote.getMap('locks').size).toBe(0);
+    expect(t.notices).toEqual([]);
+    expect(t.remoteHtml('vid00001')).toBe(
+      '<video data-autoplay="" src="/a.webm" data-paused-by-reveal=""></video>'
+    );
+    t.bridge.destroy();
+  });
+
   test('remote html for an off-screen slide waits until it is shown', async () => {
     const t = setup();
     t.bridge.deferOffscreen = true;
@@ -740,6 +823,42 @@ test.describe('live deck bridge', () => {
     await tick();
     expect(t.slideCalls).toEqual([]);
     expect(t.cached).toEqual({ h: 1, v: 0 });
+    t.bridge.destroy();
+  });
+
+  test('a co-editor deletes the slide on screen: the one shown next is current here and to peers', async () => {
+    const t = setup();
+    t.bridge.deferOffscreen = true;
+    t.setCurrent('aaaa0002');
+    // An edit to the next slide waits while it is off screen.
+    t.remote.transact(() =>
+      (deckSlides(t.remote).get('aaaa0003') as Y.Map<unknown>).set('html', '<h2>Changed</h2>')
+    );
+    await tick();
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>Three</h2>');
+
+    t.remote.transact(() => deckSlides(t.remote).delete('aaaa0002'));
+    await tick();
+    // Reveal now shows the slide that took the deleted one's place, at the
+    // same index: it is Reveal's current slide, awareness says so, and its
+    // waiting edit is rendered.
+    expect(t.order().slice(0, 2)).toEqual(['aaaa0001', 'aaaa0003']);
+    expect(t.reveal.getCurrentSlide()).toBe(t.section('aaaa0003'));
+    expect(t.session.currentSlides.at(-1)).toBe('aaaa0003');
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>Changed</h2>');
+    t.bridge.destroy();
+  });
+
+  test('a co-editor deletes the stack on screen: the slide shown next is current here and to peers', async () => {
+    const t = setup();
+    t.setCurrent('aaaa0004');
+    t.remote.transact(() => {
+      for (const id of ['aaaa0004', 'aaaa0005', 'stack001']) deckSlides(t.remote).delete(id);
+    });
+    await tick();
+    expect(t.order()).toEqual(['aaaa0001', 'aaaa0002', 'aaaa0003']);
+    expect(t.reveal.getCurrentSlide()).toBe(t.section('aaaa0003'));
+    expect(t.session.currentSlides.at(-1)).toBe('aaaa0003');
     t.bridge.destroy();
   });
 

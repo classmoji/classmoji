@@ -89,6 +89,25 @@ export function storedSectionsHtml(slidesDiv: Element, frames: EditorFrames | nu
 }
 
 /**
+ * The whole document a save posts (the editor's `getCurrentContent`): the
+ * deck's theme attributes (from the `.reveal` element) on a thin `.slides`
+ * wrapper around {@link storedSectionsHtml}. The save action parses it with
+ * parseSlidesFragment.
+ */
+export function storedDeckHtml(
+  revealDiv: Element,
+  slidesDiv: Element,
+  frames: EditorFrames | null
+): string {
+  const dataAttrs: string[] = [];
+  for (const name of ['data-theme', 'data-code-theme']) {
+    if (revealDiv.hasAttribute(name)) dataAttrs.push(`${name}="${revealDiv.getAttribute(name)}"`);
+  }
+  const attrsStr = dataAttrs.length > 0 ? ' ' + dataAttrs.join(' ') : '';
+  return `<div class="slides"${attrsStr}>\n${storedSectionsHtml(slidesDiv, frames)}\n</div>`;
+}
+
+/**
  * What a copy or cut of the editor's slides puts on the clipboard (`contents`:
  * the selection, cloned): its authored form — what this page renamed or held
  * back for display restored, legacy html blocks' code back in `srcdoc`, the
