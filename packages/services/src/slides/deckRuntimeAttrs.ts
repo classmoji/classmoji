@@ -24,6 +24,10 @@
  *    `has-dark-background` / `has-light-background` contrast class every
  *    themed background earns (js/controllers/backgrounds.js:193-197,
  *    `getContrastClass`), plus `hidden` and `aria-hidden`.
+ *  - `inert` on every section but the current one and its stack (reveal.js 6,
+ *    js/reveal.js `updateSlidesVisibility`), so off-screen slides take no
+ *    keyboard focus. reveal.js 5 never removes it, so a saved one would leave
+ *    that slide dead to input in a deck opened by an older build.
  *
  * Author-set neighbours that must SURVIVE: `data-start-indexv`,
  * `data-fragment-index`, `data-background-*`, `data-transition`, and every
@@ -64,6 +68,7 @@ export const RUNTIME_SECTION_ATTRS: ReadonlySet<string> = new Set([
   'data-previous-indexv',
   'data-index-h',
   'data-index-v',
+  'inert',
   'contenteditable',
   'spellcheck',
 ]);

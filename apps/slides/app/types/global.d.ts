@@ -1,8 +1,13 @@
 // Global type declarations for slides app
 
-/** Minimal Reveal.js API surface used across the slides app */
+/**
+ * Minimal Reveal.js API surface used across the slides app. Instances are
+ * created from reveal.js's own types and assigned to this, so it must stay a
+ * subset of them (plus `isScrollView` and `stopEmbeddedContent`, which reveal
+ * has but does not declare).
+ */
 interface RevealApi {
-  initialize(): Promise<void>;
+  initialize(): Promise<unknown>;
   destroy(): void;
   sync(): void;
   layout(): void;
@@ -16,7 +21,7 @@ interface RevealApi {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- Reveal.js event callbacks have varying signatures per event
   off(event: string, callback: Function): void;
   getIndices(slide?: HTMLElement): { h: number; v: number; f?: number };
-  getSlide(h: number, v: number): HTMLElement | null;
+  getSlide(h: number, v: number): HTMLElement | undefined;
   getCurrentSlide(): HTMLElement;
   getSlidesElement(): HTMLElement | null;
   getRevealElement?(): HTMLElement | null;
@@ -26,32 +31,10 @@ interface RevealApi {
   isScrollView?(): boolean;
   getScale(): number;
   configure(options: Record<string, unknown>): void;
-}
-
-/** Reveal.js constructor type (from dynamic import) */
-interface RevealConstructor {
-  new (container: HTMLElement, options: Record<string, unknown>): RevealApi;
-}
-
-/** Reveal.js plugin type */
-interface RevealPlugin {
-  id?: string;
-  init?(deck: RevealApi): void | Promise<void>;
-}
-
-declare module 'reveal.js' {
-  const Reveal: RevealConstructor;
-  export default Reveal;
-}
-
-declare module 'reveal.js/plugin/highlight/highlight' {
-  const RevealHighlight: RevealPlugin;
-  export default RevealHighlight;
-}
-
-declare module 'reveal.js/plugin/notes/notes' {
-  const RevealNotes: RevealPlugin;
-  export default RevealNotes;
+  /** Sends a reveal.js event from the deck element, the way reveal.js sends its own. */
+  dispatchEvent(event: { type: string; data?: unknown }): Event;
+  /** Pauses the media of the slide reveal.js holds as current. */
+  stopEmbeddedContent?(): void;
 }
 
 interface Window {

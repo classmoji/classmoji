@@ -10,6 +10,8 @@
  * Pure DOM, no React — runs in Node-side unit tests too. Idempotent.
  */
 
+import { RUNTIME_SECTION_ATTRS } from '@classmoji/services/slides/runtime-attrs';
+
 import { cleanSandpackBlocks } from './sandpackBlocks.ts';
 
 export function cleanupEditorContainer(container: Element): void {
@@ -47,6 +49,45 @@ export function cleanupEditorContainer(container: Element): void {
   container.querySelectorAll('.fragment').forEach(el => {
     el.classList.remove('visible', 'current-fragment');
   });
+
+  // Reveal marks the media it pauses on leaving a slide (and never unmarks
+  // them); reveal.js 6 also mutes a video whose autoplay with sound the
+  // browser refused, and marks it so it can unmute it later. Playback state,
+  // never authored.
+  container.querySelectorAll('[data-paused-by-reveal], [data-muted-by-reveal]').forEach(el => {
+    el.removeAttribute('data-paused-by-reveal');
+    el.removeAttribute('data-muted-by-reveal');
+  });
+
+  // Runtime attributes on the slides themselves (Reveal's indices, `inert`,
+  // editing state): every server parser strips them too, but what is posted
+  // must not depend on the server reading it — a server of an earlier
+  // release does not know reveal.js 6's `inert`, and a slide stored with it
+  // takes no input under reveal.js 5.
+  for (const section of slideSections(container)) {
+    for (const name of RUNTIME_SECTION_ATTRS) section.removeAttribute(name);
+  }
+  // reveal.js 6 marks EVERY `.slides section` but the current slide inert,
+  // sections inside a slide's content included.
+  container.querySelectorAll('section[inert]').forEach(el => {
+    el.removeAttribute('inert');
+  });
+}
+
+/**
+ * The slides under `container`: its outermost sections (whatever wraps them)
+ * and their direct section children (stack slides). Sections deeper down are
+ * a slide's content.
+ */
+function slideSections(container: Element): Element[] {
+  const roots = Array.from(container.querySelectorAll('section')).filter(section => {
+    const up = section.parentElement?.closest('section');
+    return !up || !container.contains(up);
+  });
+  return roots.flatMap(root => [
+    root,
+    ...Array.from(root.children).filter(child => child.localName === 'section'),
+  ]);
 }
 
 /**

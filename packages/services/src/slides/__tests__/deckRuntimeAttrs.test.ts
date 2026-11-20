@@ -83,6 +83,12 @@ describe('stripRuntimeSectionAttrs', () => {
     ).toEqual({ 'data-transition': 'slide' });
   });
 
+  it('drops the inert reveal.js 6 puts on every slide but the current one', () => {
+    expect(stripRuntimeSectionAttrs({ inert: '', 'data-transition': 'fade' })).toEqual({
+      'data-transition': 'fade',
+    });
+  });
+
   it('keeps the author-set neighbours of those attributes', () => {
     expect(
       stripRuntimeSectionAttrs({

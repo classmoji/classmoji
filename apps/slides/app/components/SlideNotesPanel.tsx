@@ -217,7 +217,7 @@ export default function SlideNotesPanel({
 
     const handleSlideChange = () => {
       const indices = revealInstance.getIndices();
-      const slide = revealInstance.getSlide(indices.h, indices.v);
+      const slide = revealInstance.getSlide(indices.h, indices.v) ?? null;
       setCurrentSlide(slide);
       setNotes(extractNotesFromSlide(slide));
     };

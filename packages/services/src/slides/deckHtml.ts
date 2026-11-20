@@ -471,12 +471,28 @@ function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
 }
 
 /**
+ * Reveal's playback state inside a slide, never authored: the fragment paint
+ * above, the mark Reveal puts on media it paused on leaving a slide
+ * (`data-paused-by-reveal`, never taken off), the mark reveal.js 6 puts on a
+ * video it muted to autoplay (`data-muted-by-reveal`), and the `inert` it
+ * puts on every `.slides section` but the current slide — sections inside a
+ * slide's content included. Mirrors the client's cleanupEditorContainer
+ * (editorCleanup.ts).
+ */
+function stripContentRuntimeState($root: Cheerio<AnyNode>): void {
+  stripFragmentRuntimeClasses($root);
+  $root.find('[data-paused-by-reveal]').removeAttr('data-paused-by-reveal');
+  $root.find('[data-muted-by-reveal]').removeAttr('data-muted-by-reveal');
+  $root.find('section[inert]').removeAttr('inert');
+}
+
+/**
  * Strip runtime paint from a section element (plan §2 cruft list) — the
  * element-level wrapper around the shared record normalizer, so the parser and
  * the editor's client-side diff can never drift apart.
  */
 function stripRuntimeCruft($el: Cheerio<Element>): void {
-  stripFragmentRuntimeClasses($el);
+  stripContentRuntimeState($el);
   const el = $el[0];
   if (!el) return;
   const before = el.attribs ?? {};
@@ -892,8 +908,8 @@ export function normalizeSlideHtml(html: string): string {
     }
   });
 
-  // Reveal fragment runtime paint (visible / current-fragment) never persists.
-  stripFragmentRuntimeClasses($.root());
+  // Reveal's playback state (fragment paint, the muted-video mark) never persists.
+  stripContentRuntimeState($.root());
 
   // svg blocks held to the drawing lists; an html block's frame whose
   // sandbox would let it out is stored inert, and one that names its file

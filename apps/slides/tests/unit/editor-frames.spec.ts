@@ -14,7 +14,11 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 // @ts-expect-error -- jsdom ships no type declarations; only the constructor is used.
 import { JSDOM } from 'jsdom';
-import { HTML_BLOCK_SANDBOX, htmlBlockMarkup } from '@classmoji/services/slides/runtime-attrs';
+import {
+  HTML_BLOCK_SANDBOX,
+  RUNTIME_SECTION_ATTRS,
+  htmlBlockMarkup,
+} from '@classmoji/services/slides/runtime-attrs';
 import { pageSessionMarker, sessionInertName } from '@classmoji/services/slides/safe-markup';
 
 import {
@@ -33,6 +37,7 @@ import { sectionFromMarkup, serializeSection } from '../../app/utils/collab/brid
 import {
   clipboardHtml,
   editorSlidesFragment,
+  storedDeckHtml,
   storedSectionsHtml,
   viewerSlidesFragment,
 } from '../../app/utils/slideMarkup.ts';
@@ -308,6 +313,112 @@ test.describe("the git editor's save and its diff", () => {
   });
 });
 
+test.describe("reveal.js 6's runtime state never leaves the editor", () => {
+  const STORED6 =
+    '<section data-cm-id="s1" data-transition="fade"><h2>One</h2>' +
+    '<div class="box"><section><p>inside</p></section></div>' +
+    '<video data-autoplay="" src="clip.webm"></video></section>' +
+    '<section data-cm-id="st"><section data-cm-id="c1"><p>c1</p></section>' +
+    '<section data-cm-id="c2"><p>c2</p></section></section>' +
+    '<section data-cm-id="s3"><p class="fragment">three</p></section>';
+
+  /**
+   * The editor's deck as reveal.js 6 leaves it with the first stack child on
+   * screen: `inert` on every `.slides section` but that slide and its stack,
+   * sections inside a slide's content included (js/reveal.js:1917-1922), the
+   * mark on a video it muted to autoplay (slidecontent.js:495), and the
+   * indices, classes, styles and editing state reveal.js 5 already left.
+   */
+  function revealSixDeck(): { reveal: HTMLElement; slides: HTMLElement } {
+    const reveal = doc.createElement('div');
+    reveal.className = 'reveal';
+    reveal.setAttribute('data-theme', 'night');
+    reveal.setAttribute('data-code-theme', 'github');
+    const slides = doc.createElement('div');
+    slides.className = 'slides';
+    slides.replaceChildren(editorSlidesFragment(STORED6, doc, { frames: FRAMES }));
+    reveal.append(slides);
+    const at = (id: string) => slides.querySelector(`[data-cm-id="${id}"]`) as HTMLElement;
+    const current = at('c1');
+    for (const id of ['s1', 'st', 'c1', 'c2', 's3']) {
+      at(id).setAttribute('contenteditable', 'true');
+      at(id).setAttribute('spellcheck', 'false');
+    }
+    for (const section of Array.from(slides.querySelectorAll('section'))) {
+      section.toggleAttribute('inert', section !== current && !section.contains(current));
+    }
+    at('s1').className = 'past';
+    at('s1').setAttribute('style', 'top: 12px; display: none;');
+    at('s1').setAttribute('data-index-h', '0');
+    at('st').className = 'stack present';
+    at('st').setAttribute('data-previous-indexv', '0');
+    at('c1').className = 'present';
+    at('c1').setAttribute('data-index-v', '0');
+    at('s3').className = 'future';
+    at('s3').setAttribute('hidden', '');
+    at('s3').setAttribute('aria-hidden', 'true');
+    at('s3').setAttribute('data-fragment', '0');
+    (slides.querySelector('video') as HTMLElement).setAttribute('data-muted-by-reveal', 'true');
+    (slides.querySelector('video') as HTMLElement).setAttribute('data-paused-by-reveal', '');
+    return { reveal, slides };
+  }
+
+  /** Every attribute name in some markup, and those on sections. */
+  function attributeNames(html: string): { all: Set<string>; sections: Set<string> } {
+    const template = doc.createElement('template');
+    template.innerHTML = html;
+    const all = new Set<string>();
+    const sections = new Set<string>();
+    for (const el of Array.from(template.content.querySelectorAll('*'))) {
+      for (const attr of Array.from(el.attributes)) {
+        all.add(attr.name);
+        if (el.localName === 'section') sections.add(attr.name);
+      }
+    }
+    return { all, sections };
+  }
+
+  test('the whole document a save posts', () => {
+    const { reveal, slides } = revealSixDeck();
+    const posted = storedDeckHtml(reveal, slides, FRAMES);
+    const { all, sections } = attributeNames(posted);
+    expect(all.has('inert')).toBe(false);
+    expect(all.has('data-muted-by-reveal')).toBe(false);
+    expect(all.has('data-paused-by-reveal')).toBe(false);
+    for (const name of RUNTIME_SECTION_ATTRS) expect(sections.has(name)).toBe(false);
+    // What the author wrote stays: the theme, attributes, the nested section, the video.
+    expect(posted).toMatch(/^<div class="slides" data-theme="night" data-code-theme="github">\n/);
+    expect(posted).toContain('<section data-cm-id="s1" data-transition="fade"');
+    expect(posted).toContain('<div class="box"><section><p>inside</p></section></div>');
+    expect(posted).toContain('<video data-autoplay="" src="clip.webm"></video>');
+  });
+
+  test("the git editor's diff snapshot, read from the editor's DOM", () => {
+    const { reveal } = revealSixDeck();
+    const parse = (html: string) =>
+      new jsdom.window.DOMParser().parseFromString(html, 'text/html') as Document;
+    const snapshot = extractDeckSnapshot(reveal.outerHTML, parse);
+    expect(snapshot).not.toBeNull();
+    const text = JSON.stringify(snapshot);
+    expect(text).not.toContain('inert');
+    expect(text).not.toContain('data-muted-by-reveal');
+    expect(text).not.toContain('data-paused-by-reveal');
+    expect(snapshot?.sections[0]).toMatchObject({
+      id: 's1',
+      attrs: { 'data-transition': 'fade' },
+      html:
+        '<h2>One</h2><div class="box"><section><p>inside</p></section></div>' +
+        '<video data-autoplay="" src="clip.webm"></video>',
+    });
+    // Unchanged against the stored deck: viewing it is not an edit.
+    const base = extractDeckSnapshot(
+      `<div class="slides" data-theme="night" data-code-theme="github">${STORED6}</div>`,
+      parse
+    );
+    expect(base && snapshot && diffDeckSnapshots(base, snapshot)).toEqual([]);
+  });
+});
+
 test.describe('html block files: the delete prompt and forks count references', () => {
   const deckWith = (...srcs: Array<string | null>) =>
     holder(
@@ -454,9 +565,11 @@ test.describe('slide markup is cleaned where it is inserted', () => {
     expect(slides).not.toMatch(/\.innerHTML\s*=\s*htmlContent/);
     expect(slides).toContain('slidesContainer.replaceChildren(');
     // Reveal's cross-window API stays off: locked options last, guards first.
-    const init = slides.slice(slides.indexOf('const deck = new Reveal('));
+    const start = slides.indexOf('const deck: RevealApi = new Reveal(');
+    expect(start).toBeGreaterThan(-1);
+    const init = slides.slice(start);
     expect(init.slice(0, init.indexOf('});'))).toMatch(/\.\.\.REVEAL_LOCKED_OPTIONS,\s*$/);
-    const before = slides.slice(0, slides.indexOf('const deck = new Reveal('));
+    const before = slides.slice(0, start);
     expect(before).toContain('stripRevealQueryConfig();');
     expect(before).toContain('installRevealMessageGuard();');
 
