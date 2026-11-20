@@ -5,7 +5,7 @@ import { blockMarkup, mintBlockId, type BlockBox } from '@classmoji/services/sli
 
 import { useToast } from '~/hooks';
 import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';
-import { addSlideLeftOf, syncShowing } from '~/utils/revealSync';
+import { addSlideLeftOf, slideBeside, syncShowing } from '~/utils/revealSync';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 import { DEFAULT_IFRAME_SANDBOX } from '~/utils/editorFrames';
@@ -395,48 +395,13 @@ export default function SlideToolbar({
       return;
     }
 
-    const parent = currentSlide.parentElement;
-    if (!parent) return;
-
-    // Navigate away from the slide before deleting
-    // Try to go to the previous slide, otherwise next
-    const indices = revealInstance.getIndices();
-    const canGoLeft = indices.h > 0;
-    const canGoUp = indices.v > 0;
-
-    if (parent.tagName === 'SECTION') {
-      // In vertical stack
-      const siblings = parent.querySelectorAll(':scope > section');
-      if (siblings.length <= 1) {
-        // Last slide in stack - navigate horizontally then remove stack
-        if (canGoLeft) {
-          revealInstance.left();
-        } else {
-          revealInstance.right();
-        }
-        parent.remove();
-      } else {
-        // Multiple slides in stack - navigate vertically then remove slide
-        if (canGoUp) {
-          revealInstance.up();
-        } else {
-          revealInstance.down();
-        }
-        currentSlide.remove();
-      }
-    } else {
-      // Top-level slide - navigate horizontally then remove
-      if (canGoLeft) {
-        revealInstance.left();
-      } else {
-        revealInstance.right();
-      }
-      currentSlide.remove();
-    }
-
-    // Stay on the slide navigated to above (now one index lower when it
-    // followed the deleted one).
-    syncShowing(revealInstance, getCurrentSlide());
+    // The slide on screen: take it out (its stack too when it was the only
+    // child), then show the one beside it (the previous one, else the next:
+    // revealSync.ts). Not by stepping there first: Reveal would start that
+    // slide's media, then stop and restart it when the deck shifts under it.
+    const beside = slideBeside(revealInstance, currentSlide);
+    removeSlideElement(currentSlide);
+    syncShowing(revealInstance, beside);
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
     afterBlocksRemoved([currentSlide]);
