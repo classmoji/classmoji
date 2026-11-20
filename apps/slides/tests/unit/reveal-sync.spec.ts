@@ -293,6 +293,17 @@ test.describe('the editor paths call revealSync', () => {
       expect(remove).not.toContain(step);
     }
   });
+
+  test("the live bridge reads the fragment step before a co-editor's change is synced, and shows the slide again through slideTo", () => {
+    const bridge = source('../../app/utils/collab/DeckBridge.ts');
+    const remote = between(bridge, 'if (structural && this.reveal) {', 'reveal.layout();');
+    expect(remote).toMatch(
+      /const step = stepShown\(reveal\);[\s\S]*reveal\.sync\(\)[\s\S]*this\.goTo\(currentId, step\)/
+    );
+    const goTo = between(bridge, 'private goTo(', 'return true;');
+    expect(goTo).toContain('slideTo(this.reveal, el, indices.h, indices.v ?? 0, step);');
+    expect(goTo).not.toContain('this.reveal.slide(');
+  });
 });
 
 test.describe('adding a slide to the left (SlideToolbar)', () => {
@@ -935,6 +946,62 @@ test.describe('deleting a slide before the one on screen', () => {
         length: named ? before.length : before.length + 1,
       });
       expect(await state(page)).toMatchObject({ current: 'c', indices: { h: 1 }, events: [] });
+    });
+  }
+});
+
+test.describe("a co-editor's delete of a slide before the one on screen (DeckBridge)", () => {
+  /** What the bridge does with a remote structural change: step read, DOM changed, sync, goTo. */
+  const remoteDelete = (page: Page, id: string) =>
+    page.evaluate(id => {
+      const w = window.revealSyncTest as TestWindow;
+      const step = w.revealSync.stepShown(w.deck);
+      const onScreen = w.deck.getCurrentSlide();
+      (document.getElementById(id) as HTMLElement).remove();
+      w.deck.sync();
+      const indices = w.deck.getIndices(onScreen);
+      const now = w.deck.getIndices();
+      if (indices.h !== now.h || (indices.v ?? 0) !== (now.v ?? 0)) {
+        w.revealSync.slideTo(w.deck, onScreen, indices.h, indices.v ?? 0, step);
+      }
+      w.deck.layout();
+    }, id);
+
+  for (const [name, slides, at, gone, h, v] of [
+    [
+      'a slide',
+      slide('a') +
+        slide('b') +
+        slide('c', '<p class="fragment" id="c-f0">0</p><p class="fragment" id="c-f1">1</p>') +
+        slide('d'),
+      [2, 0],
+      'a',
+      1,
+      0,
+    ],
+    [
+      'a stack child above it',
+      slide('a') +
+        `<section id="st">${slide('s1')}${slide('s2', '<p class="fragment" id="s2-f0">0</p><p class="fragment" id="s2-f1">1</p>')}${slide('s3')}</section>`,
+      [1, 1],
+      's1',
+      1,
+      0,
+    ],
+  ] as const) {
+    test(`${name}: the fragments on screen stay as they were, quietly`, async ({ page }) => {
+      await open(page, slides, [...at]);
+      await page.evaluate(() => {
+        const w = window.revealSyncTest as TestWindow;
+        w.deck.next();
+        w.fragmentEvents.length = 0;
+      });
+      expect(await fragmentStep(page)).toEqual({ classes: 'V*-', f: 0, heard: [] });
+      await remoteDelete(page, gone);
+      expect((await state(page)).indices).toMatchObject({ h, v });
+      expect(await fragmentStep(page)).toEqual({ classes: 'V*-', f: 0, heard: [] });
+      await page.evaluate(() => (window.revealSyncTest as TestWindow).deck.next());
+      expect(await fragmentStep(page)).toMatchObject({ classes: 'VV*', f: 1 });
     });
   }
 });

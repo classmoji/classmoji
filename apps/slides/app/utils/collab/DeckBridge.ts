@@ -70,7 +70,7 @@ import {
 import type { DeckSlide } from '@classmoji/services/slides';
 
 import { canonicalMediaUrls } from '../mediaRefs.ts';
-import { showAgain } from '../revealSync.ts';
+import { showAgain, slideTo, stepShown, type FragmentStep } from '../revealSync.ts';
 import { displaySectionAttrs, type EditorFrames } from '../editorFrames.ts';
 import {
   LOCKED_BY_ATTR,
@@ -1111,13 +1111,16 @@ export class DeckBridge {
     if (structural) this.revision++;
     if (structural && this.reveal) {
       const reveal = this.reveal;
+      // Read before the sync, which shows every fragment of the slide on
+      // screen when a slide before it went (revealSync.ts).
+      const step = stepShown(reveal);
       // Reveal's sync reformats embeds (YouTube/Vimeo api params): its paint,
       // not an edit — the DOM baselines take it in.
       this.mutateDom(() => reveal.sync());
       this.rebaseDomSerializations();
       // The slide on screen went with the change: settle Reveal on the one it
       // shows now (revealSync.ts), or reveal.js 6 leaves that slide inert.
-      if (!this.goTo(currentId)) showAgain(reveal, null);
+      if (!this.goTo(currentId, step)) showAgain(reveal, null);
       reveal.layout();
     }
     // Someone typing must not notice: Reveal's slide() blurs the active
@@ -1248,14 +1251,17 @@ export class DeckBridge {
    * slide() blurs the editor; the caller restores focus and the caret.
    * False when that slide is no longer in the deck.
    */
-  private goTo(slideId: string | null): boolean {
+  /** Show the slide `slideId`; on `step`'s fragment step when it is that slide (revealSync.ts). */
+  private goTo(slideId: string | null, step?: FragmentStep | null): boolean {
     if (!slideId || !this.reveal || !this.slidesEl) return false;
-    const el = this.slidesEl.querySelector(`section[data-cm-id="${CSS.escape(slideId)}"]`);
+    const el = this.slidesEl.querySelector<HTMLElement>(
+      `section[data-cm-id="${CSS.escape(slideId)}"]`
+    );
     if (!el) return false;
-    const indices = this.reveal.getIndices(el as HTMLElement);
+    const indices = this.reveal.getIndices(el);
     const now = this.reveal.getIndices();
     if (indices.h !== now.h || (indices.v ?? 0) !== (now.v ?? 0)) {
-      this.reveal.slide(indices.h, indices.v ?? 0);
+      slideTo(this.reveal, el, indices.h, indices.v ?? 0, step);
     }
     return true;
   }
