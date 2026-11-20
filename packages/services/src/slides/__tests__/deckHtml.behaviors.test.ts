@@ -157,14 +157,15 @@ describe('parseSlidesFragment', () => {
     );
   });
 
-  it("strips reveal.js 6's playback state inside a slide: inert on nested sections, the muted-video mark", () => {
+  it("strips Reveal's playback state inside a slide: inert on nested sections, the muted- and paused-media marks", () => {
     // reveal.js 6 marks every `.slides section` inert but the current one
     // (sections inside a slide's content too), and marks a video it muted to
-    // autoplay. Neither is authored; the editor's cleanup drops both too.
+    // autoplay; Reveal marks media it paused on leaving a slide. None of it is
+    // authored; the editor's cleanup drops it all too.
     const result = parseSlidesFragment(
       '<div class="slides"><section data-cm-id="frag7777" inert=""><h2>A</h2>' +
         '<div class="box"><section inert=""><p>inside</p></section></div>' +
-        '<video data-autoplay="" src="clip.webm" data-muted-by-reveal="true"></video></section>' +
+        '<video data-autoplay="" src="clip.webm" data-muted-by-reveal="true" data-paused-by-reveal=""></video></section>' +
         '<section data-cm-id="frag7778" inert=""><section data-cm-id="frag7779" inert="">' +
         '<p>child</p></section></section></div>'
     );
@@ -236,6 +237,15 @@ describe('normalizeSlideHtml', () => {
         '<video data-autoplay="" src="clip.webm" data-muted-by-reveal="true"></video>'
       )
     ).toBe('<video data-autoplay="" src="clip.webm"></video>');
+  });
+
+  it('strips the mark Reveal puts on media it paused on leaving a slide', () => {
+    expect(
+      normalizeSlideHtml(
+        '<video data-autoplay="" src="clip.webm" data-paused-by-reveal=""></video>' +
+          '<audio src="a.mp3" data-paused-by-reveal=""></audio>'
+      )
+    ).toBe('<video data-autoplay="" src="clip.webm"></video><audio src="a.mp3"></audio>');
   });
 
   it('leaves a non-fragment `visible`/`current-fragment` class alone (only fragment paint is runtime)', () => {

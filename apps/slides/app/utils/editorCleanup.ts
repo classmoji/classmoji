@@ -50,9 +50,12 @@ export function cleanupEditorContainer(container: Element): void {
     el.classList.remove('visible', 'current-fragment');
   });
 
-  // reveal.js 6 mutes a video whose autoplay with sound the browser refused,
-  // and marks it so it can unmute it later. Playback state, never authored.
-  container.querySelectorAll('[data-muted-by-reveal]').forEach(el => {
+  // Reveal marks the media it pauses on leaving a slide (and never unmarks
+  // them); reveal.js 6 also mutes a video whose autoplay with sound the
+  // browser refused, and marks it so it can unmute it later. Playback state,
+  // never authored.
+  container.querySelectorAll('[data-paused-by-reveal], [data-muted-by-reveal]').forEach(el => {
+    el.removeAttribute('data-paused-by-reveal');
     el.removeAttribute('data-muted-by-reveal');
   });
 

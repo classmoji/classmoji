@@ -622,6 +622,40 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test("Reveal's playback marks on media claim nothing and write nothing, stored or new", async () => {
+    const t = setup();
+    // A deck stored with Reveal's mark on a video (saved before it was
+    // stripped), and one without, which Reveal marks as it stops and mutes.
+    insertSlide(
+      t.remote,
+      'vid00001',
+      { html: '<video data-autoplay="" src="/a.webm" data-paused-by-reveal=""></video>' },
+      { parent: null, after: 'aaaa0003' }
+    );
+    insertSlide(
+      t.remote,
+      'vid00002',
+      { html: '<video data-autoplay="" src="/b.webm"></video><audio src="/c.mp3"></audio>' },
+      { parent: null, after: 'vid00001' }
+    );
+    await tick();
+    const before = t.session.pending;
+    for (const id of ['vid00001', 'vid00002']) {
+      for (const media of Array.from(t.section(id).querySelectorAll('video, audio'))) {
+        media.setAttribute('data-paused-by-reveal', '');
+      }
+    }
+    t.section('vid00002').querySelector('video')?.setAttribute('data-muted-by-reveal', 'true');
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(before);
+    expect(t.remote.getMap('locks').size).toBe(0);
+    expect(t.notices).toEqual([]);
+    expect(t.remoteHtml('vid00001')).toBe(
+      '<video data-autoplay="" src="/a.webm" data-paused-by-reveal=""></video>'
+    );
+    t.bridge.destroy();
+  });
+
   test('remote html for an off-screen slide waits until it is shown', async () => {
     const t = setup();
     t.bridge.deferOffscreen = true;

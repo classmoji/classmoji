@@ -472,13 +472,16 @@ function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
 
 /**
  * Reveal's playback state inside a slide, never authored: the fragment paint
- * above, the mark reveal.js 6 puts on a video it muted to autoplay
- * (`data-muted-by-reveal`), and the `inert` it puts on every `.slides
- * section` but the current slide — sections inside a slide's content
- * included. Mirrors the client's cleanupEditorContainer (editorCleanup.ts).
+ * above, the mark Reveal puts on media it paused on leaving a slide
+ * (`data-paused-by-reveal`, never taken off), the mark reveal.js 6 puts on a
+ * video it muted to autoplay (`data-muted-by-reveal`), and the `inert` it
+ * puts on every `.slides section` but the current slide — sections inside a
+ * slide's content included. Mirrors the client's cleanupEditorContainer
+ * (editorCleanup.ts).
  */
 function stripContentRuntimeState($root: Cheerio<AnyNode>): void {
   stripFragmentRuntimeClasses($root);
+  $root.find('[data-paused-by-reveal]').removeAttr('data-paused-by-reveal');
   $root.find('[data-muted-by-reveal]').removeAttr('data-muted-by-reveal');
   $root.find('section[inert]').removeAttr('inert');
 }

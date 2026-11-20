@@ -359,6 +359,7 @@ test.describe("reveal.js 6's runtime state never leaves the editor", () => {
     at('s3').setAttribute('aria-hidden', 'true');
     at('s3').setAttribute('data-fragment', '0');
     (slides.querySelector('video') as HTMLElement).setAttribute('data-muted-by-reveal', 'true');
+    (slides.querySelector('video') as HTMLElement).setAttribute('data-paused-by-reveal', '');
     return { reveal, slides };
   }
 
@@ -383,6 +384,7 @@ test.describe("reveal.js 6's runtime state never leaves the editor", () => {
     const { all, sections } = attributeNames(posted);
     expect(all.has('inert')).toBe(false);
     expect(all.has('data-muted-by-reveal')).toBe(false);
+    expect(all.has('data-paused-by-reveal')).toBe(false);
     for (const name of RUNTIME_SECTION_ATTRS) expect(sections.has(name)).toBe(false);
     // What the author wrote stays: the theme, attributes, the nested section, the video.
     expect(posted).toMatch(/^<div class="slides" data-theme="night" data-code-theme="github">\n/);
@@ -400,6 +402,7 @@ test.describe("reveal.js 6's runtime state never leaves the editor", () => {
     const text = JSON.stringify(snapshot);
     expect(text).not.toContain('inert');
     expect(text).not.toContain('data-muted-by-reveal');
+    expect(text).not.toContain('data-paused-by-reveal');
     expect(snapshot?.sections[0]).toMatchObject({
       id: 's1',
       attrs: { 'data-transition': 'fade' },
