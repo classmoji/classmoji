@@ -26,8 +26,8 @@
   "upload_source_maps": true,
 
   // Secrets are not declared here. CI pushes an allowlist of them from
-  // Infisical (`sta` for staging) with `wrangler secret bulk` after each
-  // deploy; the list is in .github/workflows/deploy-fly-staging.yml
+  // Infisical (`sta` for staging) with each deploy (`wrangler deploy
+  // --secrets-file`); the list is in .github/workflows/deploy-fly-staging.yml
   // (deploy-admin-worker).
   // None of them may also appear in `vars` below (the names would collide).
   "env": {
