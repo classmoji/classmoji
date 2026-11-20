@@ -29,9 +29,10 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import type { AddressInfo, Server as NetServer } from 'node:net';
+import type { AddressInfo, Server as NetServer, Socket } from 'node:net';
 
 import { Agent, MockAgent, request } from 'undici';
+import type { Dispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -704,6 +705,196 @@ describe('fetchImportUrl', () => {
     } finally {
       process.env.VITEST = prev;
     }
+  });
+});
+
+// ─── fetchImportUrl (real socket) ──────────────────────────────────────────
+
+/**
+ * The same refusals over a real undici connection. MockAgent hands back a
+ * body that has no socket behind it; these use a raw TCP server that writes
+ * each response in ONE write, so the whole body has arrived by the time the
+ * helper decides to refuse it — the case where discarding the body must not
+ * raise an error nobody listens for (in the Trigger task that error would
+ * fail the attempt, and the caller would lose the specific refusal).
+ *
+ * The import URL stays https and is still resolved through `resolveAll`; the
+ * test dispatcher only rewrites the origin to the local plain-HTTP server.
+ */
+describe('fetchImportUrl (real socket)', () => {
+  const ORIGIN = 'https://files.example.com';
+  const publicDns: ResolveAll = async () => [{ address: '93.184.216.34', family: 4 }];
+
+  let server: NetServer;
+  let port: number;
+  let base: Agent;
+  let dispatcher: Dispatcher;
+  /** What the server writes back, in one write, once it has read a request. */
+  let reply: (socket: Socket) => void;
+  /** Every connection the server accepted. */
+  let sockets: Socket[];
+  const strays: unknown[] = [];
+  const onStray = (e: unknown) => strays.push(e);
+
+  beforeEach(async () => {
+    sockets = [];
+    strays.length = 0;
+    process.on('uncaughtException', onStray);
+    process.on('unhandledRejection', onStray);
+    server = createNetServer(socket => {
+      sockets.push(socket);
+      socket.on('error', () => {});
+      socket.once('data', () => reply(socket));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    port = (server.address() as AddressInfo).port;
+    base = new Agent();
+    dispatcher = base.compose(
+      dispatch => (opts, handler) =>
+        dispatch({ ...opts, origin: `http://127.0.0.1:${port}` }, handler)
+    );
+  });
+
+  afterEach(async () => {
+    await base.destroy();
+    server.close();
+    await once(server, 'close');
+    process.off('uncaughtException', onStray);
+    process.off('unhandledRejection', onStray);
+  });
+
+  const opts = (extra: Partial<Parameters<typeof fetchImportUrl>[1]> = {}) => ({
+    maxBytes: 16,
+    resolveAll: publicDns,
+    __testOnlyDispatcher: dispatcher,
+    ...extra,
+  });
+
+  /** A complete HTTP/1.1 response, written in one go. */
+  const respond =
+    (head: string, body = '') =>
+    (socket: Socket) => {
+      socket.write(`${head}\r\n\r\n${body}`);
+    };
+
+  /** Long enough for an `error` emitted on a later tick to have surfaced. */
+  const settle = () => new Promise(r => setTimeout(r, 100));
+
+  it('refuses a 404 whose body arrived with the headers, with nothing left uncaught', async () => {
+    reply = respond('HTTP/1.1 404 Not Found\r\nContent-Length: 9', 'not found');
+    const err = await expectCode(fetchImportUrl(`${ORIGIN}/gone`, opts()), 'HTTP_ERROR');
+    expect(err.status).toBe(404);
+    expect(err.message).toBe('The server answered HTTP 404.');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('refuses a redirect whose body arrived with the headers, with nothing left uncaught', async () => {
+    reply = respond('HTTP/1.1 302 Found\r\nLocation: /final.pdf\r\nContent-Length: 5', 'moved');
+    const err = await expectCode(fetchImportUrl(`${ORIGIN}/moved`, opts()), 'REDIRECT_REFUSED');
+    expect(err.status).toBe(302);
+    expect(err.message).toContain('https://files.example.com/final.pdf');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('refuses an over-limit Content-Length whose body arrived with the headers, with nothing left uncaught', async () => {
+    reply = respond('HTTP/1.1 200 OK\r\nContent-Length: 64', 'x'.repeat(64));
+    const err = await expectCode(fetchImportUrl(`${ORIGIN}/big`, opts()), 'TOO_LARGE');
+    expect(err.message).toBe('The file is 64 bytes, over the 16-byte limit.');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('stops reading at the cap when the whole body arrived with the headers', async () => {
+    const chunk = 'x'.repeat(32);
+    reply = respond(
+      'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked',
+      `20\r\n${chunk}\r\n20\r\n${chunk}\r\n0\r\n\r\n`
+    );
+    const res = await fetchImportUrl(`${ORIGIN}/over-cap`, opts());
+    await expectCode(drain(res.body), 'TOO_LARGE');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('cancels a fetched but unread body with nothing left uncaught', async () => {
+    reply = respond('HTTP/1.1 200 OK\r\nContent-Length: 4', 'tiny');
+    const res = await fetchImportUrl(`${ORIGIN}/tiny`, opts());
+    await res.cancel();
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('closes the connection when an endless body is cancelled unread', async () => {
+    let pump: NodeJS.Timeout | undefined;
+    reply = socket => {
+      socket.write('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n');
+      pump = setInterval(() => socket.write('4\r\nmore\r\n'), 5);
+    };
+    try {
+      const res = await fetchImportUrl(`${ORIGIN}/endless`, opts({ maxBytes: 1 << 20 }));
+      await res.cancel();
+      await settle();
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0].destroyed).toBe(true);
+      expect(strays).toEqual([]);
+    } finally {
+      clearInterval(pump);
+    }
+  });
+
+  it('still reports a connection lost mid-body to the reader', async () => {
+    reply = socket => {
+      socket.write('HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhalf');
+      setTimeout(() => socket.destroy(), 20);
+    };
+    const res = await fetchImportUrl(`${ORIGIN}/cut`, opts());
+    await expectCode(drain(res.body), 'FETCH_FAILED');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it.each([
+    ['two lines, identity then gzip', 'Content-Encoding: identity\r\nContent-Encoding: gzip'],
+    ['a list, identity then gzip', 'Content-Encoding: identity, gzip'],
+    ['two lines in mixed case', 'Content-Encoding: Identity\r\nContent-Encoding: GZip'],
+    ['a padded list across lines', 'Content-Encoding:  identity ,\r\nContent-Encoding: BR '],
+  ])('refuses a compressed body whatever the header shape (%s)', async (_label, lines) => {
+    reply = respond(`HTTP/1.1 200 OK\r\n${lines}\r\nContent-Length: 4`, 'zzzz');
+    const err = await expectCode(fetchImportUrl(`${ORIGIN}/z`, opts()), 'UNSUPPORTED_ENCODING');
+    expect(err.message).toMatch(/only uncompressed downloads/);
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it.each([
+    ['one identity line', 'Content-Encoding: identity'],
+    [
+      'two identity lines in mixed case',
+      'Content-Encoding: Identity\r\nContent-Encoding: IDENTITY',
+    ],
+    ['an identity list', 'Content-Encoding: identity, identity'],
+  ])('accepts a body that is identity throughout (%s)', async (_label, lines) => {
+    reply = respond(`HTTP/1.1 200 OK\r\n${lines}\r\nContent-Length: 4`, 'tiny');
+    const res = await fetchImportUrl(`${ORIGIN}/plain`, opts());
+    expect(await drain(res.body)).toBe(4);
+  });
+
+  it('fails a response with two Content-Length headers rather than reading either', async () => {
+    reply = respond('HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length: 999999', 'tiny');
+    await expectCode(fetchImportUrl(`${ORIGIN}/twice`, opts()), 'FETCH_FAILED');
+    await settle();
+    expect(strays).toEqual([]);
+  });
+
+  it('streams a body that fits', async () => {
+    reply = respond('HTTP/1.1 200 OK\r\nContent-Length: 4', 'tiny');
+    const res = await fetchImportUrl(`${ORIGIN}/tiny`, opts());
+    expect(await drain(res.body)).toBe(4);
+    await settle();
+    expect(strays).toEqual([]);
   });
 });
 
