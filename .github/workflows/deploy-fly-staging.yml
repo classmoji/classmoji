@@ -366,30 +366,21 @@ jobs:
           npx astro build
           node "$GITHUB_WORKSPACE/apps/site/cloudflare/check-build.mjs" . staging
 
-      - name: Deploy site Worker
-        id: deploy
-        working-directory: ${{ runner.temp }}/site
-        run: |
-          set -euo pipefail
-          npx wrangler deploy -c dist/server/wrangler.json | tee deploy.log
-          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
-          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
-          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       # The version deploy-cloudflare-staging.yml pins, moved on together.
       - name: Install Infisical CLI
         run: npm install -g @infisical/cli@0.44.9
 
-      # After the deploy: `wrangler secret bulk` needs the script to exist.
+      # The secret goes up WITH the code (`wrangler deploy --secrets-file`), so
+      # the deploy makes ONE version and its `Current Version ID` is the one
+      # the smoke check must see (deploy-admin-worker explains why a separate
+      # `secret bulk` could not be checked reliably).
       # The site reads ONE secret, RESEND_API_KEY (the contact form; staging's
       # key, which staging's platform mail shares). Infisical `sta` holds every
       # service's secrets, so only that key is pushed. Without it the form
       # answers 503 ("email us instead"), so it is required. Names only in
-      # logs, never values.
-      - name: Sync secrets from Infisical
+      # logs, never values (wrangler lists secrets as "(hidden)").
+      - name: Deploy site Worker with its secret from Infisical
+        id: deploy
         working-directory: ${{ runner.temp }}/site
         env:
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
@@ -462,43 +453,20 @@ jobs:
             console.log(`Verified ${required.length} secret(s) from Infisical (${required.join(", ")}).`);
           ' "$RAW_SECRETS" "$BULK_SECRETS" dist/server/wrangler.json
 
-          npx wrangler secret bulk "$BULK_SECRETS" -c dist/server/wrangler.json
-
-      # `secret bulk` makes and deploys ANOTHER version (the deploy's code with
-      # the new secret), so the version to expect is the one deployed now, not
-      # the deploy step's (deploy-admin-worker explains the check).
-      - name: Read the live version
-        id: live
-        working-directory: ${{ runner.temp }}/site
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DEPLOYED: ${{ steps.deploy.outputs.version_id }}
-        run: |
-          set -euo pipefail
-          npx wrangler deployments status -c dist/server/wrangler.json --json > status.json
-          VERSION_ID="$(node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            const status = JSON.parse(readFileSync("status.json", "utf8"));
-            const live = (status.versions ?? []).filter(v => v.percentage === 100);
-            const fail = m => { console.error(`::error::${m}`); process.exit(1); };
-            if (live.length !== 1) fail(`expected one version at 100%, got ${JSON.stringify(status.versions)}`);
-            const id = live[0].version_id;
-            const bySecret = status.annotations?.["workers/triggered_by"] === "secret";
-            if (id !== process.env.DEPLOYED && !bySecret) fail(`live version ${id} is neither the deploy (${process.env.DEPLOYED}) nor its secret change`);
-            console.log(id);
-          ')"
-          echo "Live version: $VERSION_ID (deploy step made $DEPLOYED)"
+          npx wrangler deploy -c dist/server/wrangler.json --secrets-file "$BULK_SECRETS" | tee deploy.log
+          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
+          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
           echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
 
       # The new version must be the one answering: /health carries the
-      # Worker's version id (CF_VERSION_METADATA) in x-worker-version. Then
+      # Worker's version id (CF_VERSION_METADATA) in x-worker-version, which
+      # must be the id the deploy printed. Then
       # the rest of the site: a static page and a 404, both noindex on staging;
       # the server build is not served; and the contact route answers. The
       # POST fills the honeypot field, so it succeeds without sending mail.
       - name: Smoke check site.staging.classmoji.io
         env:
-          EXPECTED: ${{ steps.live.outputs.version_id }}
+          EXPECTED: ${{ steps.deploy.outputs.version_id }}
           SITE: https://site.staging.classmoji.io
         run: |
           set -uo pipefail
@@ -649,32 +617,26 @@ jobs:
             console.log(`Built ${config.name}: ${Object.keys(config.vars ?? {}).length} vars, Hyperdrive bound.`);
           '
 
-      - name: Deploy admin Worker
-        id: deploy
-        working-directory: apps/admin
-        run: |
-          set -euo pipefail
-          npx wrangler deploy -c build/server/wrangler.json | tee deploy.log
-          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
-          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
-          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       # The version deploy-cloudflare-staging.yml pins, moved on together.
       - name: Install Infisical CLI
         run: npm install -g @infisical/cli@0.44.9
 
-      # After the deploy: `wrangler secret bulk` needs the script to exist
-      # (the content worker's job explains the short window this leaves).
+      # The secrets go up WITH the code (`wrangler deploy --secrets-file`), so
+      # the deploy makes ONE version, code and secrets together, and its
+      # `Current Version ID` is the version the smoke check must see. A
+      # separate `secret bulk` after the deploy made and deployed a second
+      # version, and `wrangler deployments status` read right after it could
+      # still return the deployment from before this job (prod run
+      # 44692471877), so the check waited for an old version. Secrets not in
+      # the file stay on the Worker, as with `secret bulk`.
       # Admin reads the shared root of Infisical `sta`, which holds every
       # service's secrets, so only an ALLOWLIST is pushed: the env reads the
       # admin bundle can reach (checked under wrangler dev and against the
       # built bundle). Keys outside it are ignored, not errors. Required keys
       # must be present and non-blank; optional ones are pushed only when set.
-      # Names only in logs, never values.
-      - name: Sync secrets from Infisical
+      # Names only in logs, never values (wrangler lists secrets as "(hidden)").
+      - name: Deploy admin Worker with its secrets from Infisical
+        id: deploy
         working-directory: apps/admin
         env:
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
@@ -760,9 +722,9 @@ jobs:
               process.exit(1);
             }
 
-            // Values go through untouched, as for the content worker; `secret
-            // bulk` never deletes, so a key cleared in Infisical stays on the
-            // Worker until `wrangler secret delete`.
+            // Values go through untouched, as for the content worker; a deploy
+            // never deletes secrets, so a key cleared in Infisical stays on
+            // the Worker until `wrangler secret delete`.
             const pushing = allowed.filter(isSet);
             writeFileSync(out, JSON.stringify(Object.fromEntries(pushing.map(key => [key, secrets[key]]))));
             const skipped = optional.filter(key => !isSet(key));
@@ -770,42 +732,17 @@ jobs:
             if (skipped.length) console.log(`Not set in Infisical, not pushed: ${skipped.join(", ")}.`);
           ' "$RAW_SECRETS" "$BULK_SECRETS" build/server/wrangler.json
 
-          npx wrangler secret bulk "$BULK_SECRETS" -c build/server/wrangler.json
-
-      # `secret bulk` makes and deploys ANOTHER version (the deploy's code with
-      # the new secrets), so the version to expect is the one deployed now,
-      # not the deploy step's. It must carry the deploy step's code: its
-      # deployment is the secret change made on top of that version.
-      - name: Read the live version
-        id: live
-        working-directory: apps/admin
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DEPLOYED: ${{ steps.deploy.outputs.version_id }}
-        run: |
-          set -euo pipefail
-          npx wrangler deployments status -c build/server/wrangler.json --json > status.json
-          VERSION_ID="$(node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            const status = JSON.parse(readFileSync("status.json", "utf8"));
-            const live = (status.versions ?? []).filter(v => v.percentage === 100);
-            const fail = m => { console.error(`::error::${m}`); process.exit(1); };
-            if (live.length !== 1) fail(`expected one version at 100%, got ${JSON.stringify(status.versions)}`);
-            const id = live[0].version_id;
-            const bySecret = status.annotations?.["workers/triggered_by"] === "secret";
-            if (id !== process.env.DEPLOYED && !bySecret) fail(`live version ${id} is neither the deploy (${process.env.DEPLOYED}) nor its secret change`);
-            console.log(id);
-          ')"
-          echo "Live version: $VERSION_ID (deploy step made $DEPLOYED)"
+          npx wrangler deploy -c build/server/wrangler.json --secrets-file "$BULK_SECRETS" | tee deploy.log
+          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
+          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
           echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
 
       # The new version must be the one answering, not just something: /health
       # carries the Worker's version id (CF_VERSION_METADATA) in
-      # x-worker-version. Runs after the secrets, which the Worker needs to load.
+      # x-worker-version, which must be the id the deploy printed.
       - name: Smoke check admin.staging.classmoji.io
         env:
-          EXPECTED: ${{ steps.live.outputs.version_id }}
+          EXPECTED: ${{ steps.deploy.outputs.version_id }}
         run: |
           set -uo pipefail
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do

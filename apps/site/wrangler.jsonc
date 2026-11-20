@@ -32,8 +32,8 @@
   },
 
   // Secrets are not declared here. CI pushes RESEND_API_KEY from Infisical
-  // (`sta` for staging) with `wrangler secret bulk` after each deploy (the
-  // deploy-site-worker job). Locally, wrangler reads .dev.vars next to the
+  // (`sta` for staging) with each deploy (`wrangler deploy --secrets-file`,
+  // the deploy-site-worker job). Locally, wrangler reads .dev.vars next to the
   // config it runs, i.e. dist/server/.dev.vars (gitignored with dist/; a
   // rebuild removes it), if you want the form to send.
   //
