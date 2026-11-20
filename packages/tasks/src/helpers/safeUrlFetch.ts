@@ -430,6 +430,24 @@ function header(
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
+/**
+ * Every token of a list-valued header, across repeated header lines and
+ * comma-separated values alike: trimmed, lowercased, empties dropped. For a
+ * header where any one value changes the meaning, reading only the first
+ * (as `header` does) would miss the rest.
+ */
+function headerTokens(
+  headers: Record<string, string | string[] | undefined>,
+  name: string
+): string[] {
+  const v = headers[name];
+  if (v === undefined) return [];
+  return (Array.isArray(v) ? v : [v])
+    .flatMap(line => line.split(','))
+    .map(token => token.trim().toLowerCase())
+    .filter(token => token !== '');
+}
+
 const MAX_FILENAME_LENGTH = 255;
 
 /**
@@ -580,7 +598,16 @@ export async function fetchImportUrl(
     if (released) return;
     released = true;
     clearTimeout(timer);
+    // Discarding the body: `destroy()` stops reading at once (a cap or a
+    // refusal must not keep pulling an unbounded body; `dump()` would read on
+    // up to its limit) and emits `UND_ERR_ABORTED` unless the body was read to
+    // the end. If the response had already fully arrived, nothing else is
+    // listening for that error and it would surface as an uncaught exception,
+    // failing the task instead of returning the refusal we are throwing. The
+    // listener is undici's own idiom for a body it abandons, and is added only
+    // here: a reader of `body` has already seen any error by the time this runs.
     try {
+      body?.on('error', () => {});
       body?.destroy();
     } catch {
       // already destroyed
@@ -662,10 +689,14 @@ export async function fetchImportUrl(
     // Stored byte for byte, so a compressed body would be stored compressed —
     // and the cap would count the compressed size. We asked for `identity`;
     // a server that compresses anyway is refused rather than trusted. No header
-    // means identity.
-    const encoding = header(res.headers, 'content-encoding')?.trim().toLowerCase() ?? '';
-    if (encoding !== '' && encoding !== 'identity') {
-      const named = encoding.replace(/[^a-z0-9,\s-]/g, '').slice(0, 40);
+    // means identity. Every value counts: a second `Content-Encoding` line, or
+    // a later item in a list, applies a coding just as much as the first.
+    const encodings = headerTokens(res.headers, 'content-encoding');
+    if (encodings.some(coding => coding !== 'identity')) {
+      const named = encodings
+        .join(', ')
+        .replace(/[^a-z0-9,\s-]/g, '')
+        .slice(0, 40);
       throw new UrlImportError(
         'UNSUPPORTED_ENCODING',
         `The server sent the file compressed (${named}); only uncompressed downloads can be imported.`
