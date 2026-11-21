@@ -40,6 +40,7 @@ import {
 import { verifyDocViewToken } from '@classmoji/services/render-token';
 import { CollabRequestError } from './collab/env.server.ts';
 import { FRAME_SETTLE_JS } from './frameSettle.ts';
+import { MEDIA_STILL_JS } from './mediaStill.ts';
 import { generatedDocCspHeaders } from './csp.server.ts';
 import { fetchLiveDeck, liveEditingEnv } from './collab/collab.server.ts';
 import {
@@ -150,6 +151,7 @@ export const VIEW_DRIVER_SCRIPT = `
 (function () {
   var META = JSON.parse(document.getElementById(${JSON.stringify(VIEW_META_ELEMENT_ID)}).textContent);
 ${FRAME_SETTLE_JS}
+${MEDIA_STILL_JS}
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function frames() { return new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); }
   function describe(el, text) {
@@ -280,6 +282,10 @@ ${FRAME_SETTLE_JS}
     // shown; start them again so an embed in a fragment loads too.
     if (Reveal.startEmbeddedContent) Reveal.startEmbeddedContent();
     return settleImages(target, 4000).then(function () {
+      // Its videos (and its background video) on their first frame, paused.
+      var background = Reveal.getSlideBackground && Reveal.getSlideBackground(idx.h, idx.v || 0);
+      return stillMedia([target, background], 4000);
+    }).then(function () {
       Reveal.layout();
       return frames();
     }).then(function () { return measure(target, entry); });
