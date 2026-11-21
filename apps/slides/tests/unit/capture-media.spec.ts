@@ -11,9 +11,6 @@
  * for their CDN URLs, in Chrome refusing autoplay with sound (as a headless
  * capture browser does). Media is a WAV tone, so nothing binary is checked in.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { generateDeckHtml, type DeckJson } from '@classmoji/services/slides';
 import { VIEW_API_GLOBAL, VIEW_READY_ATTRIBUTE } from '@classmoji/services/render-contract';
@@ -24,6 +21,7 @@ import {
   firstSlideOnly,
   withReadinessMarker,
 } from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
+import { routeJsdelivrToInstalled } from '../helpers/revealCdn.helpers.ts';
 
 test.use({
   channel: 'chrome',
@@ -31,23 +29,6 @@ test.use({
 });
 
 const ORIGIN = 'https://cm-capture.test';
-const requireFromHere = createRequire(import.meta.url);
-
-/** `/npm/<pkg>@<version>/<path>` → the installed package's file, or null. */
-function cdnFile(pathname: string): string | null {
-  const m = pathname.match(/^\/npm\/((?:@[^/]+\/)?[^@/]+)@[^/]+\/(.+)$/);
-  if (!m) return null;
-  let root: string;
-  try {
-    // The entry point, then up to the package's own folder (`exports` hides package.json).
-    root = dirname(requireFromHere.resolve(m[1]));
-  } catch {
-    return null;
-  }
-  while (!existsSync(join(root, 'package.json'))) root = dirname(root);
-  const file = join(root, m[2]);
-  return existsSync(file) ? file : null;
-}
 
 /** A 2 s mono 8 kHz tone as WAV: media that loads offline (a `<video>` plays it too). */
 function toneWav(): Buffer {
@@ -102,12 +83,7 @@ const deckOf = (slide: DeckJson['slides'][number]): DeckJson => ({
 });
 
 async function serve(page: Page, html: string) {
-  await page.route('https://cdn.jsdelivr.net/**', async routed => {
-    const file = cdnFile(new URL(routed.request().url()).pathname);
-    if (!file) return routed.fulfill({ status: 404, body: '' });
-    const contentType = file.endsWith('.css') ? 'text/css' : 'text/javascript';
-    return routed.fulfill({ contentType, body: readFileSync(file) });
-  });
+  await routeJsdelivrToInstalled(page);
   await page.route(`${ORIGIN}/**`, async routed => {
     const path = new URL(routed.request().url()).pathname;
     if (path === '/doc') return routed.fulfill({ contentType: 'text/html', body: html });

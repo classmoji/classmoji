@@ -269,11 +269,26 @@ ${MEDIA_STILL_JS}
   }
   var byId = {};
   META.slides.forEach(function (s) { byId[s.id] = s; });
+  // The largest two-decimal scale at which the whole slide fits the viewport,
+  // given to Reveal as its maxScale. Reveal 6 rounds its scale to two
+  // decimals, and with margin 0 a scale rounded UP draws the slide past the
+  // viewport and the picture loses its edges (1280x720 at 480 px: 0.375 is
+  // drawn at 0.38). Capped, it rounds to itself. Equal to the exact fit
+  // whenever that has two decimals (every 960x700 deck at 480 and 960 px).
+  function fitScale() {
+    var box = document.querySelector('.reveal');
+    var fit = Math.min(box.offsetWidth / META.width, box.offsetHeight / META.height);
+    return Math.floor(fit * 100 + 1e-6) / 100;
+  }
   function show(id) {
     var entry = byId[id];
     if (!entry) return Promise.resolve({ error: 'unknown-slide', id: id });
     var sec = document.querySelector('.reveal .slides section[data-cm-id="' + CSS.escape(id) + '"]');
     if (!sec) return Promise.resolve({ error: 'unknown-slide', id: id });
+    // The caller sizes the viewport after the ready flag: fit that size. Only
+    // on a change (configure re-syncs the deck), before the slide is shown.
+    var cap = fitScale();
+    if (Reveal.getConfig && Reveal.getConfig().maxScale !== cap) Reveal.configure({ maxScale: cap });
     var target = sec.querySelector(':scope > section') || sec;
     var idx = Reveal.getIndices(target);
     Reveal.slide(idx.h, idx.v || 0);
@@ -305,7 +320,7 @@ ${MEDIA_STILL_JS}
     Reveal.configure({
       transition: 'none', backgroundTransition: 'none', controls: false, progress: false,
       slideNumber: false, hash: false, history: false, keyboard: false, touch: false,
-      margin: 0, fragments: false, autoAnimate: false, autoSlide: 0, viewDistance: 2,
+      margin: 0, maxScale: fitScale(), fragments: false, autoAnimate: false, autoSlide: 0, viewDistance: 2,
     });
     window[${JSON.stringify(VIEW_API_GLOBAL)}] = { meta: META, show: show, measureAll: measureAll };
     frames().then(function () { document.documentElement.setAttribute(${JSON.stringify(VIEW_READY_ATTRIBUTE)}, ''); });
