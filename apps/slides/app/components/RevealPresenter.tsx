@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { RevealConfig } from 'reveal.js';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
+import { revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
 import QRCodeOverlay from './QRCodeOverlay';
 import { deckSlidesFragment, hasVisibleSlides, renderSpeakerNotes } from '~/utils/presenterMarkup';
 import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
@@ -65,7 +66,7 @@ function getThemeUrl(theme: string) {
     return null;
   }
   if (BUILTIN_THEMES.includes(theme)) {
-    return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
+    return revealThemeUrl(theme);
   }
   // Custom themes are relative paths
   return theme;

@@ -50,6 +50,13 @@ import {
   type BlockBox,
 } from './deckBlocks.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
+import {
+  highlightStyleUrl,
+  revealCoreCssUrl,
+  revealHighlightPluginUrl,
+  revealScriptUrl,
+  revealThemeUrl,
+} from './revealAssets.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -69,9 +76,6 @@ export const BUILTIN_THEMES = [
   'sky',
   'blood',
 ] as const;
-
-const REVEAL_VERSION = '5.1.0';
-const HIGHLIGHT_VERSION = '11.9.0';
 
 const MEDIA_LIGHT = '(prefers-color-scheme: light)';
 const MEDIA_DARK = '(prefers-color-scheme: dark)';
@@ -259,11 +263,11 @@ export const SL_BLOCK_CSS =
 
 function builtinThemeUrl(theme: string): string {
   const name = (BUILTIN_THEMES as readonly string[]).includes(theme) ? theme : 'white';
-  return `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/theme/${name}.css`;
+  return revealThemeUrl(name);
 }
 
 function highlightThemeUrl(codeTheme: string): string {
-  return `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/${codeTheme}.min.css`;
+  return highlightStyleUrl(codeTheme);
 }
 
 function linkLine(href: string, media?: string): string {
@@ -316,7 +320,8 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
  *   for routes that open the document outside the slides app.
  * - themeDark/codeThemeDark → light/dark/`not all` media link trio, else a
  *   single canonical link.
- * - Builtin themes via jsDelivr reveal.js@5.1.0; shared:/custom: themes via
+ * - Reveal (engine, core css, highlight plugin) and builtin themes from
+ *   jsDelivr, at the versions revealAssets.ts names; shared:/custom: themes via
  *   opts.themeUrls (caller-resolved).
  * - `data-cm-id` emitted on every section.
  * - Config goes into a `<script type="application/json">` block (canonical
@@ -381,7 +386,7 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0">',
     `  <title>${escapeHtml(title)}</title>`,
-    `  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/reveal.css">`,
+    linkLine(revealCoreCssUrl()),
     ...themeLinks,
     ...codeLinks,
   ];
@@ -428,8 +433,8 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     sections,
     '    </div>',
     '  </div>',
-    `  <script src="https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/reveal.js"></script>`,
-    `  <script src="https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/plugin/highlight/highlight.js"></script>`,
+    `  <script src="${escapeAttr(revealScriptUrl())}"></script>`,
+    `  <script src="${escapeAttr(revealHighlightPluginUrl())}"></script>`,
     `  <script type="application/json" id="${REVEAL_CONFIG_ELEMENT_ID}">${jsonForScript(revealConfig)}</script>`,
     `  <script>${REVEAL_INIT_SCRIPT}</script>`,
     '</body>',
@@ -607,9 +612,11 @@ const DELIVERY_THEME_HREF =
 
 const BUILTIN_THEME_RE = /reveal\.js@[^/]+\/dist\/theme\/([\w-]+?)(?:\.min)?\.css/;
 // Recognizes BOTH highlight.js styles AND the reveal plugin path (the starter
-// links monokai via `reveal.js@*/plugin/highlight/monokai.css`).
+// links monokai via `reveal.js@*/plugin/highlight/monokai.css`; reveal.js 6
+// moved the plugin's stylesheets under `dist/`).
 const HIGHLIGHT_RE = /highlight\.js@[^/]+\/styles\/([\w.-]+?)(?:\.min)?\.css/;
-const REVEAL_PLUGIN_HIGHLIGHT_RE = /reveal\.js@[^/]+\/plugin\/highlight\/([\w.-]+?)(?:\.min)?\.css/;
+const REVEAL_PLUGIN_HIGHLIGHT_RE =
+  /reveal\.js@[^/]+\/(?:dist\/)?plugin\/highlight\/([\w.-]+?)(?:\.min)?\.css/;
 
 interface ThemeSlots {
   light?: string;

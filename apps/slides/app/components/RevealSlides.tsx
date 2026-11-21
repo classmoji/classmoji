@@ -7,6 +7,7 @@ import {
   removeHiddenSlides,
   slideIndicesWhere,
 } from '@classmoji/services/slides/hidden';
+import { highlightStyleUrl, revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 import type { EditorFrames } from '~/utils/editorFrames';
 import { editorSlidesFragment, storedDeckHtml, viewerSlidesFragment } from '~/utils/slideMarkup';
@@ -115,7 +116,7 @@ function getThemeUrl(
   sharedThemes: SharedTheme[] = []
 ) {
   if (BUILTIN_THEMES.includes(theme)) {
-    return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
+    return revealThemeUrl(theme);
   }
   // Check if this is a custom theme ID (format: "custom:filename.css")
   if (theme.startsWith('custom:')) {
@@ -311,7 +312,7 @@ const RevealSlides = forwardRef(function RevealSlides(
   useEffect(() => {
     if (!isClient) return;
 
-    const codeThemeUrl = `https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeTheme}.min.css`;
+    const codeThemeUrl = highlightStyleUrl(codeTheme);
 
     // Remove existing code theme stylesheet if present
     if (codeThemeStyleRef.current) {
