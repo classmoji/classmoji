@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { RevealConfig } from 'reveal.js';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
-import { revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
+import {
+  BUILTIN_THEMES as REVEAL_BUILTIN_THEMES,
+  revealThemeUrl,
+} from '@classmoji/services/slides/reveal-assets';
 import QRCodeOverlay from './QRCodeOverlay';
 import { deckSlidesFragment, hasVisibleSlides, renderSpeakerNotes } from '~/utils/presenterMarkup';
 import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
@@ -24,21 +27,8 @@ import {
 const DELIVERY_THEME_HREF =
   /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/theme\//;
 
-// Built-in Reveal.js themes
-const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-];
+// Built-in Reveal.js themes (the one list, revealAssets.ts)
+const BUILTIN_THEMES: readonly string[] = REVEAL_BUILTIN_THEMES;
 
 /**
  * Get the URL for a theme stylesheet

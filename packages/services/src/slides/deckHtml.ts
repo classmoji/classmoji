@@ -51,6 +51,8 @@ import {
 } from './deckBlocks.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 import {
+  BUILTIN_THEMES,
+  highlightStyleName,
   highlightStyleUrl,
   revealCoreCssUrl,
   revealHighlightPluginUrl,
@@ -62,20 +64,8 @@ import {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-] as const;
+// The builtin themes live with the CDN URLs (revealAssets.ts); re-exported here.
+export { BUILTIN_THEMES };
 
 const MEDIA_LIGHT = '(prefers-color-scheme: light)';
 const MEDIA_DARK = '(prefers-color-scheme: dark)';
@@ -613,8 +603,10 @@ const DELIVERY_THEME_HREF =
 const BUILTIN_THEME_RE = /reveal\.js@[^/]+\/dist\/theme\/([\w-]+?)(?:\.min)?\.css/;
 // Recognizes BOTH highlight.js styles AND the reveal plugin path (the starter
 // links monokai via `reveal.js@*/plugin/highlight/monokai.css`; reveal.js 6
-// moved the plugin's stylesheets under `dist/`).
-const HIGHLIGHT_RE = /highlight\.js@[^/]+\/styles\/([\w.-]+?)(?:\.min)?\.css/;
+// moved the plugin's stylesheets under `dist/`). A highlight.js style may sit
+// one folder down (`styles/base16/dracula.min.css` is the `dracula` code
+// theme); `highlightStyleName` maps the path back to the name the deck stores.
+const HIGHLIGHT_RE = /highlight\.js@[^/]+\/styles\/((?:[\w-]+\/)?[\w.-]+?)(?:\.min)?\.css/;
 const REVEAL_PLUGIN_HIGHLIGHT_RE =
   /reveal\.js@[^/]+\/(?:dist\/)?plugin\/highlight\/([\w.-]+?)(?:\.min)?\.css/;
 
@@ -756,9 +748,11 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
         });
         return;
       }
-      const hlMatch = href.match(HIGHLIGHT_RE) ?? href.match(REVEAL_PLUGIN_HIGHLIGHT_RE);
-      if (hlMatch) {
-        codeCandidates.push({ name: hlMatch[1], ...(media ? { media } : {}) });
+      const styleMatch = href.match(HIGHLIGHT_RE);
+      const styleName = styleMatch ? highlightStyleName(styleMatch[1]) : null;
+      const codeName = styleName ?? href.match(REVEAL_PLUGIN_HIGHLIGHT_RE)?.[1];
+      if (codeName) {
+        codeCandidates.push({ name: codeName, ...(media ? { media } : {}) });
         return;
       }
       // Shared-theme assets are regenerated from caller-resolved themeUrls.

@@ -7,7 +7,11 @@ import {
   removeHiddenSlides,
   slideIndicesWhere,
 } from '@classmoji/services/slides/hidden';
-import { highlightStyleUrl, revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
+import {
+  BUILTIN_THEMES as REVEAL_BUILTIN_THEMES,
+  highlightStyleUrl,
+  revealThemeUrl,
+} from '@classmoji/services/slides/reveal-assets';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 import type { EditorFrames } from '~/utils/editorFrames';
 import { editorSlidesFragment, storedDeckHtml, viewerSlidesFragment } from '~/utils/slideMarkup';
@@ -35,21 +39,9 @@ function showHashSlideInScrollView(deck: RevealApi, hash: string): void {
   scrollToSlidePage(viewport, slide, navbar);
 }
 
-// Built-in Reveal.js themes (exported for use in SlideToolbar)
-export const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-];
+// Built-in Reveal.js themes (exported for use in SlideToolbar): the one list
+// the generator, the MCP and the CDN URLs use.
+export const BUILTIN_THEMES: readonly string[] = REVEAL_BUILTIN_THEMES;
 
 // Theme categories for better UX in dropdowns
 export const LIGHT_THEMES = ['white', 'beige', 'sky', 'serif', 'simple', 'solarized'];

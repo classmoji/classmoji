@@ -1,16 +1,20 @@
 /**
  * revealAssets.ts — every reveal.js and highlight.js URL a deck loads from a
- * CDN, built in one place. Browser-safe (no node imports): the slides client
- * imports it through `@classmoji/services/slides/reveal-assets`.
+ * CDN, built in one place, and the builtin and code themes the editor offers.
+ * Browser-safe (no node imports): the slides client imports it through
+ * `@classmoji/services/slides/reveal-assets`.
  *
  * Two kinds of version live here, on purpose:
  *
  * - The ENGINE versions: the reveal.js the slides app bundles (engine, core
  *   css, highlight plugin), the highlight.js that plugin bundles, and the
  *   installed highlight.js package. They must equal what is installed;
- *   `__tests__/revealAssets.test.ts` fails when they do not, and when any
- *   reveal/highlight CDN URL in the repo is written by hand instead of through
- *   this module.
+ *   `__tests__/revealAssets.test.ts` fails when they do not. The same test
+ *   reads every reveal/highlight CDN URL in the repo and fails on one that
+ *   names a version other than the one this module would use, names none
+ *   (floats to latest), or is assembled from pieces it cannot read (a
+ *   template or a concatenation). It checks versions, not authorship: a URL
+ *   written out by hand at the right version passes.
  *
  * - The LOOK versions: the builtin theme stylesheets decks were built with,
  *   and the highlight styles whose colours changed after that. reveal.js 6's
@@ -23,6 +27,7 @@
  */
 
 const JSDELIVR = 'https://cdn.jsdelivr.net/npm';
+const CDNJS = 'https://cdnjs.cloudflare.com/ajax/libs';
 
 /** The installed reveal.js (apps/slides/package.json pins it exactly). */
 export const REVEAL_VERSION = '6.0.2';
@@ -53,6 +58,59 @@ export const HIGHLIGHT_STYLE_VERSIONS: Readonly<Record<string, string>> = {
   monokai: '11.9.0',
 };
 
+/** reveal.js's builtin themes: the editor's theme picker, the MCP's set_theme. */
+export const BUILTIN_THEMES = [
+  'black',
+  'white',
+  'league',
+  'beige',
+  'night',
+  'serif',
+  'simple',
+  'solarized',
+  'moon',
+  'dracula',
+  'sky',
+  'blood',
+] as const;
+
+/** The code themes the editor's picker offers (`value` is the highlight.js style a deck stores). */
+export const CODE_THEMES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'github-dark', label: 'GitHub Dark' },
+  { value: 'github', label: 'GitHub Light' },
+  { value: 'monokai', label: 'Monokai' },
+  { value: 'atom-one-dark', label: 'Atom One Dark' },
+  { value: 'vs2015', label: 'VS 2015' },
+  { value: 'dracula', label: 'Dracula' },
+];
+
+/**
+ * Code themes whose stylesheet is not `styles/<name>`, by the name decks
+ * store. highlight.js ships Dracula only as a base16 style:
+ * `styles/dracula.min.css` does not exist, and a deck that picked Dracula got
+ * no code colours from it.
+ */
+export const HIGHLIGHT_STYLE_PATHS: Readonly<Record<string, string>> = {
+  dracula: 'base16/dracula',
+};
+
+/** A code theme's stylesheet path below `styles/` (no extension). */
+export function highlightStylePath(name: string): string {
+  return Object.hasOwn(HIGHLIGHT_STYLE_PATHS, name) ? HIGHLIGHT_STYLE_PATHS[name] : name;
+}
+
+/**
+ * The code theme a stylesheet path below `styles/` stands for, the inverse of
+ * {@link highlightStylePath} (`base16/dracula` → `dracula`); null for a nested
+ * style no code theme maps to.
+ */
+export function highlightStyleName(path: string): string | null {
+  for (const [name, mapped] of Object.entries(HIGHLIGHT_STYLE_PATHS)) {
+    if (mapped === path) return name;
+  }
+  return path.includes('/') ? null : path;
+}
+
 /** reveal.js's core stylesheet. */
 export function revealCoreCssUrl(): string {
   return `${JSDELIVR}/reveal.js@${REVEAL_VERSION}/dist/reveal.css`;
@@ -78,22 +136,29 @@ export function revealThemeUrl(name: string): string {
   return `${JSDELIVR}/reveal.js@${REVEAL_THEME_VERSION}/dist/theme/${name}.css`;
 }
 
-/** The version a highlight.js style is loaded at. */
+/** The version a highlight.js style is loaded at in decks. */
 export function highlightStyleVersion(name: string): string {
   return Object.hasOwn(HIGHLIGHT_STYLE_VERSIONS, name)
     ? HIGHLIGHT_STYLE_VERSIONS[name]
     : HIGHLIGHT_VERSION;
 }
 
+/** The version a highlight.js style is loaded at on cdnjs (code outside decks). */
+export function highlightStyleCdnjsVersion(name: string): string {
+  return Object.hasOwn(HIGHLIGHT_STYLE_VERSIONS, name)
+    ? HIGHLIGHT_STYLE_VERSIONS[name]
+    : HIGHLIGHT_PACKAGE_VERSION;
+}
+
 /** A highlight.js style (minified) on jsDelivr. */
 export function highlightStyleUrl(name: string): string {
-  return `${JSDELIVR}/highlight.js@${highlightStyleVersion(name)}/styles/${name}.min.css`;
+  return `${JSDELIVR}/highlight.js@${highlightStyleVersion(name)}/styles/${highlightStylePath(name)}.min.css`;
 }
 
 /**
- * A highlight.js style (minified) on cdnjs, for code highlighted outside decks
- * by the installed package (pages whose policy names cdnjs).
+ * A highlight.js style (minified) on cdnjs, for code the installed package
+ * highlights outside decks (the webapp's quiz chat loads it from there).
  */
 export function highlightStyleCdnjsUrl(name: string): string {
-  return `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_PACKAGE_VERSION}/styles/${name}.min.css`;
+  return `${CDNJS}/highlight.js/${highlightStyleCdnjsVersion(name)}/styles/${highlightStylePath(name)}.min.css`;
 }
