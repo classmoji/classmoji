@@ -132,6 +132,8 @@ function jsonForScript(value: unknown): string {
 const VIEW_STYLE = `
 <style>
   .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }
+  /* reveal.js 6's play/unmute button (autoplay with sound refused): never in a picture. */
+  .reveal .r-media-play-button { display: none !important; }
   html, body { margin: 0; overflow: hidden; }
   /* A still frame: every transition and animation jumps to its end state, so
      a slide caught mid-transition (a per-slide data-transition) is never

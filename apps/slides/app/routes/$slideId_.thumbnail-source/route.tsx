@@ -209,8 +209,8 @@ export function firstSlideOnly(deck: DeckJson): DeckJson {
 /**
  * The one script the render page carries, plus the chrome suppression.
  *
- * Reveal draws controls, a progress bar and a slide number; none of them belong
- * in a card image. Hiding them in CSS is cheaper and more reliable than
+ * Reveal draws controls, a progress bar, a slide number and (reveal.js 6) a
+ * play/unmute button; none of them belong in a card image. Hiding them in CSS is cheaper and more reliable than
  * re-configuring the deck's own `Reveal.initialize` call, which is emitted by
  * the shared generator and must stay byte-identical to what a save writes.
  *
@@ -280,6 +280,9 @@ export function readinessScript(): string {
   return [
     '<style>',
     '  .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }',
+    // reveal.js 6 offers a play/unmute button when the browser refuses
+    // autoplay with sound; a card image is never clicked.
+    '  .reveal .r-media-play-button { display: none !important; }',
     '  html, body { margin: 0; overflow: hidden; }',
     '</style>',
     `<script>${READINESS_SCRIPT}</script>`,
