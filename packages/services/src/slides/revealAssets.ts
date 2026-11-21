@@ -6,18 +6,20 @@
  * Two kinds of version live here, on purpose:
  *
  * - The ENGINE versions: the reveal.js the slides app bundles (engine, core
- *   css, highlight plugin) and the highlight.js that plugin bundles. They must
- *   equal the installed packages; `__tests__/revealAssets.test.ts` fails when
- *   they do not, and when any reveal/highlight CDN URL in the repo is written
- *   by hand instead of through this module.
+ *   css, highlight plugin), the highlight.js that plugin bundles, and the
+ *   installed highlight.js package. They must equal what is installed;
+ *   `__tests__/revealAssets.test.ts` fails when they do not, and when any
+ *   reveal/highlight CDN URL in the repo is written by hand instead of through
+ *   this module.
  *
  * - The LOOK versions: the builtin theme stylesheets decks were built with,
  *   and the highlight styles whose colours changed after that. reveal.js 6's
- *   themes are not the 5.1.0 themes (beige, dracula and simple lost their
- *   fonts and heading sizes; every theme changed its link and selection
- *   colours), and highlight.js 11.11.1's monokai colours numbers and `attr`
- *   tokens that 11.9.0 left plain. These stay frozen until someone decides to
- *   change how existing decks look; they are not "left behind" pins.
+ *   themes are not the 5.1.0 themes (beige, dracula, simple, serif, night,
+ *   sky and league draw text or headings differently: fonts, sizes, weights,
+ *   colours; every theme changed its link-hover and selection colours), and
+ *   highlight.js 11.11.1's monokai colours numbers and `attr` tokens that
+ *   11.9.0 left plain. These stay frozen until someone decides to change how
+ *   existing decks look; they are not "left behind" pins.
  */
 
 const JSDELIVR = 'https://cdn.jsdelivr.net/npm';
@@ -25,18 +27,29 @@ const JSDELIVR = 'https://cdn.jsdelivr.net/npm';
 /** The installed reveal.js (apps/slides/package.json pins it exactly). */
 export const REVEAL_VERSION = '6.0.2';
 
-/** The highlight.js bundled into that reveal.js's highlight plugin. */
+/**
+ * The highlight.js bundled into that reveal.js's highlight plugin: what
+ * tokenises code in every deck, live and generated, so deck code styles follow it.
+ */
 export const HIGHLIGHT_VERSION = '11.11.1';
+
+/**
+ * The installed highlight.js package (the lockfile's), which highlights code
+ * outside decks (the webapp's quiz chat). Equal to {@link HIGHLIGHT_VERSION}
+ * today; the two can move apart, so each is checked against its own source.
+ */
+export const HIGHLIGHT_PACKAGE_VERSION = '11.11.1';
 
 /** The reveal.js whose builtin theme stylesheets every deck is drawn with. */
 export const REVEAL_THEME_VERSION = '5.1.0';
 
 /**
- * highlight.js styles kept at the version decks were drawn with, because the
- * installed version's file colours tokens differently. A style not listed
- * here is byte-identical between that version and {@link HIGHLIGHT_VERSION}.
+ * highlight.js styles kept at the version decks were drawn with (11.9.0),
+ * because the 11.11.1 file colours tokens differently. Every other style both
+ * versions ship is byte-identical between them.
  */
 export const HIGHLIGHT_STYLE_VERSIONS: Readonly<Record<string, string>> = {
+  felipec: '11.9.0',
   monokai: '11.9.0',
 };
 
@@ -77,7 +90,10 @@ export function highlightStyleUrl(name: string): string {
   return `${JSDELIVR}/highlight.js@${highlightStyleVersion(name)}/styles/${name}.min.css`;
 }
 
-/** A highlight.js style (minified) on cdnjs, for pages whose policy names cdnjs. */
+/**
+ * A highlight.js style (minified) on cdnjs, for code highlighted outside decks
+ * by the installed package (pages whose policy names cdnjs).
+ */
 export function highlightStyleCdnjsUrl(name: string): string {
-  return `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${highlightStyleVersion(name)}/styles/${name}.min.css`;
+  return `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_PACKAGE_VERSION}/styles/${name}.min.css`;
 }

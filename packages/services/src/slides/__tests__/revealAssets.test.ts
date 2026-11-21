@@ -18,6 +18,7 @@ import { promisify } from 'node:util';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateDeckHtml, parseDeckHtml } from '../deckHtml.ts';
 import {
+  HIGHLIGHT_PACKAGE_VERSION,
   HIGHLIGHT_STYLE_VERSIONS,
   HIGHLIGHT_VERSION,
   REVEAL_THEME_VERSION,
@@ -64,8 +65,14 @@ describe('engine versions match the installed packages', () => {
     expect((await readJson('node_modules/reveal.js/package.json')).version).toBe(REVEAL_VERSION);
   });
 
-  it('highlight.js: the lockfile has it, and the installed highlight plugin bundles it', async () => {
-    expect(await lockVersion('highlight.js')).toBe(HIGHLIGHT_VERSION);
+  it('highlight.js: the installed package is the lockfile one', async () => {
+    expect(await lockVersion('highlight.js')).toBe(HIGHLIGHT_PACKAGE_VERSION);
+    expect((await readJson('node_modules/highlight.js/package.json')).version).toBe(
+      HIGHLIGHT_PACKAGE_VERSION
+    );
+  });
+
+  it('highlight.js: the installed highlight plugin bundles HIGHLIGHT_VERSION', async () => {
     const plugin = await text('node_modules/reveal.js/dist/plugin/highlight.js');
     const versions = new Set([...plugin.matchAll(/[`'"](11\.\d+\.\d+)[`'"]/g)].map(m => m[1]));
     expect([...versions]).toEqual([HIGHLIGHT_VERSION]);
@@ -144,10 +151,9 @@ function pinnedReferences(text: string): Array<{ url: string; version: string; e
   )) {
     out.push({ url: m[0], version: m[1], expected: style(m[2]) });
   }
-  for (const m of text.matchAll(
-    /ajax\/libs\/highlight\.js\/(\d+\.\d+\.\d+)(?:\/styles\/([\w.-]+?)(?:\.min)?\.css)?/g
-  )) {
-    out.push({ url: m[0], version: m[1], expected: style(m[2]) });
+  // cdnjs styles colour code the installed package highlights (outside decks).
+  for (const m of text.matchAll(/ajax\/libs\/highlight\.js\/(\d+\.\d+\.\d+)/g)) {
+    out.push({ url: m[0], version: m[1], expected: HIGHLIGHT_PACKAGE_VERSION });
   }
   return out;
 }
@@ -290,13 +296,18 @@ describe('the generated document', () => {
     );
   });
 
-  it('cdnjs styles follow the same versions', () => {
+  it('cdnjs styles (code outside decks) follow the installed package', () => {
     expect(highlightStyleCdnjsUrl('github')).toBe(
-      `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_VERSION}/styles/github.min.css`
+      `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_PACKAGE_VERSION}/styles/github.min.css`
     );
-    expect(highlightStyleCdnjsUrl('monokai')).toContain(
-      '/highlight.js/11.9.0/styles/monokai.min.css'
-    );
+  });
+
+  it('every frozen style is one the frozen version ships', async () => {
+    for (const name of Object.keys(HIGHLIGHT_STYLE_VERSIONS)) {
+      expect(highlightStyleUrl(name)).toContain(`@${HIGHLIGHT_STYLE_VERSIONS[name]}/styles/`);
+      // and one the installed package still ships (a deck may name it)
+      expect(await exists(`node_modules/highlight.js/styles/${name}.min.css`), name).toBe(true);
+    }
   });
 });
 
