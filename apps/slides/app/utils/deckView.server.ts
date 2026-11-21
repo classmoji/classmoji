@@ -146,6 +146,16 @@ const VIEW_STYLE = `
 </style>
 `;
 
+/**
+ * How long one render-view visit may wait for media to reach a first frame, in
+ * total across every `show()`. deck_render shows every slide inside one 60 s
+ * render (RENDER_DEADLINE_MS) with 15 s per page call; each slide may also
+ * wait up to 4 s for images and frames. At 4 s of media per slide, a deck
+ * whose videos never load ran out of time and returned nothing. 8 s is two
+ * slides' worth: enough for a slow first video, small against the deadline.
+ */
+export const MEDIA_BUDGET_MS = 8000;
+
 /** The driver script's exact text (its CSP hash is taken over these bytes). */
 export const VIEW_DRIVER_SCRIPT = `
 (function () {
@@ -287,6 +297,10 @@ ${MEDIA_STILL_JS}
     var fit = Math.min(box.offsetWidth / META.width, box.offsetHeight / META.height);
     config.maxScale = Math.floor(fit * 100 + 1e-6) / 100;
   }
+  // One media budget for the whole visit (MEDIA_BUDGET_MS). Once it is spent
+  // a slide does not wait: its media is still paused and rewound, and the
+  // play listener holds anything that starts later.
+  var mediaBudget = ${MEDIA_BUDGET_MS};
   function show(id) {
     var entry = byId[id];
     if (!entry) return Promise.resolve({ error: 'unknown-slide', id: id });
@@ -300,9 +314,13 @@ ${MEDIA_STILL_JS}
     // shown; start them again so an embed in a fragment loads too.
     if (Reveal.startEmbeddedContent) Reveal.startEmbeddedContent();
     return settleImages(target, 4000).then(function () {
-      // Its videos (and its background video) on their first frame, paused.
+      // Its videos (and its background video) on their first frame, paused,
+      // waited for out of the visit's media budget.
       var background = Reveal.getSlideBackground && Reveal.getSlideBackground(idx.h, idx.v || 0);
-      return stillMedia([target, background], 4000);
+      var started = Date.now();
+      return stillMedia([target, background], Math.min(4000, mediaBudget)).then(function () {
+        mediaBudget = Math.max(0, mediaBudget - (Date.now() - started));
+      });
     }).then(function () {
       fitScaleToViewport();
       Reveal.layout();

@@ -54,6 +54,8 @@ function toneWav(): Buffer {
 }
 
 const TONE = `${ORIGIN}/tone.wav`;
+/** Past the thumbnail page's outer cap (8 s) and the render view's media wait (4 s). */
+const LATE_MS = 9000;
 
 /** One slide per case: what reveal.js 6 plays during a capture without the hold. */
 const CASES: Array<{ name: string; slide: DeckJson['slides'][number] }> = [
@@ -88,6 +90,13 @@ async function serve(page: Page, html: string) {
     const path = new URL(routed.request().url()).pathname;
     if (path === '/doc') return routed.fulfill({ contentType: 'text/html', body: html });
     if (path === '/tone.wav') return routed.fulfill({ contentType: 'audio/wav', body: toneWav() });
+    // Past every media wait (the hold's 4 s cap): only the play listener is left.
+    if (path === '/late.wav') {
+      await new Promise(resolve => setTimeout(resolve, LATE_MS));
+      return routed.fulfill({ contentType: 'audio/wav', body: toneWav() }).catch(() => {});
+    }
+    // A host that takes the request and never answers.
+    if (path.startsWith('/stall')) return;
     return routed.fulfill({ status: 404, body: '' });
   });
   await page.goto(`${ORIGIN}/doc`, { waitUntil: 'domcontentloaded' });
@@ -154,6 +163,103 @@ test.describe('render-view holds media on its first frame', () => {
       for (const media of state) expect(media).toEqual(HELD);
     });
   }
+});
+
+/** The render-view document for `deck`, opened and ready. */
+async function openView(page: Page, deck: DeckJson) {
+  const doc = generateDeckHtml(deck, { title: 'T', includeNotes: false, standalone: true });
+  await serve(
+    page,
+    withViewScript(doc, {
+      kind: 'deck',
+      version: 'x',
+      width: 960,
+      height: 700,
+      slides: deckViewSlides(deck),
+    })
+  );
+  await page.waitForSelector(`[${VIEW_READY_ATTRIBUTE}]`, { state: 'attached' });
+}
+
+const show = (page: Page, id: string) =>
+  page.evaluate(
+    ([api, slide]) =>
+      (Reflect.get(window, api) as { show(id: string): Promise<unknown> }).show(slide),
+    [VIEW_API_GLOBAL, id] as const
+  );
+
+test.describe('media that arrives after every wait is still held', () => {
+  const LATE: DeckJson['slides'][number] = {
+    id: 'a',
+    html: `<h2>V</h2><video data-autoplay muted src="${ORIGIN}/late.wav"></video>`,
+  };
+  /** The late video: not there when the page is done, then held once it arrives. */
+  async function heldAfterArrival(page: Page) {
+    expect((await mediaState(page))[0]).toMatchObject({ loaded: false });
+    await page.waitForFunction(
+      () => (document.querySelector('video')?.readyState ?? 0) >= 2,
+      null,
+      {
+        timeout: 15_000,
+      }
+    );
+    // Longer than Reveal takes to start it; the tone is 2 s, so a video that
+    // played would be playing or over.
+    await page.waitForTimeout(1500);
+    expect(await mediaState(page)).toEqual([
+      { paused: true, atStart: true, mutedByReveal: false, loaded: true },
+    ]);
+  }
+
+  test('on the thumbnail page (after its 8 s outer cap)', async ({ page }) => {
+    const doc = generateDeckHtml(firstSlideOnly(deckOf(LATE)), {
+      title: 'T',
+      includeNotes: false,
+      standalone: true,
+    });
+    await serve(page, withReadinessMarker(doc));
+    await page.waitForSelector(`[${THUMBNAIL_READY_ATTRIBUTE}]`, { state: 'attached' });
+    await heldAfterArrival(page);
+  });
+
+  test('in the render view', async ({ page }) => {
+    await openView(page, deckOf(LATE));
+    expect(await show(page, 'a')).toMatchObject({ id: 'a' });
+    await heldAfterArrival(page);
+  });
+});
+
+test.describe('render-view waits for media out of one budget per visit', () => {
+  test('a deck whose media never loads still returns every slide in time', async ({ page }) => {
+    test.setTimeout(90_000);
+    // Every kind of media Reveal starts, from a host that never answers.
+    const stalled = (n: number): DeckJson['slides'][number] => {
+      const src = `${ORIGIN}/stall-${n}.wav`;
+      const kinds: Array<DeckJson['slides'][number]> = [
+        { id: `s${n}`, html: `<video data-autoplay src="${src}"></video>` },
+        { id: `s${n}`, html: '<h2>B</h2>', attrs: { 'data-background-video': src } },
+        { id: `s${n}`, html: `<audio data-autoplay src="${src}"></audio>` },
+        { id: `s${n}`, html: `<video data-autoplay><source src="${src}"></video>` },
+      ];
+      return kinds[n % kinds.length];
+    };
+    const slides = Array.from({ length: 30 }, (_, n) => stalled(n));
+    await openView(page, { version: 1, theme: 'black', codeTheme: 'github', slides });
+
+    // As deck_render does: every slide in turn, inside one 60 s render. Stop
+    // early rather than run into the test timeout when the waits are per slide.
+    const started = Date.now();
+    const shown: unknown[] = [];
+    for (const { id } of slides) {
+      if (Date.now() - started > 25_000) break;
+      shown.push(await show(page, id));
+    }
+    const elapsed = Date.now() - started;
+    expect(shown).toHaveLength(30);
+    shown.forEach((measure, n) => expect(measure).toMatchObject({ id: `s${n}` }));
+    // The budget (8 s) plus a little per slide; never 4 s a slide.
+    expect(elapsed).toBeLessThan(15_000);
+  });
 });
 
 test.describe('the stored document keeps reveal’s own autoplay', () => {
