@@ -244,6 +244,12 @@ test.describe('the resource-route invariant', () => {
     // No global.css here: a first slide built from .sl-blocks would stack.
     expect(ROUTE_SOURCE).toMatch(/generateDeckHtml\(deck, \{[^}]*standalone: true/);
   });
+
+  test("hides Reveal's chrome, the play/unmute button included", () => {
+    const block = readinessScript();
+    expect(block).toContain('.reveal .controls, .reveal .progress, .reveal .slide-number');
+    expect(block).toContain('.reveal .r-media-play-button { display: none !important; }');
+  });
 });
 
 test.describe('the render token travels in a host-scoped cookie', () => {

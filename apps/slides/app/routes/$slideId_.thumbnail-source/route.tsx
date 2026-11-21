@@ -97,6 +97,7 @@ import {
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
 import { FRAME_SETTLE_JS } from '~/utils/frameSettle';
+import { MEDIA_STILL_JS } from '~/utils/mediaStill';
 import { generatedDocCspHeaders } from '~/utils/csp.server';
 
 /**
@@ -209,15 +210,15 @@ export function firstSlideOnly(deck: DeckJson): DeckJson {
 /**
  * The one script the render page carries, plus the chrome suppression.
  *
- * Reveal draws controls, a progress bar and a slide number; none of them belong
- * in a card image. Hiding them in CSS is cheaper and more reliable than
+ * Reveal draws controls, a progress bar, a slide number and (reveal.js 6) a
+ * play/unmute button; none of them belong in a card image. Hiding them in CSS is cheaper and more reliable than
  * re-configuring the deck's own `Reveal.initialize` call, which is emitted by
  * the shared generator and must stay byte-identical to what a save writes.
  *
  * The readiness signal is a HARD-CAPPED settle, not a promise chain that can
  * hang: images, fonts and frames (html blocks, and the embeds Reveal starts on
- * the first slide once it is ready) get their chance, then the flag goes up no
- * matter what. Browser Run's `waitForSelector` is the outer bound, and a deck with one
+ * the first slide once it is ready) get their chance, media is held on its
+ * first frame (`mediaStill.ts`), then the flag goes up no matter what. Browser Run's `waitForSelector` is the outer bound, and a deck with one
  * unreachable image must produce a slightly incomplete thumbnail rather than
  * burning the whole render budget and producing none.
  */
@@ -234,6 +235,7 @@ export const READINESS_SCRIPT = [
   '    // Outer cap: whatever else happens, the page declares itself ready.',
   '    setTimeout(mark, 8000);',
   FRAME_SETTLE_JS,
+  MEDIA_STILL_JS,
   '    function revealReady() {',
   '      return new Promise(function (resolve) {',
   '        var R = window.Reveal;',
@@ -262,6 +264,8 @@ export const READINESS_SCRIPT = [
   '        revealReady().then(function () {',
   '          return new Promise(function (resolve) { requestAnimationFrame(resolve); });',
   '        }).then(function () { return settleFrames(document, 6000); })',
+  '          // Then its media, paused on the first frame (Reveal has started them).',
+  '          .then(function () { return stillMedia([document], 4000); })',
   '      );',
   '      Promise.all(pending).then(function () {',
   '        requestAnimationFrame(function () { requestAnimationFrame(mark); });',
@@ -280,6 +284,9 @@ export function readinessScript(): string {
   return [
     '<style>',
     '  .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }',
+    // reveal.js 6 offers a play/unmute button when the browser refuses
+    // autoplay with sound; a card image is never clicked.
+    '  .reveal .r-media-play-button { display: none !important; }',
     '  html, body { margin: 0; overflow: hidden; }',
     '</style>',
     `<script>${READINESS_SCRIPT}</script>`,

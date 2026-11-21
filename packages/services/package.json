@@ -28,6 +28,7 @@
     "./slides/frame-refs": "./src/slides/frameRefs.ts",
     "./slides/hidden": "./src/slides/hiddenSlides.ts",
     "./slides/ops": "./src/slides/deckOps.ts",
+    "./slides/reveal-assets": "./src/slides/revealAssets.ts",
     "./slides/runtime-attrs": "./src/slides/deckRuntimeAttrs.ts",
     "./slides/safe-markup": "./src/slides/safeMarkup/index.ts",
     "./slides/safe-markup/server": "./src/slides/safeMarkup/server.ts",

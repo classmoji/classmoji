@@ -40,6 +40,7 @@ import {
 import { verifyDocViewToken } from '@classmoji/services/render-token';
 import { CollabRequestError } from './collab/env.server.ts';
 import { FRAME_SETTLE_JS } from './frameSettle.ts';
+import { MEDIA_STILL_JS } from './mediaStill.ts';
 import { generatedDocCspHeaders } from './csp.server.ts';
 import { fetchLiveDeck, liveEditingEnv } from './collab/collab.server.ts';
 import {
@@ -132,6 +133,8 @@ function jsonForScript(value: unknown): string {
 const VIEW_STYLE = `
 <style>
   .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }
+  /* reveal.js 6's play/unmute button (autoplay with sound refused): never in a picture. */
+  .reveal .r-media-play-button { display: none !important; }
   html, body { margin: 0; overflow: hidden; }
   /* A still frame: every transition and animation jumps to its end state, so
      a slide caught mid-transition (a per-slide data-transition) is never
@@ -143,11 +146,22 @@ const VIEW_STYLE = `
 </style>
 `;
 
+/**
+ * How long one render-view visit may wait for media to reach a first frame, in
+ * total across every `show()`. deck_render shows every slide inside one 60 s
+ * render (RENDER_DEADLINE_MS) with 15 s per page call; each slide may also
+ * wait up to 4 s for images and frames. At 4 s of media per slide, a deck
+ * whose videos never load ran out of time and returned nothing. 8 s is two
+ * slides' worth: enough for a slow first video, small against the deadline.
+ */
+export const MEDIA_BUDGET_MS = 8000;
+
 /** The driver script's exact text (its CSP hash is taken over these bytes). */
 export const VIEW_DRIVER_SCRIPT = `
 (function () {
   var META = JSON.parse(document.getElementById(${JSON.stringify(VIEW_META_ELEMENT_ID)}).textContent);
 ${FRAME_SETTLE_JS}
+${MEDIA_STILL_JS}
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function frames() { return new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); }
   function describe(el, text) {
@@ -265,6 +279,28 @@ ${FRAME_SETTLE_JS}
   }
   var byId = {};
   META.slides.forEach(function (s) { byId[s.id] = s; });
+  // The largest two-decimal scale at which the whole slide fits the viewport.
+  // Reveal 6 rounds its scale to two decimals, and with margin 0 a scale
+  // rounded UP draws the slide past the viewport and the picture loses its
+  // edges (1280x720 at 480 px: 0.375 is drawn at 0.38). As Reveal's maxScale
+  // it rounds to itself. Equal to the exact fit whenever that has two
+  // decimals (every 960x700 deck at 480 and 960 px), so those are unchanged.
+  //
+  // Set on the live config (getConfig() returns it) right before the layout
+  // a picture is taken from, because the caller sizes the viewport after the
+  // ready flag. Not through configure(): that re-syncs the whole deck
+  // (embeds, backgrounds) and changed slides that hold an embed.
+  function fitScaleToViewport() {
+    var config = Reveal.getConfig && Reveal.getConfig();
+    var box = document.querySelector('.reveal');
+    if (!config || !box) return;
+    var fit = Math.min(box.offsetWidth / META.width, box.offsetHeight / META.height);
+    config.maxScale = Math.floor(fit * 100 + 1e-6) / 100;
+  }
+  // One media budget for the whole visit (MEDIA_BUDGET_MS). Once it is spent
+  // a slide does not wait: its media is still paused and rewound, and the
+  // play listener holds anything that starts later.
+  var mediaBudget = ${MEDIA_BUDGET_MS};
   function show(id) {
     var entry = byId[id];
     if (!entry) return Promise.resolve({ error: 'unknown-slide', id: id });
@@ -278,6 +314,15 @@ ${FRAME_SETTLE_JS}
     // shown; start them again so an embed in a fragment loads too.
     if (Reveal.startEmbeddedContent) Reveal.startEmbeddedContent();
     return settleImages(target, 4000).then(function () {
+      // Its videos (and its background video) on their first frame, paused,
+      // waited for out of the visit's media budget.
+      var background = Reveal.getSlideBackground && Reveal.getSlideBackground(idx.h, idx.v || 0);
+      var started = Date.now();
+      return stillMedia([target, background], Math.min(4000, mediaBudget)).then(function () {
+        mediaBudget = Math.max(0, mediaBudget - (Date.now() - started));
+      });
+    }).then(function () {
+      fitScaleToViewport();
       Reveal.layout();
       return frames();
     }).then(function () { return measure(target, entry); });

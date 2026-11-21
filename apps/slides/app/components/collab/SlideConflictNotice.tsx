@@ -1,14 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { SlideConflictNotice as Notice } from '@classmoji/collab';
 
+import { revealCoreCssUrl, revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
+
 import { BUILTIN_THEMES } from '~/components/RevealSlides';
 import { stripUnsafeMarkup } from '~/utils/collab/bridgeDom';
 
-const REVEAL_CSS = 'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css';
+const REVEAL_CSS = revealCoreCssUrl();
 
 function themeCss(theme: string): string {
   const name = BUILTIN_THEMES.includes(theme) ? theme : 'white';
-  return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${name}.css`;
+  return revealThemeUrl(name);
 }
 
 /** A slide's html as a static page (no scripts run: the frame is sandboxed). */

@@ -8,6 +8,7 @@ import { useChat } from '@ai-sdk/react';
 import type { ChatTransport, UIMessageChunk } from 'ai';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
+import { highlightStyleCdnjsUrl } from '@classmoji/services/slides/reveal-assets';
 import {
   ANSWER_COUNTER_COPY,
   ANSWER_PLACEHOLDER,
@@ -1937,9 +1938,7 @@ const useHighlightTheme = (isDarkMode: boolean) => {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.setAttribute('data-hljs-theme', 'true');
-    link.href = isDarkMode
-      ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
-      : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
+    link.href = highlightStyleCdnjsUrl(isDarkMode ? 'github-dark' : 'github');
     document.head.appendChild(link);
     return () => {
       document.querySelector('link[data-hljs-theme]')?.remove();

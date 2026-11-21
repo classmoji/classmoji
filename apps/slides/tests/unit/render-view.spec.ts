@@ -62,6 +62,8 @@ test.describe('render-view', () => {
     expect(script).toContain(JSON.stringify(VIEW_META_ELEMENT_ID));
     // A still frame: transitions and animations jump to their end state.
     expect(script).toContain('transition-duration: 0s !important');
+    // reveal.js 6's play/unmute button never lands in a picture.
+    expect(script).toContain('.reveal .r-media-play-button { display: none !important; }');
   });
 
   test('renders the deck standalone, with the draggable-block rules', () => {

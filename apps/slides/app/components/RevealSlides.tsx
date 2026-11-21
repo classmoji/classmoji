@@ -7,6 +7,11 @@ import {
   removeHiddenSlides,
   slideIndicesWhere,
 } from '@classmoji/services/slides/hidden';
+import {
+  BUILTIN_THEMES as REVEAL_BUILTIN_THEMES,
+  highlightStyleUrl,
+  revealThemeUrl,
+} from '@classmoji/services/slides/reveal-assets';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 import type { EditorFrames } from '~/utils/editorFrames';
 import { editorSlidesFragment, storedDeckHtml, viewerSlidesFragment } from '~/utils/slideMarkup';
@@ -34,21 +39,9 @@ function showHashSlideInScrollView(deck: RevealApi, hash: string): void {
   scrollToSlidePage(viewport, slide, navbar);
 }
 
-// Built-in Reveal.js themes (exported for use in SlideToolbar)
-export const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-];
+// Built-in Reveal.js themes (exported for use in SlideToolbar): the one list
+// the generator, the MCP and the CDN URLs use.
+export const BUILTIN_THEMES: readonly string[] = REVEAL_BUILTIN_THEMES;
 
 // Theme categories for better UX in dropdowns
 export const LIGHT_THEMES = ['white', 'beige', 'sky', 'serif', 'simple', 'solarized'];
@@ -115,7 +108,7 @@ function getThemeUrl(
   sharedThemes: SharedTheme[] = []
 ) {
   if (BUILTIN_THEMES.includes(theme)) {
-    return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
+    return revealThemeUrl(theme);
   }
   // Check if this is a custom theme ID (format: "custom:filename.css")
   if (theme.startsWith('custom:')) {
@@ -311,7 +304,7 @@ const RevealSlides = forwardRef(function RevealSlides(
   useEffect(() => {
     if (!isClient) return;
 
-    const codeThemeUrl = `https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeTheme}.min.css`;
+    const codeThemeUrl = highlightStyleUrl(codeTheme);
 
     // Remove existing code theme stylesheet if present
     if (codeThemeStyleRef.current) {

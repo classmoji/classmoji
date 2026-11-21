@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import type { Prisma } from '@classmoji/database/client';
+import { highlightStyleCdnjsUrl } from '@classmoji/services/slides/reveal-assets';
 import { checkForCompletion } from '~/utils/quizUtils';
 import type { QuizEvaluation } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';
@@ -125,9 +126,7 @@ function LegacyQuizTranscript({
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.setAttribute('data-hljs-theme', 'true');
-    link.href = isDarkMode
-      ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
-      : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
+    link.href = highlightStyleCdnjsUrl(isDarkMode ? 'github-dark' : 'github');
     document.head.appendChild(link);
     return () => {
       document.querySelector('link[data-hljs-theme]')?.remove();
