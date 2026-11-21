@@ -72,13 +72,22 @@ for (const [deckWidth, deckHeight] of [
         height: heightFor(width, { width: deckWidth, height: deckHeight }),
       };
       await page.setViewportSize(viewport);
+      // The cap never goes through Reveal.configure, which re-syncs the deck
+      // (embeds, backgrounds) and changes slides that hold an embed.
+      await page.evaluate(() => {
+        const reveal = Reflect.get(window, 'Reveal') as { configure(...args: unknown[]): void };
+        const configure = reveal.configure.bind(reveal);
+        Reflect.set(window, '__configures', 0);
+        reveal.configure = (...args: unknown[]) => {
+          Reflect.set(window, '__configures', Number(Reflect.get(window, '__configures')) + 1);
+          configure(...args);
+        };
+      });
 
       for (const id of ['frame', 'text']) {
         const measured = await page.evaluate(
           ([api, slide]) =>
-            (window as unknown as Record<string, { show(id: string): Promise<unknown> }>)[api].show(
-              slide
-            ),
+            (Reflect.get(window, api) as { show(id: string): Promise<unknown> }).show(slide),
           [VIEW_API_GLOBAL, id] as const
         );
         // Measured in the deck's own px, so the cap changes no verdict.
@@ -87,9 +96,9 @@ for (const [deckWidth, deckHeight] of [
           overflow_px: { top: 0, right: 0, bottom: 0, left: 0 },
         });
         const { scale, box } = await page.evaluate(() => {
-          const r = document.querySelector('.reveal .slides')!.getBoundingClientRect();
-          const reveal = (window as unknown as { Reveal: { getScale(): number } }).Reveal;
-          return { scale: reveal.getScale(), box: [r.left, r.top, r.right, r.bottom] };
+          const r = document.querySelector('.reveal .slides')?.getBoundingClientRect();
+          const reveal = Reflect.get(window, 'Reveal') as { getScale(): number };
+          return { scale: reveal.getScale(), box: r ? [r.left, r.top, r.right, r.bottom] : [] };
         });
         const exact = Math.min(viewport.width / deckWidth, viewport.height / deckHeight);
         expect(scale).toBeLessThanOrEqual(exact + 1e-9);
@@ -106,6 +115,7 @@ for (const [deckWidth, deckHeight] of [
           expect(box).toEqual([0, 0, viewport.width, viewport.height]);
         }
       }
+      expect(await page.evaluate(() => Reflect.get(window, '__configures'))).toBe(0);
     });
   }
 }

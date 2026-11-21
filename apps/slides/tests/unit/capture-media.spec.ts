@@ -145,10 +145,7 @@ test.describe('render-view holds media on its first frame', () => {
       );
       await page.waitForSelector(`[${VIEW_READY_ATTRIBUTE}]`, { state: 'attached' });
       const shown = await page.evaluate(
-        api =>
-          (window as unknown as Record<string, { show(id: string): Promise<unknown> }>)[api].show(
-            'a'
-          ),
+        api => (Reflect.get(window, api) as { show(id: string): Promise<unknown> }).show('a'),
         VIEW_API_GLOBAL
       );
       expect(shown).toMatchObject({ id: 'a' });
