@@ -3,9 +3,10 @@
  *
  * The driver lays the deck out with margin 0, and reveal.js 6 rounds its scale
  * to two decimals: a scale rounded UP (1280x720 at 480 px: 0.375 drawn at
- * 0.38) put the slide past the viewport and cut its edges off. The driver caps
- * the scale at the exact fit floored to two decimals; a 960x700 deck (every
- * deck in use today) keeps exactly 0.5 and 1.
+ * 0.38) put the slide past the viewport and cut its edges off, and so did
+ * reveal's minScale (0.2) for a deck that needs less. The driver caps the
+ * scale at the exact fit floored to two decimals; a 960x700 deck (every deck
+ * in use today) keeps exactly 0.5 and 1.
  *
  * The generated render-view document with the installed reveal.js 6, sized
  * the way the MCP sizes it (apps/mcp/src/render/deckRender.ts): opened at the
@@ -46,6 +47,8 @@ for (const [deckWidth, deckHeight] of [
   [1920, 1080],
   [800, 600],
   [960, 700],
+  // Below reveal's minScale (0.2) at 480 px: the cap wins over that clamp too.
+  [2560, 1440],
 ]) {
   for (const width of [480, 960]) {
     test(`a ${deckWidth}x${deckHeight} deck at ${width} px fits the picture`, async ({ page }) => {
