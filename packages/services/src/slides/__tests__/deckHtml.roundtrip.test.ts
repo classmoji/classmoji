@@ -102,6 +102,7 @@ describe('importer media-pair fixture', () => {
   it('re-emits the media link trio for themeDark/codeThemeDark', () => {
     const { deck } = parseDeckHtml(IMPORTER_FIXTURE, { idGen: seededIdGen() });
     const html = generateDeckHtml(deck, { title: TITLE });
+    // Builtin themes stay at the version decks are drawn with (revealAssets.ts).
     expect(html).toContain(
       '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" media="(prefers-color-scheme: light)">'
     );
@@ -112,7 +113,7 @@ describe('importer media-pair fixture', () => {
       '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" media="not all and (prefers-color-scheme)">'
     );
     expect(html).toContain(
-      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">'
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">'
     );
     expect(html).toContain('"center":false,"transition":"slide","width":960,"height":700}');
   });

@@ -3,6 +3,7 @@ import { Select, Input, Modal, Dropdown, Popconfirm, Collapse, Switch } from 'an
 import { PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import { BUILTIN_THEMES } from '../../RevealSlides';
+import { CODE_THEMES } from '@classmoji/services/slides/reveal-assets';
 
 const { TextArea } = Input;
 
@@ -52,16 +53,6 @@ const LAYOUT_COLUMN_COUNT = {
   'two-columns-right': 2,
   'three-columns': 3,
 };
-
-// Code syntax highlighting themes (highlight.js)
-const CODE_THEMES = [
-  { value: 'github-dark', label: 'GitHub Dark' },
-  { value: 'github', label: 'GitHub Light' },
-  { value: 'monokai', label: 'Monokai' },
-  { value: 'atom-one-dark', label: 'Atom One Dark' },
-  { value: 'vs2015', label: 'VS 2015' },
-  { value: 'dracula', label: 'Dracula' },
-];
 
 // Built-in theme options for dropdown
 const builtInThemeOptions = BUILTIN_THEMES.map(t => ({
@@ -471,7 +462,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             <Select
               value={currentCodeTheme}
               onChange={handleCodeThemeChange}
-              options={CODE_THEMES}
+              options={[...CODE_THEMES]}
               className="w-full"
               size="small"
             />
