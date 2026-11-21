@@ -10,11 +10,12 @@
  *   stored documents (5.1.0 paths and 6.x paths).
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { promisify } from 'node:util';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { generateDeckHtml, parseDeckHtml } from '../deckHtml.ts';
 import {
   HIGHLIGHT_STYLE_VERSIONS,
@@ -35,39 +36,39 @@ import { IMPORTER_FIXTURE, STARTER_FIXTURE, seededIdGen } from './fixtures.ts';
 
 const ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 
-function readJson(path: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(join(ROOT, path), 'utf8')) as Record<string, unknown>;
+const text = (path: string): Promise<string> => readFile(join(ROOT, path), 'utf8');
+const exists = (path: string): Promise<boolean> =>
+  access(join(ROOT, path)).then(
+    () => true,
+    () => false
+  );
+
+async function readJson(path: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await text(path)) as Record<string, unknown>;
 }
 
-function lockVersion(pkg: string): string | undefined {
-  const lock = readJson('package-lock.json') as {
+async function lockVersion(pkg: string): Promise<string | undefined> {
+  const lock = (await readJson('package-lock.json')) as {
     packages: Record<string, { version?: string }>;
   };
   return lock.packages[`node_modules/${pkg}`]?.version;
 }
 
 describe('engine versions match the installed packages', () => {
-  it('reveal.js: apps/slides pins it exactly, the lockfile and node_modules agree', () => {
-    const slides = readJson('apps/slides/package.json') as {
+  it('reveal.js: apps/slides pins it exactly, the lockfile and node_modules agree', async () => {
+    const slides = (await readJson('apps/slides/package.json')) as {
       dependencies: Record<string, string>;
     };
     expect(slides.dependencies['reveal.js']).toBe(REVEAL_VERSION);
-    expect(lockVersion('reveal.js')).toBe(REVEAL_VERSION);
-    const installed = join(ROOT, 'node_modules/reveal.js/package.json');
-    if (existsSync(installed)) {
-      expect(JSON.parse(readFileSync(installed, 'utf8')).version).toBe(REVEAL_VERSION);
-    }
+    expect(await lockVersion('reveal.js')).toBe(REVEAL_VERSION);
+    expect((await readJson('node_modules/reveal.js/package.json')).version).toBe(REVEAL_VERSION);
   });
 
-  it('highlight.js: the lockfile has it, and the installed highlight plugin bundles it', () => {
-    expect(lockVersion('highlight.js')).toBe(HIGHLIGHT_VERSION);
-    const plugin = join(ROOT, 'node_modules/reveal.js/dist/plugin/highlight.js');
-    if (existsSync(plugin)) {
-      const versions = new Set(
-        [...readFileSync(plugin, 'utf8').matchAll(/[`'"](11\.\d+\.\d+)[`'"]/g)].map(m => m[1])
-      );
-      expect([...versions]).toEqual([HIGHLIGHT_VERSION]);
-    }
+  it('highlight.js: the lockfile has it, and the installed highlight plugin bundles it', async () => {
+    expect(await lockVersion('highlight.js')).toBe(HIGHLIGHT_VERSION);
+    const plugin = await text('node_modules/reveal.js/dist/plugin/highlight.js');
+    const versions = new Set([...plugin.matchAll(/[`'"](11\.\d+\.\d+)[`'"]/g)].map(m => m[1]));
+    expect([...versions]).toEqual([HIGHLIGHT_VERSION]);
   });
 
   it('a frozen highlight style really is frozen (an older version than the installed one)', () => {
@@ -100,21 +101,26 @@ const ASSETS_MODULE = 'packages/services/src/slides/revealAssets.ts';
 const TEXT_FILE = /\.(?:[cm]?[jt]sx?|json|html?|css|md|mdx|astro|ya?ml|toml|sh|txt)$|Dockerfile/;
 
 /** `[file, text]` for every tracked (or new, not ignored) text file, submodules included. */
-function trackedTextFiles(): Array<[string, string]> {
-  const git = (args: string[]) =>
-    execFileSync('git', ['ls-files', '-z', ...args], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    }).split('\0');
+async function trackedTextFiles(): Promise<Array<[string, string]>> {
+  const git = async (args: string[]) =>
+    (
+      await promisify(execFile)('git', ['ls-files', '-z', ...args], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+      })
+    ).stdout.split('\0');
   const listing = new Set([
-    ...git(['--recurse-submodules']),
-    ...git(['--others', '--exclude-standard']),
+    ...(await git(['--recurse-submodules'])),
+    ...(await git(['--others', '--exclude-standard'])),
   ]);
-  return [...listing]
-    .filter(file => file && TEXT_FILE.test(file) && !file.startsWith('.claude/'))
-    .filter(file => existsSync(join(ROOT, file)))
-    .map(file => [file, readFileSync(join(ROOT, file), 'utf8')]);
+  const files = [...listing].filter(
+    file => file && TEXT_FILE.test(file) && !file.startsWith('.claude/')
+  );
+  const read = await Promise.all(
+    files.map(async file => ((await exists(file)) ? [file, await text(file)] : null))
+  );
+  return read.filter((entry): entry is [string, string] => entry !== null);
 }
 
 interface Finding {
@@ -131,8 +137,11 @@ function pinnedReferences(text: string): Array<{ url: string; version: string; e
     const expected = path.startsWith('/dist/theme/') ? REVEAL_THEME_VERSION : REVEAL_VERSION;
     out.push({ url: m[0], version: m[1], expected });
   }
-  const style = (name: string | undefined) => (name ? highlightStyleVersion(name) : HIGHLIGHT_VERSION);
-  for (const m of text.matchAll(/highlight\.js@(\d+\.\d+\.\d+)(?:\/styles\/([\w.-]+?)(?:\.min)?\.css)?/g)) {
+  const style = (name: string | undefined) =>
+    name ? highlightStyleVersion(name) : HIGHLIGHT_VERSION;
+  for (const m of text.matchAll(
+    /highlight\.js@(\d+\.\d+\.\d+)(?:\/styles\/([\w.-]+?)(?:\.min)?\.css)?/g
+  )) {
     out.push({ url: m[0], version: m[1], expected: style(m[2]) });
   }
   for (const m of text.matchAll(
@@ -153,7 +162,10 @@ function looseReferences(text: string): string[] {
 }
 
 describe('every reveal/highlight CDN URL in the repo', () => {
-  const files = trackedTextFiles();
+  let files: Array<[string, string]> = [];
+  beforeAll(async () => {
+    files = await trackedTextFiles();
+  });
 
   it('scans the files that load reveal (sanity: the walk sees them)', () => {
     const names = files.map(([file]) => file);
@@ -166,7 +178,8 @@ describe('every reveal/highlight CDN URL in the repo', () => {
     for (const [file, text] of files) {
       if (OLD_GENERATION_CORPUS.has(file)) continue;
       for (const ref of pinnedReferences(text)) {
-        if (ref.version !== ref.expected) wrong.push({ file, url: ref.url, expected: ref.expected });
+        if (ref.version !== ref.expected)
+          wrong.push({ file, url: ref.url, expected: ref.expected });
       }
     }
     expect(wrong).toEqual([]);
@@ -192,9 +205,15 @@ describe('every reveal/highlight CDN URL in the repo', () => {
       [revealScriptUrl(), revealThemeUrl('white'), highlightStyleUrl('monokai')].join(' ')
     );
     expect(fine.every(r => r.version === r.expected)).toBe(true);
-    expect(looseReferences('`https://cdn.jsdelivr.net/npm/reveal.js@${v}/dist/reveal.js`')).toHaveLength(1);
-    expect(looseReferences('https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js')).toHaveLength(1);
-    expect(looseReferences('https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/reveal.js')).toEqual([]);
+    expect(
+      looseReferences('`https://cdn.jsdelivr.net/npm/reveal.js@${v}/dist/reveal.js`')
+    ).toHaveLength(1);
+    expect(looseReferences('https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js')).toHaveLength(
+      1
+    );
+    expect(looseReferences('https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/reveal.js')).toEqual(
+      []
+    );
   });
 });
 
@@ -202,7 +221,9 @@ const DECK: DeckJson = {
   version: 1,
   theme: 'white',
   codeTheme: 'github',
-  slides: [{ id: 'a1b2c3d4', html: '<h1>Hi</h1><pre><code class="language-js">let x = 1;</code></pre>' }],
+  slides: [
+    { id: 'a1b2c3d4', html: '<h1>Hi</h1><pre><code class="language-js">let x = 1;</code></pre>' },
+  ],
 };
 
 /** Every http(s) URL a document references in an href/src attribute. */
@@ -224,21 +245,26 @@ describe('the generated document', () => {
 
   it('keeps monokai at its frozen version, light/dark pairs included', () => {
     const html = generateDeckHtml(
-      { ...DECK, theme: 'night', themeDark: 'black', codeTheme: 'monokai', codeThemeDark: 'github-dark' },
+      {
+        ...DECK,
+        theme: 'night',
+        themeDark: 'black',
+        codeTheme: 'monokai',
+        codeThemeDark: 'github-dark',
+      },
       { title: 'T' }
     );
     const urls = documentUrls(html);
-    expect(urls).toContain('https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/monokai.min.css');
+    expect(urls).toContain(
+      'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/monokai.min.css'
+    );
     expect(urls).toContain(
       `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/github-dark.min.css`
     );
     expect(urls).toContain(revealThemeUrl('black'));
   });
 
-  it('names only files the installed packages ship', () => {
-    const revealRoot = join(ROOT, 'node_modules/reveal.js');
-    const hljsRoot = join(ROOT, 'node_modules/highlight.js');
-    if (!existsSync(revealRoot) || !existsSync(hljsRoot)) return;
+  it('names only files the installed packages ship', async () => {
     const prefix = `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/`;
     for (const url of [
       revealCoreCssUrl(),
@@ -247,19 +273,19 @@ describe('the generated document', () => {
       revealHighlightPluginCssUrl('monokai'),
     ]) {
       expect(url.startsWith(prefix)).toBe(true);
-      expect(existsSync(join(revealRoot, url.slice(prefix.length))), url).toBe(true);
+      expect(await exists(`node_modules/reveal.js/${url.slice(prefix.length)}`), url).toBe(true);
     }
     for (const name of ['github', 'github-dark', 'atom-one-dark', 'vs2015']) {
-      expect(existsSync(join(hljsRoot, 'styles', `${name}.min.css`)), name).toBe(true);
+      expect(await exists(`node_modules/highlight.js/styles/${name}.min.css`), name).toBe(true);
       expect(highlightStyleVersion(name)).toBe(HIGHLIGHT_VERSION);
     }
   });
 
-  it('defines the globals the init script calls (UMD builds)', () => {
-    const revealRoot = join(ROOT, 'node_modules/reveal.js/dist');
-    if (!existsSync(revealRoot)) return;
-    expect(readFileSync(join(revealRoot, 'reveal.js'), 'utf8').slice(0, 600)).toContain('.Reveal=');
-    expect(readFileSync(join(revealRoot, 'plugin/highlight.js'), 'utf8').slice(0, 600)).toContain(
+  it('defines the globals the init script calls (UMD builds)', async () => {
+    expect((await text('node_modules/reveal.js/dist/reveal.js')).slice(0, 600)).toContain(
+      '.Reveal='
+    );
+    expect((await text('node_modules/reveal.js/dist/plugin/highlight.js')).slice(0, 600)).toContain(
       '.RevealHighlight='
     );
   });
@@ -268,12 +294,15 @@ describe('the generated document', () => {
     expect(highlightStyleCdnjsUrl('github')).toBe(
       `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_VERSION}/styles/github.min.css`
     );
-    expect(highlightStyleCdnjsUrl('monokai')).toContain('/highlight.js/11.9.0/styles/monokai.min.css');
+    expect(highlightStyleCdnjsUrl('monokai')).toContain(
+      '/highlight.js/11.9.0/styles/monokai.min.css'
+    );
   });
 });
 
 describe('both generations of stored documents parse the same', () => {
-  const PLUGIN_CSS_OLD = 'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css';
+  const PLUGIN_CSS_OLD =
+    'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css';
   const PLUGIN_CSS_NEW = revealHighlightPluginCssUrl('monokai');
 
   it('the reveal plugin stylesheet names the code theme at either path', () => {
@@ -305,7 +334,10 @@ describe('both generations of stored documents parse the same', () => {
     const now = generateDeckHtml(deck, { title: 'T' }).split('\n');
     const before = now.map(line =>
       line
-        .replace(`reveal.js@${REVEAL_VERSION}/dist/plugin/highlight.js`, 'reveal.js@5.1.0/plugin/highlight/highlight.js')
+        .replace(
+          `reveal.js@${REVEAL_VERSION}/dist/plugin/highlight.js`,
+          'reveal.js@5.1.0/plugin/highlight/highlight.js'
+        )
         .replace(`reveal.js@${REVEAL_VERSION}/`, 'reveal.js@5.1.0/')
         .replace(`highlight.js@${HIGHLIGHT_VERSION}/`, 'highlight.js@11.9.0/')
     );
