@@ -197,6 +197,8 @@ export interface SubmissionLike {
   id: string;
   status: string;
   closed_at?: Date | string | null;
+  /** The queue's order (`byCreation` in resources/grading.ts). */
+  created_at?: Date | string | null;
   is_late_override?: boolean;
   provider_issue_number?: number | null;
   /** Extension hours bought with tokens; refunds carry negative hours. */
