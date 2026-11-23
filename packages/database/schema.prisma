@@ -1367,28 +1367,36 @@ model Assignment {
 // ============================================================================
 
 model GitRepo {
-  id             String      @id @default(uuid())
-  provider       GitProvider
-  provider_id    String // GitHub repo ID
-  name           String
-  classroom_id   String
-  repository_id  String
-  student_id     String?
-  team_id        String?
-  contributions  String?
-  project_id     String? // GitHub Projects V2 node_id of created project
-  project_number Int? // Project number for URL building
+  id                          String      @id @default(uuid())
+  provider                    GitProvider
+  provider_id                 String // GitHub repo ID
+  name                        String
+  classroom_id                String
+  repository_id               String
+  student_id                  String?
+  team_id                     String?
+  /// Retired: the old blame summary ("<lines> <author>" per line). Nothing reads it.
+  contributions               String?
+  /// Team repos only: who wrote what, from the `calculate_repo_contributions`
+  /// task (`RepoContributions` in @classmoji/utils/repo-contributions).
+  contribution_stats          Json?
+  /// When `contribution_stats` was last written (or the last attempt failed).
+  contributions_calculated_at DateTime?
+  /// The last calculation's failure, shown in place of the stats; null once one succeeds.
+  contributions_error         String?
+  project_id                  String? // GitHub Projects V2 node_id of created project
+  project_number              Int? // Project number for URL building
   // Read-only provider data captured at import time (e.g. GitHub Classroom
   // points / commit count). Not part of live grading — for viewing only.
-  metadata       Json?
+  metadata                    Json?
   // When the provider last told us about a push to this repo (the webhook's
   // receipt time). Independent of any assignment's submission time, which
   // freezes at the deadline; this is what "Last push" shows.
-  last_push_at   DateTime?
+  last_push_at                DateTime?
   /// When the Gitlab push poll last read this repo (it rotates through all).
-  push_polled_at DateTime?
-  created_at     DateTime    @default(now())
-  updated_at     DateTime    @default(now()) @updatedAt
+  push_polled_at              DateTime?
+  created_at                  DateTime    @default(now())
+  updated_at                  DateTime    @default(now()) @updatedAt
 
   classroom           Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repository          Repository               @relation(fields: [repository_id], references: [id], onDelete: Cascade)

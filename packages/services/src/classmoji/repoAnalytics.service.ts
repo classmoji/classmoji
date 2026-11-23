@@ -63,17 +63,19 @@ function pickLatestSnapshot<T, S extends { fetched_at: Date | string }>(
 /**
  * The lookup keys an author identity answers to: itself, lowercased, and for
  * a Gitlab no-reply commit email (`123-alice@users.noreply.gitlab.example`)
+ * or Github no-reply commit email (`123+alice@users.noreply.github.com`)
  * the username inside it. Github logins are case-insensitive, and Gitlab
  * reports authors by name and email rather than username.
  */
 export function identityKeys(value: string | null | undefined): string[] {
   const v = (value ?? '').trim().toLowerCase();
   if (!v) return [];
-  const noreply = v.match(/^(?:\d+-)?([^@]+)@users\.noreply\./);
+  // Gitlab: `123-alice@users.noreply.<host>`; Github: `123+alice@users.noreply.github.com`.
+  const noreply = v.match(/^(?:\d+[-+])?([^@]+)@users\.noreply\./);
   return noreply ? [v, noreply[1]] : [v];
 }
 
-function lookupUser(
+export function lookupUser(
   loginToUserId: Map<string, string>,
   ...identities: Array<string | null | undefined>
 ): string | null {
@@ -252,7 +254,7 @@ export async function upsertSnapshot(
  * win). Commit emails are self-asserted too, as on Github: attribution is a
  * teaching aid, and a TA can relink.
  */
-async function buildLoginToUserIdMap(
+export async function buildLoginToUserIdMap(
   classroomId: string,
   repositoryId: string
 ): Promise<Map<string, string>> {

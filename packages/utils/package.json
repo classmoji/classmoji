@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./themes": "./src/themes.ts",
     "./repo-limits": "./src/repoLimits.ts",
+    "./repo-contributions": "./src/repoContributions.ts",
     "./return-path": "./src/returnPath.ts",
     "./upload-limit": "./src/uploadLimit.ts",
     "./upload-concurrency": "./src/uploadConcurrency.ts",

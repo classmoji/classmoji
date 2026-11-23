@@ -71,13 +71,10 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
   tasks: { trigger: (...a: unknown[]) => mocks.tasksTrigger(...a) },
 }));
 
-// Both contribution helpers fan out Trigger runs; what matters here is whether
-// they are reached, and with which repository id.
-vi.mock('../admin.$class.repos_.$title/helpers', () => ({
-  calculateContributions: (...a: unknown[]) => mocks.calculateContributions(...a),
-}));
-vi.mock('../admin.$class.repos/contributions', () => ({
-  calculateContributions: (...a: unknown[]) => mocks.calculateContributions(...a),
+// Both pages start contributions through one helper, which queues the Trigger
+// runs; what matters here is whether it is reached, and with which repository.
+vi.mock('~/utils/repoContributions.server', () => ({
+  startContributionsCalculation: (...a: unknown[]) => mocks.calculateContributions(...a),
 }));
 // The repos action names the sync errors; the real module loads the Trigger
 // workflows.
@@ -319,7 +316,12 @@ describe('repository page: calculateContributions / createProjects', () => {
     const projects = await detailAction('createProjects', { repositoryId: 'repo-1' });
 
     expect(contributions).toEqual({ triggerSession: { id: 's-1' } });
-    expect(mocks.calculateContributions).toHaveBeenCalledWith({ id: 'repo-1' }, CLASS_SLUG);
+    expect(mocks.calculateContributions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroom: expect.objectContaining({ id: 'class-1' }),
+        repositoryId: 'repo-1',
+      })
+    );
     expect(projects).toMatchObject({ success: 'Project creation started', taskId: 'run-1' });
     expect(mocks.tasksTrigger).toHaveBeenCalledWith('gh-create_projects_for_repository', {
       repositoryId: 'repo-1',
@@ -358,7 +360,12 @@ describe('repositories list: calculateContributions', () => {
     await listAction({ assignment_id: 'repo-1' });
 
     expect(mocks.repositoryFindByIdInClassroom).toHaveBeenCalledWith('repo-1', 'class-1');
-    expect(mocks.calculateContributions).toHaveBeenCalledWith({ id: 'repo-1' }, CLASS_SLUG);
+    expect(mocks.calculateContributions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroom: expect.objectContaining({ id: 'class-1' }),
+        repositoryId: 'repo-1',
+      })
+    );
   });
 
   it('refuses a repository outside this classroom', async () => {

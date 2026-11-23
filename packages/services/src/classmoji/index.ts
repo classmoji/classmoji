@@ -127,6 +127,7 @@ import * as deckThumbnailContract from './deckThumbnail.contract.ts';
 import * as deckThumbnailService from './deckThumbnail.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
 import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
+import * as repoContributionsService from './repoContributions.service.ts';
 import * as dashboardService from './dashboard.service.ts';
 import * as taDashboardService from './taDashboard.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -268,6 +269,7 @@ const ClassmojiService = {
   deckThumbnail: { ...deckThumbnailContract, ...deckThumbnailService },
   resourceView: resourceViewService,
   repoAnalytics: gitRepoAnalyticsService,
+  repoContributions: repoContributionsService,
   dashboard: dashboardService,
   taDashboard: taDashboardService,
   notification: notificationService,

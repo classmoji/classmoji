@@ -17,6 +17,10 @@ import { CommitCount } from '~/components/features/analytics';
 import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 import ImportedBadge from './ImportedBadge';
+import ContributionsCell, {
+  type ContributorNames,
+} from '~/components/features/repositories/ContributionsCell';
+import type { RepoContributions } from '@classmoji/utils/repo-contributions';
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
@@ -80,6 +84,10 @@ export interface SubmissionsRepo {
   project_number?: number | null;
   metadata?: unknown;
   autograding_result?: AutogradingResultData | null;
+  /** Team repos: the last contributions calculation (read through readRepoContributions). */
+  contribution_stats?: RepoContributions | null;
+  contributions_calculated_at?: string | Date | null;
+  contributions_error?: string | null;
   [key: string]: unknown;
 }
 
@@ -97,6 +105,8 @@ interface SubmissionsTableProps {
   assistants: Assistant[];
   emojiMappings: Record<string, unknown>;
   org: string;
+  /** Classmoji names of the contributors the team repos' stats matched, by user id. */
+  contributors?: ContributorNames;
   /**
    * False for an ASSISTANT. Deleting here destroys the GitHub repository and
    * every submission recorded against it, so it stays with the classroom's
@@ -118,6 +128,7 @@ const SubmissionsTable = ({
   assistants,
   emojiMappings,
   org,
+  contributors = {},
   canEdit = true,
 }: SubmissionsTableProps) => {
   const web = useGitWeb();
@@ -308,6 +319,23 @@ const SubmissionsTable = ({
                 result={repo.autograding_result}
                 org={org}
                 repoName={repo.name}
+              />
+            ),
+          },
+        ]),
+    ...(isIndividual
+      ? []
+      : [
+          {
+            title: 'Contributions',
+            key: 'contributions',
+            width: 280,
+            render: (_: unknown, repo: SubmissionsRepo) => (
+              <ContributionsCell
+                stats={repo.contribution_stats ?? null}
+                error={repo.contributions_error ?? null}
+                calculatedAt={repo.contributions_calculated_at ?? null}
+                names={contributors}
               />
             ),
           },

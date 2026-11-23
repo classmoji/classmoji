@@ -1,6 +1,6 @@
 import { namedAction } from '~/utils/namedAction.server';
 import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
-import { calculateContributions } from './helpers';
+import { startContributionsCalculation } from '~/utils/repoContributions.server';
 import { gitTerms } from '~/utils/gitWeb';
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -19,11 +19,7 @@ const SUBMISSION_NOT_FOUND = 'Submission not found.';
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const {
-    classroom,
-    userId: _userId,
-    membership,
-  } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'repository_action',
   });
@@ -46,9 +42,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
       if (!repository) return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: REPO_NOT_FOUND };
 
-      const result = await calculateContributions({ id: repository.id }, classSlug);
-
-      return result;
+      return startContributionsCalculation({
+        classroom,
+        repositoryId: repository.id,
+        userId,
+        role: membership!.role,
+      });
     },
     async deleteRepo() {
       const pageRepository = await loadPageRepository();

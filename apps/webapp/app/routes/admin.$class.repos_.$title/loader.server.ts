@@ -12,6 +12,7 @@ import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { LinkedPage } from './LinkedPages';
 import { gitTerms } from '~/utils/gitWeb';
 import { classroomForClient } from '~/utils/classroomForClient';
+import { withContributions } from '~/utils/repoContributions.server';
 
 type LoaderArgs = { params: Record<string, string | undefined>; request: Request };
 
@@ -29,7 +30,7 @@ export const buildLoader =
   async ({ params, request }: LoaderArgs) => {
     const { class: classSlug, title } = params;
 
-    const { classroom } = await gate(request, classSlug!, {
+    const { classroom, userId, membership } = await gate(request, classSlug!, {
       resourceType: 'REPOSITORIES',
       action: 'view_module',
     });
@@ -43,7 +44,14 @@ export const buildLoader =
     const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
       repos.map(r => r.id)
     );
-    const reposWithAutograding = repos.map(r => ({
+    const { repos: reposWithContributions, contributors } = await withContributions({
+      classroom,
+      userId,
+      role: membership?.role,
+      repository: repository!,
+      repos,
+    });
+    const reposWithAutograding = reposWithContributions.map(r => ({
       ...r,
       autograding_result: latestAutograding.get(r.id) ?? null,
     }));
@@ -121,6 +129,7 @@ export const buildLoader =
     return {
       repository,
       repos: reposWithAutograding,
+      contributors,
       assignments,
       assistants,
       emojiMappings,

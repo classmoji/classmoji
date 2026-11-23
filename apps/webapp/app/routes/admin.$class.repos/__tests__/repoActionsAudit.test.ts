@@ -59,7 +59,7 @@ vi.mock('@classmoji/tasks/repo-sync', () => ({
   },
 }));
 
-vi.mock('../contributions', () => ({ calculateContributions: vi.fn() }));
+vi.mock('~/utils/repoContributions.server', () => ({ startContributionsCalculation: vi.fn() }));
 
 vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),

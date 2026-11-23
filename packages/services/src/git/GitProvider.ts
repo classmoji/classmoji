@@ -153,6 +153,8 @@ export class GitProvider {
       branch?: string;
       maxCommits?: number;
       knownStats?: Map<string, CommitStats>;
+      /** Leave line counts at 0 instead of reading each commit (Github): for callers that count lines themselves. */
+      skipStats?: boolean;
     }
   ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
     throw new Error('listCommits() must be implemented by subclass');

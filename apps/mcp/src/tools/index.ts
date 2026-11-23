@@ -83,6 +83,11 @@ import {
   repoSyncTool,
   repoUnpublishTool,
 } from './repos.ts';
+import {
+  repoContributionsCalculateTool,
+  repoContributionsCommitsTool,
+  repoContributionsTool,
+} from './repoContributions.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
@@ -323,6 +328,9 @@ export function registerAllTools(): void {
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoSyncTool);
   registerToolDefinition(repoUnpublishTool);
+  registerToolDefinition(repoContributionsTool);
+  registerToolDefinition(repoContributionsCalculateTool);
+  registerToolDefinition(repoContributionsCommitsTool);
 
   // Classroom settings + lifecycle status (OWNER). The org tool writes
   // ORGANIZATION-WIDE GitHub settings, so it sits beside the repo tools it

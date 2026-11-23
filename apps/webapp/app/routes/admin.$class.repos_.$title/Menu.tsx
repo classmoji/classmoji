@@ -26,7 +26,7 @@ interface MenuProps {
 const Menu = ({ repository, assistants }: MenuProps) => {
   const navigate = useNavigate();
   const { class: classSlug, title: repositoryTitle } = useParams();
-  const { fetcher } = useGlobalFetcher();
+  const { fetcher, notify } = useGlobalFetcher();
   const callout = useCallout();
   const web = useGitWeb();
 
@@ -39,6 +39,9 @@ const Menu = ({ repository, assistants }: MenuProps) => {
       return;
     }
 
+    // Without it the click shows nothing until the runs finish and the page
+    // refreshes: the progress bar keys off this notice.
+    notify('CALCULATE_REPO_CONTRIBUTIONS', 'Calculating contributions…');
     fetcher!.submit(JSON.stringify({ repository }), {
       method: 'post',
       action: `/admin/${classSlug}/repos/${repositoryTitle}?action=calculateContributions`,
@@ -97,6 +100,19 @@ const Menu = ({ repository, assistants }: MenuProps) => {
     repository.type === 'GROUP' && {
       key: 'calculate-contributions',
       label: <button onClick={calculateContributions}>Calculate contributions</button>,
+    },
+    // A plain download: the route answers with the file, so the browser
+    // stays on this page.
+    repository.type === 'GROUP' && {
+      key: 'export-commits',
+      label: (
+        <a
+          href={`/admin/${classSlug}/repos/${encodeURIComponent(repositoryTitle ?? '')}/contributions-csv`}
+          download
+        >
+          Export commits (CSV)
+        </a>
+      ),
     },
   ];
 
