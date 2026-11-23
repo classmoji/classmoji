@@ -19,6 +19,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const {
     repository,
     repos,
+    contributors,
     assignments,
     assistants,
     emojiMappings,
@@ -188,6 +189,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
             canEdit={canEdit}
             emojiMappings={emojiMappings as Record<string, unknown>}
             org={gitOrgLogin ?? ''}
+            contributors={contributors}
           />
         </div>
       </div>

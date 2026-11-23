@@ -8,7 +8,7 @@ import {
   RepositorySyncPartialError,
 } from '@classmoji/tasks/repo-sync';
 import { publishAssignment, publishAssignmentAndRepository, syncAssignment } from './helpers';
-import { calculateContributions } from './contributions';
+import { startContributionsCalculation } from '~/utils/repoContributions.server';
 import { ActionTypes } from '~/constants';
 import { addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -185,7 +185,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!repository) {
         return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: 'Repository not found.' };
       }
-      return calculateContributions({ id: repository.id }, classSlug);
+      return startContributionsCalculation({
+        classroom,
+        repositoryId: repository.id,
+        userId,
+        role: membership!.role,
+      });
     },
   });
 };

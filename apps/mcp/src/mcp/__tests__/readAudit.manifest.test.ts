@@ -35,6 +35,8 @@ const READS: Record<string, Kind> = {
   list_tags: 'none', // tag names and counts
   list_repos: 'none', // staff: definitions only; a student: their own submissions
   my_grades: 'none', // the caller's own grades
+  repo_contributions: 'audited', // who wrote what in every team's repository
+  repo_contributions_commits: 'audited', // every student commit in every team's repository
   list_submissions: 'audited', // every student's submissions and grades
   get_submission: 'audited', // one student's submission, grades, analytics
   get_leaderboard: 'audited', // every student's computed grade
