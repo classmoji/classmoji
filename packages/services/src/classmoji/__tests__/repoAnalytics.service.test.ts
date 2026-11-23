@@ -121,6 +121,14 @@ describe('Gitlab author matching', () => {
       '42-mchen@users.noreply.gitlab.school.edu',
       'mchen',
     ]);
+    expect(identityKeys('9876+MChen@users.noreply.github.com')).toEqual([
+      '9876+mchen@users.noreply.github.com',
+      'mchen',
+    ]);
+    expect(identityKeys('MChen@users.noreply.github.com')).toEqual([
+      'mchen@users.noreply.github.com',
+      'mchen',
+    ]);
     expect(identityKeys('  Maya Chen ')).toEqual(['maya chen']);
     expect(identityKeys(null)).toEqual([]);
   });

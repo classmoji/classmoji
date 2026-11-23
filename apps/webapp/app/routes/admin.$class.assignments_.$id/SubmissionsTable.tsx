@@ -41,6 +41,10 @@ const latestCommitSha = (commits: unknown): string | null => {
 };
 import AutogradingResultPill from '~/components/features/AutogradingResultPill';
 import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
+import ContributionsCell, {
+  type ContributorNames,
+} from '~/components/features/repositories/ContributionsCell';
+import type { RepoContributions } from '@classmoji/utils/repo-contributions';
 
 interface AssignmentGrade {
   emoji: string;
@@ -97,6 +101,10 @@ export interface SubmissionsRepo {
   project_number?: number | null;
   metadata?: unknown;
   autograding_result?: AutogradingResultData | null;
+  /** Team repos: the last contributions calculation (read through readRepoContributions). */
+  contribution_stats?: RepoContributions | null;
+  contributions_calculated_at?: string | Date | null;
+  contributions_error?: string | null;
   [key: string]: unknown;
 }
 
@@ -133,6 +141,8 @@ interface SubmissionsTableProps {
   assistants: Assistant[];
   emojiMappings: Record<string, unknown>;
   org: string;
+  /** Classmoji names of the contributors the team repos' stats matched, by user id. */
+  contributors?: ContributorNames;
   canManageGraders: boolean;
   /**
    * False for an ASSISTANT. Deleting a submission destroys its grades, and can
@@ -156,6 +166,7 @@ const SubmissionsTable = ({
   assistants,
   emojiMappings,
   org,
+  contributors = {},
   canManageGraders,
   canDeleteSubmissions,
   total,
@@ -338,6 +349,23 @@ const SubmissionsTable = ({
           },
         ]
       : []),
+    ...(isIndividual
+      ? []
+      : [
+          {
+            title: 'Contributions',
+            key: 'contributions',
+            width: 280,
+            render: (_: unknown, repo: SubmissionsRepo) => (
+              <ContributionsCell
+                stats={repo.contribution_stats ?? null}
+                error={repo.contributions_error ?? null}
+                calculatedAt={repo.contributions_calculated_at ?? null}
+                names={contributors}
+              />
+            ),
+          },
+        ]),
     ...(anyImported
       ? [
           {

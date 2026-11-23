@@ -26,6 +26,7 @@ import SubmissionsTable, {
 } from './SubmissionsTable';
 import type { Route } from './+types/route';
 import { classroomForClient } from '~/utils/classroomForClient';
+import { withContributions } from '~/utils/repoContributions.server';
 
 /**
  * The assignment page: one REPO assignment, every student (or team) copy of
@@ -41,10 +42,11 @@ import { classroomForClient } from '~/utils/classroomForClient';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
 
-  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
-    resourceType: 'ASSIGNMENTS',
-    action: 'view_assignment',
-  });
+  const { classroom, userId, membership } = await requireClassroomTeachingTeam(
+    request,
+    classSlug!,
+    { resourceType: 'ASSIGNMENTS', action: 'view_assignment' }
+  );
 
   const assignment = await ClassmojiService.assignment.findByIdInClassroom(id!, classroom.id);
   if (!assignment) throw new Response('Assignment not found', { status: 404 });
@@ -85,7 +87,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // One row per student repo: the repo itself plus THIS assignment's
   // submission row (null until the assignment is released to that repo).
-  const repos = gitRepos.map(({ assignments: rows, ...repo }) => ({
+  // Team repos also carry who wrote what (the last contributions calculation).
+  const { repos: withStats, contributors } = await withContributions({
+    classroom,
+    userId,
+    role: membership?.role,
+    repository: assignment.repository,
+    repos: gitRepos,
+  });
+  const repos = withStats.map(({ assignments: rows, ...repo }) => ({
     ...repo,
     submission: rows.find(ra => ra.assignment_id === assignment.id) ?? null,
     autograding_result: autogradingByRepo.get(repo.id) ?? null,
@@ -105,6 +115,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     assignment,
     repos,
+    contributors,
     // What the grader picker reads of each grader: id, login and name.
     assistants: graderPool
       .filter(({ is_grader }) => is_grader)
@@ -211,6 +222,7 @@ const AssignmentPage = ({ loaderData, params }: Route.ComponentProps) => {
   const {
     assignment,
     repos,
+    contributors,
     assistants,
     emojiMappings,
     classroom,
@@ -304,9 +316,38 @@ const AssignmentPage = ({ loaderData, params }: Route.ComponentProps) => {
     { type: 'divider' },
     { key: 'edit-repo', label: `Edit ${terms.repo}` },
     { key: 'update-repos', label: `Update student ${terms.repos}` },
+    // Team repos: who wrote what. Owner only, like the actions they call.
+    ...(isAdmin && !isIndividual
+      ? [
+          { type: 'divider' as const },
+          { key: 'contributions', label: 'Calculate contributions' },
+          {
+            key: 'export-commits',
+            label: (
+              // A plain download: the route answers with the file.
+              <a
+                href={`/admin/${classSlug}/repos/${encodeURIComponent(repository.title)}/contributions-csv`}
+                download
+              >
+                Export commits (CSV)
+              </a>
+            ),
+          },
+        ]
+      : []),
   ];
+  // The same action the Repositories list posts to (its gate is the owner's).
+  const handleCalculateContributions = () => {
+    notify('CALCULATE_REPO_CONTRIBUTIONS', 'Calculating contributions…');
+    fetcher!.submit(JSON.stringify({ assignment_id: repository.id }), {
+      action: `/admin/${classSlug}/repos?/calculateContributions`,
+      method: 'post',
+      encType: 'application/json',
+    });
+  };
   const onMoreClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'autograde') handleAutograde();
+    if (key === 'contributions') handleCalculateContributions();
     if (key === 'edit-repo')
       navigate(`/admin/${classSlug}/repos/form?title=${encodeURIComponent(repository.title)}`);
     if (key === 'update-repos') navigate(`/admin/${classSlug}/repos/update?id=${repository.id}`);
@@ -495,6 +536,7 @@ const AssignmentPage = ({ loaderData, params }: Route.ComponentProps) => {
           assistants={assistants as Parameters<typeof SubmissionsTable>[0]['assistants']}
           emojiMappings={emojiMappings as Record<string, unknown>}
           org={gitOrgLogin ?? ''}
+          contributors={contributors}
           canManageGraders={canManage}
           canDeleteSubmissions={canManage}
           total={rows.length}

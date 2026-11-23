@@ -841,6 +841,8 @@ export class GitHubProvider extends GitProvider {
       branch?: string;
       maxCommits?: number;
       knownStats?: Map<string, CommitStats>;
+      /** Leave line counts at 0 instead of reading each commit: for callers that count lines themselves. */
+      skipStats?: boolean;
     } = {}
   ): Promise<CommitRecord[]> {
     const octokit = await this.#getOctokit();
@@ -863,7 +865,7 @@ export class GitHubProvider extends GitProvider {
       for (const c of data.slice(0, remaining)) {
         // The list carries no line counts; only a commit we have never read
         // costs a call of its own.
-        let stats = opts.knownStats?.get(c.sha);
+        let stats = opts.skipStats ? { additions: 0, deletions: 0 } : opts.knownStats?.get(c.sha);
         if (!stats) {
           const { data: full } = await octokit.rest.repos.getCommit({
             owner: org,
