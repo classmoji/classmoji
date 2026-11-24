@@ -293,6 +293,241 @@ test.describe('a locked section as each reader sees it', () => {
   });
 });
 
+// ─── "View as" a student: their state, drawn read-only ───────────────────────
+
+test.describe('viewing as a student ("View as")', () => {
+  const UNLOCKED_AT = '2026-11-01T10:00:00.000Z';
+  const blocks = [
+    {
+      id: 'h-done',
+      type: 'heading',
+      props: { level: 2, checkable: true },
+      content: text('Setup'),
+      children: [],
+    },
+    { id: 'p-1', type: 'paragraph', content: text('Do the setup.') },
+    {
+      id: 'h-todo',
+      type: 'heading',
+      props: { level: 2, checkable: true },
+      content: text('Next'),
+      children: [],
+    },
+    {
+      id: 'item-done',
+      type: 'checkListItem',
+      props: { checked: false, personal: true },
+      content: text('Install Node'),
+    },
+    {
+      id: 'item-todo',
+      type: 'checkListItem',
+      // The author's box is ticked; the student's is not.
+      props: { checked: true, personal: true },
+      content: text('Install Git'),
+    },
+    // Still locked for the student: no body was sent.
+    { id: 'lock', type: 'lockedSection', props: { title: 'Solution' }, children: [] },
+    // Unlocked by the student: the body was sent.
+    {
+      id: 'opened',
+      type: 'lockedSection',
+      props: { title: 'Hint' },
+      children: [{ id: 'hint-body', type: 'paragraph', content: text('the hint body') }],
+    },
+  ];
+  const viewAs = () => {
+    const data = siteIslandData(blocks);
+    data.payload.readerSections = {
+      staff: false,
+      signedIn: true,
+      member: true,
+      showChecks: true,
+      showUnlock: true,
+      canCheck: false,
+      canUnlock: false,
+      checked: ['h-done', 'item-done'],
+      unlocked: { opened: UNLOCKED_AT },
+    };
+    return data;
+  };
+
+  test('the student’s ticks and unlocks, every control inert, nothing posted', async ({ page }) => {
+    const posts: string[] = [];
+    page.on('request', request => {
+      if (request.method() !== 'GET') posts.push(`${request.method()} ${request.url()}`);
+    });
+    await mountReader(page, blocks, { data: viewAs() });
+
+    const box = (id: string) => page.locator(`.bn-block[data-id="${id}"] .pg-section-check`);
+    const boxState = (id: string) =>
+      box(id).evaluate(el => ({
+        hidden: (el as HTMLButtonElement).hidden,
+        disabled: (el as HTMLButtonElement).disabled,
+        checked: el.getAttribute('aria-checked'),
+        label: el.getAttribute('aria-label'),
+        tooltip: el.getAttribute('data-tooltip'),
+        afterContent: getComputedStyle(el, '::after').content,
+        cursor: getComputedStyle(el).cursor,
+      }));
+    expect(await boxState('h-done')).toEqual({
+      hidden: false,
+      disabled: true,
+      checked: 'true',
+      label: "'Setup' done",
+      tooltip: null,
+      afterContent: 'none',
+      cursor: 'default',
+    });
+    expect(await boxState('h-todo')).toMatchObject({
+      hidden: false,
+      disabled: true,
+      checked: 'false',
+      label: "'Next' not done",
+    });
+    await expect(box('h-done')).toBeVisible();
+
+    // The done section fades, as it does for the student.
+    await expect
+      .poll(() =>
+        page
+          .locator('.bn-block[data-id="p-1"]')
+          .evaluate(el => Number(getComputedStyle(el.closest('.bn-block-outer')!).opacity))
+      )
+      .toBeLessThan(1);
+
+    // Student check list items: the student's state, not the author's, disabled.
+    const itemState = (id: string) =>
+      page.locator(`.bn-block[data-id="${id}"] input[type="checkbox"]`).evaluate(el => ({
+        checked: (el as HTMLInputElement).checked,
+        disabled: (el as HTMLInputElement).disabled,
+      }));
+    expect(await itemState('item-done')).toEqual({ checked: true, disabled: true });
+    expect(await itemState('item-todo')).toEqual({ checked: false, disabled: true });
+
+    // The student's unlocked section is open; the locked one is their card,
+    // hold control and note included, the control disabled.
+    const lock = page.locator('.bn-block[data-id="lock"] .pg-locked');
+    await expect(lock).toHaveAttribute('data-mode', 'view');
+    await expect(lock).toContainText('Hold to unlock');
+    await expect(lock).toContainText('Staff can see when you unlock this.');
+    const hold = lock.locator('.pg-hold-btn');
+    await expect(hold).toBeDisabled();
+    // Inert to the pointer too: no hand, a swipe on it scrolls.
+    expect(
+      await hold.evaluate(el => ({
+        cursor: getComputedStyle(el).cursor,
+        touchAction: getComputedStyle(el).touchAction,
+      }))
+    ).toEqual({ cursor: 'default', touchAction: 'auto' });
+    expect(
+      await page
+        .locator('.bn-block[data-id="item-done"] input[type="checkbox"]')
+        .evaluate(el => getComputedStyle(el).cursor)
+    ).toBe('default');
+    const describedBy = await hold.getAttribute('aria-describedby');
+    expect(await page.locator(`[id="${describedBy}"]`).count()).toBe(1);
+    await expect(page.locator('.bn-block[data-id="opened"] .pg-locked').first()).toHaveAttribute(
+      'data-mode',
+      'unlocked'
+    );
+    await expect(page.locator('#reader-island-root')).toContainText('the hint body');
+
+    // Clicking a box, ticking an item and holding the padlock change nothing.
+    await box('h-todo').click({ force: true });
+    await page
+      .locator('.bn-block[data-id="item-todo"] input[type="checkbox"]')
+      .click({ force: true });
+    const at = await hold.boundingBox();
+    if (!at) throw new Error('the hold control is not drawn');
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(1600);
+    await page.mouse.up();
+    expect(await boxState('h-todo')).toMatchObject({ checked: 'false', disabled: true });
+    expect(await itemState('item-todo')).toEqual({ checked: false, disabled: true });
+    await expect(lock).toHaveAttribute('data-mode', 'view');
+    expect(posts).toEqual([]);
+  });
+
+  test('a payload without the draw flags draws what it may act on', async ({ page }) => {
+    const data = viewAs();
+    const { showChecks: _s, showUnlock: _u, ...older } = data.payload.readerSections;
+    data.payload.readerSections = older as typeof data.payload.readerSections;
+    await mountReader(page, blocks, { data });
+    expect(
+      await page
+        .locator('.bn-block[data-id="h-done"] .pg-section-check')
+        .evaluate(el => (el as HTMLButtonElement).hidden)
+    ).toBe(true);
+    await expect(page.locator('.bn-block[data-id="lock"] .pg-locked')).toHaveAttribute(
+      'data-mode',
+      'closed'
+    );
+  });
+
+  test('the student themself: the same controls, live, each posting once', async ({ page }) => {
+    const data = viewAs();
+    data.payload.readerSections = {
+      ...data.payload.readerSections,
+      canCheck: true,
+      canUnlock: true,
+    };
+    await mountReader(page, blocks, { data });
+    // Answer the section API (registered after the harness's own route, so it wins).
+    const posts: Array<{ blockId: string; intent: string }> = [];
+    await page.route('**/api/page-sections', async route => {
+      const body = JSON.parse(route.request().postData() ?? '{}') as {
+        blockId: string;
+        intent: string;
+      };
+      posts.push({ blockId: body.blockId, intent: body.intent });
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          body.intent === 'unlock'
+            ? { ok: true, unlockedAt: '2026-11-02T10:00:00.000Z' }
+            : { ok: true, checked: body.intent === 'check' }
+        ),
+      });
+    });
+
+    // The heading box: enabled, with its tooltip; a click posts one check.
+    const box = page.locator('.bn-block[data-id="h-todo"] .pg-section-check');
+    await expect(box).toBeEnabled();
+    expect(await box.getAttribute('data-tooltip')).toBe('Mark done');
+    await box.click();
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts[0]).toEqual({ blockId: 'h-todo', intent: 'check' });
+    await expect(box).toHaveAttribute('aria-checked', 'true');
+
+    // The student's check list item: enabled; ticking posts one check.
+    const item = page.locator('.bn-block[data-id="item-todo"] input[type="checkbox"]');
+    await expect(item).toBeEnabled();
+    await item.click();
+    await expect.poll(() => posts.length).toBe(2);
+    expect(posts[1]).toEqual({ blockId: 'item-todo', intent: 'check' });
+
+    // The locked section: the live hold; a full hold posts one unlock.
+    const lock = page.locator('.bn-block[data-id="lock"] .pg-locked');
+    await expect(lock).toHaveAttribute('data-mode', 'hold');
+    const hold = lock.locator('.pg-hold-btn');
+    await expect(hold).toBeEnabled();
+    expect(await hold.evaluate(el => getComputedStyle(el).touchAction)).toBe('none');
+    expect(await item.evaluate(el => getComputedStyle(el).cursor)).toBe('pointer');
+    expect(await hold.getAttribute('aria-label')).toBe("Hold to unlock 'Solution'");
+    const at = await hold.boundingBox();
+    if (!at) throw new Error('the hold control is not drawn');
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+    await page.mouse.down();
+    await expect.poll(() => posts.length, { timeout: 5_000 }).toBe(3);
+    await page.mouse.up();
+    expect(posts[2]).toEqual({ blockId: 'lock', intent: 'unlock' });
+    await page.waitForTimeout(500);
+    expect(posts).toHaveLength(3);
+  });
+});
+
 test.describe('a click selects nothing in the reader', () => {
   test('a block made the selected node gets no selection overlay', async ({ page }) => {
     await mountReader(page, [

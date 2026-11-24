@@ -237,6 +237,8 @@ test.describe('the render page loader (reader island)', () => {
       staff: true,
       signedIn: false,
       member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],

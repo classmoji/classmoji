@@ -5,12 +5,13 @@ import { sectionStoreFor } from './sectionCheckbox.ts';
  * reader's view.
  *
  * BlockNote's own check list item node view, with its checkbox handed to the
- * reader: for a reader who can tick (`canCheck`), the box shows THEIR state
- * (the section store's `checked`, the same set and the same POST as the
- * checkable headings) instead of the author's stored `checked`, and ticking it
- * toggles their own row. For everyone else (signed out, not an accepted
- * member, viewing as someone) the item stays exactly as BlockNote draws it in
- * a read-only editor: the author's state, a disabled box.
+ * reader: where the reader's tick state is drawn (`showChecks`), the box shows
+ * THEIR state (the section store's `checked`, the same set and the same POST
+ * as the checkable headings) instead of the author's stored `checked`, and a
+ * reader who can tick (`canCheck`) toggles their own row with it. Viewing as
+ * someone shows that person's state in a disabled box. For everyone else
+ * (signed out, not an accepted member) the item stays exactly as BlockNote
+ * draws it in a read-only editor: the author's state, a disabled box.
  *
  * The line-through is BlockNote's (`[data-checked="true"]` on the block's
  * content element), so the reader's state sets that attribute too. No fade:
@@ -39,20 +40,25 @@ function inlineText(content: unknown): string {
     .trim();
 }
 
-/** What the box shows: the reader's own state when they can tick, else the author's. */
+/**
+ * What the box shows: the reader's own state where it is drawn (`showChecks`),
+ * else the author's; it can be ticked only when the reader may tick.
+ */
 export function personalItemState({
+  showChecks,
   canCheck,
   checked,
   blockId,
   authorChecked,
 }: {
+  showChecks: boolean;
   canCheck: boolean;
   checked: ReadonlySet<string>;
   blockId: string;
   authorChecked: boolean;
 }): { checked: boolean; interactive: boolean } {
-  return canCheck
-    ? { checked: checked.has(blockId), interactive: true }
+  return showChecks || canCheck
+    ? { checked: checked.has(blockId), interactive: canCheck }
     : { checked: authorChecked, interactive: false };
 }
 
@@ -74,8 +80,14 @@ export function withPersonalCheckbox<T extends CheckListItemNodeView>(
   input.classList.add('pg-personal-check');
 
   const sync = () => {
-    const { canCheck, checked } = store.get();
-    const state = personalItemState({ canCheck, checked, blockId: block.id, authorChecked });
+    const { showChecks, canCheck, checked } = store.get();
+    const state = personalItemState({
+      showChecks,
+      canCheck,
+      checked,
+      blockId: block.id,
+      authorChecked,
+    });
     input.disabled = !state.interactive;
     input.checked = state.checked;
     if (state.checked) view.dom.setAttribute('data-checked', 'true');
