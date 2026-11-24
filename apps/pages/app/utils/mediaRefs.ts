@@ -75,21 +75,6 @@ function onDeliveryOrigin(url: string, deliveryOrigin: string | null | undefined
 }
 
 /**
- * The placeholder a media reference resolves to when it cannot be signed —
- * on `deliveryOrigin` only (see `onDeliveryOrigin`).
- */
-export function isMediaPlaceholderUrl(
-  url: unknown,
-  deliveryOrigin: string | null | undefined
-): url is string {
-  return (
-    typeof url === 'string' &&
-    MEDIA_PLACEHOLDER_URL.test(url) &&
-    onDeliveryOrigin(url, deliveryOrigin)
-  );
-}
-
-/**
  * A signed media URL, or the placeholder a media reference resolves to when it
  * cannot be signed — on `deliveryOrigin` only (see `onDeliveryOrigin`).
  */

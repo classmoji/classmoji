@@ -564,8 +564,7 @@
 
 /* Code blocks dress like terminal blocks: a title bar naming the language.
    The bar is drawn under BlockNote's language select (disabled in read-only
-   views) or, on the class site, a plain-text label in the same slot
-   (`.bn-code-language`, site/viewerSchema.server.ts). The `.bn-container`
+   views). The `.bn-container`
    prefix makes the rules that tie BlockNote's own win whichever stylesheet
    loads last. */
 .bn-container .bn-block-content[data-content-type="codeBlock"] {
@@ -886,7 +885,7 @@
 }
 
 /* Copying turned off: readers cannot select the block's text (the copy guard,
-   app/utils/copyGuard.ts and site/copyScript.ts, covers selections that span
+   app/utils/copyGuard.ts, covers selections that span
    it). Never in an editable editor: editors copy everything. */
 .bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"],
 .bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"] *,

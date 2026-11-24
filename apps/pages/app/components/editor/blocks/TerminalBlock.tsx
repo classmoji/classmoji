@@ -19,6 +19,7 @@ import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript';
 import bash from '@shikijs/langs/bash';
 import oneDarkPro from '@shikijs/themes/one-dark-pro';
 import { terminalView } from './readOnlyGates.ts';
+import { terminalCodeHtml } from './terminalHighlight.ts';
 
 type TerminalRenderProps = ReactCustomBlockRenderProps<typeof terminalConfig>;
 
@@ -104,12 +105,9 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
           themes: [oneDarkPro],
           engine: createJavaScriptRegexEngine(),
         }).then(highlighter => {
-          let html = highlighter.codeToHtml(props.block.props.code, {
-            lang: 'bash',
-            theme: 'one-dark-pro',
-          });
-          // Remove background-color from the pre element to use terminal's background
-          html = html.replace(/background-color:[^;]+;?/g, '');
+          // Shiki's escaped HTML, without the theme background on the <pre>
+          // (terminalHighlight.ts); the code text is never edited.
+          const html = terminalCodeHtml(highlighter, props.block.props.code);
           if (codeRef.current) {
             codeRef.current.innerHTML = html;
           }

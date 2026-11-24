@@ -20,7 +20,6 @@ import {
   legacyNoticeFor,
   legacyNoticeText,
 } from '~/utils/legacyPage.ts';
-import { renderSitePage } from '~/site/render.server.ts';
 import { importWithStubs, stubModule } from '../helpers/dataRequest.helpers.ts';
 
 const source = (relative: string) =>
@@ -236,7 +235,7 @@ test.describe('the class site', () => {
     );
   }
 
-  test('a legacy page loads as an empty article, its HTML never read into the render', async () => {
+  test('a legacy page loads as an empty article, its HTML never read into the payload', async () => {
     const { loadSitePageContent } = await siteContent();
     const asked: string[] = [];
     const content = await loadSitePageContent(
@@ -249,11 +248,7 @@ test.describe('the class site', () => {
     );
     expect(asked).toEqual(['pages/old/content.json', 'pages/old/index.html']);
     expect(content).toEqual({ format: 'html', blocks: [], coverImage: null });
-
-    // The empty document renders (an empty paragraph), not a 503.
-    const { html } = await renderSitePage({ blocks: content.blocks, resolveLink: () => null });
-    expect(html).toContain('data-content-type="paragraph"');
-    expect(html).not.toContain('SECRET-OLD-BODY');
+    expect(JSON.stringify(content)).not.toContain('SECRET-OLD-BODY');
   });
 
   test('a content.json page is unchanged', async () => {

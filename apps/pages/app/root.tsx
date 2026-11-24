@@ -42,7 +42,6 @@ import '~/styles/toastify-overrides.css';
 import '@mantine/core/styles.css';
 import '@blocknote/core/fonts/inter.css';
 import '@blocknote/mantine/style.css';
-import 'highlight.js/styles/atom-one-dark.css';
 import '~/styles/blocknote-overrides.css';
 import '~/styles/tailwind.css';
 

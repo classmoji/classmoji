@@ -13,8 +13,8 @@ import { parseMediaRef } from './mediaRefs.ts';
  * which applies the same rule again — so a button drawn wrongly could never
  * hand out a file, it could only fail.
  *
- * Pure and import-light on purpose: the page loader, the class-site renderer
- * and the unit suite all read it, and none may pull in the services root.
+ * Pure and import-light on purpose: the page loader, the reader payload and
+ * the unit suite all read it, and none may pull in the services root.
  */
 
 /**
@@ -112,27 +112,4 @@ export function downloadableByRef(
  */
 export function mediaDownloadHref(pageId: string, ref: string, origin = ''): string {
   return `${origin}/api/media-download?${new URLSearchParams({ pageId, ref })}`;
-}
-
-/**
- * The class site's form of the map: `signedUrl → downloadHref`, because the
- * site renders a document whose references have already been rewritten to
- * signed URLs. A ref that did not resolve to a URL of its own (the resolve
- * failed, or it could not be signed) has no entry — its block renders as
- * nothing on the site, so it has nothing to hang a button on.
- */
-export function siteDownloadsFor(
-  downloads: MediaDownloads,
-  urlFor: (ref: string) => string | undefined,
-  pageId: string,
-  origin: string
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [ref, allowed] of Object.entries(downloads)) {
-    if (!allowed) continue;
-    const signed = urlFor(ref);
-    if (!signed || signed === ref) continue;
-    out[signed] = mediaDownloadHref(pageId, ref, origin);
-  }
-  return out;
 }

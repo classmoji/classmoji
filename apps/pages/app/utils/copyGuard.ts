@@ -14,9 +14,6 @@
  *
  * Read-only only: a disabled block inside an editable editor
  * (`contenteditable="true"`) is never in the way; editors copy everything.
- *
- * The class site has no bundle, so its inline script (site/copyScript.ts)
- * repeats the DOM half of this in ES5. Change one, change the other.
  */
 
 export const NON_COPYABLE_SELECTOR = '[data-copyable="false"]';

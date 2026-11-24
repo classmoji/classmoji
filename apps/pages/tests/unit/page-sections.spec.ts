@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
-// @ts-expect-error -- jsdom ships no type declarations (see site-render.spec.ts).
+// @ts-expect-error -- jsdom ships no type declarations (see block-styles.spec.ts).
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 import { collectBlockAssetRefs } from '@classmoji/utils';
 
@@ -59,7 +59,6 @@ import {
   isNoSuchSection,
   parseActivityList,
 } from '~/components/editor/sectionActivity.ts';
-import { renderSitePage } from '~/site/render.server.ts';
 
 const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
 const parse = (html: string): Document => new JSDOM(`<body>${html}</body>`).window.document;
@@ -1823,68 +1822,6 @@ test.describe('the class site', () => {
     expect(documentForSite(plain)).toBe(plain);
   });
 
-  test('renders closed cards with the unlock link and no body text', async () => {
-    const href = 'https://pages.example/cs52/page-a';
-    const { html } = await renderSitePage({
-      blocks: documentForSite(fixture()),
-      resolveLink: () => null,
-      lockedSectionHref: href,
-    });
-    for (const secret of [
-      ...SECRETS,
-      'Hidden step',
-      'outer-secret.png',
-      'inner-secret.png',
-      MEDIA_ID,
-    ]) {
-      expect(html).not.toContain(secret);
-    }
-    const doc = parse(html);
-    const cards = [...doc.querySelectorAll('.bn-site-locked')];
-    expect(cards.map(card => card.querySelector('.bn-site-locked-title')?.textContent)).toEqual([
-      'Outer title',
-      'Solo title',
-    ]);
-    for (const card of cards) {
-      const link = card.querySelector('a.bn-site-locked-link');
-      expect(link?.getAttribute('href')).toBe(href);
-      expect(link?.textContent).toBe('Open in Classmoji to unlock');
-      expect(card.querySelector('svg.bn-site-locked-icon')).not.toBeNull();
-    }
-    // A checkable heading is a plain heading on the site: no control of any kind.
-    expect(doc.querySelectorAll('input, button[role="checkbox"], [role="checkbox"]')).toHaveLength(
-      0
-    );
-    expect(html).toContain('Part 1');
-  });
-
-  test('a signed-out visitor gets one sign-in row per section, no card and no body', async () => {
-    const signIn = '/sign-in?returnTo=%2Fweather';
-    const { html } = await renderSitePage({
-      blocks: documentForSite(fixture()),
-      resolveLink: () => null,
-      lockedSectionHref: 'https://pages.example/cs52/page-a',
-      lockedSectionSignInHref: signIn,
-    });
-    for (const secret of [...SECRETS, 'Hidden step', 'outer-secret.png', MEDIA_ID]) {
-      expect(html).not.toContain(secret);
-    }
-    const doc = parse(html);
-    expect(doc.querySelectorAll('.bn-site-locked')).toHaveLength(0);
-    expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
-    const rows = [...doc.querySelectorAll('a.bn-site-locked-gate')];
-    expect(rows.map(row => row.querySelector('.bn-site-locked-title')?.textContent)).toEqual([
-      'Outer title',
-      'Solo title',
-    ]);
-    for (const row of rows) {
-      expect(row.getAttribute('href')).toBe(signIn);
-      expect(row.getAttribute('aria-label')).toMatch(/^Sign in to unlock: /);
-      expect(row.querySelector('svg.bn-site-locked-icon')).not.toBeNull();
-      expect(row.querySelector('.bn-site-locked-tip')?.textContent).toBe('Sign in to unlock');
-    }
-  });
-
   // CHANGED: the sign-in link is the same for EVERY non-member (anonymous or
   // signed in), so their payloads are identical; the builder asks for it only
   // when the viewer is null. Through the site interstitial, as before.
@@ -1892,14 +1829,6 @@ test.describe('the class site', () => {
     expect(body).toContain('signInUrl: () => signInUrl,');
     expect(RENDER).not.toMatch(/viewer\.userId\s*\?/);
     expect(RENDER).toContain('`${context.memberLinkOrigin}${signInPathFor(publicPath)}`');
-  });
-
-  test('without an href (the staff view) there is no link, and the body renders as authored', async () => {
-    const { html } = await renderSitePage({ blocks: fixture(), resolveLink: () => null });
-    const doc = parse(html);
-    expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
-    expect(html).toContain('OUTER-SECRET-BODY');
-    expect(html).toContain('INNER-SECRET-BODY');
   });
 });
 

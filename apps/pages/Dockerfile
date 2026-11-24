@@ -67,6 +67,12 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
 # it did for the build; a lockfile that nests one under apps/pages fails here.
 RUN node scripts/check-server-externals.mjs apps/pages/Dockerfile
 
+# The server renders no page HTML: jsdom and BlockNote's server editor
+# (`@blocknote/server-util`, `@classmoji/page-schema/html`) are for tests, Trigger
+# tasks and scripts only. Reads the imports in the built server, so a transitive import
+# fails too (the source maps are gone here when SENTRY_AUTH_TOKEN was set).
+RUN node scripts/check-no-dom-runtime.mjs apps/pages
+
 
 # ======================
 # Production stage
