@@ -5,12 +5,12 @@ import { extractOwnRepoPath } from './contentRefs.ts';
  * HTML handed to a page create (a markdown import, a batch import, MCP
  * `page_create`'s `html`) -> the blocks its `content.json` starts with.
  *
- * The conversion is `htmlToPageBlocks` from `@classmoji/page-schema/server`,
+ * The conversion is `htmlToPageBlocks` from `@classmoji/page-schema/html`,
  * the converter the viewer, the class site and live editing already run on a
  * legacy `index.html`, so a page created from HTML holds exactly the blocks it
  * would have been shown as.
  *
- * Loaded on first use, and on purpose: the server entry pulls in BlockNote's
+ * Loaded on first use, and on purpose: the html entry pulls in BlockNote's
  * server editor and jsdom, which nothing else in this package needs and which
  * every service that imports `@classmoji/services` would otherwise load at
  * startup. `@classmoji/page-schema` is a workspace package resolved from the
@@ -18,15 +18,15 @@ import { extractOwnRepoPath } from './contentRefs.ts';
  * needs a lockfile refresh).
  */
 
-type PageSchemaServer = {
+type PageSchemaHtml = {
   htmlToPageBlocks: (html: string, options?: { title?: string }) => Promise<unknown[]>;
 };
 
-let loading: Promise<PageSchemaServer> | null = null;
+let loading: Promise<PageSchemaHtml> | null = null;
 
-function loadPageSchemaServer(): Promise<PageSchemaServer> {
-  loading ??= import('@classmoji/page-schema/server').then(
-    module => module as unknown as PageSchemaServer,
+function loadPageSchemaHtml(): Promise<PageSchemaHtml> {
+  loading ??= import('@classmoji/page-schema/html').then(
+    module => module as unknown as PageSchemaHtml,
     error => {
       // A failed load is not cached: the next create tries again.
       loading = null;
@@ -43,7 +43,7 @@ function loadPageSchemaServer(): Promise<PageSchemaServer> {
  * here.
  */
 export async function convertPageHtml(html: string, { title }: { title?: string } = {}) {
-  const { htmlToPageBlocks } = await loadPageSchemaServer();
+  const { htmlToPageBlocks } = await loadPageSchemaHtml();
   return htmlToPageBlocks(html, title ? { title } : {});
 }
 

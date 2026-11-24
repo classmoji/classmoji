@@ -7,6 +7,15 @@ import { normalizeCodeBlockContent } from './codeContent.ts';
  * `coverImage` key at all when there is no cover.
  */
 
+/** A page block as stored in `content.json` (BlockNote JSON). */
+export interface PageBlock {
+  id?: string;
+  type: string;
+  props?: Record<string, unknown>;
+  content?: unknown;
+  children?: PageBlock[];
+}
+
 export interface PageCoverImage {
   url: string;
   position: number;

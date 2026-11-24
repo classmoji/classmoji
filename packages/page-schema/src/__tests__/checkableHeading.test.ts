@@ -9,7 +9,8 @@ import * as Y from 'yjs';
 import { lockedSectionConfig } from '../configs.ts';
 import { serializePageContent } from '../content.ts';
 import { createPageSchema } from '../schema.ts';
-import { getServerEditor, pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import { getServerEditor } from '../html.ts';
+import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
 
 const text = (value: string) => [{ type: 'text', text: value, styles: {} }];
 

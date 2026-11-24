@@ -26,8 +26,8 @@ import { updateYFragment } from 'y-prosemirror';
 import { COVER_IMAGE_KEY, FRAGMENT, META_MAP, type PageCoverImage } from '@classmoji/page-schema';
 import {
   blocksToYDoc,
-  getServerEditor,
   pageContentToYDoc,
+  pmSchema,
   yDocToBlocks,
 } from '@classmoji/page-schema/server';
 
@@ -44,10 +44,6 @@ export interface PageBlock {
 
 type PmSchema = Parameters<typeof blockToNode>[1];
 type PmNode = ReturnType<typeof blockToNode>;
-
-function pmSchema(): PmSchema {
-  return (getServerEditor().editor as unknown as { pmSchema: PmSchema }).pmSchema;
-}
 
 function freshMeta() {
   return { mapping: new Map(), isOMark: new Map() };

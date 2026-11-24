@@ -20,11 +20,11 @@
  * `@classmoji/tasks`. Trigger.dev discovers it through `dirs`, and the collab
  * server triggers it by string id.
  *
- * The renderers — `@classmoji/page-schema/server` (BlockNote's server editor,
- * React, jsdom) and the deck converter in `@classmoji/collab` — are imported
- * INSIDE the run, never at module load: Trigger.dev imports every task file to
- * index the worker, and a jsdom problem here must not stop the other tasks
- * from being indexed. The ids below are literals for the same reason (a test
+ * The renderers — `@classmoji/page-schema/server` (a plain BlockNote editor
+ * and its schema, no DOM) and the deck converter in `@classmoji/collab` — are
+ * imported INSIDE the run, never at module load: Trigger.dev imports every
+ * task file to index the worker, and a renderer problem here must not stop
+ * the other tasks from being indexed. The ids below are literals for the same reason (a test
  * pins them to the `@classmoji/collab` constants).
  *
  * Editors (co-author trailers) arrive in the payload: the collab server keeps,
@@ -290,7 +290,7 @@ export const contentCheckpoint = task({
    */
   queue: { name: CHECKPOINT_QUEUE_NAME, concurrencyLimit: 1 },
   /**
-   * Git plus a BlockNote server editor (jsdom) holding every dirty doc of a
+   * Git plus a BlockNote editor holding every dirty doc of a
    * classroom. Its own size (the project default is small-2x) so its warm
    * machines only take checkpoint runs: a collab warm-up keeps a machine warm
    * for the next Present/Save version instead of for an unrelated task, and

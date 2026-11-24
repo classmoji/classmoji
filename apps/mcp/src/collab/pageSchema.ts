@@ -6,10 +6,8 @@
  * compares like with like (the live server's snapshots are already in this
  * form).
  *
- * Loaded on first use: the server entry pulls in the BlockNote server editor
- * (jsdom), which no other MCP tool needs. `@classmoji/page-schema` is a
- * workspace package resolved from the root node_modules; apps/mcp's
- * package.json does not list it yet (adding it needs a lockfile refresh).
+ * Loaded on first use: the server entry pulls in BlockNote and the page
+ * schema (no DOM), which no other MCP tool needs.
  */
 
 type SchemaModule = {

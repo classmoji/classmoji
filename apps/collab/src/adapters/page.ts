@@ -2,7 +2,8 @@
  * The PAGE adapter: BlockNote pages (`pages/<slug>/content.json`).
  *
  * A legacy page (only `pages/<slug>/index.html`) is converted on its first
- * live open (`htmlToPageBlocks`) and seeded with `source_sha` = index.html's
+ * live open (`convertLegacyPageHtml` from `@classmoji/page-schema/html`, loaded
+ * only then: it pulls in jsdom) and seeded with `source_sha` = index.html's
  * blob: the checkpoint worker compares content.json first and index.html
  * second, so the first checkpoint after an edit creates content.json beside
  * index.html and records ITS blob as `source_sha` from then on.
@@ -19,12 +20,8 @@ import { ClassmojiService, ContentService } from '@classmoji/services';
 import { canMutateClassroom } from '@classmoji/auth/predicates';
 import { canEditPages, findClassroomRole } from '@classmoji/auth/classroom-role';
 import { SCHEMA_VERSION, parsePageContent, type PageCoverImage } from '@classmoji/page-schema';
-import {
-  htmlToPageBlocks,
-  pageContentToYDoc,
-  yDocToBlocks,
-  type HtmlToPageBlocksOptions,
-} from '@classmoji/page-schema/server';
+import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
+import type { HtmlToPageBlocksOptions } from '@classmoji/page-schema/html';
 import type { PageSnapshotContent } from '@classmoji/collab';
 import { itemHash, pageView } from '@classmoji/collab/hash';
 import { AGENT_TOUCHED_MAX } from '@classmoji/collab';
@@ -143,8 +140,10 @@ export interface PageAdapterDeps {
    * links in a legacy page. Throws when the database cannot answer.
    */
   pageIdsInClassroom(classroomId: string, ids: string[]): Promise<Set<string>>;
-  /** Legacy index.html -> blocks. Default `htmlToPageBlocks`; swapped out in tests. */
+  /** Legacy index.html -> blocks. Default `htmlToPageBlocks` (/html); swapped out in tests. */
   convertHtml?(html: string, options: HtmlToPageBlocksOptions): Promise<unknown[]>;
+  /** Loads `@classmoji/page-schema/html`. Default `loadPageSchemaHtml`; swapped out in tests. */
+  loadHtml?(): Promise<PageSchemaHtml>;
 }
 
 export const defaultPageAdapterDeps: PageAdapterDeps = {
@@ -236,25 +235,40 @@ function asHttpError(err: unknown): never {
 
 type PageContentRaw = { blocks: PageBlock[]; cover: PageCoverImage | null };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Every uuid-shaped string in a page's HTML: the page ids its old links could name. */
-const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+export type PageSchemaHtml = typeof import('@classmoji/page-schema/html');
 
-function withoutIds(blocks: unknown[]): PageBlock[] {
-  return blocks.map(raw => {
-    const { id: _id, children, ...rest } = raw as PageBlock;
-    return {
-      ...rest,
-      ...(Array.isArray(children) ? { children: withoutIds(children) } : {}),
-    } as PageBlock;
+/**
+ * `@classmoji/page-schema/html` (BlockNote's server editor, jsdom), loaded on
+ * the first legacy conversion (and in the background once the server listens,
+ * `preloadLegacyConverter`): every other path here needs no DOM. A failed load
+ * is not cached.
+ */
+let loadingHtml: Promise<PageSchemaHtml> | null = null;
+export function loadPageSchemaHtml(): Promise<PageSchemaHtml> {
+  loadingHtml ??= import('@classmoji/page-schema/html').catch(err => {
+    loadingHtml = null;
+    throw err;
+  });
+  return loadingHtml;
+}
+
+/**
+ * Start loading the legacy converter in the background (collab startup, once
+ * the server listens), so a broken install is logged at deploy time instead
+ * of on the first legacy page. Never rejects; nothing waits for it.
+ */
+export function preloadLegacyConverter(): void {
+  loadPageSchemaHtml().catch(err => {
+    console.error(
+      '[collab] ERROR: the legacy HTML converter (@classmoji/page-schema/html) failed to load; legacy pages will answer 503 until it does:',
+      err
+    );
   });
 }
 
 export function createPageAdapter(
   deps: PageAdapterDeps = defaultPageAdapterDeps
 ): CollabAdapter<'page', BlockOp> {
-  const convert = deps.convertHtml ?? htmlToPageBlocks;
-
   async function mustFindPage(pageId: string): Promise<PageRecord> {
     const page = await deps.findPage(pageId);
     if (!page) throw new CollabHttpError(404, { error: 'not-found' });
@@ -262,7 +276,9 @@ export function createPageAdapter(
   }
 
   /**
-   * Legacy page HTML -> blocks. Old `/<slug>/pages/<id>` links are rewritten
+   * Legacy page HTML -> blocks, through `convertLegacyPageHtml`
+   * (`@classmoji/page-schema/html`), the one conversion a legacy page is
+   * converted with anywhere. Old `/<slug>/pages/<id>` links are rewritten
    * only to a page of THIS page's classroom (looked up by the row's own
    * classroom, never by the slug in the content), at this classroom's address.
    *
@@ -277,11 +293,23 @@ export function createPageAdapter(
    * row's classroom_id. When that read fails the conversion fails too, as
    * `unavailable` (503, transient: the caller retries): converting with the
    * links left unresolved would give different blocks, and so different ids,
-   * than the next conversion of the same HTML. Throws `legacy-html` (422)
-   * when the converter itself fails.
+   * than the next conversion of the same HTML. A converter that cannot be
+   * LOADED is `unavailable` (503) too: the page itself is fine, so it is
+   * retried, never read as "no merge base". Throws `legacy-html` (422) when
+   * the converter fails on this page's HTML.
    */
   async function convertLegacy(page: PageRecord, html: string, what: string): Promise<PageBlock[]> {
-    const linkedIds = [...new Set((html.match(UUID_ANYWHERE) ?? []).map(id => id.toLowerCase()))];
+    let schemaHtml: PageSchemaHtml;
+    try {
+      schemaHtml = await (deps.loadHtml ?? loadPageSchemaHtml)();
+    } catch (err) {
+      console.error(`[collab] ${what}: the legacy HTML converter could not be loaded:`, err);
+      throw new CollabHttpError(503, {
+        error: 'unavailable',
+        message: `${what} could not be converted for live editing right now; retry shortly`,
+      });
+    }
+    const linkedIds = schemaHtml.legacyPageLinkIds(html);
     let pagesHere = new Set<string>();
     if (linkedIds.length > 0) {
       try {
@@ -294,15 +322,14 @@ export function createPageAdapter(
         });
       }
     }
-    const resolvePageLink = (linkSlug: string, pageId: string) => {
-      const id = pageId.toLowerCase();
-      if (!UUID.test(id) || !pagesHere.has(id)) return null;
-      return `/${page.classroom.slug ?? linkSlug}/${pageId}`;
-    };
     try {
-      // One conversion at a time per process: the converter queues itself.
-      const blocks = await convert(html, { title: page.title, resolvePageLink });
-      return pageContent.ensureBlockIds(withoutIds(blocks)) as PageBlock[];
+      return (await schemaHtml.convertLegacyPageHtml(html, {
+        title: page.title,
+        classroomSlug: page.classroom.slug,
+        pagesInClassroom: pagesHere,
+        ensureBlockIds: pageContent.ensureBlockIds,
+        ...(deps.convertHtml ? { convert: deps.convertHtml } : {}),
+      })) as PageBlock[];
     } catch (err) {
       console.error(`[collab] ${what}: legacy HTML could not be converted:`, err);
       throw new CollabHttpError(422, {

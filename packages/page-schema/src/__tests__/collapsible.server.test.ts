@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { getServerEditor } from '../server.ts';
+import { getServerEditor } from '../html.ts';
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n');
 const code = (id: string, text: string, props: Record<string, unknown> = {}) => ({

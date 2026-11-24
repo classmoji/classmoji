@@ -1,5 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 
+import { preloadLegacyConverter } from './adapters/page.ts';
 import { createAdapterRegistry } from './adapters/registry.ts';
 import { createServiceAuditSink } from './audit.ts';
 import { createTaskCheckpointTrigger } from './checkpoint.ts';
@@ -59,6 +60,8 @@ const runtime = createCollabServer({
 
 live = runtime;
 await runtime.listen();
+// In the background, never awaited: logs loudly if the legacy converter (jsdom) is broken.
+preloadLegacyConverter();
 console.log(
   `[collab] origins: ${[...config.allowedOrigins].join(', ') || '(none)'}; checkpoint delay ${config.checkpointDelay} (max ${config.checkpointMaxDelay})`
 );

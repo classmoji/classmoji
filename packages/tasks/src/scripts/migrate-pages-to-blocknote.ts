@@ -1,7 +1,7 @@
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { ContentService } from '@classmoji/content';
 import { ClassmojiService } from '@classmoji/services';
-import { htmlToPageBlocks } from '@classmoji/page-schema/server';
+import { htmlToPageBlocks } from '@classmoji/page-schema/html';
 
 async function migratePagesToBlockNote(): Promise<void> {
   const prisma = createPgPrismaClient(process.env.DATABASE_URL ?? '');

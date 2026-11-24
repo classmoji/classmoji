@@ -11,7 +11,8 @@ import * as Y from 'yjs';
 import { parsePageContent, serializePageContent, type PageContent } from '../content.ts';
 import { FRAGMENT } from '../constants.ts';
 import { createPageSchema } from '../schema.ts';
-import { getServerEditor, pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import { getServerEditor } from '../html.ts';
+import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
 
 type AnyBlock = { type?: string; props?: Record<string, unknown>; children?: AnyBlock[] };
 
