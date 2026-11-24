@@ -54,9 +54,11 @@ import {
   BUILTIN_THEMES,
   highlightStyleName,
   highlightStyleUrl,
+  isThemeFontStylesheet,
   revealCoreCssUrl,
   revealHighlightPluginUrl,
   revealScriptUrl,
+  revealThemeExtraStylesheets,
   revealThemeUrl,
 } from './revealAssets.ts';
 
@@ -251,9 +253,20 @@ export const SL_BLOCK_CSS =
   '.sl-block-content{width:100%;height:100%;overflow:visible}' +
   ".reveal .sl-block[data-block-type='image'] .sl-block-content img{max-width:none}";
 
+function builtinThemeName(theme: string): string {
+  return (BUILTIN_THEMES as readonly string[]).includes(theme) ? theme : 'white';
+}
+
 function builtinThemeUrl(theme: string): string {
-  const name = (BUILTIN_THEMES as readonly string[]).includes(theme) ? theme : 'white';
-  return revealThemeUrl(name);
+  return revealThemeUrl(builtinThemeName(theme));
+}
+
+/**
+ * The font stylesheets the deck's builtin theme(s) need, once each. No media:
+ * they only declare faces, and a face nobody uses is never downloaded.
+ */
+function builtinThemeFontUrls(themes: string[]): string[] {
+  return [...new Set(themes.flatMap(t => revealThemeExtraStylesheets(builtinThemeName(t))))];
 }
 
 function highlightThemeUrl(codeTheme: string): string {
@@ -311,8 +324,9 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
  * - themeDark/codeThemeDark → light/dark/`not all` media link trio, else a
  *   single canonical link.
  * - Reveal (engine, core css, highlight plugin) and builtin themes from
- *   jsDelivr, at the versions revealAssets.ts names; shared:/custom: themes via
- *   opts.themeUrls (caller-resolved).
+ *   jsDelivr, at the versions revealAssets.ts names, each builtin theme
+ *   followed by the font stylesheets it needs (beige: Source Sans Pro);
+ *   shared:/custom: themes via opts.themeUrls (caller-resolved).
  * - `data-cm-id` emitted on every section.
  * - Config goes into a `<script type="application/json">` block (canonical
  *   defaults hash:true, controls:true, progress:true, center:true,
@@ -349,10 +363,14 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     themeLinks.push(
       linkLine(lightUrl, MEDIA_LIGHT),
       linkLine(darkUrl, MEDIA_DARK),
-      linkLine(lightUrl, MEDIA_FALLBACK)
+      linkLine(lightUrl, MEDIA_FALLBACK),
+      ...builtinThemeFontUrls([theme, deck.themeDark]).map(href => linkLine(href))
     );
   } else {
-    themeLinks.push(linkLine(builtinThemeUrl(theme)));
+    themeLinks.push(
+      linkLine(builtinThemeUrl(theme)),
+      ...builtinThemeFontUrls([theme]).map(href => linkLine(href))
+    );
   }
 
   // Code syntax highlighting links
@@ -731,7 +749,8 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
   // ── Stylesheet link classification (media-aware) ──
   const themeCandidates: LinkCandidate[] = [];
   const codeCandidates: LinkCandidate[] = [];
-  const extraCss: DeckExtraCss[] = [];
+  // In document order; a theme font link is settled once the theme is known.
+  const headExtras: Array<{ css: DeckExtraCss; themeFont: boolean }> = [];
 
   $('link[rel="stylesheet"]')
     .toArray()
@@ -774,7 +793,11 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
           return;
         }
       }
-      extraCss.push({ href, ...(media ? { media } : {}) });
+      headExtras.push({
+        css: { href, ...(media ? { media } : {}) },
+        // The generated links carry no media; one that does is the author's.
+        themeFont: !media && isThemeFontStylesheet(href),
+      });
     });
 
   // Builtin/highlight-shaped links never land in extraCss: they either fill a
@@ -797,6 +820,16 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
   const themeDark = declaredIsSharedOrCustom ? undefined : themeSlots.dark;
   const codeTheme = declaredCodeTheme ?? codeSlots.light ?? 'github';
   const codeThemeDark = codeSlots.dark;
+
+  // A theme's font stylesheets (beige's Source Sans Pro) are regenerated from
+  // the theme, at whatever version they were stored; on a deck whose theme
+  // needs none they are the author's own and stay extra css.
+  const themeWantsFonts =
+    !declaredIsSharedOrCustom &&
+    builtinThemeFontUrls([theme, themeDark].filter((t): t is string => Boolean(t))).length > 0;
+  const extraCss = headExtras
+    .filter(entry => !(entry.themeFont && themeWantsFonts))
+    .map(entry => entry.css);
 
   // ── Head <style> → customCss (never the generator's standalone block rules) ──
   const styleBlocks = $('head style:not([data-cm-standalone])')

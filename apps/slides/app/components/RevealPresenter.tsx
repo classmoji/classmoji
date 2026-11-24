@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import {
   BUILTIN_THEMES as REVEAL_BUILTIN_THEMES,
+  revealThemeExtraStylesheets,
   revealThemeUrl,
 } from '@classmoji/services/slides/reveal-assets';
 import QRCodeOverlay from './QRCodeOverlay';
@@ -105,6 +106,8 @@ export default function RevealPresenter({
   const [themeLight, setThemeLight] = useState('white');
   const [themeDark, setThemeDark] = useState('black');
   const themeStyleRef = useRef<HTMLLinkElement | null>(null);
+  // Fonts the builtin theme names but does not define (beige: Source Sans Pro).
+  const themeFontLinksRef = useRef<HTMLLinkElement[]>([]);
   // Shared theme state - CSS URLs extracted from HTML head
   const sharedThemeLinksRef = useRef<HTMLLinkElement[]>([]);
   const [bodyClasses, setBodyClasses] = useState('');
@@ -163,9 +166,20 @@ export default function RevealPresenter({
       if (themeStyleRef.current) {
         themeStyleRef.current.remove();
       }
+      themeFontLinksRef.current.forEach(link => link.remove());
+      themeFontLinksRef.current = [];
 
       // Skip if no theme URL (shouldn't happen for built-in themes)
       if (!themeUrl) return;
+
+      themeFontLinksRef.current = revealThemeExtraStylesheets(currentTheme).map(href => {
+        const fontLink = document.createElement('link');
+        fontLink.rel = 'stylesheet';
+        fontLink.href = href;
+        fontLink.dataset.revealThemeFont = '';
+        document.head.appendChild(fontLink);
+        return fontLink;
+      });
 
       // Create new link element for theme
       const link = document.createElement('link');
@@ -203,6 +217,8 @@ export default function RevealPresenter({
         themeStyleRef.current.remove();
         themeStyleRef.current = null;
       }
+      themeFontLinksRef.current.forEach(link => link.remove());
+      themeFontLinksRef.current = [];
     };
   }, [isClient, theme, themeLight, themeDark, bodyClasses]);
 

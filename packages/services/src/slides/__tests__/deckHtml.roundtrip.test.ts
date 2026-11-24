@@ -102,15 +102,14 @@ describe('importer media-pair fixture', () => {
   it('re-emits the media link trio for themeDark/codeThemeDark', () => {
     const { deck } = parseDeckHtml(IMPORTER_FIXTURE, { idGen: seededIdGen() });
     const html = generateDeckHtml(deck, { title: TITLE });
-    // Builtin themes stay at the version decks are drawn with (revealAssets.ts).
     expect(html).toContain(
-      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" media="(prefers-color-scheme: light)">'
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/theme/white.css" media="(prefers-color-scheme: light)">'
     );
     expect(html).toContain(
-      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" media="(prefers-color-scheme: dark)">'
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/theme/black.css" media="(prefers-color-scheme: dark)">'
     );
     expect(html).toContain(
-      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" media="not all and (prefers-color-scheme)">'
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/theme/white.css" media="not all and (prefers-color-scheme)">'
     );
     expect(html).toContain(
       '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">'
