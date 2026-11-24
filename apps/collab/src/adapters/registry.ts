@@ -7,9 +7,10 @@ import type { CollabAdapter } from './types.ts';
  *   page.ts → `export function createPageAdapter(): CollabAdapter<'page'>`
  *   deck.ts → `export function createDeckAdapter(): CollabAdapter<'deck'>`
  *
- * Both are imported lazily, on first use: a module that is missing (deck.ts
- * before slice D lands) or fails to load makes that kind unavailable — its
- * rooms are refused with a logged reason — without taking the server down.
+ * Both are imported lazily, on first use: a module that fails to load makes
+ * that kind unavailable — its rooms are refused with a logged reason —
+ * without taking the server down. The specifiers are literals so
+ * `scripts/check-no-dom-runtime.mjs --entry` follows them into both adapters.
  */
 export interface AdapterRegistry {
   get(kind: CollabKind): Promise<CollabAdapter | null>;
@@ -19,17 +20,7 @@ type Loader = () => Promise<CollabAdapter>;
 
 const DEFAULT_LOADERS: Record<CollabKind, Loader> = {
   page: async () => (await import('./page.ts')).createPageAdapter(),
-  deck: async () => {
-    // A variable specifier so typecheck does not require the file to exist yet.
-    const specifier = './deck.ts';
-    const mod = (await import(specifier)) as {
-      createDeckAdapter?: () => CollabAdapter;
-    };
-    if (typeof mod.createDeckAdapter !== 'function') {
-      throw new Error('deck.ts does not export createDeckAdapter()');
-    }
-    return mod.createDeckAdapter();
-  },
+  deck: async () => (await import('./deck.ts')).createDeckAdapter(),
 };
 
 export function createAdapterRegistry(

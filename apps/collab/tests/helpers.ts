@@ -11,7 +11,6 @@ import type { Role } from '@classmoji/database/client';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import type { CollabActor, CollabKind, ContentCheckpointPayload } from '@classmoji/collab';
 import { SCHEMA_VERSION } from '@classmoji/page-schema';
-import { htmlToPageBlocks } from '@classmoji/page-schema/html';
 
 import { createAdapterRegistry } from '../src/adapters/registry.ts';
 import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
@@ -240,17 +239,10 @@ export interface FakeWorld {
    * content.json, 'html-sha' for index.html).
    */
   headSha: Map<string, string>;
-  /** Legacy HTML conversions run (the real converter), in order. */
-  conversions: string[];
-  /** `pageIdsInClassroom` calls: the classroom and the ids asked about. */
-  pageIdQueries: Array<{ classroomId: string; ids: string[] }>;
   /** Make a lookup throw (an unexpected error, e.g. a DB blip). */
   fail: {
     role?: boolean;
     content?: boolean;
-    convert?: boolean;
-    pageIds?: boolean;
-    loadHtml?: boolean;
   };
 }
 
@@ -279,8 +271,6 @@ export function createWorld(): FakeWorld {
     contentAt: new Map(),
     blobs: new Map(),
     headSha: new Map(),
-    conversions: [],
-    pageIdQueries: [],
     fail: {},
   };
 }
@@ -326,20 +316,6 @@ export function pageAdapterFor(world: FakeWorld) {
     },
     async readBlob(_page, sha) {
       return world.blobs.get(sha) ?? null;
-    },
-    async pageIdsInClassroom(classroomId, ids) {
-      world.pageIdQueries.push({ classroomId, ids });
-      if (world.fail.pageIds) throw new Error('database unavailable');
-      return new Set(ids.filter(id => world.pages.get(id)?.classroom_id === classroomId));
-    },
-    async loadHtml() {
-      if (world.fail.loadHtml) throw new Error("Cannot find package 'jsdom'");
-      return import('@classmoji/page-schema/html');
-    },
-    async convertHtml(html, options) {
-      world.conversions.push(html);
-      if (world.fail.convert) throw new Error('converter blew up');
-      return htmlToPageBlocks(html, options);
     },
   });
 }

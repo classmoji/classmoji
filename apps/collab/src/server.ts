@@ -414,7 +414,8 @@ export class CollabRuntime {
 
   /**
    * Database `fetch` (inside onLoadDocument). Every failure reaches the
-   * client as a refusal reason: `stale-epoch` (reload), `legacy-html`,
+   * client as a refusal reason: `stale-epoch` (reload), `legacy-html` (a
+   * page git holds as index.html only: refused before anything is seeded),
    * `forbidden`, or `unavailable` for anything unexpected.
    */
   private async fetch({ documentName }: fetchPayload): Promise<Uint8Array | null> {

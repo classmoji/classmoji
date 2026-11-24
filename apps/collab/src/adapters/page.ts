@@ -1,12 +1,13 @@
 /**
  * The PAGE adapter: BlockNote pages (`pages/<slug>/content.json`).
  *
- * A legacy page (only `pages/<slug>/index.html`) is converted on its first
- * live open (`convertLegacyPageHtml` from `@classmoji/page-schema/html`, loaded
- * only then: it pulls in jsdom) and seeded with `source_sha` = index.html's
- * blob: the checkpoint worker compares content.json first and index.html
- * second, so the first checkpoint after an edit creates content.json beside
- * index.html and records ITS blob as `source_sha` from then on.
+ * A legacy page (only `pages/<slug>/index.html`) is NOT converted here: its
+ * room is refused (`legacy-html`, 422) before anything is seeded or stored,
+ * and so is an outside push that leaves a page as HTML only. Legacy pages are
+ * converted by the operator script (`packages/tasks/src/scripts/
+ * convertLegacyPages.ts`); collab never loads `@classmoji/page-schema/html`,
+ * `@blocknote/server-util` or jsdom (`scripts/check-no-dom-runtime.mjs
+ * --entry apps/collab/src/index.ts` enforces it).
  *
  * Edit rule: today's — OWNER or TEACHER in the page's classroom
  * (`findClassroomRole`, highest role wins), the classroom mutation gate
@@ -15,13 +16,11 @@
  */
 import type * as Y from 'yjs';
 import type { Role } from '@classmoji/database/client';
-import getPrisma from '@classmoji/database';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import { canMutateClassroom } from '@classmoji/auth/predicates';
 import { canEditPages, findClassroomRole } from '@classmoji/auth/classroom-role';
 import { SCHEMA_VERSION, parsePageContent, type PageCoverImage } from '@classmoji/page-schema';
 import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
-import type { HtmlToPageBlocksOptions } from '@classmoji/page-schema/html';
 import type { PageSnapshotContent } from '@classmoji/collab';
 import { itemHash, pageView } from '@classmoji/collab/hash';
 import { AGENT_TOUCHED_MAX } from '@classmoji/collab';
@@ -131,19 +130,13 @@ type LoadedContent = Awaited<ReturnType<typeof pageContent.loadPageContent>>;
 export interface PageAdapterDeps {
   findPage(pageId: string): Promise<PageRecord | null>;
   findRole(userId: string, classroomId: string): Promise<Role | null>;
-  /** content.json (or legacy index.html) at the default branch, or at `ref`. */
+  /**
+   * content.json at the default branch, or at `ref` (`format: 'html'` when
+   * git holds the page as legacy index.html only, which is refused).
+   */
   loadContent(page: PageRecord, options: { ref?: string }): Promise<LoadedContent>;
   /** A blob's text by sha, null when it does not exist. */
   readBlob(page: PageRecord, sha: string): Promise<string | null>;
-  /**
-   * Which of `ids` are pages of `classroomId`: ONE query, for the old page
-   * links in a legacy page. Throws when the database cannot answer.
-   */
-  pageIdsInClassroom(classroomId: string, ids: string[]): Promise<Set<string>>;
-  /** Legacy index.html -> blocks. Default `htmlToPageBlocks` (/html); swapped out in tests. */
-  convertHtml?(html: string, options: HtmlToPageBlocksOptions): Promise<unknown[]>;
-  /** Loads `@classmoji/page-schema/html`. Default `loadPageSchemaHtml`; swapped out in tests. */
-  loadHtml?(): Promise<PageSchemaHtml>;
 }
 
 export const defaultPageAdapterDeps: PageAdapterDeps = {
@@ -165,13 +158,6 @@ export const defaultPageAdapterDeps: PageAdapterDeps = {
       sha,
     });
     return blob?.content ?? null;
-  },
-  async pageIdsInClassroom(classroomId, ids) {
-    const rows = await getPrisma().page.findMany({
-      where: { classroom_id: classroomId, id: { in: ids } },
-      select: { id: true },
-    });
-    return new Set(rows.map(row => row.id));
   },
 };
 
@@ -235,34 +221,15 @@ function asHttpError(err: unknown): never {
 
 type PageContentRaw = { blocks: PageBlock[]; cover: PageCoverImage | null };
 
-export type PageSchemaHtml = typeof import('@classmoji/page-schema/html');
-
 /**
- * `@classmoji/page-schema/html` (BlockNote's server editor, jsdom), loaded on
- * the first legacy conversion (and in the background once the server listens,
- * `preloadLegacyConverter`): every other path here needs no DOM. A failed load
- * is not cached.
+ * The refusal for a page git holds as legacy HTML (index.html, no
+ * content.json): the socket's `legacy-html` reason, 422 on the internal API.
+ * Nothing is converted, seeded or stored for it.
  */
-let loadingHtml: Promise<PageSchemaHtml> | null = null;
-export function loadPageSchemaHtml(): Promise<PageSchemaHtml> {
-  loadingHtml ??= import('@classmoji/page-schema/html').catch(err => {
-    loadingHtml = null;
-    throw err;
-  });
-  return loadingHtml;
-}
-
-/**
- * Start loading the legacy converter in the background (collab startup, once
- * the server listens), so a broken install is logged at deploy time instead
- * of on the first legacy page. Never rejects; nothing waits for it.
- */
-export function preloadLegacyConverter(): void {
-  loadPageSchemaHtml().catch(err => {
-    console.error(
-      '[collab] ERROR: the legacy HTML converter (@classmoji/page-schema/html) failed to load; legacy pages will answer 503 until it does:',
-      err
-    );
+function legacyHtmlRefusal(what: string): CollabHttpError {
+  return new CollabHttpError(422, {
+    error: 'legacy-html',
+    message: `${what} is a legacy HTML page (index.html, no content.json); it is not edited live until it is converted`,
   });
 }
 
@@ -275,110 +242,26 @@ export function createPageAdapter(
     return page;
   }
 
-  /**
-   * Legacy page HTML -> blocks, through `convertLegacyPageHtml`
-   * (`@classmoji/page-schema/html`), the one conversion a legacy page is
-   * converted with anywhere. Old `/<slug>/pages/<id>` links are rewritten
-   * only to a page of THIS page's classroom (looked up by the row's own
-   * classroom, never by the slug in the content), at this classroom's address.
-   *
-   * The converter gives every block a fresh uuid; those are dropped for the
-   * content-derived ids `ensureBlockIds` gives, so the same HTML always reads
-   * as the same ids: a snapshot of a page nobody has open (seeded, not
-   * stored) names the blocks the stored seed will have, and an outside
-   * merge's base shares its blocks with the live doc seeded from that HTML.
-   * The deck adapter names legacy slides the same way (`legacyIdGen`).
-   *
-   * The pages a link may point at are read first, in ONE query scoped by the
-   * row's classroom_id. When that read fails the conversion fails too, as
-   * `unavailable` (503, transient: the caller retries): converting with the
-   * links left unresolved would give different blocks, and so different ids,
-   * than the next conversion of the same HTML. A converter that cannot be
-   * LOADED is `unavailable` (503) too: the page itself is fine, so it is
-   * retried, never read as "no merge base". Throws `legacy-html` (422) when
-   * the converter fails on this page's HTML.
-   */
-  async function convertLegacy(page: PageRecord, html: string, what: string): Promise<PageBlock[]> {
-    let schemaHtml: PageSchemaHtml;
-    try {
-      schemaHtml = await (deps.loadHtml ?? loadPageSchemaHtml)();
-    } catch (err) {
-      console.error(`[collab] ${what}: the legacy HTML converter could not be loaded:`, err);
-      throw new CollabHttpError(503, {
-        error: 'unavailable',
-        message: `${what} could not be converted for live editing right now; retry shortly`,
-      });
-    }
-    const linkedIds = schemaHtml.legacyPageLinkIds(html);
-    let pagesHere = new Set<string>();
-    if (linkedIds.length > 0) {
-      try {
-        pagesHere = await deps.pageIdsInClassroom(page.classroom_id, linkedIds);
-      } catch (err) {
-        console.error(`[collab] ${what}: the pages its links name could not be read:`, err);
-        throw new CollabHttpError(503, {
-          error: 'unavailable',
-          message: `${what} could not be converted for live editing right now; retry shortly`,
-        });
-      }
-    }
-    try {
-      return (await schemaHtml.convertLegacyPageHtml(html, {
-        title: page.title,
-        classroomSlug: page.classroom.slug,
-        pagesInClassroom: pagesHere,
-        ensureBlockIds: pageContent.ensureBlockIds,
-        ...(deps.convertHtml ? { convert: deps.convertHtml } : {}),
-      })) as PageBlock[];
-    } catch (err) {
-      console.error(`[collab] ${what}: legacy HTML could not be converted:`, err);
-      throw new CollabHttpError(422, {
-        error: 'legacy-html',
-        message: `${what} is a legacy HTML page that could not be converted for live editing`,
-      });
-    }
-  }
-
-  /** Content at `loadContent` → blocks + cover (legacy HTML converted), or a refusal. */
-  async function contentOf(
-    page: PageRecord,
-    loaded: LoadedContent,
-    what: string
-  ): Promise<PageContentRaw> {
+  /** content.json at `loadContent` → blocks + cover; legacy HTML and no file are refused. */
+  function contentOf(loaded: LoadedContent, what: string): PageContentRaw {
     if (loaded.format === 'json') {
       return { blocks: (loaded.blocks as PageBlock[]) ?? [], cover: loaded.coverImage ?? null };
     }
-    if (loaded.format === 'html') {
-      return { blocks: await convertLegacy(page, String(loaded.blocks ?? ''), what), cover: null };
-    }
+    if (loaded.format === 'html') throw legacyHtmlRefusal(what);
     throw new CollabHttpError(409, {
       error: 'content-missing',
       message: `${what} has no content file`,
     });
   }
 
-  /**
-   * A blob the live doc descends from: content.json text, or the legacy
-   * index.html a converted doc was seeded from. Null when it is neither.
-   */
-  async function contentOfBlob(page: PageRecord, text: string): Promise<PageContentRaw | null> {
-    let parsed: ReturnType<typeof parsePageContent> | null = null;
+  /** A blob the live doc descends from, as content.json; null when it is not one. */
+  function contentOfBlob(text: string): PageContentRaw | null {
     try {
-      parsed = parsePageContent(text);
+      const parsed = parsePageContent(text);
+      return { blocks: parsed.blocks as PageBlock[], cover: parsed.coverImage ?? null };
     } catch (err) {
-      if (!(err instanceof SyntaxError)) throw err;
-    }
-    if (parsed) return { blocks: parsed.blocks as PageBlock[], cover: parsed.coverImage ?? null };
-    try {
-      return await contentOf(
-        page,
-        { format: 'html', blocks: text, coverImage: null, sha: null },
-        `page ${page.id} base`
-      );
-    } catch (err) {
-      // A transient failure is the caller's to retry, not "no merge base".
-      if (err instanceof CollabHttpError && err.status === 503) throw err;
-      return null;
+      if (err instanceof SyntaxError) return null;
+      throw err;
     }
   }
 
@@ -419,13 +302,11 @@ export function createPageAdapter(
         });
         return { doc, sourceSha: null, classroomId: page.classroom_id };
       }
-      // Legacy HTML is converted here, once: the row stores the result, and
-      // its source_sha (index.html's blob, below) is what currentSourceSha
-      // reads back while content.json does not exist, so a clean reopen is
-      // served from the row, not converted or reseeded again.
-      const { blocks, cover: fileCover } = await contentOf(page, loaded, `page ${docId}`);
-      // Legacy pages keep the cover only in the DB columns: seed it the way
-      // the pages loader falls back today, so it doesn't vanish from the editor.
+      // Legacy HTML (index.html, no content.json) is refused here, before the
+      // caller inserts anything: no row, no checkpoint, no empty content.json.
+      const { blocks, cover: fileCover } = contentOf(loaded, `page ${docId}`);
+      // A page whose content.json has no cover keeps it in the DB columns:
+      // seed it the way the pages loader falls back, so it doesn't vanish.
       const cover = fileCover ?? legacyCover(page);
       // Deterministic ids for any id-less block — the ids MCP derives on read,
       // so an agent's ops name blocks the live doc actually has — and the
@@ -442,9 +323,6 @@ export function createPageAdapter(
           message: `page ${docId} content does not fit the page schema: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-      // For legacy HTML: index.html's blob. The checkpoint worker compares
-      // content.json first and index.html second against it (expectBase), so
-      // the first checkpoint creates content.json and records that blob.
       return { doc, sourceSha: loaded.sha, classroomId: page.classroom_id };
     },
 
@@ -545,18 +423,20 @@ export function createPageAdapter(
       const normalize = (blocks: unknown[]) =>
         pageContent.normalizeBlockStructure(pageContent.ensureBlockIds(blocks));
 
-      // theirs: the content file at the pushed commit (legacy HTML converted).
+      // theirs: content.json at the pushed commit. A push that leaves the
+      // page as legacy HTML only is refused (`legacy-html`, 422): the live
+      // doc is kept.
       const theirsLoaded = await deps.loadContent(page, { ref: sha });
 
       // Already ours (our own push, a replay, an older push): nothing to do.
       if (theirsLoaded.sha && theirsLoaded.sha === ctx.row?.source_sha) {
         return { sourceSha: theirsLoaded.sha, conflicts: 0, noop: true };
       }
-      const theirsRaw = await contentOf(page, theirsLoaded, `page ${page.id} at ${sha}`);
+      const theirsRaw = contentOf(theirsLoaded, `page ${page.id} at ${sha}`);
 
-      // base: the file at `before` (exactly the outside change), else the
-      // blob the live doc descends from. Either may be the legacy index.html
-      // a converted doc was seeded from; it converts to the same ids.
+      // base: content.json at `before` (exactly the outside change), else the
+      // blob the live doc descends from. Legacy HTML is no base: it is read
+      // as unreadable, and without another base the push is not merged.
       let baseRaw: PageContentRaw | null = null;
       // No content file before the push (a page created outside after a
       // blank start, or the live doc was seeded blank): the true merge base
@@ -565,21 +445,19 @@ export function createPageAdapter(
       if (before && !/^0+$/.test(before)) {
         try {
           const loaded = await deps.loadContent(page, { ref: before });
-          if (loaded.format === 'json' || loaded.format === 'html') {
-            baseRaw = await contentOf(page, loaded, `page ${page.id} at ${before}`);
+          if (loaded.format === 'json') {
+            baseRaw = contentOf(loaded, `page ${page.id} at ${before}`);
           } else if (loaded.format === 'none' && !ctx.row?.source_sha) {
             baseRaw = empty;
           }
         } catch (err) {
-          // A transient failure (the link lookup) is retried, not read as no base.
-          if (err instanceof CollabHttpError && err.status === 503) throw err;
           console.warn(`[collab] page ${page.id}: base at ${before} unreadable:`, err);
         }
       }
       const baseSha = ctx.row?.source_sha;
       if (!baseRaw && baseSha) {
         const text = await deps.readBlob(page, baseSha);
-        if (text != null) baseRaw = await contentOfBlob(page, text);
+        if (text != null) baseRaw = contentOfBlob(text);
       }
       // Seeded blank (no source file ever) and nothing readable at `before`.
       if (!baseRaw && ctx.row && !baseSha && !ctx.row.pushed_commit) baseRaw = empty;
