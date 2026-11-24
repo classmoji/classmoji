@@ -35,6 +35,9 @@ import {
  * - signed out (a public page): one compact row, the padlock and the title,
  *   that links to sign-in; hovering or focusing it says "Sign in to unlock".
  *   No card, no glass, no hold.
+ * - signed in but not an accepted member of the class (a pending invite
+ *   included): the same compact row, not a link, and the one line "Only class
+ *   members can unlock this." Signing in again would not help them.
  *
  * "Unlocked" is shown only once the section is open in this editor: its body
  * is in, or it has none (the viewer publishes which, `filled` in the section
@@ -62,7 +65,7 @@ export interface LockedSectionViewProps {
 
 const NO_FILLED: ReadonlySet<string> = new Set();
 
-type Mode = 'staff' | 'unlocked' | 'hold' | 'closed' | 'signin';
+type Mode = 'staff' | 'unlocked' | 'hold' | 'closed' | 'signin' | 'members';
 
 export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   const sections = useReaderSections();
@@ -95,6 +98,7 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   else if (unlockedAt && !pending && filled && (!breaking || breakDone)) mode = 'unlocked';
   else if (sections.canUnlock || pending || breaking) mode = 'hold';
   else if (!sections.signedIn) mode = 'signin';
+  else if (!sections.member) mode = 'members';
   else mode = 'closed';
 
   // A failed unlock: the POST came back without recording anything, or the
@@ -158,6 +162,9 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
 
   if (mode === 'signin') {
     return <SignInToUnlock title={title} href={sections.signInUrl} />;
+  }
+  if (mode === 'members') {
+    return <MembersOnlyUnlock title={title} />;
   }
 
   return (
@@ -546,6 +553,26 @@ function SignInToUnlock({ title, href }: { title: string; href: string | null })
           {content}
         </span>
       )}
+    </div>
+  );
+}
+
+/** What a signed-in reader who is not a member of the class reads on a locked section. */
+export const MEMBERS_ONLY_UNLOCK = 'Only class members can unlock this.';
+
+/**
+ * A locked section for a signed-in reader who is not a member of the class:
+ * the padlock and the title, and one line saying who can unlock it. No link
+ * (they are signed in already), no card, no hold.
+ */
+function MembersOnlyUnlock({ title }: { title: string }) {
+  return (
+    <div className="pg-locked pg-locked-gate" data-mode="members" contentEditable={false}>
+      <span className="pg-locked-row">
+        <LockIcon />
+        <span className="pg-locked-title">{title}</span>
+      </span>
+      <p className="pg-locked-note">{MEMBERS_ONLY_UNLOCK}</p>
     </div>
   );
 }

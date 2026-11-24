@@ -8,6 +8,7 @@ import {
   type PageSectionsDeps,
 } from '~/utils/pageSections.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
+import { siteApiBinding, siteSectionViewer } from '~/site/apiBinding.server.ts';
 
 /**
  * A reader's checkable headings and locked sections.
@@ -92,6 +93,21 @@ const deps: PageSectionsDeps<SectionsPageRow> = {
     error instanceof ClassmojiService.pageSections.PageSectionsValidationError,
 };
 
-export const action = ({ request }: { request: Request }) => handleSectionsPost(request, deps);
+/**
+ * The deps for one request: on a class-site host (the middleware's stamp, in
+ * the router context) the call is bound to that site and reads the reader
+ * rule from ACCEPTED memberships only, as the site's payload does; anywhere
+ * else, and with no context at all, it is the pages host's.
+ */
+const depsFor = (context: unknown): typeof deps => {
+  const site = siteApiBinding(context);
+  return site ? { ...deps, site, sectionViewer: siteSectionViewer } : deps;
+};
 
-export const loader = ({ request }: { request: Request }) => handleSectionsGet(request, deps);
+type RouteArgs = { request: Request; context?: unknown };
+
+export const action = ({ request, context }: RouteArgs) =>
+  handleSectionsPost(request, depsFor(context));
+
+export const loader = ({ request, context }: RouteArgs) =>
+  handleSectionsGet(request, depsFor(context));

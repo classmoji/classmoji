@@ -3,6 +3,7 @@ import type { Role } from '@classmoji/database/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { highestRole } from '~/utils/classroomRole.ts';
+import { impersonatorOf, isImpersonatedSession } from '~/utils/pageSections.server.ts';
 import { siteHeaders } from './headers.server.ts';
 import { siteOrigin } from './env.server.ts';
 import { siteLoadContext } from '../../server/loadContext.ts';
@@ -51,6 +52,24 @@ export type SiteViewer = {
   name: string | null;
   image: string | null;
   role: SiteViewerRole;
+  /**
+   * Every ACCEPTED role this user holds in the site's classroom (empty for an
+   * anonymous visitor or a non-member). The reader's viewer on the site is
+   * built from these and nothing else (`site/pageRender.server.ts`).
+   */
+  acceptedRoles: Role[];
+  /**
+   * The highest role of a PENDING membership (invite not accepted yet), when
+   * the user holds no accepted one here; else null. It lets them READ the
+   * site's members-only pages and see member-visible page links, as the app
+   * does, and nothing more: they are not a member (`role` is null), so no
+   * reader state, comments, downloads, locked bodies or staff chrome.
+   */
+  pendingRole: Role | null;
+  /** A platform admin viewing as this user ("View as"). */
+  impersonated: boolean;
+  /** That admin's user id, for audit rows; null otherwise. */
+  impersonatedBy: string | null;
 };
 
 export type SiteContext = {
@@ -96,13 +115,17 @@ export type SitePageIndexEntry = {
   is_public: boolean;
 };
 
-const ANONYMOUS: SiteViewer = {
+const ANONYMOUS: SiteViewer = Object.freeze({
   userId: null,
   login: null,
   name: null,
   image: null,
   role: null,
-};
+  acceptedRoles: [],
+  pendingRole: null,
+  impersonated: false,
+  impersonatedBy: null,
+}) as SiteViewer;
 
 /**
  * The slice of React Router's loader args the resolver needs.
@@ -147,6 +170,15 @@ export function isMember(viewer: SiteViewer): boolean {
 }
 
 /**
+ * The role that decides which pages this viewer may READ on the site: their
+ * accepted role, else a pending membership's (`pendingRole`). Reading only:
+ * everything else on the site reads `role`.
+ */
+export function siteReadRole(viewer: Pick<SiteViewer, 'role' | 'pendingRole'>): SiteViewerRole {
+  return viewer.role ?? viewer.pendingRole ?? null;
+}
+
+/**
  * The webapp path prefix a role's dashboard lives under.
  *
  * One tree per role, and each tree is gated to its own role: `/admin` is
@@ -168,12 +200,16 @@ export function rolePrefix(
 /**
  * Resolve the signed-in viewer and their role in this classroom.
  *
- * `has_accepted_invite: false` is NOT membership — an invited-but-never-joined
- * user must see exactly what the anonymous web sees. That is the difference
- * between this and the app's `findByClassroomAndUser`, which is why site code
- * resolves the role itself instead of reusing that helper.
+ * `has_accepted_invite: false` is NOT membership: `role` and `acceptedRoles`
+ * come from accepted rows only, and everything a member gets on the site
+ * (reader state, comments, downloads, staff chrome) reads them. A user whose
+ * only rows here are pending gets `pendingRole`, which lets them read the
+ * site's members-only pages as the app lets them, and nothing else.
  */
-async function resolveViewer(request: Request, classroomId: string): Promise<SiteViewer> {
+export async function resolveSiteViewer(
+  request: Request,
+  classroomId: string
+): Promise<SiteViewer> {
   // A failed/absent session is the normal case on a public site, not an error.
   const authData = await getAuthSession(request).catch(() => null);
   if (!authData?.userId) return ANONYMOUS;
@@ -184,12 +220,8 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
       select: { id: true, name: true, image: true, ...GIT_IDENTITY },
     }),
     prisma.classroomMembership.findMany({
-      where: {
-        classroom_id: classroomId,
-        user_id: authData.userId,
-        has_accepted_invite: true,
-      },
-      select: { role: true },
+      where: { classroom_id: classroomId, user_id: authData.userId },
+      select: { role: true, has_accepted_invite: true },
     }),
   ]);
 
@@ -197,8 +229,20 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
 
   // Highest privilege wins: a TA who is also enrolled as a student sees the
   // staff view, never the narrower one — the rule the page editor and the
-  // download route share.
-  const role: SiteViewerRole = highestRole(memberships.map(membership => membership.role));
+  // download route share. Accepted rows only.
+  const acceptedRoles = memberships
+    .filter(membership => membership.has_accepted_invite === true)
+    .map(membership => membership.role);
+  const role: SiteViewerRole = highestRole(acceptedRoles);
+  // Pending rows count only when there is no accepted one: reading, nothing more.
+  const pendingRole: SiteViewerRole =
+    role === null
+      ? highestRole(
+          memberships
+            .filter(membership => membership.has_accepted_invite !== true)
+            .map(membership => membership.role)
+        )
+      : null;
 
   return {
     userId: user.id,
@@ -206,6 +250,10 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
     name: user.name,
     image: user.image,
     role,
+    acceptedRoles: role === null ? [] : acceptedRoles,
+    pendingRole,
+    impersonated: isImpersonatedSession(authData),
+    impersonatedBy: impersonatorOf(authData),
   };
 }
 
@@ -385,7 +433,7 @@ async function loadSiteContext(
   if (lookup.state !== 'active') throw siteNotFound(request, 'unavailable');
 
   const site = lookup.site;
-  const viewer = await resolveViewer(request, site.classroom_id);
+  const viewer = await resolveSiteViewer(request, site.classroom_id);
 
   return {
     subdomain: site.subdomain,

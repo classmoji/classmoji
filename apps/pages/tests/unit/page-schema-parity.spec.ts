@@ -4,7 +4,8 @@
  *
  * The collab server and the git worker convert live Yjs documents with
  * `createPageSchema()` from @classmoji/page-schema (no React, no DOM); the
- * editor, the in-app viewer and the class site run the app's React specs.
+ * editor and the reader (in the app and on the class site) run the app's
+ * React specs.
  * y-prosemirror deletes, for everyone, any element a participant's schema
  * does not accept — so a node name, content expression, group or attribute
  * (with its default) that differs between the two is lost content, not a
@@ -14,7 +15,7 @@
  * compared.
  */
 import { test, expect } from '@playwright/test';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
+import { BlockNoteEditor } from '@blocknote/core';
 import {
   SCHEMA_VERSION,
   createPageSchema,
@@ -25,41 +26,35 @@ import {
 import { schema as appSchema } from '~/components/editor/blocks/index.tsx';
 import { editingSchema } from '~/components/editor/blocks/editingSchema.ts';
 import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
-import { createViewerSchema } from '~/site/viewerSchema.server.ts';
 
 type AnySchema = Pick<PageSchema, 'blockSpecs' | 'blockSchema'>;
 
 /** The ProseMirror schema BlockNote builds for a block schema. */
 function pmSchemaOf(schema: AnySchema) {
-  return ServerBlockNoteEditor.create({ schema: schema as never }).editor.pmSchema;
+  return BlockNoteEditor.create({ schema: schema as never }).pmSchema;
 }
 
 /**
  * What y-prosemirror and the block <-> node conversion depend on, per node:
- * the document shape (name, content, group, marks, attrs with defaults) and,
- * unless `documentOnly`, the editing flags (selectable, isolating, defining,
- * code) that decide how the editor handles the node.
+ * the document shape (name, content, group, marks, attrs with defaults) and
+ * the editing flags (selectable, isolating, defining, code) that decide how
+ * the editor handles the node.
  */
-function nodeShapes(schema: AnySchema, documentOnly = false) {
+function nodeShapes(schema: AnySchema) {
   const pm = pmSchemaOf(schema);
   const out: Record<string, unknown> = {};
   for (const [name, type] of Object.entries(pm.nodes)) {
     const spec = type.spec;
-    const flags = documentOnly
-      ? {}
-      : {
-          selectable: spec.selectable ?? true,
-          isolating: spec.isolating ?? false,
-          defining: spec.defining ?? false,
-          code: spec.code ?? false,
-        };
     out[name] = {
       content: spec.content ?? null,
       group: spec.group ?? null,
       marks: spec.marks ?? null,
       inline: spec.inline ?? false,
       atom: spec.atom ?? false,
-      ...flags,
+      selectable: spec.selectable ?? true,
+      isolating: spec.isolating ?? false,
+      defining: spec.defining ?? false,
+      code: spec.code ?? false,
       attrs: Object.fromEntries(
         Object.entries(spec.attrs ?? {})
           .sort(([a], [b]) => a.localeCompare(b))
@@ -81,56 +76,25 @@ function blockShapes(schema: AnySchema) {
 
 const server = createPageSchema();
 
-/**
- * `documentOnly` for the class-site schemas: they are rendered once, read-only,
- * on the server, and never join a live document. Their static specs are
- * rebuilt from each block's config WITHOUT its implementation meta, so two
- * editing flags differ from the editor's (pinned in the last test below);
- * the document shape must still be identical.
- */
-const appSchemas: Array<[string, AnySchema, { documentOnly: boolean }]> = [
-  [
-    'shared editor schema (blocks/index.tsx)',
-    appSchema as unknown as AnySchema,
-    { documentOnly: false },
-  ],
-  [
-    'editing schema (editingSchema.ts)',
-    editingSchema as unknown as AnySchema,
-    { documentOnly: false },
-  ],
-  [
-    'in-app viewer schema (viewerBlocks.tsx)',
-    viewerSchema as unknown as AnySchema,
-    { documentOnly: false },
-  ],
-  [
-    'class-site schema (viewerSchema.server.ts, with downloads)',
-    createViewerSchema(() => null, {
-      downloads: { 'media://x': 'https://example.com/x' },
-    }) as unknown as AnySchema,
-    { documentOnly: true },
-  ],
-  [
-    'class-site schema (viewerSchema.server.ts, plain)',
-    createViewerSchema(() => null) as unknown as AnySchema,
-    { documentOnly: true },
-  ],
+const appSchemas: Array<[string, AnySchema]> = [
+  ['shared editor schema (blocks/index.tsx)', appSchema as unknown as AnySchema],
+  ['editing schema (editingSchema.ts)', editingSchema as unknown as AnySchema],
+  ['reader schema (viewerBlocks.tsx)', viewerSchema as unknown as AnySchema],
 ];
 
 test.describe('the server page schema matches every app schema', () => {
   const serverBlocks = blockShapes(server);
   const serverMarks = markNames(server);
 
-  for (const [name, schema, { documentOnly }] of appSchemas) {
+  for (const [name, schema] of appSchemas) {
     test(`${name}: same block types, content and props`, () => {
       expect(Object.keys(blockShapes(schema)).sort()).toEqual(Object.keys(serverBlocks).sort());
       expect(blockShapes(schema)).toEqual(serverBlocks);
     });
 
     test(`${name}: same ProseMirror nodes and marks`, () => {
-      const serverNodes = nodeShapes(server, documentOnly);
-      const nodes = nodeShapes(schema, documentOnly);
+      const serverNodes = nodeShapes(server);
+      const nodes = nodeShapes(schema);
       expect(Object.keys(nodes).sort()).toEqual(Object.keys(serverNodes).sort());
       for (const node of Object.keys(serverNodes)) {
         expect(nodes[node], `node "${node}"`).toEqual(serverNodes[node]);
@@ -145,22 +109,6 @@ test.describe('the server page schema matches every app schema', () => {
       // Same object, not merely an equal one: the app builds from the shared config.
       expect(spec?.config, type).toBe(config);
     }
-  });
-
-  test('the class site differs only in the editing flags it never uses', () => {
-    const site = pmSchemaOf(createViewerSchema(() => null) as unknown as AnySchema);
-    const pm = pmSchemaOf(server);
-    const flagDiffs: string[] = [];
-    for (const [node, type] of Object.entries(pm.nodes)) {
-      for (const flag of ['selectable', 'isolating', 'defining', 'code'] as const) {
-        if (type.spec[flag] !== site.nodes[node].spec[flag]) flagDiffs.push(`${node}.${flag}`);
-      }
-    }
-    expect(flagDiffs.sort()).toEqual([
-      'codeBlock.code',
-      'codeBlock.isolating',
-      'toggleListItem.isolating',
-    ]);
   });
 
   test('the schema version is a positive integer', () => {

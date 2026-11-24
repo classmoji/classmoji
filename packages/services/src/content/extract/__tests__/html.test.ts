@@ -11,10 +11,10 @@ const page = (html: string | null | undefined, title?: string) =>
   extractText({ kind: 'page-html', html }, title ? { title } : {});
 
 /**
- * `wrapHtmlContent` verbatim from `apps/webapp/app/utils/htmlWrapper.ts` — the
- * function that produced every legacy `pages/<slug>/index.html` in the fleet.
- * Inlined rather than imported: `packages/services` must not depend on the
- * webapp.
+ * `wrapHtmlContent` verbatim from `packages/services/src/content/htmlWrapper.ts`
+ * (formerly the webapp's `app/utils/htmlWrapper.ts`) — the function that
+ * produced every legacy `pages/<slug>/index.html` in the fleet. Inlined so this
+ * suite pins the historical output even if the wrapper changes.
  */
 const wrapHtmlContent = (bodyContent: string) => `<!DOCTYPE html>
 <html lang="en">

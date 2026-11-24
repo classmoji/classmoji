@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
   createPage: vi.fn(),
   freePageContentPath: vi.fn(),
   ensureContentRepo: vi.fn(),
-  processMarkdownImport: vi.fn(),
+  preflightCreatePage: vi.fn(),
+  convertMarkdown: vi.fn(),
+  isPageImportAvailable: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -31,14 +33,20 @@ vi.mock('@classmoji/services', () => ({
       createPage: (...a: unknown[]) => mocks.createPage(...a),
       freePageContentPath: (...a: unknown[]) => mocks.freePageContentPath(...a),
       ensureContentRepo: (...a: unknown[]) => mocks.ensureContentRepo(...a),
+      preflightCreatePage: (...a: unknown[]) => mocks.preflightCreatePage(...a),
+    },
+    pageImport: {
+      convertMarkdown: (...a: unknown[]) => mocks.convertMarkdown(...a),
+      isPageImportAvailable: () => mocks.isPageImportAvailable(),
+      assertImportTitle: (title?: string) => {
+        if (title && title.length > 1_000)
+          throw new Error('The page title is longer than 1,000 characters.');
+      },
+      PAGE_IMPORT_MESSAGES: { unavailable: 'Importing pages is not available right now.' },
     },
   },
 }));
 
-vi.mock('~/utils/markdownImporter.server', () => ({
-  processMarkdownImport: (...a: unknown[]) => mocks.processMarkdownImport(...a),
-}));
-vi.mock('~/utils/htmlWrapper', () => ({ wrapHtmlContent: (html: string) => html }));
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/hooks', () => ({ useRouteDrawer: () => ({}) }));
 vi.mock('../ImportTab', () => ({ default: () => null }));
@@ -130,10 +138,13 @@ beforeEach(() => {
   });
   mocks.createPage.mockResolvedValue({ id: 'page-new', title: 'Week 1' });
   mocks.freePageContentPath.mockResolvedValue('pages/week-1');
-  mocks.processMarkdownImport.mockResolvedValue({
-    html: '<p>hi</p>',
-    imageMap: new Map(),
-    unmatchedImages: [],
+  mocks.isPageImportAvailable.mockReturnValue(true);
+  mocks.preflightCreatePage.mockResolvedValue({ contentPath: 'pages/week-1' });
+  mocks.convertMarkdown.mockResolvedValue({
+    blocks: [{ type: 'paragraph' }],
+    images: [],
+    unmatched: [],
+    missing: [],
   });
 });
 
@@ -153,7 +164,7 @@ describe('admin.$class.pages.new — body after auth, with a cap', () => {
   it('refuses an image over the repository cap by name, before creating anything', async () => {
     const result = await newPageRoute.action({
       params: { class: CLASS_SLUG },
-      request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new`, {
+      request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new?intent=import`, {
         intent: 'import',
         title: 'Week 1',
         markdown: markdown(),
@@ -164,13 +175,13 @@ describe('admin.$class.pages.new — body after auth, with a cap', () => {
     expect(result).toEqual({
       error: 'big.png is larger than the 35 MB your course repository accepts.',
     });
-    expect(mocks.processMarkdownImport).not.toHaveBeenCalled();
+    expect(mocks.convertMarkdown).not.toHaveBeenCalled();
     expect(mocks.createPage).not.toHaveBeenCalled();
   });
 
   it('refuses a body declared over the import cap without reading it', async () => {
     const { request, state } = hugeStreamingRequest(
-      `http://localhost/admin/${CLASS_SLUG}/pages/new`
+      `http://localhost/admin/${CLASS_SLUG}/pages/new?intent=import`
     );
     request.headers.set('content-length', String(200 * 1024 * 1024));
 
@@ -237,8 +248,10 @@ describe('page imports take an upload slot', () => {
 
   it('the single import answers 503 with a retry when none is free, unread', async () => {
     await withAllSlotsTaken(async () => {
+      // The drawer marks an import in the query string, so this is known
+      // before the body is read.
       const { request, state } = hugeStreamingRequest(
-        `http://localhost/admin/${CLASS_SLUG}/pages/new`
+        `http://localhost/admin/${CLASS_SLUG}/pages/new?intent=import`
       );
       const result = (await newPageRoute.action({
         params: { class: CLASS_SLUG },
@@ -249,6 +262,50 @@ describe('page imports take an upload slot', () => {
       expect(result.init.headers).toEqual({ 'Retry-After': '30' });
       expect(result.data.error).toBe(slots.UPLOAD_BUSY_MESSAGE);
       expect(state.pulled).toBe(0);
+    });
+  });
+
+  it('a blank create takes no slot: it creates while every slot is held', async () => {
+    await withAllSlotsTaken(async () => {
+      const result = await newPageRoute.action({
+        params: { class: CLASS_SLUG },
+        request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new`, {
+          intent: 'create-blank',
+          title: 'Week 1',
+        }),
+      } as never);
+      expect(result).toMatchObject({ created: true });
+      expect(mocks.createPage).toHaveBeenCalledTimes(1);
+    });
+    expect(slots.uploadsInFlight()).toBe(0);
+  });
+
+  it('a create not marked as an import is read with a small cap, never in full', async () => {
+    await withAllSlotsTaken(async () => {
+      const { request, state } = hugeStreamingRequest(
+        `http://localhost/admin/${CLASS_SLUG}/pages/new`
+      );
+      const result = await newPageRoute.action({ params: { class: CLASS_SLUG }, request } as never);
+      expect(result).toEqual({
+        error: 'This form is larger than expected. Reload the page and try again.',
+      });
+      // 64 KiB plus multipart overhead, in 1 MiB chunks: a chunk or two.
+      expect(state.pulled).toBeLessThanOrEqual(2);
+    });
+  });
+
+  it('an import from a tab without the query string still takes its slot', async () => {
+    await withAllSlotsTaken(async () => {
+      const result = (await newPageRoute.action({
+        params: { class: CLASS_SLUG },
+        request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new`, {
+          intent: 'import',
+          title: 'Week 1',
+          markdown: markdown(),
+        }),
+      } as never)) as unknown as { init: ResponseInit };
+      expect(result.init.status).toBe(503);
+      expect(mocks.convertMarkdown).not.toHaveBeenCalled();
     });
   });
 
@@ -267,7 +324,7 @@ describe('page imports take an upload slot', () => {
   it('gives the slot back whether the import succeeds, is refused, or throws', async () => {
     await newPageRoute.action({
       params: { class: CLASS_SLUG },
-      request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new`, {
+      request: formRequest(`http://localhost/admin/${CLASS_SLUG}/pages/new?intent=import`, {
         intent: 'import',
         title: 'Week 1',
         markdown: markdown(),

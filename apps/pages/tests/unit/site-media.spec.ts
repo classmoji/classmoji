@@ -1,26 +1,17 @@
 /**
- * Media on the class site: a `media://` reference never reaches the HTML, and
- * a media video plays in a native `<video>` whatever its variant is called.
+ * Media references and URLs by shape (`utils/mediaRefs.ts`, what the reader's
+ * blocks decide with), and the class site's cover: a `media://` cover nobody
+ * signed never reaches the site's markup.
  *
- * The resolver turns every `media://{id}` it is asked about into a signed URL
- * (or the `/missing/` placeholder). These hold the two things around it:
- *
- *  - the paths where it is NOT asked (no resolve context, a resolve that
- *    threw, no delivery origin) still produce no `media://` in the markup —
- *    not as a `src`, not as a link, not as a cover;
- *  - the renderer decides "native player" by scheme, so a signed `orig.mov`
- *    or `orig.mkv` is not mistaken for a page to frame.
+ * The reader payload empties the document's own unresolved references
+ * (reader-payload.spec.ts); the class site's static renderer, which had its
+ * own guard and its own native-video rule, is gone.
  */
 
 import { test, expect } from '@playwright/test';
 
-import { renderSitePage } from '~/site/render.server.ts';
+import { coverWithoutUnresolvedMediaRef } from '~/site/siteMedia.server.ts';
 import {
-  coverWithoutUnresolvedMediaRef,
-  withoutUnresolvedMediaRefs,
-} from '~/site/siteMedia.server.ts';
-import {
-  isMediaPlaceholderUrl,
   isMediaRef,
   isMediaUrl,
   isRetryableDeliveryUrl,
@@ -37,24 +28,6 @@ const signed = (variant: string) =>
 const PLACEHOLDER = `${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(REF)}`;
 /** The same path shapes on a host that is not the delivery origin. */
 const foreign = (url: string, host = 'https://elsewhere.test') => url.replace(ORIGIN, host);
-
-/**
- * Run with `CONTENT_DELIVERY_ORIGIN` set to `value` (deleted for null), and put
- * back whatever was there — the renderer reads it at call time.
- */
-function withDeliveryOrigin(value: string | null): () => void {
-  const previous = process.env.CONTENT_DELIVERY_ORIGIN;
-  if (value === null) delete process.env.CONTENT_DELIVERY_ORIGIN;
-  else process.env.CONTENT_DELIVERY_ORIGIN = value;
-  return () => {
-    if (previous === undefined) delete process.env.CONTENT_DELIVERY_ORIGIN;
-    else process.env.CONTENT_DELIVERY_ORIGIN = previous;
-  };
-}
-
-const resolveLink = () => null;
-
-const video = (url: string, caption = '') => ({ type: 'video', props: { url, caption } });
 
 test.describe('media references and URLs, by shape', () => {
   test('a media reference is exactly media:// and a v4-shaped uuid', () => {
@@ -76,8 +49,6 @@ test.describe('media references and URLs, by shape', () => {
     expect(isMediaUrl(signed('orig.mov'), ORIGIN)).toBe(true);
     expect(isMediaUrl(signed('web-0123456789ab.mp4'), ORIGIN)).toBe(true);
     expect(isMediaUrl(PLACEHOLDER, ORIGIN)).toBe(true);
-    expect(isMediaPlaceholderUrl(PLACEHOLDER, ORIGIN)).toBe(true);
-    expect(isMediaPlaceholderUrl(signed('web-0123456789ab.mp4'), ORIGIN)).toBe(false);
     expect(isMediaUrl(`${ORIGIN}/c/${CLASSROOM}/blob/abc.png?sig=x`, ORIGIN)).toBe(false);
     expect(isMediaUrl('https://youtu.be/abc', ORIGIN)).toBe(false);
   });
@@ -103,7 +74,6 @@ test.describe('media references and URLs, by shape', () => {
       const url = foreign(ours, host);
       expect(isMediaUrl(url, ORIGIN), url).toBe(false);
       expect(playsAsNativeVideo(url, ORIGIN), url).toBe(false);
-      expect(isMediaPlaceholderUrl(foreign(PLACEHOLDER, host), ORIGIN), host).toBe(false);
       expect(isMediaUrl(foreign(PLACEHOLDER, host), ORIGIN), host).toBe(false);
     }
     // A foreign URL that happens to end in a video extension still plays by
@@ -114,7 +84,6 @@ test.describe('media references and URLs, by shape', () => {
     // `media://` reference is still one by its scheme.
     for (const none of [null, undefined, '']) {
       expect(isMediaUrl(ours, none), String(none)).toBe(false);
-      expect(isMediaPlaceholderUrl(PLACEHOLDER, none), String(none)).toBe(false);
       expect(playsAsNativeVideo(ours, none), String(none)).toBe(false);
       expect(playsAsNativeVideo(REF, none), String(none)).toBe(true);
     }
@@ -155,125 +124,9 @@ test.describe('media references and URLs, by shape', () => {
   });
 });
 
-test.describe('the class site plays media videos natively', () => {
-  let restore: () => void = () => {};
-  test.beforeAll(() => {
-    restore = withDeliveryOrigin(ORIGIN);
-  });
-  test.afterAll(() => restore());
-
-  for (const variant of ['orig.mp4', 'orig.mov', 'orig.mkv', 'orig.avi', 'web-0123456789ab.mp4']) {
-    test(`a signed ${variant} renders a <video>, not a frame`, async () => {
-      const { html } = await renderSitePage({ blocks: [video(signed(variant))], resolveLink });
-      expect(html).toContain('<video');
-      expect(html).not.toContain('<iframe');
-      expect(html).toContain(`/media/${MEDIA_ID}/${variant}`);
-    });
-  }
-
-  test('the placeholder for a media video it could not sign renders nothing', async () => {
-    const { html } = await renderSitePage({ blocks: [video(PLACEHOLDER)], resolveLink });
-    expect(html).not.toContain('<video');
-    expect(html).not.toContain('<iframe');
-    // No player and no link to click — the block's own `data-url` attribute
-    // still carries the placeholder, as it does for any unsignable reference.
-    expect(html).not.toContain('<a ');
-  });
-
-  test('a media-shaped URL on another host is framed like any https page', async () => {
-    const url = foreign(signed('orig.avi'));
-    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
-    expect(html).not.toContain('<video');
-    expect(html).toContain('<iframe');
-  });
-
-  test('a media-shaped http:// URL on another host is only a link', async () => {
-    const url = foreign(signed('web-0123456789ab.mp4'), 'http://elsewhere.test');
-    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
-    expect(html).not.toContain('<video');
-    expect(html).not.toContain('<iframe');
-    expect(html).toContain('<a ');
-  });
-
-  test('a placeholder-shaped URL on another host is not swallowed as ours', async () => {
-    const url = foreign(PLACEHOLDER);
-    const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
-    expect(html).toContain('<iframe');
-  });
-
-  test('with no delivery origin configured, no URL is a media URL', async () => {
-    const unset = withDeliveryOrigin(null);
-    try {
-      const { html } = await renderSitePage({
-        blocks: [video(signed('orig.avi'))],
-        resolveLink,
-      });
-      expect(html).not.toContain('<video');
-      expect(html).toContain('<iframe');
-    } finally {
-      unset();
-    }
-  });
-
-  test('a pasted direct .mov link plays natively too', async () => {
-    const { html } = await renderSitePage({
-      blocks: [video('https://cdn.test/lecture.mov')],
-      resolveLink,
-    });
-    expect(html).toContain('<video');
-    expect(html).not.toContain('<iframe');
-  });
-});
-
-test.describe('an unresolved media reference never reaches the HTML', () => {
-  // Every block that can hold a reference, holding a raw `media://`: what the
-  // site renders when the classroom has no resolve context, the resolve threw,
-  // or the deployment has no delivery origin.
-  const RAW = [
-    video(REF, 'Lecture 1'),
-    { type: 'image', props: { url: REF, caption: 'diagram' } },
-    { type: 'file', props: { url: REF, name: 'notes.pdf' } },
-    {
-      type: 'columnList',
-      children: [
-        { type: 'column', props: { width: 1 }, children: [video(REF)] },
-        { type: 'column', props: { width: 1 }, children: [{ type: 'file', props: { url: REF } }] },
-      ],
-    },
-  ];
-
-  test('the guard empties every media reference, nested ones included', () => {
-    const guarded = withoutUnresolvedMediaRefs(RAW);
-    expect(JSON.stringify(guarded)).not.toContain('media://');
-    // A clone: the cached document is never written to.
-    expect(JSON.stringify(RAW)).toContain('media://');
-  });
-
-  test('the guard leaves resolved and ordinary references alone', () => {
-    const blocks = [
-      video(signed('orig.mp4')),
-      { type: 'image', props: { url: 'pages/a/assets/x.png' } },
-      video('https://youtu.be/abc'),
-    ];
-    expect(withoutUnresolvedMediaRefs(blocks)).toEqual(blocks);
-  });
-
-  test('a guarded document renders with no media:// anywhere, and no link to one', async () => {
-    const { html } = await renderSitePage({
-      blocks: withoutUnresolvedMediaRefs(RAW) as unknown[],
-      resolveLink,
-    });
-    expect(html).not.toContain('media://');
-    expect(html).not.toContain('media:');
-    expect(html).not.toContain('<video');
-    expect(html).not.toContain('<iframe');
-  });
-
-  test('without the guard the raw reference would have leaked — the guard is load-bearing', async () => {
-    const { html } = await renderSitePage({ blocks: [RAW[1]], resolveLink });
-    expect(html).toContain('media://');
-  });
-
+test.describe('an unresolved media cover never reaches the site', () => {
+  // The document's own references are emptied by the reader payload
+  // (reader-payload.spec.ts); the cover is drawn by the site's chrome.
   test('a cover still on media:// is dropped; a resolved one is kept', () => {
     expect(coverWithoutUnresolvedMediaRef({ url: REF, position: 40 })).toBeNull();
     const resolved = { url: signed('orig.png'), position: 40 };

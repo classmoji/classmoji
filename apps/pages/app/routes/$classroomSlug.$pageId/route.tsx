@@ -1,14 +1,22 @@
 import {
   useLoaderData,
   useFetcher,
+  useNavigate,
   useOutletContext,
   useBlocker,
   useRevalidator,
 } from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
-import { useReaderSectionsState } from '~/hooks/useReaderSections.tsx';
 import { usePageCommentsController } from '~/components/comments/usePageCommentsController.ts';
+import { PageReader } from '~/components/reader/PageReader.tsx';
+import { pageWidthClass } from '~/components/reader/pageWidth.ts';
+import {
+  DEFAULT_READER_SURFACE,
+  ReaderSurfaceContext,
+  inAppPageHref,
+  type ReaderSurfaceValue,
+} from '~/components/reader/readerSurface.ts';
 import { CommentsButton, CommentsPanel } from '~/components/comments/CommentsPanel.tsx';
 import { PageDiscussion } from '~/components/comments/PageDiscussion.tsx';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
@@ -61,6 +69,7 @@ import {
 import { LIVE_PAGE_MESSAGE } from '~/utils/liveGates.ts';
 import { createAssetResolver } from '~/utils/liveAssets.ts';
 import type { PageEditorHandle } from '~/components/editor/PageEditor.tsx';
+import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
 import {
   hasPreviewChanges,
   previewChangesSummary,
@@ -81,14 +90,6 @@ const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.t
 
 // Import server-only code from co-located .server.ts file
 export { loader, action, headers } from './route.server.ts';
-
-// Width class mapping
-const widthClasses: Record<number, string> = {
-  1: 'max-w-2xl',
-  2: 'max-w-4xl',
-  3: 'max-w-5xl',
-  4: 'max-w-7xl',
-};
 
 /**
  * "Choose from media" beside "Add cover": an image the classroom already
@@ -197,27 +198,66 @@ const PageRoute = () => {
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
-    mediaDownloads,
     uploadCapability,
     collab,
     liveCheckpoint,
     liveUnavailable,
+    legacyNotice,
+    legacyReadOnly,
     previewChanges,
-    readerSections,
-    signInUrl,
     sectionStats,
-    // Page comments: only for a signed-in member (the key is absent otherwise,
-    // and then nothing comment-related is drawn).
+    // The shared reader's payload, on every path that shows the page
+    // read-only (`PageReader` below); null for the editors.
+    reader,
+    // Our own hosts, for the editors' embed and video blocks (the reader's
+    // come in its payload).
+    frameHosts,
+    // The EDITORS' page comments: only for a signed-in member (the key is
+    // absent otherwise, and then nothing comment-related is drawn). The
+    // reader's are in its payload.
     readerComments,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
-  // This reader's ticks and unlocks. Kept here, not in the viewer, so a
-  // viewer rebuild (asset retry) never drops an unlock in flight.
-  const sections = useReaderSectionsState(page.id, readerSections, signInUrl);
+  // Loading the page again: the reader's refresh (after an unlock, or once on
+  // an expired signature) and the editors' asset retry. Resolves once the new
+  // loader data is in.
+  const revalidator = useRevalidator();
+  const revalidateRef = useRef(revalidator.revalidate);
+  revalidateRef.current = revalidator.revalidate;
+  const revalidatePage = useCallback(async () => {
+    await revalidateRef.current();
+  }, []);
+  // In-app navigation to another page of this classroom, keeping the embed
+  // context (embed/parentOrigin/theme) of the webapp's docked and peek views
+  // and staying bare in the canonical app — buildEmbeddedPageHref forwards,
+  // never forces, `embed`. The page links of the reader and the editors use it.
+  const navigate = useNavigate();
+  const classroomSlug = classroom.slug;
+  const navigatePage = useCallback(
+    (pageId: string) => {
+      const href = inAppPageHref(classroomSlug, pageId, window.location.search);
+      if (href) navigate(href);
+    },
+    [navigate, classroomSlug]
+  );
+  // What the editors' blocks read: no link map (their own rendering), this
+  // app's navigation, and our hosts for the frame rule (an author's embed
+  // shows exactly what readers get).
+  const editorSurface = useMemo<ReaderSurfaceValue>(
+    () => ({
+      ...DEFAULT_READER_SURFACE,
+      surface: 'app',
+      classroomSlug,
+      navigatePage,
+      frameHosts: frameHosts ?? null,
+    }),
+    [classroomSlug, navigatePage, frameHosts]
+  );
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
   // An expired `edit` signature on a stale tab re-resolves once instead of
-  // leaving a page of broken images.
-  const assetEpoch = useAssetRetry();
+  // leaving a page of broken images. Off while the reader is shown: it has
+  // its own, and one failure must not refresh twice.
+  const assetEpoch = useAssetRetry(revalidatePage, !reader);
   // Responsive candidates, keyed by the stored reference and handed to the
   // image and profile blocks through context. A save-merge folds in blocks this
   // client has never seen, and the loader's map has no entry for them — the
@@ -244,11 +284,15 @@ const PageRoute = () => {
   // rendering the pending preview branch (plan §3b).
   const isPreview = Boolean(preview?.active);
   // Comments are on the published page: none on a preview branch (its blocks
-  // and text are not what the threads were written on).
-  const comments = usePageCommentsController(page.id, isPreview ? null : readerComments);
+  // and text are not what the threads were written on). The editors' only:
+  // the reader owns its own controller.
+  const comments = usePageCommentsController(page.id, isPreview || reader ? null : readerComments);
   // Live editing switched on but unreachable, with unsaved live edits: the
-  // page is shown read-only (the loader explains why below the header).
-  const canEdit = canEditRole && !isPreview && !liveUnavailable;
+  // page is shown read-only (the loader explains why below the header). A
+  // page git still holds as legacy HTML gets no GIT editor either (it would
+  // only offer to save the empty document over it); the live editor is not
+  // affected (`legacyReadOnly` is never set where `collab` is).
+  const canEdit = canEditRole && !isPreview && !liveUnavailable && !legacyReadOnly;
   // Live editing (a classroom with collab on): the document is the room's,
   // and none of the git save machinery below runs — no ops diff, chooser,
   // merged adoption, Cmd-S save, unload warning or unsaved tracking.
@@ -272,7 +316,7 @@ const PageRoute = () => {
     { title: page.title, width: page.width },
     liveMeta
   );
-  const widthClass = widthClasses[pageWidth] || 'max-w-4xl';
+  const widthClass = pageWidthClass(pageWidth);
   const editorRef = useRef<PageEditorHandle | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
@@ -341,9 +385,17 @@ const PageRoute = () => {
   // new params) — re-seed the per-page editing state (React's sanctioned
   // render-time reset for prop-derived state), including the pending
   // save/conflict UI (P4) so nothing ghosts across pages.
+  //
+  // Leaving the reader for an editor on the SAME page is the same reset: the
+  // reader's loader data carries no editor document (`content` is null while
+  // `reader` is set), so staff who opened `?preview=1` directly and then
+  // discard or leave the preview must mount the editor from the document the
+  // loader now sends, never from the null it sent before.
   const lastPageIdRef = useRef(page.id);
-  if (lastPageIdRef.current !== page.id) {
+  const lastShownReaderRef = useRef(Boolean(reader));
+  if (lastPageIdRef.current !== page.id || lastShownReaderRef.current !== Boolean(reader)) {
     lastPageIdRef.current = page.id;
+    lastShownReaderRef.current = Boolean(reader);
     setEditorDoc(content);
     setEditorEpoch(0);
     setContentToken(contentSha);
@@ -1112,37 +1164,30 @@ const PageRoute = () => {
       : null;
   const previewSummary = isPreview && previewChanges ? previewChangesSummary(previewChanges) : null;
 
-  return (
-    <PageMediaProvider
-      classroomId={classroom.id}
-      // Picking from media is for editors of a classroom whose media is
-      // available; the provider still hands the upload path the classroom id,
-      // so a server redirect to media works even when the capability did not.
-      enabled={canEdit && Boolean(uploadCapability?.media)}
-      place={placeMedia}
-    >
-      {!isEmbedded && (
-        <Header
-          classroom={classroom}
-          page={
-            pageTitle === page.title && pageWidth === page.width
-              ? page
-              : { ...page, title: pageTitle, width: pageWidth }
-          }
-          saveStatus={saveEnabled ? saveStatus : undefined}
-          hasUnsavedChanges={saveEnabled ? hasUnsavedChanges : undefined}
-          canEdit={canEdit}
-          onSave={saveEnabled ? handleSave : undefined}
-          live={liveHeader}
-          actions={comments ? <CommentsButton controller={comments} /> : null}
-        />
-      )}
-      {isEmbedded && comments && <CommentsButton controller={comments} floating />}
-      {comments && <CommentsPanel controller={comments} embedded={isEmbedded} />}
+  // The page's header (not when embedded: the host draws its own), with the
+  // comments button among its actions.
+  const headerPage =
+    pageTitle === page.title && pageWidth === page.width
+      ? page
+      : { ...page, title: pageTitle, width: pageWidth };
+  const renderHeader = (actions: React.ReactNode) => (
+    <Header
+      classroom={classroom}
+      page={headerPage}
+      saveStatus={saveEnabled ? saveStatus : undefined}
+      hasUnsavedChanges={saveEnabled ? hasUnsavedChanges : undefined}
+      canEdit={canEdit}
+      onSave={saveEnabled ? handleSave : undefined}
+      live={liveHeader}
+      actions={actions}
+    />
+  );
 
-      {/* Preview-branch chrome (staff only — `preview` is null otherwise).
-          Keyed on page.id so the preview fetcher's conflict state resets on
-          same-route navigation (P4) instead of ghosting onto the next page. */}
+  // Preview-branch chrome (staff only — `preview` is null otherwise). Keyed
+  // on page.id so the preview fetcher's conflict state resets on same-route
+  // navigation (P4) instead of ghosting onto the next page.
+  const previewChrome = (
+    <>
       {preview?.active && (
         <PreviewBar
           key={page.id}
@@ -1155,186 +1200,308 @@ const PageRoute = () => {
       {preview && !preview.active && preview.exists && (
         <PendingPreviewBanner key={page.id} preview={preview} />
       )}
+    </>
+  );
+  // Staff notices for a page shown read-only: live editing unreachable, or a
+  // page git still holds as legacy HTML.
+  const staffNotices = (
+    <>
+      {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
+      {legacyNotice && (
+        <LegacyPageNotice layout="bar" kind={legacyNotice} isEmbedded={isEmbedded} />
+      )}
+    </>
+  );
 
-      {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —
-          pick a side per block, then the same content re-submits with the
-          choices. The editor (and lastPostedContentRef) preserve the document
-          until the resolution completes. */}
-      {liveMode && liveRefused && (
-        <LiveRejectedBanner
-          reason={liveRefused}
-          isEmbedded={isEmbedded}
-          autoReloading={!autoReloadSkipped && rejectionNotice(liveRefused).action === 'reload'}
-          onCopyUnsaved={
-            offerCopyUnsaved({
-              refused: true,
-              hasSynced: liveState.hasSynced,
-              localUnsynced: liveState.localUnsynced,
-            })
-              ? handleCopyUnsaved
+  // The page read-only — students, signed-out readers of a public page, and
+  // staff on a preview branch or while the editor is withheld: the shared
+  // reader, with this app's header, notices, refresh and navigation.
+  if (reader) {
+    return (
+      <PageMediaProvider classroomId={classroom.id} enabled={false} place={placeMedia}>
+        <PageReader
+          payload={reader}
+          page={{ id: page.id, title: pageTitle, width: pageWidth, is_draft: page.is_draft }}
+          surface="app"
+          classroomSlug={classroom.slug}
+          onRefresh={revalidatePage}
+          navigatePage={navigatePage}
+          embedded={isEmbedded}
+          renderHeader={isEmbedded ? undefined : renderHeader}
+          notices={
+            <>
+              {previewChrome}
+              {staffNotices}
+            </>
+          }
+          preview={
+            isPreview
+              ? {
+                  css: previewHighlightStyle,
+                  coverChanged: Boolean(previewChanges?.coverChanged),
+                }
               : null
           }
         />
-      )}
-      {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
-      {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
+      </PageMediaProvider>
+    );
+  }
 
-      {/* Embedded editors have no header: the live status floats instead. */}
-      {isEmbedded && liveHeader && (
-        <div className="fixed bottom-3 right-3 z-40 rounded-full bg-white/95 px-3 py-1.5 shadow-md ring-1 ring-stone-200 backdrop-blur dark:bg-neutral-900/95 dark:ring-neutral-700">
-          <LiveHeaderControls {...liveHeader} compact />
-        </div>
-      )}
+  return (
+    <PageMediaProvider
+      classroomId={classroom.id}
+      // Picking from media is for editors of a classroom whose media is
+      // available; the provider still hands the upload path the classroom id,
+      // so a server redirect to media works even when the capability did not.
+      enabled={canEdit && Boolean(uploadCapability?.media)}
+      place={placeMedia}
+    >
+      <ReaderSurfaceContext.Provider value={editorSurface}>
+        {!isEmbedded && renderHeader(comments ? <CommentsButton controller={comments} /> : null)}
+        {isEmbedded && comments && <CommentsButton controller={comments} floating />}
+        {comments && <CommentsPanel controller={comments} embedded={isEmbedded} />}
 
-      {leaveBlocker.state === 'blocked' && (
-        <LeaveLiveDialog
-          offline={liveSyncStatus === 'offline'}
-          onStay={() => leaveBlocker.reset()}
-          onLeave={() => leaveBlocker.proceed()}
-        />
-      )}
+        {previewChrome}
 
-      {saveEnabled && saveMergeReport && (
-        <div className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30 shadow-lg`}>
-          <ConflictPanel
-            variant="save"
-            units={saveMergeReport.units}
-            autoMerged={saveMergeReport.autoMerged}
-            oursSha={saveMergeReport.oursSha}
-            busy={fetcher.state !== 'idle'}
-            onApply={handleApplySaveResolutions}
-            onDiscard={handleConflictReload}
+        {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —
+          pick a side per block, then the same content re-submits with the
+          choices. The editor (and lastPostedContentRef) preserve the document
+          until the resolution completes. */}
+        {liveMode && liveRefused && (
+          <LiveRejectedBanner
+            reason={liveRefused}
+            isEmbedded={isEmbedded}
+            autoReloading={!autoReloadSkipped && rejectionNotice(liveRefused).action === 'reload'}
+            onCopyUnsaved={
+              offerCopyUnsaved({
+                refused: true,
+                hasSynced: liveState.hasSynced,
+                localUnsynced: liveState.localUnsynced,
+              })
+                ? handleCopyUnsaved
+                : null
+            }
           />
-        </div>
-      )}
+        )}
+        {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
+        {staffNotices}
 
-      {/* Save-conflict notice (F2): the last save 409'd — content.json changed
+        {/* Embedded editors have no header: the live status floats instead. */}
+        {isEmbedded && liveHeader && (
+          <div className="fixed bottom-3 right-3 z-40 rounded-full bg-white/95 px-3 py-1.5 shadow-md ring-1 ring-stone-200 backdrop-blur dark:bg-neutral-900/95 dark:ring-neutral-700">
+            <LiveHeaderControls {...liveHeader} compact />
+          </div>
+        )}
+
+        {leaveBlocker.state === 'blocked' && (
+          <LeaveLiveDialog
+            offline={liveSyncStatus === 'offline'}
+            onStay={() => leaveBlocker.reset()}
+            onLeave={() => leaveBlocker.proceed()}
+          />
+        )}
+
+        {saveEnabled && saveMergeReport && (
+          <div className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30 shadow-lg`}>
+            <ConflictPanel
+              variant="save"
+              units={saveMergeReport.units}
+              autoMerged={saveMergeReport.autoMerged}
+              oursSha={saveMergeReport.oursSha}
+              busy={fetcher.state !== 'idle'}
+              onApply={handleApplySaveResolutions}
+              onDiscard={handleConflictReload}
+            />
+          </div>
+        )}
+
+        {/* Save-conflict notice (F2): the last save 409'd — content.json changed
           under this editor session (another editor, an MCP apply). Amber, same
           visual language as the preview chrome. */}
-      {saveEnabled && saveConflict && (
-        <div
-          data-testid="save-conflict-banner"
-          className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
-        >
-          <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              {fetcherData?.live ? (
-                /* The classroom switched to live editing while this tab had
+        {saveEnabled && saveConflict && (
+          <div
+            data-testid="save-conflict-banner"
+            className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
+          >
+            <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                {fetcherData?.live ? (
+                  /* The classroom switched to live editing while this tab had
                    unsaved edits: they can only be carried over by hand. */
-                <div className="text-sm text-amber-900 dark:text-amber-100">
-                  <span className="font-semibold">{fetcherData.message ?? LIVE_PAGE_MESSAGE}</span>{' '}
-                  <span className="text-amber-700 dark:text-amber-300">
-                    Your unsaved changes here are not in the live page. Copy them before you reload.
-                  </span>
-                </div>
-              ) : (
-                <div className="text-sm text-amber-900 dark:text-amber-100">
-                  <span className="font-semibold">
-                    This page changed since you opened it — reload to get the latest before saving.
-                  </span>{' '}
-                  <span className="text-amber-700 dark:text-amber-300">
-                    Your unsaved changes here will be discarded.
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                {fetcherData?.live && (
+                  <div className="text-sm text-amber-900 dark:text-amber-100">
+                    <span className="font-semibold">
+                      {fetcherData.message ?? LIVE_PAGE_MESSAGE}
+                    </span>{' '}
+                    <span className="text-amber-700 dark:text-amber-300">
+                      Your unsaved changes here are not in the live page. Copy them before you
+                      reload.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="text-sm text-amber-900 dark:text-amber-100">
+                    <span className="font-semibold">
+                      This page changed since you opened it — reload to get the latest before
+                      saving.
+                    </span>{' '}
+                    <span className="text-amber-700 dark:text-amber-300">
+                      Your unsaved changes here will be discarded.
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {fetcherData?.live && (
+                    <button
+                      type="button"
+                      onClick={handleCopyUnsaved}
+                      data-testid="save-conflict-copy"
+                      className="rounded px-3 py-1 text-sm font-medium transition-colors text-amber-900 ring-1 ring-amber-400 hover:bg-amber-100 dark:text-amber-100 dark:ring-amber-600 dark:hover:bg-amber-900/60"
+                    >
+                      Copy my changes
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={handleCopyUnsaved}
-                    data-testid="save-conflict-copy"
-                    className="rounded px-3 py-1 text-sm font-medium transition-colors text-amber-900 ring-1 ring-amber-400 hover:bg-amber-100 dark:text-amber-100 dark:ring-amber-600 dark:hover:bg-amber-900/60"
+                    onClick={handleConflictReload}
+                    className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
                   >
-                    Copy my changes
+                    Reload
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleConflictReload}
-                  className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-                >
-                  Reload
-                </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {shownCover?.url && (
-        <HeaderImage
-          imageUrl={assets.displayUrl(shownCover.url) as string}
-          position={shownCover.position ?? 50}
-          editMode={liveMode ? liveEditable && liveState.hasSynced : canEdit}
-          pageId={page.id}
-          uploadCapability={uploadCapability}
-          live={liveCoverTarget ? { storedUrl: shownCover.url, target: liveCoverTarget } : null}
-          highlighted={isPreview && Boolean(previewChanges?.coverChanged)}
-        />
-      )}
-
-      <div
-        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${shownCover?.url ? 'mt-12' : 'mt-16'}`}
-      >
-        <div>
-          {/* "Add cover" button — always visible in edit mode when no image */}
-          {!shownCover?.url && canEdit && (!liveMode || (liveEditable && liveState.hasSynced)) && (
-            <CoverAdder
-              fetcher={coverFetcher}
-              capability={uploadCapability}
-              live={liveCoverTarget}
-            />
-          )}
-
-          {titleEditable && isEditingTitle ? (
-            <input
-              type="text"
-              value={titleValue}
-              onChange={e => setTitleValue(e.target.value)}
-              onBlur={saveTitle}
-              onKeyDown={e => {
-                if (e.key === 'Enter') saveTitle();
-                if (e.key === 'Escape') cancelTitleEdit();
-              }}
-              autoFocus
-              className="!text-5xl !font-bold text-gray-900 dark:text-white mb-6 w-full bg-transparent border-none outline-none focus:ring-0 p-0 m-0"
-              style={{ fontSize: '3rem', fontWeight: 700, lineHeight: 1 }}
-              placeholder="Untitled"
-            />
-          ) : (
-            <h1
-              className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${titleEditable ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
-              onClick={() => titleEditable && setIsEditingTitle(true)}
-            >
-              {pageTitle || 'Untitled'}
-            </h1>
-          )}
-        </div>
-
-        {page.is_draft && (
-          <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
-            Draft
-          </span>
         )}
 
-        {/* The page's own open threads (page-level), above every host:
+        {shownCover?.url && (
+          <HeaderImage
+            imageUrl={assets.displayUrl(shownCover.url) as string}
+            position={shownCover.position ?? 50}
+            editMode={liveMode ? liveEditable && liveState.hasSynced : canEdit}
+            pageId={page.id}
+            uploadCapability={uploadCapability}
+            live={liveCoverTarget ? { storedUrl: shownCover.url, target: liveCoverTarget } : null}
+            highlighted={isPreview && Boolean(previewChanges?.coverChanged)}
+          />
+        )}
+
+        <div
+          className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${shownCover?.url ? 'mt-12' : 'mt-16'}`}
+        >
+          <div>
+            {/* "Add cover" button — always visible in edit mode when no image */}
+            {!shownCover?.url &&
+              canEdit &&
+              (!liveMode || (liveEditable && liveState.hasSynced)) && (
+                <CoverAdder
+                  fetcher={coverFetcher}
+                  capability={uploadCapability}
+                  live={liveCoverTarget}
+                />
+              )}
+
+            {titleEditable && isEditingTitle ? (
+              <input
+                type="text"
+                value={titleValue}
+                onChange={e => setTitleValue(e.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveTitle();
+                  if (e.key === 'Escape') cancelTitleEdit();
+                }}
+                autoFocus
+                className="!text-5xl !font-bold text-gray-900 dark:text-white mb-6 w-full bg-transparent border-none outline-none focus:ring-0 p-0 m-0"
+                style={{ fontSize: '3rem', fontWeight: 700, lineHeight: 1 }}
+                placeholder="Untitled"
+              />
+            ) : (
+              <h1
+                className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${titleEditable ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
+                onClick={() => titleEditable && setIsEditingTitle(true)}
+              >
+                {pageTitle || 'Untitled'}
+              </h1>
+            )}
+          </div>
+
+          {page.is_draft && (
+            <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
+              Draft
+            </span>
+          )}
+
+          {/* The page's own open threads (page-level), above every host:
             viewer, git editor and live editor alike. */}
-        {comments && (
-          <PageDiscussion controller={comments} pageLevelOnLoad={readerComments?.pageLevel ?? 0} />
-        )}
+          {comments && (
+            <PageDiscussion
+              controller={comments}
+              pageLevelOnLoad={readerComments?.pageLevel ?? 0}
+            />
+          )}
 
-        <div className="mt-2">
-          {!isClient ? (
-            /* SSR placeholder — BlockNote requires browser APIs */
-            <div className="flex items-center justify-center py-12">
-              <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
-            </div>
-          ) : liveMode ? (
-            /* Live editor: mounted once the room's document has arrived */
-            // `session.room === collab.room`: after a navigation the loader
-            // names the new room one render before the effect opens it, and
-            // the editor must never bind to the previous page's document.
-            session && collab && session.room === collab.room && liveState.hasSynced ? (
+          <div className="mt-2">
+            {!isClient ? (
+              /* SSR placeholder — BlockNote requires browser APIs */
+              <div className="flex items-center justify-center py-12">
+                <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
+              </div>
+            ) : liveMode ? (
+              /* Live editor: mounted once the room's document has arrived */
+              // `session.room === collab.room`: after a navigation the loader
+              // names the new room one render before the effect opens it, and
+              // the editor must never bind to the previous page's document.
+              session && collab && session.room === collab.room && liveState.hasSynced ? (
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center py-12">
+                      <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
+                    </div>
+                  }
+                >
+                  {agentTouchStyles && (
+                    <style data-testid="agent-touch-styles">{agentTouchStyles}</style>
+                  )}
+                  <PageEditor
+                    key={session.room}
+                    ref={editorRef}
+                    initialContent={null}
+                    pageId={page.id}
+                    darkMode={darkMode}
+                    resolveFileUrl={liveResolveFileUrl}
+                    srcSets={srcSets}
+                    displayUrl={assets.displayUrl}
+                    onAssetUploaded={assets.remember}
+                    uploadCapability={uploadCapability}
+                    editable={liveEditable}
+                    collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
+                    sectionStats={sectionStats ?? null}
+                    comments={comments?.bridge ?? null}
+                  />
+                </Suspense>
+              ) : (
+                /* Until the room arrives: the page as the loader read it, read-only. */
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center py-12">
+                      <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
+                    </div>
+                  }
+                >
+                  <div data-testid="live-pre-sync">
+                    <BlockNoteViewer
+                      key={`${page.id}:${assetEpoch}:pre-sync`}
+                      content={content}
+                      darkMode={darkMode}
+                      resolveFileUrl={assets.resolveFileUrl}
+                      srcSets={srcSets}
+                      displayUrl={assets.displayUrl}
+                      pageId={page.id}
+                    />
+                  </div>
+                </Suspense>
+              )
+            ) : (
+              /* Editor for instructors (a reader is shown by PageReader above) */
               <Suspense
                 fallback={
                   <div className="flex items-center justify-center py-12">
@@ -1342,110 +1509,31 @@ const PageRoute = () => {
                   </div>
                 }
               >
-                {agentTouchStyles && (
-                  <style data-testid="agent-touch-styles">{agentTouchStyles}</style>
-                )}
                 <PageEditor
-                  key={session.room}
+                  key={`${page.id}:${editorEpoch}`}
                   ref={editorRef}
-                  initialContent={null}
+                  initialContent={editorDoc}
                   pageId={page.id}
                   darkMode={darkMode}
-                  resolveFileUrl={liveResolveFileUrl}
+                  onChange={handleEditorChange}
+                  onReady={handleEditorReady}
+                  resolveFileUrl={assets.resolveFileUrl}
                   srcSets={srcSets}
                   displayUrl={assets.displayUrl}
                   onAssetUploaded={assets.remember}
                   uploadCapability={uploadCapability}
-                  editable={liveEditable}
-                  collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
+                  // P5: block editing while the save-merge chooser is open so no
+                  // edits are silently discarded when the resolved merge remounts
+                  // the editor. The chooser is the way forward (Apply / Reload).
+                  editable={!saveMergeReport}
                   sectionStats={sectionStats ?? null}
                   comments={comments?.bridge ?? null}
                 />
               </Suspense>
-            ) : (
-              /* Until the room arrives: the page as the loader read it, read-only. */
-              <Suspense
-                fallback={
-                  <div className="flex items-center justify-center py-12">
-                    <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
-                  </div>
-                }
-              >
-                <div data-testid="live-pre-sync">
-                  <BlockNoteViewer
-                    key={`${page.id}:${assetEpoch}:pre-sync`}
-                    content={content}
-                    darkMode={darkMode}
-                    resolveFileUrl={assets.resolveFileUrl}
-                    srcSets={srcSets}
-                    displayUrl={assets.displayUrl}
-                    pageId={page.id}
-                  />
-                </div>
-              </Suspense>
-            )
-          ) : canEdit ? (
-            /* Editor for instructors */
-            <Suspense
-              fallback={
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
-                </div>
-              }
-            >
-              <PageEditor
-                key={`${page.id}:${editorEpoch}`}
-                ref={editorRef}
-                initialContent={editorDoc}
-                pageId={page.id}
-                darkMode={darkMode}
-                onChange={handleEditorChange}
-                onReady={handleEditorReady}
-                resolveFileUrl={assets.resolveFileUrl}
-                srcSets={srcSets}
-                displayUrl={assets.displayUrl}
-                onAssetUploaded={assets.remember}
-                uploadCapability={uploadCapability}
-                // P5: block editing while the save-merge chooser is open so no
-                // edits are silently discarded when the resolved merge remounts
-                // the editor. The chooser is the way forward (Apply / Reload).
-                editable={!saveMergeReport}
-                sectionStats={sectionStats ?? null}
-                comments={comments?.bridge ?? null}
-              />
-            </Suspense>
-          ) : (
-            /* Viewer for students/public */
-            <Suspense
-              fallback={
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
-                </div>
-              }
-            >
-              {previewHighlightStyle && <style>{previewHighlightStyle}</style>}
-              <div className={previewHighlightStyle ? 'preview-highlight' : undefined}>
-                <BlockNoteViewer
-                  // The epoch rebuilds the viewer after a 403 retry — BlockNote
-                  // asks for a file URL once per mount, so a refreshed map only
-                  // reaches it through a remount. Safe here and only here: the
-                  // viewer holds no unsaved state, the editor does.
-                  key={`${page.id}:${assetEpoch}`}
-                  content={content}
-                  darkMode={darkMode}
-                  resolveFileUrl={assets.resolveFileUrl}
-                  srcSets={srcSets}
-                  displayUrl={assets.displayUrl}
-                  pageId={page.id}
-                  mediaDownloads={mediaDownloads}
-                  readerSections={sections}
-                  comments={comments?.bridge ?? null}
-                />
-              </div>
-            </Suspense>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      </ReaderSurfaceContext.Provider>
     </PageMediaProvider>
   );
 };

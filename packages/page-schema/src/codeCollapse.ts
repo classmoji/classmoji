@@ -11,10 +11,8 @@
  * them, and a server render needs no measuring to draw the clipped block.
  *
  * The vanilla code block (schema.ts) draws the bar for the editor and the
- * in-app viewer and attaches the behavior below; the class site's static
- * render draws the same markup (site/viewerSchema.server.ts) and its inline
- * script does what `createCodeCollapse` does here (site/copyScript.ts, ES5).
- * Change one, change the other.
+ * shared reader (the in-app viewer and the class site) and attaches the
+ * behavior below.
  *
  * DOM is touched only in the builders and event paths, never at import: the
  * collab server and the git worker import this package without a DOM.

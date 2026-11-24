@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
-// @ts-expect-error -- jsdom ships no type declarations (see site-render.spec.ts).
+// @ts-expect-error -- jsdom ships no type declarations (see block-styles.spec.ts).
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 import { collectBlockAssetRefs } from '@classmoji/utils';
 
@@ -59,7 +59,6 @@ import {
   isNoSuchSection,
   parseActivityList,
 } from '~/components/editor/sectionActivity.ts';
-import { renderSitePage } from '~/site/render.server.ts';
 
 const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
 const parse = (html: string): Document => new JSDOM(`<body>${html}</body>`).window.document;
@@ -360,6 +359,7 @@ test.describe('readerSections (the loader contract)', () => {
     ).toEqual({
       staff: false,
       signedIn: false,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -371,6 +371,7 @@ test.describe('readerSections (the loader contract)', () => {
     expect(readerSectionsFor({ ...base, signedIn: true, viewer: STUDENT_VIEWER, state })).toEqual({
       staff: false,
       signedIn: true,
+      member: true,
       canCheck: true,
       canUnlock: true,
       ...state,
@@ -387,6 +388,8 @@ test.describe('readerSections (the loader contract)', () => {
     });
     expect(out.canCheck).toBe(false);
     expect(out.canUnlock).toBe(false);
+    // Still a member: a locked section is a closed card, never the members-only line.
+    expect(out.member).toBe(true);
     expect(out.checked).toEqual(state.checked);
   });
 
@@ -430,6 +433,7 @@ test.describe('readerSections (the loader contract)', () => {
     expect(out).toEqual({
       staff: false,
       signedIn: true,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -1688,13 +1692,27 @@ test.describe('the page loader', () => {
     // …and before every consumer of it.
     for (const consumer of [
       'await resolveDocumentAssets(',
-      'await loadMediaDownloads(page.classroom.id, viewerContent',
       'previewBlockChanges(',
       'sectionStatsFor(viewerContent',
-      '    content: viewerContent,',
+      '    content: reader ? null : viewerContent,',
     ]) {
       const at = loaderBody.indexOf(consumer);
       expect(at, consumer).toBeGreaterThan(redact);
+    }
+    // The reader payload strips them itself, first, before anything else reads
+    // the document (leak cases: reader-payload.spec.ts).
+    const BUILDER = source('../../app/utils/readerPayload.server.ts');
+    const builderBody = BUILDER.slice(BUILDER.indexOf('export async function buildReaderPayload'));
+    const strip = builderBody.indexOf('const sectioned = documentForReader(stored');
+    expect(strip).toBeGreaterThan(0);
+    for (const consumer of [
+      'linkedPageIds(sectioned)',
+      'redactDocumentForViewer(sectioned',
+      'deps.resolveAssets(ctx, normalizeCodeBlockContent(sectioned)',
+      'await deps.loadMediaDownloads(classroom.id, finalBlocks',
+      'describeBlocks(finalBlocks)',
+    ]) {
+      expect(builderBody.indexOf(consumer), consumer).toBeGreaterThan(strip);
     }
     // Reveal-all and edit come from the one shared reader rule.
     expect(loaderBody).toContain('const canEdit = sectionViewer.canEditAnyState;');
@@ -1741,7 +1759,13 @@ test.describe('the page loader', () => {
   test('a sign-in link goes only to a signed-out reader', () => {
     // `url`, React Router's normalized one: `request.url` is the `.data` fetch
     // on a client-side navigation, not the page.
-    expect(loaderBody).toContain('signInUrl: authData?.userId ? null : signInUrlFor(url.href),');
+    // Built by the reader payload for a viewer the loader passes only when
+    // signed in.
+    expect(loaderBody).toContain('signInUrl: () => signInUrlFor(url.href),');
+    expect(loaderBody).toMatch(/const readerViewer: ReaderViewer \| null = authData\?\.userId/);
+    expect(source('../../app/utils/readerPayload.server.ts')).toContain(
+      'signInUrl: viewer ? null : input.signInUrl(),'
+    );
   });
 });
 
@@ -1762,19 +1786,24 @@ test.describe('signInUrlFor', () => {
 
 test.describe('the class site', () => {
   const RENDER = source('../../app/site/pageRender.server.ts');
-  const body = RENDER.slice(RENDER.indexOf('export async function renderPageForViewer'));
+  const body = RENDER.slice(RENDER.indexOf('export async function buildSitePayload'));
 
-  test('redacts every locked body right after loading, before assets, downloads and render', () => {
-    const REDACT = 'const blocks = documentForSite(content.blocks);';
-    const redact = body.indexOf(REDACT);
-    expect(redact).toBeGreaterThan(body.indexOf('await loadSitePageContent('));
-    expect(body.indexOf('await resolveSiteAssets(assetCtx, blocks)')).toBeGreaterThan(redact);
-    expect(
-      body.indexOf('await loadMediaDownloads(context.site.classroom_id, blocks, role)')
-    ).toBeGreaterThan(redact);
-    // Nothing downstream reads the unredacted blocks again.
-    const after = body.slice(redact + REDACT.length, body.indexOf('\n}\n'));
-    expect(after).not.toContain('content.blocks');
+  // CHANGED with the reader island: the site no longer redacts and renders on
+  // its own. Its document goes through the shared builder, which removes the
+  // locked bodies this viewer may not see before assets, downloads or links
+  // read it (readerPayload.server.ts); a non-member viewer is null, so every
+  // body is removed for them (site-reader.spec.ts runs the real loaders).
+  test('the site hands the stored document to the shared builder with its own viewer', () => {
+    expect(body).toContain(
+      'const readerViewer = await siteReaderViewer(viewer, page, site.classroom);'
+    );
+    expect(body).toContain('return buildReaderPayload(');
+    expect(body).toContain('viewer: readerViewer,');
+    // The only other use of the stored blocks: the description, from the
+    // locked-stripped document.
+    expect(RENDER).toContain(
+      "return describeBlocks(content.format === 'json' ? documentForSite(content.blocks) : []);"
+    );
   });
 
   test('the staff _render/page view does not go through the site path', () => {
@@ -1798,79 +1827,13 @@ test.describe('the class site', () => {
     expect(documentForSite(plain)).toBe(plain);
   });
 
-  test('renders closed cards with the unlock link and no body text', async () => {
-    const href = 'https://pages.example/cs52/page-a';
-    const { html } = await renderSitePage({
-      blocks: documentForSite(fixture()),
-      resolveLink: () => null,
-      lockedSectionHref: href,
-    });
-    for (const secret of [
-      ...SECRETS,
-      'Hidden step',
-      'outer-secret.png',
-      'inner-secret.png',
-      MEDIA_ID,
-    ]) {
-      expect(html).not.toContain(secret);
-    }
-    const doc = parse(html);
-    const cards = [...doc.querySelectorAll('.bn-site-locked')];
-    expect(cards.map(card => card.querySelector('.bn-site-locked-title')?.textContent)).toEqual([
-      'Outer title',
-      'Solo title',
-    ]);
-    for (const card of cards) {
-      const link = card.querySelector('a.bn-site-locked-link');
-      expect(link?.getAttribute('href')).toBe(href);
-      expect(link?.textContent).toBe('Open in Classmoji to unlock');
-      expect(card.querySelector('svg.bn-site-locked-icon')).not.toBeNull();
-    }
-    // A checkable heading is a plain heading on the site: no control of any kind.
-    expect(doc.querySelectorAll('input, button[role="checkbox"], [role="checkbox"]')).toHaveLength(
-      0
-    );
-    expect(html).toContain('Part 1');
-  });
-
-  test('a signed-out visitor gets one sign-in row per section, no card and no body', async () => {
-    const signIn = '/sign-in?returnTo=%2Fweather';
-    const { html } = await renderSitePage({
-      blocks: documentForSite(fixture()),
-      resolveLink: () => null,
-      lockedSectionHref: 'https://pages.example/cs52/page-a',
-      lockedSectionSignInHref: signIn,
-    });
-    for (const secret of [...SECRETS, 'Hidden step', 'outer-secret.png', MEDIA_ID]) {
-      expect(html).not.toContain(secret);
-    }
-    const doc = parse(html);
-    expect(doc.querySelectorAll('.bn-site-locked')).toHaveLength(0);
-    expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
-    const rows = [...doc.querySelectorAll('a.bn-site-locked-gate')];
-    expect(rows.map(row => row.querySelector('.bn-site-locked-title')?.textContent)).toEqual([
-      'Outer title',
-      'Solo title',
-    ]);
-    for (const row of rows) {
-      expect(row.getAttribute('href')).toBe(signIn);
-      expect(row.getAttribute('aria-label')).toMatch(/^Sign in to unlock: /);
-      expect(row.querySelector('svg.bn-site-locked-icon')).not.toBeNull();
-      expect(row.querySelector('.bn-site-locked-tip')?.textContent).toBe('Sign in to unlock');
-    }
-  });
-
-  test('the sign-in row is for anonymous renders only, through the site interstitial', () => {
-    expect(body).toMatch(/lockedSectionSignInHref: context\.viewer\.userId\s*\? null/);
-    expect(body).toContain('`${context.memberLinkOrigin}${signInPathFor(');
-  });
-
-  test('without an href (the staff view) there is no link, and the body renders as authored', async () => {
-    const { html } = await renderSitePage({ blocks: fixture(), resolveLink: () => null });
-    const doc = parse(html);
-    expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
-    expect(html).toContain('OUTER-SECRET-BODY');
-    expect(html).toContain('INNER-SECRET-BODY');
+  // CHANGED: the sign-in link is the same for EVERY non-member (anonymous or
+  // signed in), so their payloads are identical; the builder asks for it only
+  // when the viewer is null. Through the site interstitial, as before.
+  test('the sign-in link is not branched on a session, and goes through the site interstitial', () => {
+    expect(body).toContain('signInUrl: () => signInUrl,');
+    expect(RENDER).not.toMatch(/viewer\.userId\s*\?/);
+    expect(RENDER).toContain('`${context.memberLinkOrigin}${signInPathFor(publicPath)}`');
   });
 });
 

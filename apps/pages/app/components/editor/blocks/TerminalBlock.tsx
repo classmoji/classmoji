@@ -18,6 +18,8 @@ import { createHighlighterCore } from '@shikijs/core';
 import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript';
 import bash from '@shikijs/langs/bash';
 import oneDarkPro from '@shikijs/themes/one-dark-pro';
+import { terminalView } from './readOnlyGates.ts';
+import { terminalCodeHtml } from './terminalHighlight.ts';
 
 type TerminalRenderProps = ReactCustomBlockRenderProps<typeof terminalConfig>;
 
@@ -103,18 +105,21 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
           themes: [oneDarkPro],
           engine: createJavaScriptRegexEngine(),
         }).then(highlighter => {
-          let html = highlighter.codeToHtml(props.block.props.code, {
-            lang: 'bash',
-            theme: 'one-dark-pro',
-          });
-          // Remove background-color from the pre element to use terminal's background
-          html = html.replace(/background-color:[^;]+;?/g, '');
+          // Shiki's escaped HTML, without the theme background on the <pre>
+          // (terminalHighlight.ts); the code text is never edited.
+          const html = terminalCodeHtml(highlighter, props.block.props.code);
           if (codeRef.current) {
             codeRef.current.innerHTML = html;
           }
         });
       }
     }, [props.block.props.code, isFocused]);
+
+    // A reader gets the code and never an editing box; a reader of an empty
+    // terminal gets nothing (readOnlyGates.ts).
+    const view = terminalView(props.editor.isEditable, props.block.props.code);
+    if (view === 'nothing') return null;
+    const editing = view === 'edit';
 
     return (
       <div className="terminal-block" contentEditable={false}>
@@ -125,7 +130,7 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
             <span className="dot dot-yellow"></span>
             <span className="dot dot-green"></span>
           </div>
-          <span className="terminal-title">Terminal</span>
+          <span className="terminal-title">{props.block.props.title || 'Terminal'}</span>
           <TerminalCopyControl editor={props.editor} block={props.block} />
         </div>
 
@@ -135,14 +140,15 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
           {!isFocused && props.block.props.code && (
             <div
               ref={codeRef}
-              onClick={() => {
-                // A reader of a block with copying off never gets the
-                // textarea: its value would be selectable whatever the CSS.
-                if (!props.editor.isEditable && !isCopyable(props.block.props)) return;
-                setIsFocused(true);
-                // Focus textarea after state updates
-                setTimeout(() => textareaRef.current?.focus(), 0);
-              }}
+              onClick={
+                editing
+                  ? () => {
+                      setIsFocused(true);
+                      // Focus textarea after state updates
+                      setTimeout(() => textareaRef.current?.focus(), 0);
+                    }
+                  : undefined
+              }
               style={{
                 margin: 0,
                 background: 'transparent',
@@ -151,44 +157,46 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
                 lineHeight: 'inherit',
                 padding: 0,
                 overflow: 'auto',
-                cursor: 'text',
+                cursor: editing ? 'text' : undefined,
               }}
             />
           )}
 
-          {/* Editable textarea (shown when focused or empty) */}
-          <textarea
-            ref={textareaRef}
-            value={props.block.props.code}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-              props.editor.updateBlock(props.block, {
-                props: { code: e.target.value },
-              })
-            }
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            placeholder="$ Enter terminal commands..."
-            rows={1}
-            style={{
-              width: '100%',
-              background: 'transparent',
-              color: '#d4d4d4',
-              border: 'none',
-              outline: 'none',
-              resize: 'none',
-              fontFamily: 'inherit',
-              fontSize: 'inherit',
-              lineHeight: 'inherit',
-              padding: 0,
-              overflow: 'hidden',
-              display: isFocused || !props.block.props.code ? 'block' : 'none',
-            }}
-            onInput={(e: React.FormEvent<HTMLTextAreaElement>) => {
-              const target = e.currentTarget;
-              target.style.height = 'auto';
-              target.style.height = target.scrollHeight + 'px';
-            }}
-          />
+          {/* Editable textarea (shown when focused or empty), authors only */}
+          {editing && (
+            <textarea
+              ref={textareaRef}
+              value={props.block.props.code}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                props.editor.updateBlock(props.block, {
+                  props: { code: e.target.value },
+                })
+              }
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              placeholder="$ Enter terminal commands..."
+              rows={1}
+              style={{
+                width: '100%',
+                background: 'transparent',
+                color: '#d4d4d4',
+                border: 'none',
+                outline: 'none',
+                resize: 'none',
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+                lineHeight: 'inherit',
+                padding: 0,
+                overflow: 'hidden',
+                display: isFocused || !props.block.props.code ? 'block' : 'none',
+              }}
+              onInput={(e: React.FormEvent<HTMLTextAreaElement>) => {
+                const target = e.currentTarget;
+                target.style.height = 'auto';
+                target.style.height = target.scrollHeight + 'px';
+              }}
+            />
+          )}
         </div>
       </div>
     );

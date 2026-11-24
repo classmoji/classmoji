@@ -11,6 +11,7 @@ import { IconPhoto } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
 import { useAssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
+import { readerCanShowMedia } from './readOnlyGates.ts';
 
 /**
  * BlockNote's image block, with responsive candidates.
@@ -49,13 +50,10 @@ type ImageRenderProps = ReactCustomBlockRenderProps<typeof imageConfig>;
  * with it — it is looked up separately, by the stored reference, which the
  * block has synchronously on its first render. Both land in the same commit.
  */
-function ResponsiveImagePreview(props: ImageRenderProps) {
+function ResponsiveImagePreview(props: ImageRenderProps & { src: string }) {
   const { url, caption, name, previewWidth } = props.block.props;
-
-  // The stored reference stays in the block; this is the URL to display it
-  // with. Same call the app's other custom blocks make.
+  const { src } = props;
   const ref = typeof url === 'string' ? url : '';
-  const src = useResolvedFileUrl(ref, props.editor.resolveFileUrl);
   // Keyed by the STORED reference, which the block has synchronously on its
   // first render — the signed URL arrives later and depends on a clock, an
   // expiry bucket and the viewer's tier.
@@ -73,7 +71,31 @@ function ResponsiveImagePreview(props: ImageRenderProps) {
       alt={(caption as string) || (name as string) || 'BlockNote image'}
       contentEditable={false}
       draggable={false}
+      // A reader's page can be long; the editor keeps BlockNote's eager load.
+      loading={props.editor.isEditable ? undefined : 'lazy'}
     />
+  );
+}
+
+/**
+ * The block: BlockNote's wrapper around the picture. A reader of an image with
+ * no URL, or of media that cannot be shown (a reference still unresolved, the
+ * placeholder for one that could not be signed), gets nothing — not the
+ * author's "Add image" button, not a broken picture.
+ */
+function ResponsiveImageBlock(props: ImageRenderProps) {
+  // The stored reference stays in the block; this is the URL to display it
+  // with. Same call the app's other custom blocks make.
+  const ref = typeof props.block.props.url === 'string' ? props.block.props.url : '';
+  const src = useResolvedFileUrl(ref, props.editor.resolveFileUrl);
+  if (!props.editor.isEditable && !readerCanShowMedia(ref, src)) return null;
+  return (
+    <ResizableFileBlockWrapper
+      {...(props as unknown as FileWrapperProps)}
+      buttonIcon={<IconPhoto size={24} />}
+    >
+      <ResponsiveImagePreview {...props} src={src} />
+    </ResizableFileBlockWrapper>
   );
 }
 
@@ -96,13 +118,6 @@ export const ResponsiveImage = createReactBlockSpec(imageConfig, options => ({
   meta: imageMeta,
   runsBefore: ['file'],
   parse: imageParse(options),
-  render: props => (
-    <ResizableFileBlockWrapper
-      {...(props as unknown as FileWrapperProps)}
-      buttonIcon={<IconPhoto size={24} />}
-    >
-      <ResponsiveImagePreview {...props} />
-    </ResizableFileBlockWrapper>
-  ),
+  render: props => <ResponsiveImageBlock {...props} />,
   toExternalHTML: ImageToExternalHTML,
 }));

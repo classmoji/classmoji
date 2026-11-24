@@ -25,6 +25,7 @@ import * as formResponseService from './formResponse.service.ts';
 import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
+import * as pageImportService from './pageImport.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as pageSectionsService from './pageSections.service.ts';
 import * as pageCommentsService from './pageComments.service.ts';
@@ -164,6 +165,9 @@ const ClassmojiService = {
   formIdentity: formIdentityService,
   formTeam: formTeamResolverService,
   page: pageService,
+  // Markdown/HTML -> page blocks for a page create, run on Trigger.dev (the
+  // `page-import-convert` task); the callers wait for it before creating.
+  pageImport: pageImportService,
   pageContent: pageContentService,
   // Per-student page state: checked headings and opened locked sections, with
   // the current-student counts and lists staff see.

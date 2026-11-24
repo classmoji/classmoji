@@ -77,7 +77,32 @@ export type SiteRequestResolution =
       action: 'not-found';
       reason: 'unknown-host' | 'invalid-host' | 'internal-path' | 'data-request' | 'dot-segment';
     }
-  | { action: 'rewrite'; url: string; subdomain: string; customDomain?: string };
+  | { action: 'rewrite'; url: string; subdomain: string; customDomain?: string }
+  /**
+   * A members' reader call on a class-site SUBDOMAIN (`SITE_API_PATHS`): left
+   * as it is (not rewritten into the `_site` tree) and stamped with the
+   * subdomain, so its handler binds the call to that site.
+   */
+  | { action: 'site-api'; subdomain: string };
+
+/**
+ * The API paths a class-site subdomain passes through to the pages app's own
+ * routes: what a MEMBER's reader on the site calls (ticks and unlocks,
+ * comments, the payload after an unlock). Matched EXACTLY on the normalized
+ * path, after the dot-segment refusal; never on a custom domain (no session
+ * exists there, and its CSP allows no connection). Every other `/api/*` path
+ * on a site host is rewritten into the `_site` tree and 404s there.
+ *
+ * Passing the path through is not authorization: each handler re-resolves the
+ * site from the stamped subdomain and answers 404 unless the page belongs to
+ * that site's classroom, is not a draft and is visible there to the caller
+ * (`app/site/apiBinding.server.ts`).
+ */
+export const SITE_API_PATHS: ReadonlySet<string> = new Set([
+  '/api/page-sections',
+  '/api/page-comments',
+  '/api/page-reader',
+]);
 
 /** The slice of the environment this module reads (structurally `process.env`). */
 export type SiteHostEnv = {
@@ -341,6 +366,12 @@ export function resolveSiteRequest(
       // that pass, which is what a domain pointed here before it is connected
       // needs.
       if (path.endsWith('.data')) return { action: 'not-found', reason: 'data-request' };
+      // A member's reader calls, on the class subdomain only. `path` is the
+      // normalized one the adapter routes on, and the dot-segment refusal has
+      // already run, so the string compared is the route that will answer.
+      if (!classification.customDomain && SITE_API_PATHS.has(path)) {
+        return { action: 'site-api', subdomain: classification.subdomain };
+      }
       return {
         action: 'rewrite',
         url: computeSiteUrl(rawUrl, classification.subdomain),
@@ -424,10 +455,24 @@ function sendHealthy(res: Response): void {
  */
 export const CUSTOM_DOMAIN_REQUEST_KEY = '__classmojiCustomDomain';
 
+/**
+ * Where the middleware records "this API call arrived on the class site with
+ * this subdomain" (`site-api`), the same way as the custom-domain marker: a
+ * string property on the Express request, never a header, written on EVERY
+ * request (null unless it is a site API call).
+ */
+export const SITE_SUBDOMAIN_REQUEST_KEY = '__classmojiSiteSubdomain';
+
 /** The load context every class-site loader receives. */
 export type SiteLoadContext = {
   /** The custom hostname this request arrived on, or null for every other host. */
   customDomain: string | null;
+  /**
+   * The class-site subdomain a passed-through API call (`SITE_API_PATHS`)
+   * arrived on, or null: the canonical pages host, a rewritten site page, or
+   * anything else.
+   */
+  siteSubdomain: string | null;
 };
 
 /**
@@ -443,12 +488,15 @@ export type SiteLoadContext = {
  * a hand-built one in a test — reads as "not a custom domain", the safe answer.
  */
 export function buildSiteLoadContext(req: unknown): SiteLoadContext {
-  const marker =
-    req && typeof req === 'object'
-      ? (req as Record<string, unknown>)[CUSTOM_DOMAIN_REQUEST_KEY]
-      : undefined;
+  const record = req && typeof req === 'object' ? (req as Record<string, unknown>) : undefined;
+  const marker = record?.[CUSTOM_DOMAIN_REQUEST_KEY];
+  const site = record?.[SITE_SUBDOMAIN_REQUEST_KEY];
 
-  return { customDomain: typeof marker === 'string' && marker.length > 0 ? marker : null };
+  return {
+    customDomain: typeof marker === 'string' && marker.length > 0 ? marker : null,
+    // Shape-checked again on the way out: it names a tenant a handler looks up.
+    siteSubdomain: typeof site === 'string' && DNS_LABEL.test(site) ? site : null,
+  };
 }
 
 export type SiteHostMiddleware = {
@@ -501,6 +549,11 @@ export function createSiteHostMiddleware(
     (req as unknown as Record<string, unknown>)[CUSTOM_DOMAIN_REQUEST_KEY] = customDomain;
   };
 
+  /** Stamp (or clear) the site-API marker, on every request for the same reason. */
+  const markSiteApi = (req: Request, subdomain: string | null): void => {
+    (req as unknown as Record<string, unknown>)[SITE_SUBDOMAIN_REQUEST_KEY] = subdomain;
+  };
+
   const rewriteSiteRequests: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
     // Answered HERE, before any host classification: the probe has to work on
     // whatever Host the platform sends, and letting it into the app would serve
@@ -526,8 +579,15 @@ export function createSiteHostMiddleware(
       req.url = resolution.url;
       req.originalUrl = resolution.url;
       markCustomDomain(req, resolution.customDomain ?? null);
+      markSiteApi(req, null);
+    } else if (resolution.action === 'site-api') {
+      // Not rewritten: the pages app's own API route answers, bound to this
+      // site by the stamp. Never a custom domain (resolveSiteRequest).
+      markCustomDomain(req, null);
+      markSiteApi(req, resolution.subdomain);
     } else {
       markCustomDomain(req, null);
+      markSiteApi(req, null);
     }
 
     next();

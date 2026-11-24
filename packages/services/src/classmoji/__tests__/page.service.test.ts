@@ -93,19 +93,13 @@ vi.mock('../contentAssets.service.ts', async () => ({
   removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
 }));
 
-// The real converter (BlockNote's server editor on synthetic HTML), behind a
-// spy so a test can make it fail.
-const convertPageHtmlMock = vi.fn();
-vi.mock('../pageHtmlBlocks.ts', async () => {
-  const actual =
-    await vi.importActual<typeof import('../pageHtmlBlocks.ts')>('../pageHtmlBlocks.ts');
-  convertPageHtmlMock.mockImplementation(actual.convertPageHtml);
-  return {
-    ...actual,
-    convertPageHtml: (...args: Parameters<typeof actual.convertPageHtml>) =>
-      convertPageHtmlMock(...args),
-  };
-});
+// createPage takes blocks the caller already converted (on Trigger.dev, the
+// `page-import-convert` task, whose own suite pins the conversion). These
+// tests make them with the same converter, so what they assert about the
+// committed content.json reads realistic blocks.
+const { htmlToPageBlocks } = await import('@classmoji/page-schema/html');
+const toBlocks = (html: string, title?: string) =>
+  htmlToPageBlocks(html, title ? { title } : {}) as Promise<unknown[]>;
 
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),
@@ -122,6 +116,7 @@ const {
   linkPage,
   pageContentPath,
   pageSlugCandidates,
+  preflightCreatePage,
   PAGE_SLUG_MAX_SUFFIX,
   PAGE_SLUG_UNAVAILABLE,
 } = await import('../page.service.ts');
@@ -325,7 +320,10 @@ describe('page.createPage', () => {
     await createPage({
       classroomId: 'class-1',
       title: 'Md Import',
-      html: '<h2>Setup</h2><p>from <strong>markdown</strong></p><ul><li>one</li></ul>',
+      blocks: await toBlocks(
+        '<h2>Setup</h2><p>from <strong>markdown</strong></p><ul><li>one</li></ul>',
+        'Md Import'
+      ),
       createdBy: 'user-1',
       commitMessage: 'Import page: Md Import',
     });
@@ -354,24 +352,6 @@ describe('page.createPage', () => {
     ]);
     // Every block carries an id, as the editor's own saves do.
     for (const block of stored.blocks) expect(typeof block.id).toBe('string');
-    expect(convertPageHtmlMock).toHaveBeenCalledWith(expect.any(String), { title: 'Md Import' });
-  });
-
-  it('reads the full document the markdown import wraps its HTML in', async () => {
-    await createPage({
-      classroomId: 'class-1',
-      title: 'Wrapped',
-      html:
-        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
-        '<style>body { margin: 0 auto; }</style></head><body><p>Only this</p></body></html>',
-      createdBy: 'user-1',
-    });
-
-    const content = putMock.mock.calls[0][0].content as string;
-    const stored = JSON.parse(content) as { blocks: Block[] };
-    expect(stored.blocks.map(b => b.type)).toEqual(['paragraph']);
-    expect(content).toContain('Only this');
-    expect(content).not.toContain('margin');
   });
 
   // A signed URL (or a `/missing/` placeholder) of ours must never reach
@@ -387,7 +367,7 @@ describe('page.createPage', () => {
     await createPage({
       classroomId,
       title: 'From An Agent',
-      html: `<p><img src="${placeholder}"></p>`,
+      blocks: await toBlocks(`<p><img src="${placeholder}"></p>`, 'From An Agent'),
       createdBy: 'user-1',
     });
 
@@ -397,25 +377,13 @@ describe('page.createPage', () => {
     );
   });
 
-  it('drops the leading <h1> that repeats the page title', async () => {
-    await createPage({
-      classroomId: 'class-1',
-      title: 'Week 1',
-      html: '<!DOCTYPE html><html><body><h1>Week 1</h1><p>Body text</p></body></html>',
-      createdBy: 'user-1',
-    });
-
-    const stored = JSON.parse(putMock.mock.calls[0][0].content as string) as { blocks: Block[] };
-    expect(stored.blocks.map(b => b.type)).toEqual(['paragraph']);
-  });
-
   it('import flow: batches assets + content.json in one commit with the import message', async () => {
     const rawUrl =
       'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/imported/assets/a.png';
     await createPage({
       classroomId: 'class-1',
       title: 'Imported',
-      html: `<p>hi</p><p><img src="${rawUrl}" alt="a"></p>`,
+      blocks: await toBlocks(`<p>hi</p><p><img src="${rawUrl}" alt="a"></p>`, 'Imported'),
       files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
       createdBy: 'user-1',
       ensureRepo: false,
@@ -472,13 +440,16 @@ describe('page.createPage', () => {
       await createPage({
         classroomId: 'class-1',
         title: 'Imported',
-        html: [
-          `<p><img src="${raw('pages/imported/assets/a.png')}"></p>`,
-          // Ours, but not committed by this create: left as written.
-          `<p><img src="${raw('pages/other/assets/b.png')}"></p>`,
-          // Not ours at all.
-          '<p><img src="https://example.com/c.png"></p>',
-        ].join(''),
+        blocks: await toBlocks(
+          [
+            `<p><img src="${raw('pages/imported/assets/a.png')}"></p>`,
+            // Ours, but not committed by this create: left as written.
+            `<p><img src="${raw('pages/other/assets/b.png')}"></p>`,
+            // Not ours at all.
+            '<p><img src="https://example.com/c.png"></p>',
+          ].join(''),
+          'Imported'
+        ),
         files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
         createdBy: 'user-1',
       });
@@ -499,7 +470,7 @@ describe('page.createPage', () => {
       await createPage({
         classroomId: 'class-1',
         title: 'Imported',
-        html: `<p><img src="${raw('pages/imported/assets/a.png')}"></p>`,
+        blocks: await toBlocks(`<p><img src="${raw('pages/imported/assets/a.png')}"></p>`),
         files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
         createdBy: 'user-1',
       });
@@ -512,27 +483,6 @@ describe('page.createPage', () => {
         raw('pages/imported/assets/a.png')
       );
     });
-  });
-
-  it('a conversion that fails writes nothing: no commit, no row', async () => {
-    convertPageHtmlMock.mockRejectedValueOnce(new Error('converter unavailable'));
-
-    await expect(
-      createPage({
-        classroomId: 'class-1',
-        title: 'Imported',
-        html: '<p>hi</p>',
-        files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
-        createdBy: 'user-1',
-      })
-    ).rejects.toThrow('converter unavailable');
-
-    expect(repositoryExistsMock).not.toHaveBeenCalled();
-    expect(deleteBranchMock).not.toHaveBeenCalled();
-    expect(uploadBatchMock).not.toHaveBeenCalled();
-    expect(putMock).not.toHaveBeenCalled();
-    expect(recordContentAssetsMock).not.toHaveBeenCalled();
-    expect(pageCreateMock).not.toHaveBeenCalled();
   });
 
   it('creates the content repo when missing, and nothing beyond it', async () => {
@@ -736,7 +686,12 @@ describe('page.createPage', () => {
     // html-without-assets flow still uses put → the single-file message.
     putMock.mockRejectedValue(new Error('boom'));
     await expect(
-      createPage({ classroomId: 'class-1', title: 'X', html: '<p>x</p>', createdBy: 'user-1' })
+      createPage({
+        classroomId: 'class-1',
+        title: 'X',
+        blocks: await toBlocks('<p>x</p>'),
+        createdBy: 'user-1',
+      })
     ).rejects.toThrow('Failed to upload file to GitHub: boom');
   });
 
@@ -774,12 +729,76 @@ describe('page.createPage', () => {
       classroomId: 'class-1',
       title: 'Imported',
       createdBy: 'user-1',
-      html: '<h1>Imported</h1>',
+      blocks: await toBlocks('<p>Imported</p>'),
     });
 
     expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
       { path: 'pages/imported/content.json', sha: 'abc' },
     ]);
+  });
+});
+
+// The import callers run it before spending a conversion run; createPage runs
+// it again. Same errors (messages and codes) as createPage's own refusals, and
+// it writes nothing.
+describe('page.preflightCreatePage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    classroomFindUniqueMock.mockResolvedValue(classroom);
+    pageFindFirstMock.mockResolvedValue(null);
+    pageFindUniqueMock.mockResolvedValue({ classroom_id: 'class-1' });
+  });
+
+  const nothingWritten = () => {
+    expect(putMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(pageCreateMock).not.toHaveBeenCalled();
+    expect(repositoryExistsMock).not.toHaveBeenCalled();
+  };
+
+  it('answers the content path the page will take', async () => {
+    await expect(preflightCreatePage({ classroomId: 'class-1', title: 'Week 1' })).resolves.toEqual(
+      { contentPath: 'pages/week-1' }
+    );
+    nothingWritten();
+  });
+
+  it('refuses at the page limit with the plan error itself', async () => {
+    const planLimits = await import('../planLimits.ts');
+    const limitError = Object.assign(new Error('Free classes can have up to 10 pages.'), {
+      code: 'PLAN_CONTENT_LIMIT',
+    });
+    vi.mocked(planLimits.assertCanCreateContent).mockRejectedValueOnce(limitError);
+
+    await expect(preflightCreatePage({ classroomId: 'class-1', title: 'Lab 11' })).rejects.toBe(
+      limitError
+    );
+    nothingWritten();
+  });
+
+  it('refuses a title whose path a page already uses (a repeated title included)', async () => {
+    pageFindFirstMock.mockResolvedValue({ id: 'page-0', title: 'Week 1' });
+
+    const failure = await preflightCreatePage({ classroomId: 'class-1', title: 'Week 1' }).catch(
+      (e: Error & { code?: string }) => e
+    );
+    expect(failure).toMatchObject({
+      code: 'PAGE_CONTENT_PATH_CONFLICT',
+      message: expect.stringContaining(`existing page: "Week 1"`),
+    });
+    nothingWritten();
+  });
+
+  it('refuses a link target outside the classroom', async () => {
+    repositoryFindFirstMock.mockResolvedValue(null);
+    await expect(
+      preflightCreatePage({
+        classroomId: 'class-1',
+        title: 'Week 1',
+        linkRepositoryId: 'repo-elsewhere',
+      })
+    ).rejects.toThrow('Repository not found');
+    nothingWritten();
   });
 });
 

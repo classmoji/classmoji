@@ -23,7 +23,7 @@ const registry = globalThis as unknown as Record<
 >;
 
 export const siteLoadContext: RouterContext<SiteLoadContext> = (registry[KEY] ??=
-  createContext<SiteLoadContext>({ customDomain: null }));
+  createContext<SiteLoadContext>({ customDomain: null, siteSubdomain: null }));
 
 /** `getLoadContext`'s answer for a request whose marker is `value`. */
 export function siteRouterContext(value: SiteLoadContext): RouterContextProvider {

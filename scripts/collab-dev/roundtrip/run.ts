@@ -72,11 +72,8 @@ import { basename, join } from 'node:path';
 import * as Y from 'yjs';
 
 import { FRAGMENT, normalizeCodeBlockContent } from '@classmoji/page-schema';
-import {
-  getServerEditor,
-  pageContentToYDoc,
-  yDocToPageContent,
-} from '@classmoji/page-schema/server';
+import { getServerEditor } from '@classmoji/page-schema/html';
+import { pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
   generateDeckHtml,
@@ -583,8 +580,9 @@ function blockNoteOnly(blocks: unknown[]): unknown[] {
 }
 
 /**
- * `blocksToFullHTML` the way the production page renderer calls it
- * (apps/pages/app/site/render.server.ts): inside the editor's JSDOM scope,
+ * `blocksToFullHTML` the way the class site's old static renderer called it
+ * (since removed; pages are drawn by the reader in the browser): inside the
+ * editor's JSDOM scope,
  * with a working localStorage (BlockNote's toggle wrapper reads it, and the
  * bare JSDOM's opaque origin throws on it), then React's deferred work
  * drained before the scope closes.

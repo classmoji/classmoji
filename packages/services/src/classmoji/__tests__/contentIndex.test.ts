@@ -366,11 +366,12 @@ describe('classifyPath', () => {
   it('maps the three document shapes and nothing else', () => {
     expect(classifyPath('pages/lab-1/content.json')).toMatchObject({
       indexable: true,
-      target: { kind: 'page', extract: 'blocknote', docPath: 'pages/lab-1', legacy: false },
+      target: { kind: 'page', extract: 'blocknote', docPath: 'pages/lab-1' },
     });
-    expect(classifyPath('pages/lab-1/index.html')).toMatchObject({
-      indexable: true,
-      target: { kind: 'page', extract: 'page-html', legacy: true },
+    // A page's index.html is its legacy body, which no surface shows: never indexed.
+    expect(classifyPath('pages/lab-1/index.html')).toEqual({
+      indexable: false,
+      reason: 'legacy_page',
     });
     expect(classifyPath('slides/lecture-1/index.html')).toMatchObject({
       indexable: true,
@@ -517,30 +518,37 @@ describe('indexOneFile', () => {
     expect(indexRows).toHaveLength(0);
   });
 
-  it('prefers content.json: a legacy index.html beside one is skipped', async () => {
+  it('never indexes a page’s index.html, with or without content.json beside it', async () => {
     assetShas.set(assetKey(CLASSROOM, 'pages/lab-1/content.json'), SHA);
-    const result = await indexOneFile({
+    const beside = await indexOneFile({
       classroomId: CLASSROOM,
       path: 'pages/lab-1/index.html',
       sha: 'b'.repeat(40),
       body: '<h1>old</h1>',
       docHint: { kind: 'page', id: PAGE_ID, title: 'Lab 1' },
     });
-    expect(result).toEqual({ outcome: 'skipped', reason: 'legacy_superseded' });
-    expect(embedTextsMock).not.toHaveBeenCalled();
-  });
+    expect(beside).toEqual({ outcome: 'skipped', reason: 'legacy_page' });
 
-  it('indexes a legacy index.html when there is no content.json', async () => {
+    // A legacy page (index.html only) would be found and then shown empty.
     assetShas.clear();
     assetShas.set(assetKey(CLASSROOM, 'pages/lab-1/index.html'), SHA);
-    const result = await indexOneFile({
+    const alone = await indexOneFile({
       classroomId: CLASSROOM,
       path: 'pages/lab-1/index.html',
       sha: SHA,
-      body: '<h1>old</h1>',
+      body: '<h1>old</h1><p>Lab one covers recursion.</p>',
       docHint: { kind: 'page', id: PAGE_ID, title: 'Lab 1' },
     });
-    expect(result).toEqual({ outcome: 'indexed', chunks: 1 });
+    expect(alone).toEqual({ outcome: 'skipped', reason: 'legacy_page' });
+    expect(embedTextsMock).not.toHaveBeenCalled();
+    expect(indexRows).toHaveLength(0);
+  });
+
+  it('a slide deck’s index.html is still its document', async () => {
+    expect(classifyPath('slides/lecture-1/index.html')).toMatchObject({
+      indexable: true,
+      target: { kind: 'slide', extract: 'deck-html' },
+    });
   });
 
   it('does not re-embed an unchanged document', async () => {
@@ -843,6 +851,25 @@ describe('planClassroomIndex', () => {
     expect(plan.orphans).toEqual([{ kind: 'page', id: PAGE_ID }]);
     expect(await deleteOrphans(CLASSROOM, plan.orphans)).toBe(1);
     expect(indexRows).toHaveLength(0);
+  });
+
+  it('leaves a legacy page out of the plan, and sweeps rows indexed from its html before', async () => {
+    // Rows written for the page back when its index.html was indexed.
+    await indexOneFile({
+      classroomId: CLASSROOM,
+      path: PAGE_PATH,
+      sha: SHA,
+      body: '{"blocks":[]}',
+      docHint: { kind: 'page', id: PAGE_ID, title: 'Lab 1' },
+    });
+    assetShas.clear();
+    assetShas.set(assetKey(CLASSROOM, 'pages/lab-1/index.html'), 'b'.repeat(40));
+
+    const plan = await planClassroomIndex(CLASSROOM);
+    expect(plan.items).toHaveLength(0);
+    // Not work, and not a missing asset either (the readiness counter).
+    expect(plan.missingAssets).toBe(0);
+    expect(plan.orphans).toEqual([{ kind: 'page', id: PAGE_ID }]);
   });
 
   it('counts a document with no blob in the map rather than inventing one', async () => {

@@ -3,6 +3,7 @@ import {
   audioParse,
   createAudioBlockConfig,
   createFileBlockConfig,
+  createToggleListItemBlockSpec,
   fileParse,
 } from '@blocknote/core';
 import {
@@ -21,16 +22,20 @@ import {
 } from '@classmoji/page-schema';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
+import { readerCanShowMedia } from '~/components/editor/blocks/readOnlyGates.ts';
+import { useResolvedFileUrl } from '~/components/editor/blocks/useResolvedFileUrl.ts';
 import { useMediaDownloadHref } from '~/hooks/useMediaDownloads.ts';
 import { MediaDownloadLink } from './MediaDownloadLink.tsx';
 import { LockedSectionView, type LockedSectionViewProps } from './sections/LockedSectionView.tsx';
 import { withSectionCheckbox } from './sections/sectionCheckbox.ts';
 import { withPersonalCheckbox } from './sections/personalCheckListItem.ts';
+import { withOpenToggle } from './toggles.ts';
 
 /**
  * The schema the read-only page viewer renders with: the editor's, with the
  * `file` and `audio` blocks able to show a reader's download button, the
- * heading able to carry a reader's tick box (checkable sections), a student
+ * heading able to carry a reader's tick box (checkable sections), empty or
+ * unshowable file and audio blocks drawing nothing (`useReaderShowsFile`), a student
  * check list item's box handed to the reader (`sections/personalCheckListItem.ts`),
  * and the locked section drawn for a reader (`sections/LockedSectionView.tsx`).
  *
@@ -69,8 +74,25 @@ function WithDownload({ props, children }: { props: FileLikeProps; children: Rea
   );
 }
 
+/**
+ * Whether a reader gets this file or audio block at all: not with no URL
+ * (BlockNote would draw its "Add file" button), and not for media that cannot
+ * be shown (`readerCanShowMedia`). Decided on the same resolution the blocks
+ * use, which is synchronous for every reference the loader shipped.
+ */
+function useReaderShowsFile(props: {
+  block: { props: { url?: unknown } };
+  editor: { isEditable: boolean; resolveFileUrl?: (url: string) => Promise<string> };
+}): boolean {
+  const url = typeof props.block.props.url === 'string' ? props.block.props.url : '';
+  const resolved = useResolvedFileUrl(url, props.editor.resolveFileUrl);
+  return props.editor.isEditable || readerCanShowMedia(url, resolved);
+}
+
 function ViewerFile(props: WrapperProps) {
   const href = useMediaDownloadHref(props.block.props.url);
+  const shows = useReaderShowsFile(props);
+  if (!shows) return null;
   if (!href) return <FileBlockWrapper {...props} />;
   return (
     <WithDownload props={props as unknown as FileLikeProps}>
@@ -83,6 +105,8 @@ type AudioProps = Parameters<typeof AudioBlock>[0];
 
 function ViewerAudio(props: AudioProps) {
   const href = useMediaDownloadHref(props.block.props.url);
+  const shows = useReaderShowsFile(props);
+  if (!shows) return null;
   if (!href) return <AudioBlock {...props} />;
   const preview =
     props.block.props.showPreview === false ? (
@@ -113,7 +137,8 @@ const DownloadableAudio = createReactBlockSpec(createAudioBlockConfig, config =>
 
 /**
  * The shared page heading with its render wrapped: a checkable heading gets
- * the reader's tick box (`withSectionCheckbox`). Built from a FRESH spec, not
+ * the reader's tick box (`withSectionCheckbox`), and a toggle heading is drawn
+ * open where the viewer opens every toggle (`toggles.ts`). Built from a FRESH spec, not
  * from `editorSchema.blockSpecs.heading`: a spec that has been through a
  * schema carries its ProseMirror node, whose node view closes over the
  * original render, and a schema reuses that node as is. Config, parse rules,
@@ -127,8 +152,8 @@ function createViewerHeadingSpec() {
     implementation: {
       ...base.implementation,
       render(this: unknown, ...args: Parameters<typeof render>) {
-        const view = render.apply(this as never, args);
         const [block, editor] = args;
+        const view = withOpenToggle(render.apply(this as never, args), editor as object);
         if ((block.props as { checkable?: unknown }).checkable !== true) return view;
         return withSectionCheckbox(view as never, block as never, editor as object);
       },
@@ -159,6 +184,25 @@ function createViewerCheckListItemSpec() {
   } as typeof base;
 }
 
+/**
+ * BlockNote's toggle list item with its render wrapped: drawn open where the
+ * viewer opens every toggle (`toggles.ts`). A FRESH spec, as the heading
+ * above; everything else is BlockNote's.
+ */
+function createViewerToggleListItemSpec() {
+  const base = createToggleListItemBlockSpec();
+  const render = base.implementation.render;
+  return {
+    ...base,
+    implementation: {
+      ...base.implementation,
+      render(this: unknown, ...args: Parameters<typeof render>) {
+        return withOpenToggle(render.apply(this as never, args), args[1] as object);
+      },
+    },
+  } as typeof base;
+}
+
 /** The locked section for a reader: same config, the reader's render. */
 const ReaderLockedSection = createReactBlockSpec(lockedSectionConfig, {
   render: props => (
@@ -176,6 +220,7 @@ export const viewerSchema = BlockNoteSchema.create({
     ...editorSchema.blockSpecs,
     heading: createViewerHeadingSpec(),
     checkListItem: createViewerCheckListItemSpec(),
+    toggleListItem: createViewerToggleListItemSpec(),
     file: DownloadableFile(),
     audio: DownloadableAudio(),
     lockedSection: ReaderLockedSection(),

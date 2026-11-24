@@ -14,7 +14,8 @@
  *   - impersonation: a platform admin viewing as someone reads, never writes,
  *     and is handed a read-only view (no composers, no edit/delete);
  *   - a per-user in-memory rate limit on posting and reacting;
- *   - the audit row each write leaves (`commentAuditRow`, `via: 'web'`), with
+ *   - the audit row each write leaves (`commentAuditRow`, `via: 'web'`, or
+ *     `'site'` from a class-site host), with
  *     a logging failure never undoing what the user did. Reads are not audited
  *     (plan D8: the thread list is the shared discussion every member sees).
  */
@@ -22,7 +23,9 @@ import type { ClassmojiService } from '@classmoji/services';
 
 import { checkOrigin, readCappedBody } from './originCheck.server.ts';
 import {
-  SECTION_NO_STORE_HEADERS,
+  READER_API_JSON_HEADERS,
+  isJsonContentType,
+  type SiteApiBinding,
   type SectionReaderState,
   type SectionsPage,
   type SectionsSession,
@@ -280,6 +283,12 @@ export interface PageCommentsDeps<P extends SectionsPage = SectionsPage> {
   audit(row: CommentAuditRow): Promise<unknown>;
   /** The per-user rate limit (`createCommentRateLimiter`). */
   rateLimit: CommentRateLimiter;
+  /**
+   * Set when the call arrived on a class-site host (`SiteApiBinding`): the
+   * page must be one that site serves to this member (else the usual 404), a
+   * POST must be JSON, and audit rows say `via: 'site'`.
+   */
+  site?: SiteApiBinding | null;
 }
 
 /**
@@ -291,7 +300,7 @@ export interface PageCommentsDeps<P extends SectionsPage = SectionsPage> {
 export const COMMENT_REQUEST_MAX_BYTES = 32 * 1024;
 
 function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: { ...SECTION_NO_STORE_HEADERS } });
+  return Response.json(body, { status, headers: { ...READER_API_JSON_HEADERS } });
 }
 
 /** Every refusal: `{ error: CODE, message }` (the UI reads both). */
@@ -358,6 +367,9 @@ async function resolveViewer<P extends SectionsPage>(
   if (!isRowId(pageId)) return { response: notFound() };
   const page = await deps.findPage(pageId);
   if (!page) return { response: notFound() };
+  if (deps.site && !(await deps.site.allows({ page, userId: session.userId }))) {
+    return { response: notFound() };
+  }
 
   const [viewer, state] = await Promise.all([
     deps.sectionViewer({ userId: session.userId, classroomId: page.classroom_id }),
@@ -443,6 +455,10 @@ async function commentsPost<P extends SectionsPage>(
     console.warn('[page-comments] refused cross-site request:', origin.reason, origin.origin);
     return fail(403, 'FORBIDDEN', 'Forbidden');
   }
+  // On a class site, a JSON body or nothing (before the body is read).
+  if (deps.site && !isJsonContentType(request)) {
+    return fail(415, 'UNSUPPORTED_MEDIA_TYPE', 'Unsupported media type');
+  }
 
   const text = await readCappedBody(request, COMMENT_REQUEST_MAX_BYTES);
   if (text === null) return fail(413, 'TOO_LARGE', 'That comment is too long.');
@@ -501,7 +517,11 @@ async function commentsPost<P extends SectionsPage>(
     // Null when nothing changed (no row for a no-op) or the actor has no role.
     // No `impersonatedBy`: an impersonated session never gets this far (403 above).
     const row = rules.commentAuditRow({ ctx, event: result.event, via: 'web' });
-    if (row) await auditQuietly(deps, row);
+    // The service names the web and the MCP; a call from a class-site host is
+    // the web surface reached through the site, and says so.
+    if (row) {
+      await auditQuietly(deps, deps.site ? { ...row, data: { ...row.data, via: 'site' } } : row);
+    }
 
     return json({ ok: true, thread: result.thread });
   } catch (error) {

@@ -78,6 +78,24 @@ export function directEndpointUrl(raw: string | undefined): { url: string; host:
 export const READ_ONLY_STARTUP_OPTIONS = '-c default_transaction_read_only=on';
 
 /**
+ * A checked direct-endpoint URL (`directEndpointUrl`) carrying the read-only
+ * startup parameter itself, for a client this module does not build: a
+ * script that must load `@classmoji/services` sets `DATABASE_URL` to this
+ * BEFORE importing it, so the shared client those services open starts every
+ * session read-only too. The caller still proves it (`assertStartedReadOnly`)
+ * before that client runs anything else. Never printed (it has the password).
+ */
+export function readOnlyStartupUrl(
+  directUrl: string,
+  { pool = 2 }: { pool?: number } = {}
+): string {
+  const parsed = new URL(directUrl);
+  parsed.searchParams.set('options', READ_ONLY_STARTUP_OPTIONS);
+  parsed.searchParams.set('connection_limit', String(pool));
+  return parsed.toString();
+}
+
+/**
  * A client of ONE session, made read-only and proven so (see the top of this
  * file). The caller `$disconnect()`s it.
  */

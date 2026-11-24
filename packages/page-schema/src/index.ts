@@ -2,8 +2,10 @@
  * @classmoji/page-schema — the page block schema, shared by the pages editor,
  * the collab server and the git worker. Browser- and server-safe: no React
  * renderers of its own, no DOM at import time, no app aliases (it runs under
- * `node --experimental-strip-types`). Yjs/server helpers, which pull in
- * @blocknote/server-util and jsdom, are in `@classmoji/page-schema/server`.
+ * `node --experimental-strip-types`). The Y.Doc helpers (a plain BlockNote
+ * editor, no DOM) are in `@classmoji/page-schema/server`; HTML parsing and
+ * rendering, which pull in @blocknote/server-util and jsdom, are in the
+ * Node-only `@classmoji/page-schema/html`.
  */
 export {
   SCHEMA_VERSION,
@@ -33,8 +35,9 @@ export {
   createPageCodeBlockSpec,
   createPageHeadingBlockSpec,
   createPageCheckListItemBlockSpec,
+  BLOCKNOTE_SHIKI_HIGHLIGHTER,
   codeBlockDisplayLanguage,
-  codeBlockLanguageName,
+  codeBlockHighlightLanguage,
   createPageSchema,
   type PageSchema,
 } from './schema.ts';
@@ -77,6 +80,7 @@ export {
 export {
   serializePageContent,
   parsePageContent,
+  type PageBlock,
   type PageContent,
   type PageCoverImage,
 } from './content.ts';

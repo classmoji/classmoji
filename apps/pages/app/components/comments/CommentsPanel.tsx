@@ -42,7 +42,7 @@ export function CommentsButton({
       title="Comments"
       className={
         floating
-          ? 'fixed right-3 top-3 z-40 flex items-center gap-1 rounded-full bg-white/95 px-2.5 py-1.5 text-sm text-gray-700 shadow-md ring-1 ring-stone-200 backdrop-blur hover:bg-gray-50 dark:bg-neutral-900/95 dark:text-gray-200 dark:ring-neutral-700 dark:hover:bg-neutral-800'
+          ? 'fixed right-3 top-[var(--reader-comments-button-top,0.75rem)] z-40 flex items-center gap-1 rounded-full bg-white/95 px-2.5 py-1.5 text-sm text-gray-700 shadow-md ring-1 ring-stone-200 backdrop-blur hover:bg-gray-50 dark:bg-neutral-900/95 dark:text-gray-200 dark:ring-neutral-700 dark:hover:bg-neutral-800'
           : `flex items-center gap-1 rounded p-1.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 ${
               controller.panelOpen
                 ? 'text-gray-900 dark:text-white'
@@ -200,8 +200,12 @@ export function CommentsPanel({ controller, embedded = false }: CommentsPanelPro
           // Embedded: no header above; and clear of the live-status pill
           // floating in the bottom-right corner (route.tsx). Full page: below
           // the top bar (3rem) and the page header (3rem), so the header's
-          // buttons, the comments toggle among them, stay reachable.
-          embedded ? 'md:top-4 md:bottom-16' : 'md:top-[6.5rem] md:bottom-4'
+          // buttons, the comments toggle among them, stay reachable. A host
+          // with another top bar sets `--reader-comments-panel-top` (the
+          // class site, site/styles.ts).
+          embedded
+            ? 'md:top-4 md:bottom-16'
+            : 'md:top-[var(--reader-comments-panel-top,6.5rem)] md:bottom-4'
         }`}
       >
         <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-2.5 dark:border-neutral-800">

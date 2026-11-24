@@ -2,12 +2,18 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { embedConfig } from '@classmoji/page-schema';
 import { IconWorld } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
+import { useAssetDisplayUrl } from '~/hooks/useAssetDisplayUrl.ts';
+import { useReaderSurface } from '~/components/reader/readerSurface.ts';
+import { currentPageOrigin, decideFrame } from './safeFrame.ts';
+import { SafeFrame } from './frameElement.ts';
+import { fieldBlockView } from './readOnlyGates.ts';
 
 export const Embed = createReactBlockSpec(embedConfig, {
   // A NAMED function so React (and the hooks lint) sees a component — the
   // hook below is only legal inside one.
   render: function EmbedRenderer(props) {
     const { url } = props.block.props;
+    const editable = props.editor.isEditable;
 
     // The block stores a reference; this is the URL to frame it from. An
     // embed is usually a foreign page (a Google Doc, a CodeSandbox) and those
@@ -17,11 +23,19 @@ export const Embed = createReactBlockSpec(embedConfig, {
     // against the pages origin. BlockNote calls `resolveFileUrl` for its own
     // file blocks only, so a custom block has to make the call itself.
     const resolvedUrl = useResolvedFileUrl(url, props.editor.resolveFileUrl);
+    // Our hosts (the server's), and whether the server's display map resolved
+    // this reference: the two things the frame rule reads besides the URLs.
+    const { frameHosts } = useReaderSurface();
+    const displayUrl = useAssetDisplayUrl();
+    const serverResolved = Boolean(url) && displayUrl(url) !== url;
 
-    return (
-      <div contentEditable={false}>
-        {!url ? (
-          /* Empty state: icon + input */
+    const view = fieldBlockView(editable, Boolean(url));
+    // A reader of an empty embed gets nothing: the URL box is an author's.
+    if (view === 'nothing') return null;
+
+    if (view === 'empty-state') {
+      return (
+        <div contentEditable={false}>
           <div className="embed-input-wrapper-empty">
             <IconWorld size={20} className="embed-icon" />
             <input
@@ -31,7 +45,7 @@ export const Embed = createReactBlockSpec(embedConfig, {
                   props: { url: e.target.value },
                 })
               }
-              placeholder="Embed anything (PDFs, Google Docs, Google Maps, Spotify...)"
+              placeholder="Paste a link to embed (Google Docs, Google Maps, Spotify...). A PDF link shows as a card."
               className="embed-input"
               style={{
                 width: '100%',
@@ -44,34 +58,27 @@ export const Embed = createReactBlockSpec(embedConfig, {
               }}
             />
           </div>
-        ) : (
-          /* Populated state */
-          <div
-            style={{
-              position: 'relative',
-              paddingBottom: '56.25%',
-              height: 0,
-              overflow: 'hidden',
-              borderRadius: '0.5rem',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <iframe
-              src={resolvedUrl}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                border: 'none',
-              }}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              title="Embedded content"
-            />
-          </div>
-        )}
+        </div>
+      );
+    }
+
+    // https only, sandboxed, never our own hosts or media; a PDF not of the
+    // class's own is a card (safeFrame.ts).
+    const decision = decideFrame(url, resolvedUrl, currentPageOrigin(), {
+      hosts: frameHosts,
+      serverResolved,
+    });
+    if (decision.kind === 'none' && !editable) return null;
+
+    return (
+      <div contentEditable={false}>
+        <SafeFrame
+          decision={decision}
+          title="Embedded content"
+          editable={editable}
+          storedUrl={url}
+          boxStyle={{ border: '1px solid #e2e8f0' }}
+        />
       </div>
     );
   },

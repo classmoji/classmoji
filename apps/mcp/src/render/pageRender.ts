@@ -1,11 +1,28 @@
 /**
- * Drive the pages app's `/_render/page/:pageId`: load the statically
- * rendered page, let its images settle, outline the blocks asked about,
- * measure where they sit, and screenshot the page in viewport-sized chunks.
+ * Drive the pages app's `/_render/page/:pageId`: load the page, wait until it
+ * is drawn, let its images settle, outline the blocks asked about, measure
+ * where they sit, and screenshot the page in viewport-sized chunks.
+ *
+ * Two kinds of render page answer there, because the pages app and this
+ * server deploy separately and in either order:
+ *   - the reader island (current): the page is drawn in the browser by the
+ *     shared page reader. Its first HTML declares it (`data-render-pending` on
+ *     <html>), and it raises `data-render-ready` (or `data-render-error`) once
+ *     the reader is on screen with code highlighted and fonts loaded. The
+ *     driver waits for that, bounded (`waitForPageReady`).
+ *   - the older static render: complete at `load`; nothing more to wait for.
+ * Both keep the same markup the measurements read: `article` (the page's
+ * extent), `.site-article` (the boxes checked for hidden overflow), and
+ * BlockNote's `.bn-block-outer[data-id] > .bn-block` per block.
  */
 
+import type { Page } from 'playwright-core';
 import {
+  VIEW_ERROR_ATTRIBUTE,
   VIEW_META_ELEMENT_ID,
+  VIEW_READY_ATTRIBUTE,
+  VIEW_SETTLED_SELECTOR,
+  declaresPendingRender,
   pageViewUrl,
   viewTarget,
   viewTokenCookie,
@@ -54,6 +71,12 @@ export interface PageLayout {
 
 export interface PageRenderResult extends PageLayout {
   version: string;
+  /**
+   * How the page was drawn when it was captured: `'settled'` (everything in),
+   * what timed out (`'highlight-timeout'`, `'fonts-timeout'`, …: a degraded
+   * capture), or `'static'` (the older server-rendered page).
+   */
+  drawn: string;
   /** Wider than the viewport by this many px (0 = fits). */
   overflowX: number;
   /** Boxes hiding content behind a scrollbar, by block. */
@@ -64,7 +87,58 @@ export interface PageRenderResult extends PageLayout {
 }
 
 const NAVIGATION_TIMEOUT_MS = 45_000;
+/** How long a pending page may take from `load` to its ready marker. */
+export const PAGE_READY_TIMEOUT_MS = 20_000;
 const HIGHLIGHT_COLOR = '#f97316';
+
+/**
+ * Wait until the page is drawn. `html` is the page's first HTML (the
+ * navigation response): a page that does not declare itself pending is the
+ * static render, complete at `load` (`'static'`). A pending one is waited for
+ * until <html> itself carries the ready marker (its value: `'settled'`, or
+ * what timed out, e.g. `'highlight-timeout'`) or the error marker, at most
+ * `timeoutMs`. A marker anywhere else in the page counts for nothing. A
+ * failure and the timeout are RenderErrors the caller can show.
+ */
+export async function waitForPageReady(
+  page: Pick<Page, 'waitForSelector' | 'evaluate'>,
+  html: string,
+  timeoutMs: number = PAGE_READY_TIMEOUT_MS
+): Promise<string> {
+  if (!declaresPendingRender(html)) return 'static';
+  const deadline = Date.now() + timeoutMs;
+  const late = () =>
+    new RenderError(
+      'RENDER_FAILED',
+      `The page did not finish drawing within ${Math.max(1, Math.round(timeoutMs / 1000))}s.`
+    );
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw late();
+    try {
+      await page.waitForSelector(VIEW_SETTLED_SELECTOR, { state: 'attached', timeout: remaining });
+    } catch {
+      throw late();
+    }
+    const state = await page.evaluate(
+      ([ready, failed]) => ({
+        ready: document.documentElement.getAttribute(ready),
+        failed: document.documentElement.getAttribute(failed),
+      }),
+      [VIEW_READY_ATTRIBUTE, VIEW_ERROR_ATTRIBUTE] as const
+    );
+    if (state.failed !== null) {
+      throw new RenderError(
+        'RENDER_FAILED',
+        `The page could not be drawn in the render browser (${state.failed || 'error'}).`
+      );
+    }
+    if (state.ready !== null) return state.ready || 'ready';
+    // Neither on <html> (the selector cannot say otherwise, but never
+    // report ready without it): keep waiting until the deadline.
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+}
 
 export async function renderPage(request: PageRenderRequest): Promise<PageRenderResult> {
   const token = await signDocViewToken({
@@ -98,6 +172,9 @@ export async function renderPage(request: PageRenderRequest): Promise<PageRender
           `The render page answered ${response ? response.status() : 'nothing'}.`
         );
       }
+      // Whether to wait is read from the RESPONSE, as the deck render reads
+      // its meta: the first HTML says what kind of page this is.
+      const drawn = await waitForPageReady(page, await response.text());
 
       if (request.blockIds.length > 0) {
         const selectors = request.blockIds
@@ -215,6 +292,7 @@ export async function renderPage(request: PageRenderRequest): Promise<PageRender
       return {
         ...layout,
         version: (measured.meta as PageViewMeta).version ?? 'unknown',
+        drawn,
         overflowX: measured.overflowX,
         clipped: measured.clipped,
         images,

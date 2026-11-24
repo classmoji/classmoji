@@ -155,7 +155,7 @@ export default defineConfig({
   // Reuse the task process between runs on a machine Trigger.dev keeps warm.
   // Without it every run starts a fresh Node process — even on a reused
   // machine — and re-imports its modules: `content-checkpoint` (Present, Save
-  // version) would pay its renderer imports (BlockNote server editor, jsdom)
+  // version) would pay its renderer imports (BlockNote and the page schema)
   // on every run, and the collab warm-ups (a no-op `content-checkpoint` run at
   // most once a minute while a live doc is open) would keep only the machine
   // warm, not the process. A warm machine (and so a kept-alive process) takes
@@ -221,9 +221,13 @@ export default defineConfig({
   build: {
     // jsdom cannot be bundled: it reads files beside its own modules at load
     // (`__dirname`-relative default stylesheet, `require.resolve` of the XHR
-    // sync worker), so a bundled copy throws on import. `content-checkpoint`
-    // pulls it in through @blocknote/server-util (@classmoji/page-schema/server).
-    // Kept external, the CLI installs the version the importer resolves.
+    // sync worker), so a bundled copy throws on import. It comes in through
+    // @blocknote/server-util (@classmoji/page-schema/html): the HTML -> blocks
+    // converter `page-import-convert` runs for a page create from markdown or
+    // HTML (the web app and the MCP server no longer convert in process).
+    // `content-checkpoint` no longer needs it (@classmoji/page-schema/server
+    // is jsdom-free). Kept external, the CLI installs the version the importer
+    // resolves.
     external: ['jsdom'],
     extensions: [
       // First, so a deploy without the private agents fails before any layer.

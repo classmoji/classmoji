@@ -216,7 +216,7 @@ export const formMutationBlocked = () => false;
       resolveSiteContext({
         ...routerArgs('http://course.example.edu/_site/cs52/syllabus.data?week=2&_routes=root'),
         params: { subdomain: 'cs52' },
-        context: siteRouterContext({ customDomain: 'course.example.edu' }),
+        context: siteRouterContext({ customDomain: 'course.example.edu', siteSubdomain: null }),
       })
     );
     expect((refusal as Response).status).toBe(302);

@@ -1,6 +1,8 @@
 import { reactRouter } from '@react-router/dev/vite';
 import { defaultClientConditions, defaultServerConditions, defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
+import path from 'node:path';
+import { READER_ISLAND_ENTRY, readerIslandAssetsPlugin } from './readerIslandAssets.js';
 
 // The Sentry plugins a build keeps: the config `buildEnd` reads, hidden source
 // maps and Sentry's bundler plugin. The others add a tunnel route and a hook to
@@ -74,7 +76,16 @@ export default async ({ command, mode }) => {
     // `browser` (`@sentry/react-router` needs it). Vite merges these with the
     // React Router plugin's.
     environments: {
-      client: { resolve: { conditions: [...defaultClientConditions] } },
+      client: {
+        resolve: { conditions: [...defaultClientConditions] },
+        // The reader island's entry (readerIslandAssets.js), in the SAME
+        // client build as React Router's entries. Array form, so Vite's
+        // config merge concatenates it with React Router's own inputs
+        // instead of replacing them.
+        build: {
+          rollupOptions: { input: [path.resolve(import.meta.dirname, READER_ISLAND_ENTRY)] },
+        },
+      },
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
     },
     resolve: {
@@ -103,12 +114,27 @@ export default async ({ command, mode }) => {
         'yjs',
         'y-protocols/awareness',
         '@hocuspocus/provider',
+        // Not found by the scan from the entries below (seen from a cold
+        // cache: each was optimized on its first browser load, which then
+        // reloaded mid-session). nanoid comes in through `@classmoji/utils`;
+        // zustand is the root's store (`~/store`), and root.tsx is not an entry.
+        'nanoid',
+        'zustand',
+        'zustand/middleware',
       ],
-      entries: ['./app/root.jsx'],
+      // The files the dependency scan starts from (React Router's own list is
+      // empty: `future.unstable_optimizeDeps` is off). Client-only graphs on
+      // purpose: the app's client entry, and the reader island, whose
+      // BlockNote/Mantine graph would otherwise be found on its first load and
+      // re-optimized mid-session. NOT root.tsx (the old `./app/root.jsx`
+      // named no file, so nothing was scanned): the scanner follows its
+      // `.server.ts` imports and pre-bundles better-auth and other server-only
+      // packages for the browser.
+      entries: ['./app/entry.client.tsx', `./${READER_ISLAND_ENTRY}`],
       // @prisma/client: the generated client's browser entry imports its runtime from it.
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
-    plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],
+    plugins: [tailwindcss(), reactRouter(), readerIslandAssetsPlugin(), ...sentryPlugins],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 7100,
       host: '0.0.0.0',

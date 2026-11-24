@@ -2,7 +2,7 @@ import { data, useLoaderData } from 'react-router';
 import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
-import { isMember, resolveSiteContext, rolePrefix, sitePagePath } from './tenant.server.ts';
+import { resolveSiteContext, rolePrefix, sitePagePath, siteReadRole } from './tenant.server.ts';
 import { pagesUrl, slidesUrl, webappUrl } from './env.server.ts';
 import { toScheduleSections } from './scheduleRows.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -17,7 +17,9 @@ import { ClassmojiService } from '~/utils/db.server.ts';
  * Item visibility is entirely the service's decision
  * (`listPublicModulesForViewer`), and this route never re-filters — one
  * visibility rule, in one place. Members get every published item with its
- * title and link. Anonymous visitors get public pages, decks and forms as
+ * title and link, and so does an enrolled member whose invite is still
+ * pending (`siteReadRole`), as the site's pages give them their links; drafts
+ * never appear. Anonymous visitors get public pages, decks and forms as
  * links, and everything else as a PLACEHOLDER: its type, its deadline if it has
  * one, and nothing else. The structure of the course is public; its contents
  * are not.
@@ -37,9 +39,11 @@ export const loader = async (args: LoaderFunctionArgs) => {
     });
   }
 
+  // The reading role: a pending member reads the schedule as the site's pages
+  // let them read members-only pages.
   const modules = await ClassmojiService.site.listPublicModulesForViewer(
     site.classroom_id,
-    viewer.role
+    siteReadRole(viewer)
   );
 
   // Members get in-app links for coursework; the role prefix decides which
@@ -84,7 +88,8 @@ export const loader = async (args: LoaderFunctionArgs) => {
       // a placeholder is derived from the item's type and its deadline, both
       // properties of the course, so every anonymous visitor gets a byte-
       // identical page and there is nothing personalized to leak into a cache.
-      headers: siteHeaders({ request, cacheable: !isMember(viewer), noindex: false }),
+      // Shared-cacheable only with no session, as on `/` and `/{slug}`.
+      headers: siteHeaders({ request, cacheable: !viewer.userId, noindex: false }),
     }
   );
 };

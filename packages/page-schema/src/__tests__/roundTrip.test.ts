@@ -24,13 +24,8 @@ import * as Y from 'yjs';
 import { ALL_BLOCKS } from '../../../services/src/content/extract/__tests__/fixtures/allBlocks.ts';
 import { FRAGMENT, META_MAP, COVER_IMAGE_KEY } from '../constants.ts';
 import { parsePageContent, serializePageContent, type PageContent } from '../content.ts';
-import {
-  blocksToYDoc,
-  getServerEditor,
-  pageContentToYDoc,
-  yDocToBlocks,
-  yDocToPageContent,
-} from '../server.ts';
+import { getServerEditor } from '../html.ts';
+import { blocksToYDoc, pageContentToYDoc, yDocToBlocks, yDocToPageContent } from '../server.ts';
 
 const SERVICES_FIXTURES = new URL(
   '../../../services/src/content/extract/__tests__/fixtures/',

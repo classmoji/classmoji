@@ -5,19 +5,18 @@ import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import {
   hasPublicPages,
-  isMember,
   isStaff,
   loadSitePageIndex,
   resolveSiteContext,
+  siteReadRole,
 } from './tenant.server.ts';
-import {
-  describeFromHtml,
-  renderPageForViewer,
-  siteArticleWidthClass,
-  type SitePageRow,
-} from './pageRender.server.ts';
+import { loadSitePageView, siteReaderPolicy, type SitePageRow } from './pageRender.server.ts';
+import { siteArticleWidthClass } from './articleWidth.ts';
+import { imagePreloadMeta, imagePreloadsFor } from './imagePreloads.ts';
 import { pagesUrl } from './env.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
+import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
+import { ReaderIsland } from '~/reader-island/ReaderIsland.tsx';
 
 /**
  * `/` — the site root.
@@ -44,9 +43,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
   const context = await resolveSiteContext(args);
   const { site, viewer, memberLinkOrigin, seoOrigin } = context;
 
+  // The reading role: a pending member reads a members-only home page too.
   const home = (await ClassmojiService.site.getHomePageForViewer(
     site,
-    viewer.role
+    siteReadRole(viewer)
   )) as SitePageRow | null;
 
   // `seoOrigin`, not the subdomain: a verified custom domain is the address
@@ -67,11 +67,14 @@ export const loader = async (args: LoaderFunctionArgs) => {
         canonical,
         signInHref,
         isAnonymous: !viewer.userId,
-        html: null,
         title: null,
+        island: null,
+        assets: null,
+        imagePreloads: [],
         coverImage: null,
         description: null,
         editHref: null,
+        legacyNotice: false,
         // The landing has no page behind it; the default keeps its column
         // exactly where it has always been.
         widthClass: siteArticleWidthClass(null),
@@ -79,14 +82,15 @@ export const loader = async (args: LoaderFunctionArgs) => {
       {
         headers: siteHeaders({
           request,
-          cacheable: !isMember(viewer),
+          // Shared-cacheable only with no session (the copy differs once signed in).
+          cacheable: !viewer.userId,
           noindex: !indexable,
         }),
       }
     );
   }
 
-  const rendered = await renderPageForViewer(args, context, home);
+  const view = await loadSitePageView(args, context, home);
 
   return data(
     {
@@ -95,11 +99,18 @@ export const loader = async (args: LoaderFunctionArgs) => {
       canonical,
       signInHref,
       isAnonymous: !viewer.userId,
-      html: rendered.html,
-      title: rendered.title,
-      coverImage: rendered.coverImage,
-      description: describeFromHtml(rendered.html),
+      title: view.title,
+      coverImage: view.coverImage,
+      island: view.island,
+      assets: view.assets,
+      // The first images of THIS viewer's payload, fetched while the island loads.
+      imagePreloads: imagePreloadsFor(view.island.payload),
+      // From the NON-member document, whoever is reading (pageRender.server.ts).
+      description: view.description,
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${home.id}` : null,
+      // A page still in the old format renders empty; its staff are told why.
+      // Staff are members, so this response is never shared-cacheable.
+      legacyNotice: isStaff(viewer) && view.legacyFormat,
       // The home page is a page like any other, and it is the one most likely
       // to have been widened for a directory or a row of profiles.
       widthClass: siteArticleWidthClass(home.width),
@@ -107,8 +118,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
     {
       headers: siteHeaders({
         request,
-        cacheable: home.is_public && !isMember(viewer),
+        // As on `/{slug}`: shared-cacheable only with no session.
+        cacheable: home.is_public && !viewer.userId,
         noindex: !home.is_public,
+        reader: siteReaderPolicy(request, context),
       }),
     }
   );
@@ -136,6 +149,7 @@ export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
           { tagName: 'link', rel: 'canonical', href: loaderData.canonical },
         ]
       : []),
+    ...imagePreloadMeta(loaderData.imagePreloads ?? []),
   ];
 };
 
@@ -144,12 +158,14 @@ const SiteHome = () => {
     kind,
     courseName,
     title,
-    html,
     coverImage,
+    island,
+    assets,
     editHref,
     isAnonymous,
     signInHref,
     widthClass,
+    legacyNotice,
   } = useLoaderData<typeof loader>();
 
   if (kind === 'landing') {
@@ -164,7 +180,7 @@ const SiteHome = () => {
         {isAnonymous ? (
           // A plain anchor, not <Link>: on a custom domain this href is an
           // absolute URL to another origin, which client-side routing cannot
-          // navigate to anyway — and these pages ship no client bundle.
+          // navigate to anyway — and the landing ships no client bundle.
           <a
             href={signInHref}
             className="mt-6 rounded-full bg-gray-900 px-4 py-2 text-sm text-white no-underline hover:bg-gray-700 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
@@ -186,9 +202,16 @@ const SiteHome = () => {
             {title}
           </h1>
         </div>
-        {/* Server-serialized by BlockNote with the static viewer schema; this
-            page ships no client bundle to hydrate it. */}
-        <div dangerouslySetInnerHTML={{ __html: html! }} />
+        {legacyNotice ? <LegacyPageNotice layout="inline" /> : null}
+        {/* The document: the shared reader, mounted by the reader island. */}
+        {island && assets ? (
+          <ReaderIsland
+            assets={assets}
+            data={island}
+            className="site-reader-root"
+            stalledFallback
+          />
+        ) : null}
       </div>
     </article>
   );

@@ -564,8 +564,7 @@
 
 /* Code blocks dress like terminal blocks: a title bar naming the language.
    The bar is drawn under BlockNote's language select (disabled in read-only
-   views) or, on the class site, a plain-text label in the same slot
-   (`.bn-code-language`, site/viewerSchema.server.ts). The `.bn-container`
+   views). The `.bn-container`
    prefix makes the rules that tie BlockNote's own win whichever stylesheet
    loads last. */
 .bn-container .bn-block-content[data-content-type="codeBlock"] {
@@ -886,7 +885,7 @@
 }
 
 /* Copying turned off: readers cannot select the block's text (the copy guard,
-   app/utils/copyGuard.ts and site/copyScript.ts, covers selections that span
+   app/utils/copyGuard.ts, covers selections that span
    it). Never in an editable editor: editors copy everything. */
 .bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"],
 .bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"] *,
@@ -1188,6 +1187,153 @@
 .bn-block-content[data-content-type="embed"] > div,
 .bn-block-content[data-content-type="video"] > div {
   width: 100%;
+}
+
+/* An embed or video URL that is not framed (SafeFrame.tsx): the URL as a link,
+   or as text when it is not an http(s) one. Long URLs wrap. */
+.bn-frame-fallback {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* A PDF that is not framed (SafeFrame, `FrameDecision.file`): a card with
+   the file name, its host (the END of a long host always shows: the head is
+   cut first) and an "Open" link to a new tab. In the reader the whole card is
+   the link's hit area (`.bn-frame-file-reader`); in the editor only "Open". */
+.bn-frame-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 8px;
+  background: #fff;
+  transition: background-color 120ms ease;
+}
+
+.bn-frame-file-reader:hover {
+  background: rgba(55, 53, 47, 0.04);
+}
+
+.bn-frame-file-reader .bn-frame-file-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+/* Not a text link: outranks the editor's `.bn-editor a` colour and underline. */
+.bn-frame-file a.bn-frame-file-open,
+.bn-frame-file a.bn-frame-file-open:hover,
+.bn-editor .bn-frame-file a.bn-frame-file-open,
+.bn-editor .bn-frame-file a.bn-frame-file-open:hover {
+  color: rgba(55, 53, 47, 0.85) !important;
+  text-decoration: none !important;
+}
+
+.bn-frame-file-open:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.bn-frame-file-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  color: #b91c1c;
+}
+
+.bn-frame-file-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+.bn-frame-file-name {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bn-frame-file-host {
+  display: flex;
+  min-width: 0;
+  font-size: 0.8125rem;
+  color: rgba(55, 53, 47, 0.65);
+  white-space: nowrap;
+}
+
+/* The head gives way first, all the way; the tail (the last two labels)
+   never shrinks, and is cut only when it alone is wider than the card. */
+.bn-frame-file-host-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bn-frame-file-host-tail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bn-frame-file-open {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.dark .bn-frame-file {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: #202020;
+}
+
+.dark .bn-frame-file-reader:hover {
+  background: #262626;
+}
+
+.dark .bn-frame-file-open:focus-visible {
+  outline-color: #60a5fa;
+}
+
+.dark .bn-frame-file-icon {
+  color: #f87171;
+}
+
+.dark .bn-frame-file-host {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.dark .bn-frame-file a.bn-frame-file-open,
+.dark .bn-frame-file a.bn-frame-file-open:hover,
+.dark .bn-editor .bn-frame-file a.bn-frame-file-open,
+.dark .bn-editor .bn-frame-file a.bn-frame-file-open:hover {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.dark .bn-frame-file-open {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* What an author stored that a reader is shown nothing for (unplayable media). */
+.bn-frame-unavailable {
+  color: rgba(55, 53, 47, 0.65);
+}
+
+.dark .bn-frame-unavailable {
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* Empty state wrappers - Notion-like appearance */

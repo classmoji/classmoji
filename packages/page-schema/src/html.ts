@@ -1,8 +1,18 @@
 import { COLORS_DEFAULT } from '@blocknote/core';
 
 import { normalizeCodeBlockContent } from './codeContent.ts';
+import type { PageBlock } from './content.ts';
 import { codeBlockDisplayLanguage } from './schema.ts';
 import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
+
+/**
+ * `@classmoji/page-schema/html` (Node only: BlockNote's server editor, jsdom):
+ * HTML -> page blocks, the legacy page conversion live editing seeds with
+ * (`convertLegacyPageHtml`), and the server editor for tests that render HTML.
+ * The Y.Doc conversions are in the jsdom-free `@classmoji/page-schema/server`.
+ */
+export { createServerEditor, getServerEditor, type PageServerEditor } from './serverEditor.ts';
+export type { PageBlock } from './content.ts';
 
 /**
  * Legacy page HTML (`pages/<slug>/index.html`, written by the old
@@ -10,7 +20,7 @@ import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
  * in-app viewer and the class site render a legacy page through it, and live
  * editing seeds a legacy page's room with its output, so all of them show the
  * same blocks. Node only (BlockNote's server editor, jsdom); import it from
- * `@classmoji/page-schema/server`.
+ * `@classmoji/page-schema/html`.
  *
  * Three passes:
  *
@@ -41,15 +51,6 @@ import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
  * odd input and its output always loads in the page schema: a `columnList`
  * only with two or more non-empty columns, never inside a column.
  */
-
-/** A page block as stored in `content.json` (BlockNote JSON). */
-export interface PageBlock {
-  id?: string;
-  type: string;
-  props?: Record<string, unknown>;
-  content?: unknown;
-  children?: PageBlock[];
-}
 
 export interface HtmlToPageBlocksOptions {
   /**
@@ -1144,4 +1145,92 @@ function decodeHtmlEntities(text: string): string {
     '&#39;': "'",
   };
   return text.replace(/&[^;]+;/g, match => entities[match] ?? match);
+}
+
+/* ------------------------------------------------------------------ *
+ * A legacy page, converted the way live editing seeds it
+ * ------------------------------------------------------------------ */
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Every uuid-shaped string in a page's HTML: the page ids its old links could name. */
+const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * The page ids a legacy page's old links could name (every uuid-shaped string
+ * in its HTML), lowercase, each once, in order of first appearance. Look up
+ * which of them are pages of the page's OWN classroom (by the row's
+ * classroom_id, never by the slug in the content) and pass that set to
+ * `convertLegacyPageHtml` as `pagesInClassroom`.
+ */
+export function legacyPageLinkIds(html: string): string[] {
+  return [...new Set((html.match(UUID_ANYWHERE) ?? []).map(id => id.toLowerCase()))];
+}
+
+export interface LegacyPageInputs {
+  /** The page row's title (see `HtmlToPageBlocksOptions.title`). */
+  title: string;
+  /**
+   * The slug of the page's classroom: a link that resolves is rewritten to
+   * `/<classroomSlug>/<pageId>`. When absent, the slug the link names is kept.
+   */
+  classroomSlug?: string | null;
+  /**
+   * Which of `legacyPageLinkIds(html)` are pages of the page's own classroom
+   * (lowercase ids). Only those links are rewritten; the rest are left as
+   * they are. Empty when the HTML names none.
+   */
+  pagesInClassroom: ReadonlySet<string>;
+  /**
+   * The deterministic block id rule (`ClassmojiService.pageContent
+   * .ensureBlockIds`), passed in because it lives in @classmoji/services.
+   * Pass that function and nothing else: the ids must be the ones collab
+   * derives, or a converted page and its live document disagree.
+   */
+  ensureBlockIds: <T>(blocks: T[]) => T[];
+  /** The HTML converter. Default `htmlToPageBlocks`; tests swap it. */
+  convert?: (html: string, options: HtmlToPageBlocksOptions) => Promise<unknown[]>;
+}
+
+/** The blocks with every `id` dropped, at every depth. */
+function withoutIds(blocks: unknown[]): PageBlock[] {
+  return blocks.map(raw => {
+    const { id: _id, children, ...rest } = raw as PageBlock;
+    return {
+      ...rest,
+      ...(Array.isArray(children) ? { children: withoutIds(children) } : {}),
+    } as PageBlock;
+  });
+}
+
+/**
+ * A legacy page's `index.html` -> the blocks live editing seeds its document
+ * with, exactly: the ONE conversion the collab server and any one-off
+ * conversion of legacy pages share, so both produce the same blocks and ids.
+ *
+ * `htmlToPageBlocks` with the page's title and a link resolver bound to the
+ * page's classroom (`pagesInClassroom`, `classroomSlug`), then the
+ * converter's fresh uuids are dropped for the content-derived ids
+ * `ensureBlockIds` gives, so the same HTML always reads as the same ids.
+ *
+ * No I/O: the caller reads which linked pages exist (`legacyPageLinkIds`)
+ * before calling. Throws whatever the converter throws.
+ */
+export async function convertLegacyPageHtml(
+  html: string,
+  {
+    title,
+    classroomSlug,
+    pagesInClassroom,
+    ensureBlockIds,
+    convert = htmlToPageBlocks,
+  }: LegacyPageInputs
+): Promise<PageBlock[]> {
+  const resolvePageLink = (linkSlug: string, pageId: string) => {
+    const id = pageId.toLowerCase();
+    if (!UUID.test(id) || !pagesInClassroom.has(id)) return null;
+    return `/${classroomSlug ?? linkSlug}/${pageId}`;
+  };
+  // One conversion at a time per process: the converter queues itself.
+  const blocks = await convert(html, { title, resolvePageLink });
+  return ensureBlockIds(withoutIds(blocks));
 }

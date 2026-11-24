@@ -2,7 +2,6 @@ import ClassmojiService from './classmoji/index.ts';
 import HelperService from './helper/index.ts';
 import StripeService from './stripe/index.ts';
 import FlyCertService from './fly/index.ts';
-import * as MarkdownImporter from './content/markdownImporter.ts';
 
 export {
   appendQuestionResult,
@@ -123,7 +122,10 @@ export {
   assistantMayChangeEventType,
 } from './classmoji/index.ts';
 
-export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
+// The markdown importer (marked, prettier) is NOT here: only the
+// `page-import-convert` Trigger task runs it, through the
+// `@classmoji/services/markdown-importer` subpath.
+export { ClassmojiService, HelperService, StripeService, FlyCertService };
 
 // GitHub App installation repair, shared by the "Check again" action, the
 // create-classroom guard, the uninstall webhook and the operator sweep task.
@@ -163,6 +165,7 @@ export type {
 export { waitForRunOutcome } from './helper/runWait.ts';
 export { isTriggerConfigured } from './helper/triggerConfig.ts';
 export type { RunOutcome } from './helper/runWait.ts';
+export type { MarkdownConversion, PageImportMatchedImage } from './classmoji/pageImport.service.ts';
 // A student's coursework rows (Assignments page, dashboard Up next).
 export type {
   CourseworkAction,

@@ -8,17 +8,16 @@
  * shared code block (@classmoji/page-schema `createPageCodeBlockSpec`) shows
  * those in the select as their canonical entry or Plain Text. This renders
  * each app schema through `blocksToFullHTML`, which runs every block's
- * render the way the editor and the in-app viewer mount it, plus the class
- * site's own renderer.
+ * render the way the editor and the reader (the in-app viewer, also mounted
+ * on the class site) mount it.
  */
 import { test, expect } from '@playwright/test';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+import { createServerEditor } from '@classmoji/page-schema/html';
 
 import { schema as appSchema } from '~/components/editor/blocks/index.tsx';
 import { editingSchema } from '~/components/editor/blocks/editingSchema.ts';
 import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
-import { renderSitePage } from '~/site/render.server.ts';
 
 const LANGUAGES = ['bash', 'sh', 'shell', 'js', 'jsx', 'ts', 'py', 'yml', 'brainfuck', ''];
 
@@ -39,7 +38,7 @@ const schemas: Array<[string, unknown]> = [
 test.describe('code blocks in any stored language', () => {
   for (const [name, schema] of schemas) {
     test(`${name} renders them`, async () => {
-      const editor = ServerBlockNoteEditor.create({ schema: schema as never });
+      const editor = createServerEditor(schema as object);
       const html = await editor.blocksToFullHTML(blocks as never);
       expect(html.match(/data-content-type="codeBlock"/g)).toHaveLength(LANGUAGES.length);
       // The stored value is what the block carries; only the select maps it.
@@ -47,23 +46,15 @@ test.describe('code blocks in any stored language', () => {
       expect(html).toContain('data-language="brainfuck"');
     });
   }
-
-  test('the class site renders them with the stored language', async () => {
-    const { html } = await renderSitePage({ blocks, resolveLink: () => null });
-    for (const language of LANGUAGES.filter(Boolean)) {
-      expect(html).toContain(`data-language="${language}"`);
-    }
-  });
 });
 
 /**
  * Code blocks as BlockNote 0.46 saved them (inline content). 0.55 refuses a
  * link inside one when it builds the document (what the editor and the
  * in-app viewer do with `initialContent`, and the Yjs seed — pinned in
- * @classmoji/page-schema), so the editor, the viewer and the site normalize
- * stored blocks to plain text first (`normalizeCodeBlockContent`). The HTML
- * serializer does not check content, so the site would otherwise ship a link
- * inside code.
+ * @classmoji/page-schema), so the editor and the reader payload normalize
+ * stored blocks to plain text first (`normalizeCodeBlockContent`; the
+ * payload's own case is in reader-payload.spec.ts).
  */
 const run = (text: string, styles: Record<string, unknown> = {}) => ({
   type: 'text',
@@ -87,7 +78,7 @@ const richBlocks = [
 test.describe('code blocks saved with a link or styles', () => {
   for (const [name, schema] of schemas) {
     test(`${name} loads and renders them normalized`, async () => {
-      const editor = ServerBlockNoteEditor.create({ schema: schema as never });
+      const editor = createServerEditor(schema as object);
       expect(() => editor._blocksToProsemirrorNode(richBlocks as never)).toThrow(
         /Invalid content for node codeBlock/
       );
@@ -98,11 +89,4 @@ test.describe('code blocks saved with a link or styles', () => {
       expect(html).not.toContain('href="https://example.com"');
     });
   }
-
-  test('the class site renders them as plain text', async () => {
-    const { html } = await renderSitePage({ blocks: richBlocks, resolveLink: () => null });
-    // The site colours the code into token spans; the text between the tags is the code.
-    expect(html.replace(/<[^>]*>/g, '')).toContain('curl https://example.com\necho done');
-    expect(html).not.toContain('href="https://example.com"');
-  });
 });

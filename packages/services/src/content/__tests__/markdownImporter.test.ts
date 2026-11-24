@@ -1,12 +1,17 @@
 /**
  * The markdown importer's HTML as the page create stores it: importer ->
- * `convertPageHtml` (the shared legacy-page converter) -> the asset-path
- * rewrite. Synthetic markdown only.
+ * `htmlToPageBlocks` (the shared legacy-page converter, which the
+ * `page-import-convert` task runs) -> the asset-path rewrite. Synthetic
+ * markdown only.
  */
 import { describe, expect, it } from 'vitest';
 
 import { convertMarkdownToHtml, processMarkdownImport } from '../markdownImporter.ts';
-import { convertPageHtml, storeCommittedAssetPaths } from '../../classmoji/pageHtmlBlocks.ts';
+import { htmlToPageBlocks } from '@classmoji/page-schema/html';
+import { storeCommittedAssetPaths } from '../../classmoji/pageHtmlBlocks.ts';
+
+const convertPageHtml = (html: string, { title }: { title?: string } = {}) =>
+  htmlToPageBlocks(html, title ? { title } : {});
 
 interface Block {
   type: string;
@@ -99,6 +104,26 @@ describe('markdown import: Gitlab images', () => {
         committed[0],
         'https://cdn.example.test/x.png',
       ]);
+    } finally {
+      if (previous === undefined) delete process.env.SLIDES_URL;
+      else process.env.SLIDES_URL = previous;
+    }
+  });
+
+  it('the slidesUrl option names the origin, over SLIDES_URL', async () => {
+    const previous = process.env.SLIDES_URL;
+    process.env.SLIDES_URL = 'https://env-origin.example.test';
+    try {
+      const { html } = await processMarkdownImport('![d](d.png)\n', [{ name: 'd.png' }], {
+        org: 'test-group',
+        repo: 'content-cs101',
+        contentPath: 'pages/lab-1',
+        assetsFolder: 'pages/lab-1/assets',
+        provider: 'GITLAB',
+        slidesUrl: `${SLIDES}/`,
+      });
+      expect(html).toContain(`src="${SLIDES}/content/test-group/content-cs101/pages/lab-1/assets/`);
+      expect(html).not.toContain('env-origin');
     } finally {
       if (previous === undefined) delete process.env.SLIDES_URL;
       else process.env.SLIDES_URL = previous;

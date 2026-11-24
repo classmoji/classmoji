@@ -1,36 +1,82 @@
+import type { Role } from '@classmoji/database/client';
+
 import { ClassmojiService } from '~/utils/db.server.ts';
-import { loadSitePageContent, SiteContentUnavailableError } from './content.server.ts';
-import { renderSitePage, siteArticleWrapper, SiteRenderError } from './render.server.ts';
-import { siteHeaders } from './headers.server.ts';
+import { assetResolveContext } from '~/utils/assetRefs.server.ts';
+import { readerPayloadDeps } from '~/utils/readerDeps.server.ts';
 import {
-  loadSitePageIndex,
+  buildReaderPayload,
+  type ReaderClassroom,
+  type ReaderLinkPolicy,
+  type ReaderViewer,
+} from '~/utils/readerPayload.server.ts';
+import { describeBlocks, type ReaderPayload } from '~/utils/readerPayload.ts';
+import {
+  NO_SECTION_VIEWER,
+  classroomOpenFor,
+  documentForSite,
+  readerSectionsFor,
+  type SectionViewerAccess,
+} from '~/utils/pageSections.server.ts';
+import { ownFrameHosts } from '~/utils/frameHosts.server.ts';
+import { NAV_GRID_SCHEDULE_PATH } from '~/components/editor/blocks/navGridShared.ts';
+import { readerIslandAssets } from '~/reader-island/assets.server.ts';
+import type { ReaderIslandData } from '~/reader-island/contract.ts';
+import type { ReaderIslandAssets } from '~/reader-island/ReaderIsland.tsx';
+import {
+  loadSitePageContent,
+  SiteContentUnavailableError,
+  type SitePageContent,
+} from './content.server.ts';
+import { siteHeaders, type SiteReaderPolicy } from './headers.server.ts';
+import { pagesUrl } from './env.server.ts';
+import { signInPathFor } from './returnTo.ts';
+import { coverWithoutUnresolvedMediaRef } from './siteMedia.server.ts';
+import {
+  publicPathOf,
   sitePagePath,
   type SiteContext,
   type SiteLoaderArgs,
-  type SitePageIndexEntry,
+  type SiteViewer,
+  type SiteWithClassroom,
 } from './tenant.server.ts';
-import type { PageLinkResolver } from './viewerSchema.server.ts';
-import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
-import { assetResolveContext } from '~/utils/assetRefs.server.ts';
-import { coverWithoutUnresolvedMediaRef, withoutUnresolvedMediaRefs } from './siteMedia.server.ts';
-import { isMember, publicPathOf } from './tenant.server.ts';
-import { signInPathFor } from './returnTo.ts';
-import { pagesUrl } from './env.server.ts';
-import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
-import { siteDownloadsFor } from '~/utils/mediaDownloads.ts';
-import { documentForSite } from '~/utils/pageSections.server.ts';
 
 /**
- * The shared "render one page of this site" path.
+ * One page of a class site, as the shared reader shows it.
  *
- * `/` (home) and `/{slug}` render identically — the home page IS a page, just
- * one the instructor nominated — so the composition lives here rather than
- * being written twice and drifting.
+ * `/` (home), `/{slug}` and `GET /api/page-reader` (a member's reader after an
+ * unlock) all build what the reader island mounts from here, so the three can
+ * never disagree about a viewer:
+ *
+ *  - The reader's viewer is the SITE's (`siteReaderViewer`): built from an
+ *    ACCEPTED member's accepted memberships ONLY — never the app's
+ *    any-invite-state rule, never the render route's staff viewer; for a
+ *    signed-in user whose only membership here is PENDING, a reading viewer
+ *    (members-only pages and their links, as the app gives them, and nothing
+ *    else: no reader state, comments, downloads, locked bodies or drafts,
+ *    whatever role the pending row names); null for everyone else (anonymous,
+ *    a signed-in stranger, a member of another classroom, every visitor of a
+ *    custom domain).
+ *  - The payload is the one builder every surface uses (`buildReaderPayload`):
+ *    locked bodies, link redaction, code, unresolved media and the URL maps are
+ *    all decided there, for this viewer. A non-member's payload is therefore
+ *    the same for every non-member: no tick boxes, no comments, no downloads,
+ *    locked sections behind the site's sign-in gate. The one difference is
+ *    `readerSections.signedIn`, true for a signed-in non-member, whose locked
+ *    sections say only members can unlock them (sign-in would not help).
+ *  - Links follow the site's own rule (`siteLinkPolicy`): a page this viewer
+ *    could open on the site, at its site path; the schedule tile only when the
+ *    site serves `/schedule`.
+ *
+ * The page body is NOT server-rendered any more: the island draws it in the
+ * browser. The title, cover, description and og tags still are, and the
+ * description is built from the non-member document whoever is reading
+ * (`siteDescription`).
  */
 
-/** The page row fields the site render needs. */
+/** The page row fields the site reads. */
 export type SitePageRow = {
   id: string;
+  classroom_id: string;
   title: string | null;
   slug: string | null;
   content_path: string;
@@ -42,77 +88,35 @@ export type SitePageRow = {
   width?: number | null;
 };
 
-export type RenderedSitePage = {
+/** What a site page route renders. */
+export type SitePageView = {
   title: string;
-  html: string;
+  /** The cover, ready to paint (a capped rendition), or null. Drawn by the site. */
   coverImage: { url: string; position?: number } | null;
+  /** For `<meta name=description>` / `og:description`, from the non-member document. */
+  description: string | null;
+  /** The page is still legacy HTML in git and shows empty; staff are told why. */
+  legacyFormat: boolean;
+  /** What the reader island mounts with (serialized into the document). */
+  island: ReaderIslandData;
+  /** Where the island's files are. */
+  assets: ReaderIslandAssets;
 };
 
 /**
- * Build the per-viewer page-id → link resolver from the request's page index.
- *
- * Invisible pages resolve to `null`, which every consuming block treats as
- * "drop this entry entirely" rather than "render it disabled" — an anonymous
- * visitor must not learn the titles of members-only pages by reading a nav
- * grid.
+ * Read the page's content for the site, or throw a 503 (never a cacheable
+ * empty 200) when the content repo cannot be read or the document is corrupt.
  */
-export function createLinkResolver(
-  pages: SitePageIndexEntry[],
-  role: Parameters<typeof ClassmojiService.site.isPageVisibleOnSite>[1]
-): PageLinkResolver {
-  const byId = new Map<string, SitePageIndexEntry>();
-  for (const page of pages) byId.set(page.id, page);
-
-  return (pageId: string) => {
-    const page = byId.get(pageId);
-    if (!page) return null;
-    // The index already excludes drafts; is_draft: false is restated so the
-    // service's rule — not this call site's assumption — is what decides.
-    if (
-      !ClassmojiService.site.isPageVisibleOnSite(
-        { is_draft: false, is_public: page.is_public },
-        role
-      )
-    ) {
-      return null;
-    }
-    // `membersOnly` is only ever computed for a viewer who has just passed the
-    // visibility check above, so it cannot tell an anonymous visitor that a
-    // page exists — it tells a MEMBER which links their signed-out classmates
-    // would not be able to follow.
-    return {
-      href: sitePagePath(page),
-      title: page.title || 'Untitled',
-      membersOnly: !page.is_public,
-    };
-  };
-}
-
-// `siteArticleWidthClass` lives in render.server.ts, beside the wrapper it
-// sizes — and out of reach of this module's database import, so the unit
-// suite can exercise it without a Prisma client.
-export { siteArticleWidthClass } from './render.server.ts';
-
-/**
- * Load and render a page for the current viewer.
- *
- * Throws a 503 Response (never a cacheable empty 200) when the content repo
- * cannot be read or the document cannot be serialized — the two failures that
- * would otherwise publish a blank page over a real one and pin it in a shared
- * cache for a minute.
- */
-export async function renderPageForViewer(
-  args: SiteLoaderArgs,
-  context: SiteContext,
-  page: SitePageRow
-): Promise<RenderedSitePage> {
-  const { request } = args;
-  const pages = await loadSitePageIndex(args, context.site.classroom_id);
-  const resolveLink = createLinkResolver(pages, context.viewer.role);
-
-  let content;
+export async function readSitePageContent(
+  request: Request,
+  page: SitePageRow,
+  classroom: SiteWithClassroom['classroom']
+): Promise<SitePageContent> {
   try {
-    content = await loadSitePageContent(page, context.site.classroom);
+    return await loadSitePageContent(
+      page,
+      classroom as unknown as Parameters<typeof loadSitePageContent>[1]
+    );
   } catch (error) {
     if (error instanceof SiteContentUnavailableError) {
       console.error('[site] content unavailable:', error.message, error.status);
@@ -120,149 +124,265 @@ export async function renderPageForViewer(
     }
     throw error;
   }
+}
 
-  // Locked sections are closed on the class site for EVERY viewer: their
-  // bodies (children) leave the document here, before the asset resolver, the
-  // download map and the serializer see it, so a body's text, image refs and
-  // media ids reach none of them. Unlocking happens in the pages app, per
-  // student; the site has no per-viewer state, which is what keeps this render
-  // shareable by a cache. Non-mutating: `loadSitePageContent` caches its blocks.
-  // (The staff `_render/page` view reads the document itself and keeps them.)
-  const blocks = documentForSite(content.blocks);
-
-  // Render-time URL resolution. The lifetime comes from the PAGE's visibility,
-  // through the same `tierFor` the pages app calls — not from the fact that
-  // this is the class site. A public page is `month` here and `month` in the
-  // app, which is what makes the two URLs identical inside a bucket; a
-  // members-only page reached by a signed-in member is `week` on both, so its
-  // URLs expire on the shorter bucket rather than borrowing the lifetime meant
-  // for anonymous readers. Nothing on this surface can edit, so `canEdit` is
-  // pinned false. The rewrite runs on a CLONE — `loadSitePageContent` caches
-  // its blocks for five minutes, and writing signed URLs into that cache would
-  // hand the next reader this reader's (expiring, tier-specific) URLs.
-  const assetCtx = assetResolveContext(
-    context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
-  );
-  const { blocks: resolvedBlocks, srcSets, urlFor } = await resolveSiteAssets(assetCtx, blocks);
-
-  // A signed-in member's Download buttons, for the media files they may
-  // download. None for anyone else, so an anonymous render — the one a shared
-  // cache may hold — is unchanged. Keyed by signed URL, like `srcSets`.
-  const role = context.viewer.role;
-  const downloads =
-    assetCtx && role && isMember(context.viewer)
-      ? siteDownloadsFor(
-          await loadMediaDownloads(context.site.classroom_id, blocks, role),
-          urlFor,
-          page.id,
-          pagesUrl()
-        )
-      : {};
-
-  let rendered;
-  try {
-    rendered = await renderSitePage({
-      // Whatever the resolve managed, no `media://` reaches the markup — see
-      // siteMedia.server.ts for the three paths that would otherwise leak one.
-      blocks: withoutUnresolvedMediaRefs(resolvedBlocks),
-      resolveLink,
-      // Keyed by the signed URL, because the blocks now hold signed URLs.
-      srcSets,
-      // The site's setting, not the viewer's: `/schedule` 404s for everyone
-      // when it is off, so a directory tile pointing at it is dropped.
-      showSchedule: context.site.show_schedule === true,
-      downloads,
-      // "Open in Classmoji to unlock": the page in the pages app.
-      lockedSectionHref: `${pagesUrl()}/${context.site.classroom.slug}/${page.id}`,
-      // A signed-out visitor signs in through the site's interstitial and is
-      // brought back to this page signed in (the same link `page.tsx` sends
-      // them to for a members-only page); from there the section's link opens
-      // the page in Classmoji. The same for every anonymous visitor of this
-      // URL, so the anonymous render stays shareable by a cache.
-      lockedSectionSignInHref: context.viewer.userId
-        ? null
-        : `${context.memberLinkOrigin}${signInPathFor(
-            publicPathOf(args.url.pathname, args.params.subdomain ?? '')
-          )}`,
-    });
-  } catch (error) {
-    if (error instanceof SiteRenderError) {
-      console.error('[site] render failed:', error.message, error.cause);
-      throw serviceUnavailable(request);
-    }
-    throw error;
+/**
+ * The reader's viewer on the class site: for a visitor holding an ACCEPTED
+ * membership in the site's classroom, the reader rule computed from those
+ * memberships alone, with their own ticks and unlocks; for one whose only
+ * membership is pending, `pendingReaderViewer`; else null.
+ */
+export async function siteReaderViewer(
+  viewer: SiteViewer,
+  page: Pick<SitePageRow, 'id'>,
+  classroom: Pick<SiteWithClassroom['classroom'], 'status'>
+): Promise<ReaderViewer | null> {
+  if (!viewer.userId) return null;
+  if (viewer.role === null || viewer.acceptedRoles.length === 0) {
+    return pendingReaderViewer(viewer);
   }
-
-  // Cover image: the JSON wrapper's metadata wins, with the legacy DB columns
-  // as a fallback for pages saved before covers moved into content.json.
-  const rawCover =
-    content.coverImage ||
-    (page.header_image_url
-      ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
-      : null);
-
-  // The cover is markup this app renders itself, so it takes the signed URL
-  // directly rather than going through the block rewrite — but under the same
-  // guard: this is the anonymous, cached path, and a database hiccup resolving
-  // one image must degrade to the stored reference, not 500 the site.
-  const coverImage = coverWithoutUnresolvedMediaRef(await resolveSiteCover(assetCtx, rawCover));
-
+  const access = ClassmojiService.pageSections.sectionViewerFromMemberships(
+    viewer.acceptedRoles.map(role => ({ role, has_accepted_invite: true }))
+  ) as SectionViewerAccess;
+  if (access.acceptedRole === null) return null;
+  const state = await ClassmojiService.pageSections.readerState({
+    pageId: page.id,
+    userId: viewer.userId,
+  });
   return {
-    title: page.title || 'Untitled',
-    html: siteArticleWrapper(rendered.html),
-    coverImage,
+    userId: viewer.userId,
+    access,
+    readerSections: readerSectionsFor({
+      signedIn: true,
+      viewer: access,
+      impersonated: viewer.impersonated,
+      classroomOpen: classroomOpenFor({ status: classroom.status, viewer: access }),
+      state,
+    }),
+    impersonated: viewer.impersonated,
   };
 }
 
 /**
- * Resolve a document's asset references for the public site.
- *
- * Failure is not fatal: a resolve that throws leaves the ORIGINAL blocks, which
- * render through the legacy URLs. A site that shows images from the old path is
- * strictly better than a 503, and this is the one surface with anonymous
- * readers and a shared cache in front of it.
+ * The site's reader for a signed-in user whose only membership in the
+ * classroom is pending: the role, so they read members-only pages and get
+ * their links (`SITE_LINK_POLICY` reads `access.role`), and no ability at all
+ * (`NO_SECTION_VIEWER`: no accepted role, nothing revealed, no drafts). No
+ * reader state is read; their section state is a signed-in non-member's.
+ * Null when there is no pending row either.
  */
-export async function resolveSiteAssets(
-  ctx: ReturnType<typeof assetResolveContext>,
-  blocks: unknown[]
-): Promise<{
-  blocks: unknown[];
-  srcSets: Record<string, string>;
-  /** The signed URL a stored ref became, or undefined when it was not rewritten. */
-  urlFor: (ref: string) => string | undefined;
-}> {
-  const unresolved = { blocks, srcSets: {}, urlFor: () => undefined };
-  if (!ctx) return unresolved;
+function pendingReaderViewer(viewer: SiteViewer): ReaderViewer | null {
+  if (!viewer.userId || viewer.role !== null || !viewer.pendingRole) return null;
+  const access: SectionViewerAccess = { ...NO_SECTION_VIEWER, role: viewer.pendingRole };
+  return {
+    userId: viewer.userId,
+    access,
+    readerSections: readerSectionsFor({
+      signedIn: true,
+      viewer: access,
+      impersonated: viewer.impersonated,
+      classroomOpen: false,
+      state: null,
+    }),
+    impersonated: viewer.impersonated,
+  };
+}
 
-  const refs = collectBlockAssetRefs(blocks);
-  if (refs.length === 0) return unresolved;
+/**
+ * The site's link rule: a linked page is a link when the site would serve it
+ * to this viewer (never a draft; a members-only page only to a member or a
+ * pending one), at its site path. `access.role` on the site is the accepted
+ * role, or a pending row's for a reading viewer (`siteReaderViewer`). An
+ * anonymous map can hold no members-only page.
+ */
+export const SITE_LINK_POLICY: ReaderLinkPolicy = {
+  canOpen: (page, viewer) =>
+    ClassmojiService.site.isPageVisibleOnSite(
+      page,
+      viewer ? ((viewer.access.role as Role | null) ?? null) : null
+    ),
+  href: page => sitePagePath(page),
+};
 
+/** The site's description: the non-member document's text, whoever is reading. */
+export function siteDescription(
+  content: Pick<SitePageContent, 'format' | 'blocks'>
+): string | null {
+  return describeBlocks(content.format === 'json' ? documentForSite(content.blocks) : []);
+}
+
+/**
+ * The reader payload for this viewer of this page of this site: the ONE
+ * function the site routes and `/api/page-reader` call.
+ */
+export async function buildSitePayload({
+  site,
+  viewer,
+  page,
+  content,
+  signInUrl,
+}: {
+  site: SiteWithClassroom;
+  viewer: SiteViewer;
+  page: SitePageRow;
+  content: SitePageContent;
+  /** A non-member's way in: the site's sign-in, returning to this page. */
+  signInUrl: string;
+}): Promise<ReaderPayload> {
+  const readerViewer = await siteReaderViewer(viewer, page, site.classroom);
+  return buildReaderPayload(
+    {
+      content: { blocks: content.blocks, cover: content.coverImage, format: content.format },
+      page,
+      classroom: site.classroom as unknown as ReaderClassroom,
+      viewer: readerViewer,
+      // A signed-in non-member: told only members unlock (no sign-in loop).
+      signedIn: Boolean(viewer.userId),
+      frameHosts: ownFrameHosts(),
+      options: {
+        // The lifetime comes from the PAGE's visibility (the same `tierFor`
+        // the pages app calls), never from the surface; nothing here edits.
+        tier: ClassmojiService.contentDelivery.tierFor({
+          canEdit: false,
+          isPublic: page.is_public,
+        }),
+        previewActive: false,
+        surface: 'site',
+      },
+      // Not branched on a session: every non-member gets the same link.
+      signInUrl: () => signInUrl,
+      links: SITE_LINK_POLICY,
+      // The site's setting: `/schedule` 404s for everyone when it is off.
+      scheduleHref: async () => (site.show_schedule === true ? NAV_GRID_SCHEDULE_PATH : null),
+    },
+    readerPayloadDeps
+  );
+}
+
+/** The island data for a site payload. */
+export function siteIslandData(page: SitePageRow, payload: ReaderPayload): ReaderIslandData {
+  return {
+    surface: 'site',
+    page: {
+      id: page.id,
+      title: page.title,
+      width: page.width ?? null,
+      is_draft: page.is_draft,
+    },
+    payload,
+    classroomSlug: null,
+    // Same origin: on the subdomain the reader's calls pass through to this
+    // app's own API routes; a custom domain's payload makes none.
+    apiBase: '',
+    // Download links go to the pages host, where the session lives.
+    downloadOrigin: pagesUrl(),
+  };
+}
+
+/**
+ * The CSP a site document mounting the island needs: scripts from this
+ * origin's `/assets/` in a build ('self' in dev), and connections to this
+ * origin only on the class subdomain (none on a custom domain).
+ */
+export function siteReaderPolicy(request: Request, context: SiteContext): SiteReaderPolicy {
+  return {
+    assetsOrigin: import.meta.env?.DEV ? null : new URL(request.url).origin,
+    connect: !context.customDomain,
+  };
+}
+
+/**
+ * Load and build a page of the site for the current viewer. Throws a 503
+ * Response when the content cannot be read (never a cacheable empty page).
+ */
+export async function loadSitePageView(
+  args: SiteLoaderArgs,
+  context: SiteContext,
+  page: SitePageRow
+): Promise<SitePageView> {
+  const content = await readSitePageContent(args.request, page, context.site.classroom);
+
+  // The site's sign-in interstitial, returning to this page; on a custom
+  // domain an absolute link to the subdomain, where a session can exist.
+  const publicPath = publicPathOf(args.url.pathname, args.params.subdomain ?? '');
+  const signInUrl = `${context.memberLinkOrigin}${signInPathFor(publicPath)}`;
+
+  const payload = await buildSitePayload({
+    site: context.site,
+    viewer: context.viewer,
+    page,
+    content,
+    signInUrl,
+  });
+  await auditViewAsLoad(args.request, context, page, payload);
+
+  // The cover is drawn by the site (above the title, as it always was), from
+  // the cover the payload SHIPS (already gone when it could not be resolved),
+  // as one capped rendition.
+  const assetCtx = assetResolveContext(
+    context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
+    ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
+  );
+  const coverImage = coverWithoutUnresolvedMediaRef(
+    await resolveSiteCover(assetCtx, payload.coverImage)
+  );
+
+  return {
+    title: page.title || 'Untitled',
+    coverImage,
+    description: siteDescription(content),
+    legacyFormat: content.format === 'html',
+    island: siteIslandData(page, payload),
+    assets: readerIslandAssets,
+  };
+}
+
+/**
+ * "View as" on a site page: a platform admin reading another user's state on
+ * it. When the payload carries that user's reader state (they are an accepted
+ * member here), one VIEW row for the load, the same row `/api/page-reader`
+ * writes (`data.tool: 'page_reader'`, `via: 'site'`, `impersonated_by`). A
+ * user loading their own page, and any load that ships no reader state (a
+ * non-member, a pending member), writes nothing; a HEAD shows no one
+ * anything. A failed log line must not fail the page.
+ */
+async function auditViewAsLoad(
+  request: Request,
+  context: SiteContext,
+  page: Pick<SitePageRow, 'id'>,
+  payload: ReaderPayload
+): Promise<void> {
+  const { viewer } = context;
+  if (!viewer.impersonated || !viewer.userId || viewer.role === null) return;
+  if (!payload.readerSections.member || request.method === 'HEAD') return;
   try {
-    // ONE pass: the URLs and the candidate lists come out of the same map read
-    // under the same clock, so the `src` a block ends up with is exactly the
-    // key its candidate list is filed under.
-    const { urls, srcSets } = await ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, {
-      srcSets: true,
+    await ClassmojiService.audit.create({
+      user_id: viewer.userId,
+      classroom_id: context.site.classroom_id,
+      role: viewer.role,
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'VIEW',
+      data: {
+        tool: 'page_reader',
+        via: 'site',
+        page_id: page.id,
+        ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+      },
     });
-    const bySignedUrl: Record<string, string> = {};
-    for (const set of srcSets.values()) bySignedUrl[set.src] = set.srcset;
-    return {
-      blocks: mapBlockAssetRefs(blocks, ref => urls.get(ref) ?? ref),
-      srcSets: bySignedUrl,
-      urlFor: ref => urls.get(ref),
-    };
   } catch (error) {
-    console.warn('[site] asset resolution failed, rendering stored refs:', error);
-    return unresolved;
+    console.warn('[site] view-as audit failed:', error);
   }
 }
 
 /**
  * Resolve the cover image, or leave it exactly as stored.
  *
- * Same contract as `resolveSiteAssets`, for the same reason — these are the two
- * resolves on the anonymous path, and neither is worth a 503.
+ * A single capped rendition, not a candidate list: the cover is painted as a
+ * CSS `background-image`, where `srcset` does not exist, so the only lever is
+ * the URL itself. 2560 is the widest rung the pipeline offers and `fmt=auto`
+ * takes the WebP/AVIF saving. A failed resolve degrades to the stored
+ * reference, never a 503: this is the anonymous, cached path.
  */
 export async function resolveSiteCover(
   ctx: ReturnType<typeof assetResolveContext>,
@@ -273,13 +393,6 @@ export async function resolveSiteCover(
   try {
     return {
       ...cover,
-      // A single capped rendition, not a candidate list. The cover is painted
-      // as a CSS `background-image`, where `srcset` does not exist — so the
-      // only lever is the URL itself, and an instructor's untouched camera
-      // JPEG at the top of a public page is the single heaviest thing a class
-      // site serves. 2560 is the widest rung the pipeline offers, still an
-      // honest full-bleed banner on a retina display, and `fmt=auto` takes the
-      // WebP/AVIF saving on top.
       url: await ClassmojiService.contentDelivery.resolveAssetUrl(ctx, cover.url, {
         transform: { w: 2560, fmt: 'auto' },
       }),
@@ -295,23 +408,4 @@ function serviceUnavailable(request: Request): Response {
     status: 503,
     headers: siteHeaders({ request, cacheable: false, noindex: true }),
   });
-}
-
-/**
- * A short plain-text description derived from the document, for `og:description`.
- *
- * Taken from the rendered HTML rather than the block tree so it reflects what
- * a reader actually sees (a callout's text counts; a video URL does not).
- */
-export function describeFromHtml(html: string): string | null {
-  const text = html
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (text.length < 20) return null;
-  return text.length > 180 ? `${text.slice(0, 177).trimEnd()}...` : text;
 }
