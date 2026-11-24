@@ -2,7 +2,7 @@
  * content-checkpoint: guards, one-commit push, row bookkeeping. Prisma is an
  * in-memory stub that interprets the exact `where` clauses the run uses; git
  * is a real local bare repository over file://; pages render through the real
- * BlockNote server editor and prepare through the real `preparePageContent`.
+ * page schema (`@classmoji/page-schema/server`) and prepare through the real `preparePageContent`.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

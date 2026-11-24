@@ -6,6 +6,7 @@
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
     "./server": "./src/server.ts",
+    "./html": "./src/html.ts",
     "./sections": "./src/sections.ts"
   },
   "scripts": {

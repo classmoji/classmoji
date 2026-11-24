@@ -10,13 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import { serializePageContent, type PageContent } from '../content.ts';
 import { normalizeCodeBlockContent } from '../codeContent.ts';
-import {
-  blocksToYDoc,
-  getServerEditor,
-  pageContentToYDoc,
-  yDocToBlocks,
-  yDocToPageContent,
-} from '../server.ts';
+import { getServerEditor } from '../html.ts';
+import { blocksToYDoc, pageContentToYDoc, yDocToBlocks, yDocToPageContent } from '../server.ts';
 import {
   CODE_LANGUAGES,
   RICH_CODE_TEXT,

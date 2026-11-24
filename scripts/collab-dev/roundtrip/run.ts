@@ -72,11 +72,8 @@ import { basename, join } from 'node:path';
 import * as Y from 'yjs';
 
 import { FRAGMENT, normalizeCodeBlockContent } from '@classmoji/page-schema';
-import {
-  getServerEditor,
-  pageContentToYDoc,
-  yDocToPageContent,
-} from '@classmoji/page-schema/server';
+import { getServerEditor } from '@classmoji/page-schema/html';
+import { pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
   generateDeckHtml,

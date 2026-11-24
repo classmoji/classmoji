@@ -14,7 +14,7 @@
  * compared.
  */
 import { test, expect } from '@playwright/test';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
+import { BlockNoteEditor } from '@blocknote/core';
 import {
   SCHEMA_VERSION,
   createPageSchema,
@@ -31,7 +31,7 @@ type AnySchema = Pick<PageSchema, 'blockSpecs' | 'blockSchema'>;
 
 /** The ProseMirror schema BlockNote builds for a block schema. */
 function pmSchemaOf(schema: AnySchema) {
-  return ServerBlockNoteEditor.create({ schema: schema as never }).editor.pmSchema;
+  return BlockNoteEditor.create({ schema: schema as never }).pmSchema;
 }
 
 /**

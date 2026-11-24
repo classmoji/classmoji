@@ -2,7 +2,7 @@ import {
   htmlToPageBlocks,
   type HtmlToPageBlocksOptions,
   type PageBlock,
-} from '@classmoji/page-schema/server';
+} from '@classmoji/page-schema/html';
 
 import { withServerBlockNoteLock } from '~/site/render.server.ts';
 

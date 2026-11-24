@@ -94,17 +94,13 @@ describe('classmojiWorkerSwaps', () => {
 
   it('serves a throwing stand-in for a stubbed module', async () => {
     const { resolveId, load } = hooks({
-      stubs: ['isomorphic-dompurify', { id: '@classmoji/page-schema/server', exports: ['render'] }],
+      stubs: ['isomorphic-dompurify', { id: '@classmoji/page-schema/html', exports: ['render'] }],
     });
-    const id = (await resolveId(
-      context('ssr'),
-      '@classmoji/page-schema/server',
-      '/x.ts'
-    )) as string;
+    const id = (await resolveId(context('ssr'), '@classmoji/page-schema/html', '/x.ts')) as string;
     expect(id.startsWith('\0')).toBe(true);
     const stub = await importSource(load(id) ?? '');
     expect(() => stub.render()).toThrow(
-      '[workers] @classmoji/page-schema/server is not available on Workers'
+      '[workers] @classmoji/page-schema/html is not available on Workers'
     );
     expect(() => stub.default.sanitize('x')).toThrow(/not available on Workers/);
     expect(() => stub.default()).toThrow(/not available on Workers/);

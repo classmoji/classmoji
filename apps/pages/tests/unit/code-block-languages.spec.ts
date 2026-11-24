@@ -12,8 +12,8 @@
  * site's own renderer.
  */
 import { test, expect } from '@playwright/test';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+import { createServerEditor } from '@classmoji/page-schema/html';
 
 import { schema as appSchema } from '~/components/editor/blocks/index.tsx';
 import { editingSchema } from '~/components/editor/blocks/editingSchema.ts';
@@ -39,7 +39,7 @@ const schemas: Array<[string, unknown]> = [
 test.describe('code blocks in any stored language', () => {
   for (const [name, schema] of schemas) {
     test(`${name} renders them`, async () => {
-      const editor = ServerBlockNoteEditor.create({ schema: schema as never });
+      const editor = createServerEditor(schema as object);
       const html = await editor.blocksToFullHTML(blocks as never);
       expect(html.match(/data-content-type="codeBlock"/g)).toHaveLength(LANGUAGES.length);
       // The stored value is what the block carries; only the select maps it.
@@ -87,7 +87,7 @@ const richBlocks = [
 test.describe('code blocks saved with a link or styles', () => {
   for (const [name, schema] of schemas) {
     test(`${name} loads and renders them normalized`, async () => {
-      const editor = ServerBlockNoteEditor.create({ schema: schema as never });
+      const editor = createServerEditor(schema as object);
       expect(() => editor._blocksToProsemirrorNode(richBlocks as never)).toThrow(
         /Invalid content for node codeBlock/
       );

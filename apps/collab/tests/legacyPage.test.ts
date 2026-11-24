@@ -334,6 +334,45 @@ describe('old page links', () => {
   });
 });
 
+describe('a converter that cannot be loaded', () => {
+  it('is unavailable (503, retried), on the socket and the internal API, and recovers', async () => {
+    server.world.fail.loadHtml = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await snapshot();
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('unavailable');
+
+    const a = open();
+    await waitFor(() => a.authFailures.length > 0, 3000, 'refusal');
+    expect(a.authFailures[0]).toBe('unavailable');
+    expect(await server.store.get('page', PAGE)).toBeNull();
+    a.destroy();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('the legacy HTML converter could not be loaded'),
+      expect.any(Error)
+    );
+    expect(server.world.conversions).toEqual([]);
+
+    server.world.fail.loadHtml = false;
+    expect(byText(await snapshotBlocks(), 'Intro')?.type).toBe('heading');
+    error.mockRestore();
+  });
+
+  it('an outside push against the index.html base is retried, never read as no merge base', async () => {
+    const a = open();
+    await a.synced;
+    server.world.fail.loadHtml = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    server.world.contentAt.set(`${PAGE}@c2`, { blocks: [] });
+    // No `before`: the base is the index.html blob the room was seeded from.
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
+    error.mockRestore();
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('unavailable');
+    expect((await server.store.get('page', PAGE))!.last_conflict ?? null).toBeNull();
+  });
+});
+
 describe('conversion failures and concurrency', () => {
   it('a converter failure is refused as legacy-html, on the socket and the internal API', async () => {
     server.world.fail.convert = true;

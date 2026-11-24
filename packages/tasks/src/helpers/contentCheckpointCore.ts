@@ -3,8 +3,8 @@
  * every live document of one classroom that has unpushed changes to the
  * classroom's content repo, in ONE commit.
  *
- * Kept free of Trigger.dev and of the heavy renderers (BlockNote server editor
- * / jsdom, the deck converter) — every outside effect comes in through
+ * Kept free of Trigger.dev and of the heavy renderers (BlockNote and the page
+ * schema, the deck converter) — every outside effect comes in through
  * `CheckpointDeps`, and the renderers are loaded lazily through it — so the
  * bookkeeping is unit-tested with a stubbed Prisma and a local git remote.
  * `workflows/contentCheckpoint.ts` wires the real deps.
@@ -229,7 +229,7 @@ export interface CheckpointAuditEntry {
 
 export interface CheckpointDeps {
   prisma: CheckpointPrisma;
-  /** Loaded on first use (pulls in BlockNote's server editor and jsdom). */
+  /** Loaded on first use (pulls in BlockNote and the page schema). */
   loadPageRenderer(): Promise<PageRenderer>;
   /** Loaded on first use; null while the converter is unavailable. */
   loadDeckRenderer(): Promise<DeckRenderer | null>;
@@ -1152,8 +1152,8 @@ export interface CheckpointWarmReport {
 
 /**
  * A warm-up run (`payload.warm`): load the renderers a checkpoint needs and
- * push an empty Y.Doc through each, so BlockNote's server editor, jsdom and
- * the deck converter are imported and initialised in this process. Nothing
+ * push an empty Y.Doc through each, so BlockNote, the page schema and the
+ * deck converter are imported and initialised in this process. Nothing
  * else: no Prisma, no git, no rows — the watchdog and the sweeper read "a run
  * visited this classroom" from the rows, and a warm-up must never look like
  * one. Never throws: a failed warm-up is only a slower next checkpoint, and

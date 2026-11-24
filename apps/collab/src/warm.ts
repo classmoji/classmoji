@@ -3,7 +3,7 @@
  *
  * Present and Save version wait for a `content-checkpoint` run. A run that
  * lands on a cold Trigger.dev machine pays the machine's start and the first
- * import of the renderers (BlockNote's server editor, jsdom) before it does
+ * import of the renderers (BlockNote and the page schema) before it does
  * any work (on staging ~9 s to start and ~23 s to run, against ~3 s warm), and
  * Trigger.dev
  * keeps a machine for the next run only for a minute or so after a run ends.
