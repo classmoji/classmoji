@@ -11,11 +11,13 @@ import {
 } from '~/utils/readerPayload.server.ts';
 import { describeBlocks, type ReaderPayload } from '~/utils/readerPayload.ts';
 import {
+  NO_SECTION_VIEWER,
   classroomOpenFor,
   documentForSite,
   readerSectionsFor,
   type SectionViewerAccess,
 } from '~/utils/pageSections.server.ts';
+import { ownFrameHosts } from '~/utils/frameHosts.server.ts';
 import { NAV_GRID_SCHEDULE_PATH } from '~/components/editor/blocks/navGridShared.ts';
 import { readerIslandAssets } from '~/reader-island/assets.server.ts';
 import type { ReaderIslandData } from '~/reader-island/contract.ts';
@@ -45,17 +47,22 @@ import {
  * unlock) all build what the reader island mounts from here, so the three can
  * never disagree about a viewer:
  *
- *  - The reader's viewer is the SITE's: null for anyone who is not an ACCEPTED
- *    member of the site's classroom (anonymous, a signed-in stranger, a
- *    pending invite, a member of another classroom, every visitor of a custom
- *    domain), else built from their accepted memberships ONLY
- *    (`siteReaderViewer`) — never the app's any-invite-state rule, never the
- *    render route's staff viewer.
+ *  - The reader's viewer is the SITE's (`siteReaderViewer`): built from an
+ *    ACCEPTED member's accepted memberships ONLY — never the app's
+ *    any-invite-state rule, never the render route's staff viewer; for a
+ *    signed-in user whose only membership here is PENDING, a reading viewer
+ *    (members-only pages and their links, as the app gives them, and nothing
+ *    else: no reader state, comments, downloads, locked bodies or drafts,
+ *    whatever role the pending row names); null for everyone else (anonymous,
+ *    a signed-in stranger, a member of another classroom, every visitor of a
+ *    custom domain).
  *  - The payload is the one builder every surface uses (`buildReaderPayload`):
  *    locked bodies, link redaction, code, unresolved media and the URL maps are
  *    all decided there, for this viewer. A non-member's payload is therefore
  *    the same for every non-member: no tick boxes, no comments, no downloads,
- *    locked sections behind the site's sign-in gate.
+ *    locked sections behind the site's sign-in gate. The one difference is
+ *    `readerSections.signedIn`, true for a signed-in non-member, whose locked
+ *    sections say only members can unlock them (sign-in would not help).
  *  - Links follow the site's own rule (`siteLinkPolicy`): a page this viewer
  *    could open on the site, at its site path; the schedule tile only when the
  *    site serves `/schedule`.
@@ -120,16 +127,20 @@ export async function readSitePageContent(
 }
 
 /**
- * The reader's viewer on the class site: null unless the visitor holds an
- * ACCEPTED membership in the site's classroom; else the reader rule computed
- * from those memberships alone, with their own ticks and unlocks.
+ * The reader's viewer on the class site: for a visitor holding an ACCEPTED
+ * membership in the site's classroom, the reader rule computed from those
+ * memberships alone, with their own ticks and unlocks; for one whose only
+ * membership is pending, `pendingReaderViewer`; else null.
  */
 export async function siteReaderViewer(
   viewer: SiteViewer,
   page: Pick<SitePageRow, 'id'>,
   classroom: Pick<SiteWithClassroom['classroom'], 'status'>
 ): Promise<ReaderViewer | null> {
-  if (!viewer.userId || viewer.role === null || viewer.acceptedRoles.length === 0) return null;
+  if (!viewer.userId) return null;
+  if (viewer.role === null || viewer.acceptedRoles.length === 0) {
+    return pendingReaderViewer(viewer);
+  }
   const access = ClassmojiService.pageSections.sectionViewerFromMemberships(
     viewer.acceptedRoles.map(role => ({ role, has_accepted_invite: true }))
   ) as SectionViewerAccess;
@@ -153,15 +164,42 @@ export async function siteReaderViewer(
 }
 
 /**
+ * The site's reader for a signed-in user whose only membership in the
+ * classroom is pending: the role, so they read members-only pages and get
+ * their links (`SITE_LINK_POLICY` reads `access.role`), and no ability at all
+ * (`NO_SECTION_VIEWER`: no accepted role, nothing revealed, no drafts). No
+ * reader state is read; their section state is a signed-in non-member's.
+ * Null when there is no pending row either.
+ */
+function pendingReaderViewer(viewer: SiteViewer): ReaderViewer | null {
+  if (!viewer.userId || viewer.role !== null || !viewer.pendingRole) return null;
+  const access: SectionViewerAccess = { ...NO_SECTION_VIEWER, role: viewer.pendingRole };
+  return {
+    userId: viewer.userId,
+    access,
+    readerSections: readerSectionsFor({
+      signedIn: true,
+      viewer: access,
+      impersonated: viewer.impersonated,
+      classroomOpen: false,
+      state: null,
+    }),
+    impersonated: viewer.impersonated,
+  };
+}
+
+/**
  * The site's link rule: a linked page is a link when the site would serve it
- * to this viewer (never a draft; a members-only page only to a member), at
- * its site path. An anonymous map can hold no members-only page.
+ * to this viewer (never a draft; a members-only page only to a member or a
+ * pending one), at its site path. `access.role` on the site is the accepted
+ * role, or a pending row's for a reading viewer (`siteReaderViewer`). An
+ * anonymous map can hold no members-only page.
  */
 export const SITE_LINK_POLICY: ReaderLinkPolicy = {
   canOpen: (page, viewer) =>
     ClassmojiService.site.isPageVisibleOnSite(
       page,
-      viewer ? ((viewer.access.acceptedRole as Role | null) ?? null) : null
+      viewer ? ((viewer.access.role as Role | null) ?? null) : null
     ),
   href: page => sitePagePath(page),
 };
@@ -198,6 +236,9 @@ export async function buildSitePayload({
       page,
       classroom: site.classroom as unknown as ReaderClassroom,
       viewer: readerViewer,
+      // A signed-in non-member: told only members unlock (no sign-in loop).
+      signedIn: Boolean(viewer.userId),
+      frameHosts: ownFrameHosts(),
       options: {
         // The lifetime comes from the PAGE's visibility (the same `tierFor`
         // the pages app calls), never from the surface; nothing here edits.
@@ -273,6 +314,7 @@ export async function loadSitePageView(
     content,
     signInUrl,
   });
+  await auditViewAsLoad(args.request, context, page, payload);
 
   // The cover is drawn by the site (above the title, as it always was), from
   // the cover the payload SHIPS (already gone when it could not be resolved),
@@ -293,6 +335,44 @@ export async function loadSitePageView(
     island: siteIslandData(page, payload),
     assets: readerIslandAssets,
   };
+}
+
+/**
+ * "View as" on a site page: a platform admin reading another user's state on
+ * it. When the payload carries that user's reader state (they are an accepted
+ * member here), one VIEW row for the load, the same row `/api/page-reader`
+ * writes (`data.tool: 'page_reader'`, `via: 'site'`, `impersonated_by`). A
+ * user loading their own page, and any load that ships no reader state (a
+ * non-member, a pending member), writes nothing; a HEAD shows no one
+ * anything. A failed log line must not fail the page.
+ */
+async function auditViewAsLoad(
+  request: Request,
+  context: SiteContext,
+  page: Pick<SitePageRow, 'id'>,
+  payload: ReaderPayload
+): Promise<void> {
+  const { viewer } = context;
+  if (!viewer.impersonated || !viewer.userId || viewer.role === null) return;
+  if (!payload.readerSections.member || request.method === 'HEAD') return;
+  try {
+    await ClassmojiService.audit.create({
+      user_id: viewer.userId,
+      classroom_id: context.site.classroom_id,
+      role: viewer.role,
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'VIEW',
+      data: {
+        tool: 'page_reader',
+        via: 'site',
+        page_id: page.id,
+        ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+      },
+    });
+  } catch (error) {
+    console.warn('[site] view-as audit failed:', error);
+  }
 }
 
 /**

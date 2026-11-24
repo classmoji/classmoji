@@ -348,6 +348,7 @@ export const resolveSiteContext = async () => ({
 });
 export const isStaff = viewer => viewer.role !== null && STAFF.has(viewer.role);
 export const isMember = viewer => viewer.role !== null;
+export const siteReadRole = viewer => viewer.role ?? viewer.pendingRole ?? null;
 export const publicPathOf = pathname => pathname;
 `),
   './pageRender.server.ts': stubModule(`

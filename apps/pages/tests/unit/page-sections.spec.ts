@@ -359,6 +359,7 @@ test.describe('readerSections (the loader contract)', () => {
     ).toEqual({
       staff: false,
       signedIn: false,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -370,6 +371,7 @@ test.describe('readerSections (the loader contract)', () => {
     expect(readerSectionsFor({ ...base, signedIn: true, viewer: STUDENT_VIEWER, state })).toEqual({
       staff: false,
       signedIn: true,
+      member: true,
       canCheck: true,
       canUnlock: true,
       ...state,
@@ -386,6 +388,8 @@ test.describe('readerSections (the loader contract)', () => {
     });
     expect(out.canCheck).toBe(false);
     expect(out.canUnlock).toBe(false);
+    // Still a member: a locked section is a closed card, never the members-only line.
+    expect(out.member).toBe(true);
     expect(out.checked).toEqual(state.checked);
   });
 
@@ -429,6 +433,7 @@ test.describe('readerSections (the loader contract)', () => {
     expect(out).toEqual({
       staff: false,
       signedIn: true,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],

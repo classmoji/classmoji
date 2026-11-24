@@ -50,6 +50,7 @@ import {
   SECTION_NO_STORE_HEADERS,
   classroomOpenFor,
   documentForReader,
+  impersonatorOf,
   isImpersonatedSession,
   readerSectionsFor,
   sectionStatsFor,
@@ -64,6 +65,7 @@ import {
 } from '~/utils/readerPayload.server.ts';
 import type { ReaderPayload } from '~/utils/readerPayload.ts';
 import { appScheduleHref, readerPayloadDeps } from '~/utils/readerDeps.server.ts';
+import { ownFrameHosts } from '~/utils/frameHosts.server.ts';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -547,6 +549,9 @@ export const loader = async ({
   // shown the page read-only for another reason (live editing unreachable, a
   // legacy page) gets none either (`viewerShown`).
   const viewerShown = !canEdit || previewActive;
+  // Our own hosts for the frame rule: the reader's payload and the editors'
+  // blocks read the same list.
+  const frameHosts = ownFrameHosts();
   const reader: ReaderPayload | null = readerShown
     ? await buildReaderPayload(
         {
@@ -555,6 +560,7 @@ export const loader = async ({
           page,
           classroom: page.classroom as unknown as ReaderClassroom,
           viewer: readerViewer,
+          frameHosts,
           options: {
             tier: resolveTier,
             previewActive,
@@ -619,6 +625,35 @@ export const loader = async ({
 
   const readerComments = editorCommentsPending ? await editorCommentsPending : undefined;
 
+  // "View as": a platform admin reading another user's state on this page
+  // (their ticks and unlocks ship with it whenever that user is an accepted
+  // member). One VIEW row per load that got this far (a document load, and
+  // each revalidation, which loads the state again), as `/api/page-reader`
+  // writes on the class site; a user loading their own page writes nothing.
+  // A HEAD shows no one anything. A failed log line must not fail the page.
+  const viewingAsUserId = isImpersonatedSession(authData) ? authData?.userId : null;
+  if (viewingAsUserId && readerSections.member && request.method !== 'HEAD') {
+    const impersonatedBy = impersonatorOf(authData);
+    try {
+      await ClassmojiService.audit.create({
+        user_id: viewingAsUserId,
+        classroom_id: page.classroom.id,
+        role: sectionViewer.acceptedRole as string,
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'VIEW',
+        data: {
+          tool: 'page_reader',
+          via: 'web',
+          page_id: page.id,
+          ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
+        },
+      });
+    } catch (error) {
+      console.warn('[pages] view-as audit failed:', error);
+    }
+  }
+
   return {
     page: {
       id: page.id,
@@ -658,6 +693,9 @@ export const loader = async ({
     // The shared reader's payload (`buildReaderPayload`) on every path that
     // renders `PageReader`; null for the editors.
     reader,
+    // Our own hosts, for the EDITORS' embed and video blocks (the reader's
+    // are in its payload): the same frame rule as readers get.
+    frameHosts,
     // The EDITORS' document (never link-redacted: a save would drop what
     // redaction removed). A live editor renders it read-only until its room
     // has synced; the editable document then comes from the room, never from

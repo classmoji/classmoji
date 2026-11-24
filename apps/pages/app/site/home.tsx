@@ -5,10 +5,10 @@ import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import {
   hasPublicPages,
-  isMember,
   isStaff,
   loadSitePageIndex,
   resolveSiteContext,
+  siteReadRole,
 } from './tenant.server.ts';
 import { loadSitePageView, siteReaderPolicy, type SitePageRow } from './pageRender.server.ts';
 import { siteArticleWidthClass } from './articleWidth.ts';
@@ -43,9 +43,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
   const context = await resolveSiteContext(args);
   const { site, viewer, memberLinkOrigin, seoOrigin } = context;
 
+  // The reading role: a pending member reads a members-only home page too.
   const home = (await ClassmojiService.site.getHomePageForViewer(
     site,
-    viewer.role
+    siteReadRole(viewer)
   )) as SitePageRow | null;
 
   // `seoOrigin`, not the subdomain: a verified custom domain is the address
@@ -81,7 +82,8 @@ export const loader = async (args: LoaderFunctionArgs) => {
       {
         headers: siteHeaders({
           request,
-          cacheable: !isMember(viewer),
+          // Shared-cacheable only with no session (the copy differs once signed in).
+          cacheable: !viewer.userId,
           noindex: !indexable,
         }),
       }
@@ -116,7 +118,8 @@ export const loader = async (args: LoaderFunctionArgs) => {
     {
       headers: siteHeaders({
         request,
-        cacheable: home.is_public && !isMember(viewer),
+        // As on `/{slug}`: shared-cacheable only with no session.
+        cacheable: home.is_public && !viewer.userId,
         noindex: !home.is_public,
         reader: siteReaderPolicy(request, context),
       }),

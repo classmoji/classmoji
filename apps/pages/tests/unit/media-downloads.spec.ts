@@ -255,14 +255,17 @@ test.describe('the page loader', () => {
   });
 
   test('the class site asks only for a signed-in member', () => {
-    // Through the shared builder, which draws downloads only for a viewer; the
-    // site's viewer is null for anyone who is not an accepted member
-    // (site-reader.spec.ts runs it).
+    // Through the shared builder, which draws downloads only for a viewer with
+    // an accepted role; the site's viewer has one only for an accepted member,
+    // and a pending member's reading viewer has none (site-reader.spec.ts runs it).
     expect(SITE_RENDER_SOURCE).toContain(
       'const readerViewer = await siteReaderViewer(viewer, page, site.classroom);'
     );
     expect(SITE_RENDER_SOURCE).toContain(
-      'if (!viewer.userId || viewer.role === null || viewer.acceptedRoles.length === 0) return null;'
+      'if (viewer.role === null || viewer.acceptedRoles.length === 0) {'
+    );
+    expect(SITE_RENDER_SOURCE).toContain(
+      'const access: SectionViewerAccess = { ...NO_SECTION_VIEWER, role: viewer.pendingRole };'
     );
   });
 });

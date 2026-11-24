@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 
+import type { FrameHosts } from '~/components/editor/blocks/safeFrame.ts';
 import { buildEmbeddedPageHref } from '~/routes/$classroomSlug/embedBridge.ts';
 import type { ReaderLinks, ReaderSurfaceKind } from '~/utils/readerPayload.ts';
 
@@ -38,6 +39,14 @@ export interface ReaderSurfaceValue {
    * links.
    */
   navigatePage: ((pageId: string) => void) | null;
+  /**
+   * Our own hosts, as the server named them (the reader's payload, the
+   * editor's loader data): an embed or video naming one is a link, never a
+   * frame, and only the delivery host frames a file of the class's own
+   * (`decideFrame`). Null where none were sent: only the page's own origin
+   * is refused, and nothing is framed unsandboxed.
+   */
+  frameHosts: FrameHosts | null;
 }
 
 export const DEFAULT_READER_SURFACE: ReaderSurfaceValue = Object.freeze({
@@ -48,6 +57,7 @@ export const DEFAULT_READER_SURFACE: ReaderSurfaceValue = Object.freeze({
   apiBase: '',
   classroomSlug: null,
   navigatePage: null,
+  frameHosts: null,
 }) as ReaderSurfaceValue;
 
 export const ReaderSurfaceContext = createContext<ReaderSurfaceValue>(DEFAULT_READER_SURFACE);

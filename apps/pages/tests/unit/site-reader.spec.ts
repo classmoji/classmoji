@@ -8,10 +8,15 @@
  * assets.
  *
  * Who gets what:
- *   - NON-MEMBERS (anonymous, a signed-in stranger, a pending invite, a member
- *     of ANOTHER classroom, everyone on a custom domain): one payload, byte
- *     for byte — locked bodies out, no members-only page anywhere, no tick
- *     boxes, comments or downloads, the site's sign-in link.
+ *   - NON-MEMBERS (anonymous, a signed-in stranger, a member of ANOTHER
+ *     classroom, everyone on a custom domain): one payload — locked bodies
+ *     out, no members-only page anywhere, no tick boxes, comments or
+ *     downloads, the site's sign-in link — byte for byte, except that a
+ *     signed-in one is marked signed in (their locked sections say only
+ *     members can unlock them).
+ *   - PENDING MEMBERS (enrolled, invite not accepted): the non-member reader
+ *     plus the site's members-only pages and their links, as in the app;
+ *     nothing else, whatever role the pending row names.
  *   - MEMBERS: their own reader (their unlocks, ticks, comments, downloads).
  *   - STAFF (accepted owner/teacher/assistant): every locked body; the Edit
  *     pill for owners and teachers.
@@ -24,6 +29,7 @@ import { siteRouterContext } from '../../server/loadContext.ts';
 import { serializeIslandData, type ReaderIslandData } from '../../app/reader-island/contract.ts';
 import { DARK_MODE_SCRIPT_HASH } from '../../app/site/headers.server.ts';
 import { fetchSiteReaderPayload, hostOptionsFor } from '../../app/reader-island/hostOptions.ts';
+import { ownFrameHosts } from '../../app/utils/frameHosts.server.ts';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -37,6 +43,10 @@ const MEMBERSHIPS: Array<{ user: string; classroom: string; role: Role; accepted
   { user: 'ta-x', classroom: X, role: 'ASSISTANT', accepted: true },
   { user: 'pending-x', classroom: X, role: 'TEACHER', accepted: false },
   { user: 'student-y', classroom: Y, role: 'STUDENT', accepted: true },
+  // Pending in Y only: a stranger on X's site.
+  { user: 'pending-y', classroom: Y, role: 'STUDENT', accepted: false },
+  // A pending OWNER row in X (and nothing accepted).
+  { user: 'pending-owner', classroom: X, role: 'OWNER', accepted: false },
   // An accepted student holding a PENDING teacher invite.
   { user: 'dual', classroom: X, role: 'STUDENT', accepted: true },
   { user: 'dual', classroom: X, role: 'TEACHER', accepted: false },
@@ -186,6 +196,8 @@ const SITES = {
 };
 
 interface Fakes {
+  auditThrows: boolean;
+  scheduleRoles: Array<string | null>;
   sessionReads: number;
   contentFails: boolean;
   unlocked: Record<string, Record<string, string>>;
@@ -195,6 +207,8 @@ interface Fakes {
   commentViewers: boolean[];
 }
 const fakes: Fakes = {
+  auditThrows: false,
+  scheduleRoles: [],
   sessionReads: 0,
   contentFails: false,
   unlocked: {},
@@ -242,7 +256,7 @@ export const prisma = {
   classroomMembership: {
     findMany: async ({ where }) => d().MEMBERSHIPS
       .filter(m => m.classroom === where.classroom_id && m.user === where.user_id && (where.has_accepted_invite === undefined || m.accepted === where.has_accepted_invite))
-      .map(m => ({ role: m.role })),
+      .map(m => ({ role: m.role, has_accepted_invite: m.accepted })),
   },
   page: {
     findFirst: async ({ where }) => pageOf(where),
@@ -263,7 +277,9 @@ export const ClassmojiService = {
       return page && visible(page, role) ? page : null;
     },
     isPageVisibleOnSite: visible,
+    listPublicModulesForViewer: async (classroomId, role) => { f().scheduleRoles.push(role); return []; },
   },
+  classroom: { getTimeZone: async () => null },
   pageSections: {
     sectionViewerFromMemberships: rows => {
       const best = list => list.reduce((a, r) => (a === null || RANK[r] > RANK[a] ? r : a), null);
@@ -286,6 +302,8 @@ export const ClassmojiService = {
     setChecked: async ({ blockId, checked }) => { f().sectionWrites.push('check:' + blockId); return { checked, changed: true }; },
     recordUnlock: async ({ blockId }) => { f().sectionWrites.push('unlock:' + blockId); return { unlockedAt: new Date(0), created: true }; },
     sectionActivity: async () => ({ students: 1, unlocks: [], checks: [] }),
+    unlockCounts: async () => ({ students: 1, unlocks: {} }),
+    checkCounts: async () => ({ students: 1, checks: {} }),
     PageSectionsValidationError: class extends Error {},
   },
   pageComments: {
@@ -299,21 +317,51 @@ export const ClassmojiService = {
   page: {
     findById: async id => {
       const page = d().PAGES.find(p => p.id === id);
-      return page ? { ...page, classroom: { status: 'ACTIVE' } } : null;
+      const site = Object.values(d().SITES).find(s => s.classroom_id === page?.classroom_id);
+      return page ? { ...page, classroom: { ...(site?.classroom ?? {}), id: page.classroom_id, status: 'ACTIVE' } } : null;
     },
   },
+  pageContent: {
+    getPreviewStatus: async () => ({ exists: false }),
+    previewBranchName: path => 'preview/' + path,
+  },
+  media: { uploadCapabilityFor: async () => null },
   contentDelivery: {
     tierFor: ({ isPublic }) => (isPublic ? 'month' : 'week'),
     resolveAssetUrl: async (ctx, ref) => ref,
   },
-  audit: { create: async row => { f().audits.push(row); return row; } },
+  audit: { create: async row => { if (f().auditThrows) throw new Error('audit down'); f().audits.push(row); return row; } },
 };
 `),
   '/app/site/content.server.ts': CONTENT_STUB,
   '/app/utils/content.server.ts': stubModule(`${F}
 export const loadPageContent = async () => ({ format: 'json', content: d().BLOCKS, coverImage: null, sha: 's' });
+export const savePageContent = async () => { throw new Error('no writes here'); };
+export const savePageCoverImage = async () => { throw new Error('no writes here'); };
+export const uploadPageAsset = async () => { throw new Error('no writes here'); };
 `),
-  '/app/utils/assetRefs.server.ts': stubModule('export const assetResolveContext = () => null;'),
+  '/app/utils/assetRefs.server.ts': stubModule(`
+export const assetResolveContext = () => null;
+export const resolveDocumentAssets = async () => ({ assets: {}, srcSets: {} });
+export const canonicalizeAssetRef = async x => x;
+export const canonicalizeDocumentAssets = async x => x;
+export const canonicalizeOpsAssets = async x => x;
+`),
+  // The pages app's page loader (the "View as" audit on load).
+  '/app/utils/legacyPage.server.ts': stubModule(
+    'export const pageIsLegacyInGit = async () => false;'
+  ),
+  '/app/utils/collabPreview.server.ts': stubModule(`
+export const acceptPreviewLive = async () => ({});
+export const normalizePageBlocks = x => x;
+export const previewBaseContent = async () => null;
+`),
+  '/app/utils/saveOps.server.ts': stubModule(
+    'export const OPS_MALFORMED_ANSWER = {}; export const readCanonicalSaveOps = async () => null;'
+  ),
+  '/app/utils/classroomRole.server.ts': stubModule(
+    'export const findClassroomRole = async () => null;'
+  ),
   '/app/utils/readerDeps.server.ts': stubModule(`${F}
 export const readerPayloadDeps = {
   assetContext: () => ({ ctx: true }),
@@ -329,13 +377,22 @@ export const readerPayloadDeps = {
   linkedPages: async (classroomId, ids) => d().PAGES.filter(p => p.classroom_id === classroomId && ids.includes(p.id)),
   readerComments: async ({ viewer }) => ({ counts: {}, pageLevel: 0, open: 0, canWrite: viewer.acceptedRole !== null, canResolve: false, frozen: false }),
 };
+export const appScheduleHref = async () => null;
 `),
   '/app/reader-island/assets.server.ts': stubModule(
     "export const readerIslandAssets = { dev: false, entry: '/assets/entry-abc.js', css: ['/assets/reader.css'], preloads: [] };"
   ),
-  '/app/utils/collab.server.ts': stubModule(
-    'export const liveEditingEnv = () => null; export const fetchLiveSnapshot = async () => null;'
-  ),
+  '/app/utils/collab.server.ts': stubModule(`
+export const liveEditingEnv = () => null;
+export const fetchLiveSnapshot = async () => null;
+export const collabEditorData = async () => null;
+export const liveEditingBlockedFor = async () => false;
+export const readPageBookkeeping = async () => null;
+export const notifyPageMeta = async () => {};
+export const notifyPreviewChanged = async () => {};
+export const readEditorName = async () => 'u';
+export const requestCheckpoint = async () => ({});
+`),
   '/app/utils/auth.server.ts': stubModule('export const pageMutationBlocked = () => null;'),
   '@classmoji/services': stubModule(`
 export const siteOrigin = sub => 'https://' + sub + '.classmoji.test';
@@ -343,6 +400,7 @@ export const siteBaseDomain = () => 'classmoji.test';
 export const customDomainOrigin = host => 'https://' + host;
 export const canonicalOriginForSite = async site => 'https://' + site.subdomain + '.classmoji.test';
 export const seoOriginFor = ({ subdomainOrigin }) => subdomainOrigin;
+export const uploadRefusalStatus = () => null;
 `),
 };
 
@@ -355,6 +413,8 @@ let readerRoute: Route;
 let sectionsAction: Route;
 let commentsAction: Route;
 let commentsLoader: Route;
+let appPageLoader: (args: unknown) => Promise<Record<string, unknown>>;
+let scheduleLoader: Loader;
 
 test.beforeAll(async () => {
   const at = (path: string) => new URL(path, import.meta.url);
@@ -382,10 +442,22 @@ test.beforeAll(async () => {
     action: Route;
     loader: Route;
   }>(at('../../app/routes/api.page-comments/route.ts'), STUBS, 'site-reader'));
+  ({ loader: scheduleLoader } = await importTreeWithStubs<{ loader: Loader }>(
+    at('../../app/site/schedule.tsx'),
+    STUBS,
+    'site-reader'
+  ));
+  ({ loader: appPageLoader } = await importTreeWithStubs<{ loader: typeof appPageLoader }>(
+    at('../../app/routes/$classroomSlug.$pageId/route.server.ts'),
+    STUBS,
+    'site-reader'
+  ));
 });
 
 test.beforeEach(() => {
   Object.assign(fakes, {
+    auditThrows: false,
+    scheduleRoles: [],
     sessionReads: 0,
     contentFails: false,
     unlocked: {},
@@ -415,10 +487,11 @@ async function sitePage(
   {
     customDomain = null,
     extraHeaders = {},
-  }: { customDomain?: string | null; extraHeaders?: Record<string, string> } = {}
+    method = 'GET',
+  }: { customDomain?: string | null; extraHeaders?: Record<string, string>; method?: string } = {}
 ): Promise<SiteResult> {
   const result = await pageLoader({
-    ...routerArgs(`${HOST}/_site/cs52/${slug}`, { headers: visitor(who, extraHeaders) }),
+    ...routerArgs(`${HOST}/_site/cs52/${slug}`, { method, headers: visitor(who, extraHeaders) }),
     params: { subdomain: 'cs52', pageSlug: slug },
     context: siteRouterContext({ customDomain, siteSubdomain: null }),
   });
@@ -444,16 +517,73 @@ const json = (island: ReaderIslandData) => serializeIslandData(island);
 
 // ─── The site page ──────────────────────────────────────────────────────────
 
+/** The island data with `readerSections.signedIn` set back to false. */
+const asSignedOut = (island: ReaderIslandData): ReaderIslandData => ({
+  ...island,
+  payload: {
+    ...island.payload,
+    readerSections: { ...island.payload.readerSections, signedIn: false },
+  },
+});
+
 test.describe('non-members: one public payload', () => {
-  test('anonymous, a signed-in stranger, a pending invite and a member of another classroom get byte-identical island data', async () => {
+  test('a signed-in stranger and a member (or pending member) of another classroom get the anonymous island data, marked signed in', async () => {
     const anonymous = await sitePage('week-1', null);
-    for (const who of ['stranger', 'pending-x', 'student-y']) {
+    expect(anonymous.island.payload.readerSections).toMatchObject({
+      signedIn: false,
+      member: false,
+    });
+    for (const who of ['stranger', 'student-y', 'pending-y']) {
       const other = await sitePage('week-1', who);
-      expect(json(other.island), who).toBe(json(anonymous.island));
+      // The one difference: signed in, not a member (no sign-in link loop).
+      expect(other.island.payload.readerSections, who).toMatchObject({
+        signedIn: true,
+        member: false,
+      });
+      expect(json(asSignedOut(other.island)), who).toBe(json(anonymous.island));
       // Signed in: never in a shared cache.
       expect(other.headers.get('Cache-Control'), who).toBe('private, no-store');
     }
     expect(anonymous.headers.get('Cache-Control')).toBe('public, max-age=60');
+  });
+
+  test('a pending member differs from anonymous exactly in the members-only links (and signed in, no sign-in link)', async () => {
+    const anonymous = (await sitePage('week-1', null)).island.payload;
+    const pending = await sitePage('week-1', 'pending-x');
+    const payload = pending.island.payload;
+    expect(pending.headers.get('Cache-Control')).toBe('private, no-store');
+    // The members-only page is a link for them, marked members-only.
+    expect(payload.links).toEqual({
+      ...anonymous.links,
+      'p-mem': { href: '/members-lab', title: 'Members Lab', membersOnly: true },
+    });
+    // The blocks naming it stay: its page link, and its entry in the directory.
+    const ids = (content: unknown[]) => (content as Array<{ id: string }>).map(b => b.id);
+    expect(ids(payload.content)).toEqual(
+      ids(anonymous.content).flatMap(id => (id === 'l-pub' ? [id, 'l-mem'] : [id]))
+    );
+    const grid = (content: unknown[]) =>
+      JSON.parse(
+        (content as Array<{ id: string; props: { entries: string } }>).find(b => b.id === 'grid')!
+          .props.entries
+      ) as Array<{ pageId?: string }>;
+    expect(grid(payload.content).map(e => e.pageId)).toEqual(['p-pub2', 'p-mem', undefined]);
+    expect(grid(anonymous.content).map(e => e.pageId)).toEqual(['p-pub2', undefined]);
+    // Signed in, not a member; a signed-in reader has no sign-in link.
+    expect(payload.readerSections).toEqual({
+      ...anonymous.readerSections,
+      signedIn: true,
+    });
+    expect(payload.signInUrl).toBeNull();
+    // Everything else is the anonymous payload, byte for byte.
+    const rest = ({
+      content: _c,
+      links: _l,
+      readerSections: _r,
+      signInUrl: _s,
+      ...other
+    }: typeof payload) => other;
+    expect(JSON.stringify(rest(payload))).toBe(JSON.stringify(rest(anonymous)));
   });
 
   test('locked bodies, members-only pages, tick boxes, comments and downloads are out', async () => {
@@ -497,11 +627,12 @@ test.describe('non-members: one public payload', () => {
     const anon = await thrown(() => sitePage('members-lab', null));
     expect(anon.status).toBe(302);
     expect(anon.headers.get('Location')).toBe('/sign-in?returnTo=%2Fmembers-lab');
-    const stranger = await thrown(() => sitePage('members-lab', 'stranger'));
-    expect(stranger.status).toBe(403);
-    expect(await stranger.text()).toContain('not a member of this class');
-    const pending = await thrown(() => sitePage('members-lab', 'pending-x'));
-    expect(pending.status).toBe(403);
+    // A stranger, a member of another class, someone pending in another class.
+    for (const who of ['stranger', 'student-y', 'pending-y']) {
+      const refused = await thrown(() => sitePage('members-lab', who));
+      expect(refused.status, who).toBe(403);
+      expect(await refused.text(), who).toContain('not a member of this class');
+    }
   });
 
   test('a draft is a 404 for everyone, staff included', async () => {
@@ -575,12 +706,14 @@ test.describe('members and staff', () => {
     expect(ta.data.editHref).toBeNull();
   });
 
-  test('a member with no recognizable session cookie is still never served publicly', async () => {
-    const { island, headers } = await sitePage('week-1', null, {
-      extraHeaders: { 'x-test-user': 'student-x' },
-    });
-    expect(island.payload.readerSections.signedIn).toBe(true);
-    expect(headers.get('Cache-Control')).not.toContain('public');
+  test('anyone signed in with no recognizable session cookie is still never served publicly', async () => {
+    for (const who of ['student-x', 'stranger', 'pending-x']) {
+      const { island, headers } = await sitePage('week-1', null, {
+        extraHeaders: { 'x-test-user': who },
+      });
+      expect(island.payload.readerSections.signedIn, who).toBe(true);
+      expect(headers.get('Cache-Control'), who).not.toContain('public');
+    }
   });
 
   test('the description is built from the non-member document, whoever reads', async () => {
@@ -635,7 +768,10 @@ test.describe('the home page', () => {
     const stranger = await home('stranger');
     expect(anonymous.data.kind).toBe('page');
     const island = anonymous.data.island as ReaderIslandData;
-    expect(json(stranger.data.island as ReaderIslandData)).toBe(json(island));
+    const strangerIsland = stranger.data.island as ReaderIslandData;
+    expect(strangerIsland.payload.readerSections.signedIn).toBe(true);
+    expect(json(asSignedOut(strangerIsland))).toBe(json(island));
+    expect(stranger.headers.get('Cache-Control')).toBe('private, no-store');
     expect(json(island)).not.toContain(SECRET);
     expect(island.payload.signInUrl).toBe('/sign-in');
     expect(anonymous.headers.get('Cache-Control')).toBe('public, max-age=60');
@@ -863,11 +999,11 @@ test.describe('the reader API on a site host is bound to that site', () => {
 // ─── The island's refresh ────────────────────────────────────────────────────
 
 test.describe('the site island’s refresh', () => {
-  const data = (signedIn: boolean) =>
+  const data = (signedIn: boolean, member = signedIn) =>
     ({
       surface: 'site',
       page: { id: 'p-pub', title: 'Week 1', width: 2, is_draft: false },
-      payload: { content: [], readerSections: { signedIn } },
+      payload: { content: [], readerSections: { signedIn, member } },
       apiBase: '',
     }) as unknown as ReaderIslandData;
 
@@ -875,6 +1011,8 @@ test.describe('the site island’s refresh', () => {
     expect(hostOptionsFor(data(false))).toEqual({});
     expect(typeof hostOptionsFor(data(true)).onRefresh).toBe('function');
     expect(hostOptionsFor({ ...data(true), surface: 'render' })).toEqual({});
+    // Signed in but not an accepted member (a stranger, a pending member): none.
+    expect(hostOptionsFor(data(true, false))).toEqual({});
   });
 
   test('fetches /api/page-reader with no cache and resolves with the new payload; rejects on a refusal', async () => {
@@ -1124,5 +1262,375 @@ test.describe('on a site host the reader rule is accepted memberships only', () 
     expect((await list('cs52')).status).toBe(200);
     expect((await list(null)).status).toBe(200);
     expect(fakes.commentViewers).toEqual([false, true]);
+  });
+});
+
+// ─── A pending member on the site: reading, nothing more ─────────────────────
+
+test.describe('a pending member reads the site’s members-only pages, and nothing more', () => {
+  test('a pending member of X opens X’s members-only page: no reader state, comments or downloads, locked bodies out', async () => {
+    fakes.unlocked['pending-x:p-mem'] = { lock: '2026-11-01T00:00:00.000Z' };
+    const { status, island, headers, data } = await sitePage('members-lab', 'pending-x');
+    expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toBe('private, no-store');
+    const payload = island.payload;
+    expect(payload.readerSections).toEqual({
+      staff: false,
+      signedIn: true,
+      member: false,
+      canCheck: false,
+      canUnlock: false,
+      checked: [],
+      unlocked: {},
+    });
+    expect('readerComments' in payload).toBe(false);
+    expect(payload.mediaDownloads).toEqual({});
+    expect(fakes.downloadsAsked).toEqual([]);
+    expect(json(island)).not.toContain(SECRET);
+    expect(json(island)).not.toContain('lock-body');
+    // Member-visible links, as the app gives them; never another class's page.
+    expect(payload.links['p-mem']).toEqual({
+      href: '/members-lab',
+      title: 'Members Lab',
+      membersOnly: true,
+    });
+    expect(payload.links['p-y']).toBeUndefined();
+    // No staff chrome for a pending row.
+    expect(data.editHref).toBeNull();
+    expect(data.legacyNotice).toBe(false);
+  });
+
+  test('a pending TEACHER row reveals no locked body and opens no draft on the site', async () => {
+    const page = await sitePage('week-1', 'pending-x');
+    expect(page.island.payload.readerSections.staff).toBe(false);
+    expect(json(page.island)).not.toContain(SECRET);
+    expect(fakes.commentViewers).toEqual([]);
+    const draft = await thrown(() => sitePage('draft', 'pending-x'));
+    expect(draft.status).toBe(404);
+  });
+
+  test('an accepted student holding a pending teacher invite stays a student member', async () => {
+    const { island } = await sitePage('members-lab', 'dual');
+    expect(island.payload.readerSections).toMatchObject({
+      staff: false,
+      member: true,
+      canUnlock: true,
+    });
+    expect(json(island)).not.toContain(SECRET);
+  });
+
+  test('the site’s home page: the same reading rules', async () => {
+    const result = await homeLoader({
+      ...routerArgs(`${HOST}/_site/cs52`, { headers: visitor('pending-x') }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    const island = result.data.island as ReaderIslandData;
+    expect(island.payload.readerSections).toMatchObject({ signedIn: true, member: false });
+    expect(island.payload.links['p-mem']?.membersOnly).toBe(true);
+    expect(new Headers(result.init?.headers).get('Cache-Control')).toBe('private, no-store');
+  });
+
+  test('the three site APIs still refuse a pending member', async () => {
+    expect((await readerApi('p-pub', 'pending-x')).status).toBe(404);
+    expect((await readerApi('p-mem', 'pending-x')).status).toBe(404);
+    for (const intent of ['check', 'unlock'] as const) {
+      const response = await sectionsAction({
+        request: post(`${HOST}/api/page-sections`, 'pending-x', {
+          pageId: 'p-mem',
+          blockId: intent === 'check' ? 'h-check' : 'lock',
+          intent,
+        }),
+        context: onSite('cs52'),
+      });
+      expect(response.status, intent).toBe(404);
+    }
+    expect(fakes.sectionWrites).toEqual([]);
+    const list = await commentsLoader({
+      request: new Request(`${HOST}/api/page-comments?pageId=p-mem`, {
+        headers: visitor('pending-x'),
+      }),
+      context: onSite('cs52'),
+    });
+    expect(list.status).toBe(404);
+    const create = await commentsAction({
+      request: post(`${HOST}/api/page-comments`, 'pending-x', {
+        pageId: 'p-mem',
+        intent: 'create',
+        body: 'hi',
+      }),
+      context: onSite('cs52'),
+    });
+    expect(create.status).toBe(404);
+    expect(fakes.audits).toEqual([]);
+  });
+});
+
+// ─── Locked sections for a signed-in non-member ──────────────────────────────
+
+test.describe('a locked section for a signed-in non-member', () => {
+  test('the payload says signed in and not a member: anonymous, stranger, pending, member', async () => {
+    const sections = async (who: string | null) =>
+      (await sitePage('week-1', who)).island.payload.readerSections;
+    expect(await sections(null)).toMatchObject({ signedIn: false, member: false });
+    expect(await sections('stranger')).toMatchObject({ signedIn: true, member: false });
+    expect(await sections('pending-x')).toMatchObject({ signedIn: true, member: false });
+    expect(await sections('student-x')).toMatchObject({ signedIn: true, member: true });
+    // An impersonated member is still a member (a closed card, not the line).
+    expect(await sections('imp-student-x')).toMatchObject({ member: true, canUnlock: false });
+  });
+
+  test('the reader: sign-in for a signed-out reader, the one members-only line for a signed-in non-member', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { MEMBERS_ONLY_UNLOCK } =
+      await import('../../app/components/viewer/sections/LockedSectionView.tsx');
+    expect(MEMBERS_ONLY_UNLOCK).toBe('Only class members can unlock this.');
+    const view = readFileSync(
+      new URL('../../app/components/viewer/sections/LockedSectionView.tsx', import.meta.url),
+      'utf8'
+    );
+    expect(view).toContain(
+      "  else if (!sections.signedIn) mode = 'signin';\n  else if (!sections.member) mode = 'members';\n  else mode = 'closed';"
+    );
+    // The line is text, with no link; the members' note is unchanged.
+    const members = view.slice(view.indexOf('function MembersOnlyUnlock'));
+    expect(members.slice(0, members.indexOf('\n}\n'))).not.toContain('<a ');
+    expect(view).toContain('Staff can see when you unlock this.');
+  });
+});
+
+// ─── "View as" on a page load ────────────────────────────────────────────────
+
+test.describe('"View as": the first load of a page carrying that user’s reader state is audited', () => {
+  const viewRow = (resourceId: string, via: 'site' | 'web') => ({
+    user_id: 'student-x',
+    classroom_id: X,
+    role: 'STUDENT',
+    resource_type: 'PAGES',
+    resource_id: resourceId,
+    action: 'VIEW',
+    data: { tool: 'page_reader', via, page_id: resourceId, impersonated_by: 'admin-1' },
+  });
+
+  test('a site page: exactly one VIEW row, via the site', async () => {
+    expect((await sitePage('week-1', 'imp-student-x')).status).toBe(200);
+    expect(fakes.audits).toEqual([viewRow('p-pub', 'site')]);
+  });
+
+  test('the site’s home page: exactly one VIEW row for the home page', async () => {
+    await homeLoader({
+      ...routerArgs(`${HOST}/_site/cs52`, { headers: visitor('imp-student-x') }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    expect(fakes.audits).toEqual([viewRow('p-home', 'site')]);
+  });
+
+  test('the pages app’s page: exactly one VIEW row, via the web', async () => {
+    const appPage = (who: string | null) =>
+      appPageLoader({
+        ...routerArgs('http://pages.classmoji.test/cs52/p-pub', { headers: visitor(who) }),
+        params: { classroomSlug: 'cs52', pageId: 'p-pub' },
+      });
+    const data = await appPage('imp-student-x');
+    expect((data.reader as { readerSections: { member: boolean } }).readerSections.member).toBe(
+      true
+    );
+    expect(fakes.audits).toEqual([viewRow('p-pub', 'web')]);
+    // A user loading their own page writes nothing; neither does anyone signed out.
+    fakes.audits = [];
+    await appPage('student-x');
+    await appPage(null);
+    expect(fakes.audits).toEqual([]);
+    // Viewing as a non-member (no reader state ships): nothing.
+    await appPage('imp-stranger');
+    expect(fakes.audits).toEqual([]);
+  });
+
+  test('not impersonated, or impersonating someone with no reader state here: no row', async () => {
+    await sitePage('week-1', 'student-x');
+    await sitePage('week-1', null);
+    await sitePage('week-1', 'imp-stranger');
+    await sitePage('members-lab', 'imp-pending-x');
+    await homeLoader({
+      ...routerArgs(`${HOST}/_site/cs52`, { headers: visitor('imp-stranger') }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    expect(fakes.audits).toEqual([]);
+  });
+});
+
+// ─── Review follow-ups ───────────────────────────────────────────────────────
+
+/** The pages app's page loader for `who` on X's `pageId`. */
+const appPage = (who: string | null, pageId = 'p-pub', method = 'GET') =>
+  appPageLoader({
+    ...routerArgs(`http://pages.classmoji.test/cs52/${pageId}`, {
+      method,
+      headers: visitor(who),
+    }),
+    params: { classroomSlug: 'cs52', pageId },
+  });
+
+test.describe('the frame hosts reach every surface as the server names them', () => {
+  const ENV = {
+    WEBAPP_URL: 'https://app.classmoji.test',
+    PAGES_URL: 'https://pages.classmoji.test',
+    SLIDES_URL: 'https://slides.classmoji.test',
+    CONTENT_DELIVERY_ORIGIN: 'https://content.classmoji.test',
+    SITE_BASE_DOMAIN: 'classmoji.test',
+  };
+  const saved: Record<string, string | undefined> = {};
+  test.beforeEach(() => {
+    for (const [key, value] of Object.entries(ENV)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+  });
+  test.afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  test('the class site (buildSitePayload) ships ownFrameHosts()', async () => {
+    const expected = ownFrameHosts();
+    expect(expected.siteDomain).toBe('classmoji.test');
+    for (const who of [null, 'student-x', 'pending-x']) {
+      expect((await sitePage('week-1', who)).island.payload.frameHosts, String(who)).toEqual(
+        expected
+      );
+    }
+    expect((await readerApi('p-pub', 'student-x')).status).toBe(200);
+  });
+
+  test('the pages app: the reader payload and the editors’ loader data carry ownFrameHosts()', async () => {
+    const expected = ownFrameHosts();
+    const reader = await appPage('student-x');
+    expect((reader.reader as { frameHosts: unknown }).frameHosts).toEqual(expected);
+    expect(reader.frameHosts).toEqual(expected);
+    // An owner gets the editor: no reader payload, the hosts in the loader data.
+    const editor = await appPage('owner-x');
+    expect(editor.reader).toBeNull();
+    expect(editor.canEdit).toBe(true);
+    expect(editor.frameHosts).toEqual(expected);
+  });
+});
+
+test.describe('a pending OWNER row on the site reads, and nothing more', () => {
+  test('no locked bodies, no staff chrome, no drafts', async () => {
+    for (const slug of ['week-1', 'members-lab']) {
+      const { status, island, data } = await sitePage(slug, 'pending-owner');
+      expect(status, slug).toBe(200);
+      expect(island.payload.readerSections, slug).toMatchObject({
+        staff: false,
+        member: false,
+        canCheck: false,
+        canUnlock: false,
+      });
+      expect(json(island), slug).not.toContain(SECRET);
+      expect('readerComments' in island.payload, slug).toBe(false);
+      expect(island.payload.mediaDownloads, slug).toEqual({});
+      expect(data.editHref, slug).toBeNull();
+      expect(data.legacyNotice, slug).toBe(false);
+    }
+    expect((await thrown(() => sitePage('draft', 'pending-owner'))).status).toBe(404);
+  });
+
+  test('the site APIs refuse it', async () => {
+    expect((await readerApi('p-mem', 'pending-owner')).status).toBe(404);
+    const unlock = await sectionsAction({
+      request: post(`${HOST}/api/page-sections`, 'pending-owner', {
+        pageId: 'p-pub',
+        blockId: 'lock',
+        intent: 'unlock',
+      }),
+      context: onSite('cs52'),
+    });
+    expect(unlock.status).toBe(404);
+    const activity = await (
+      await importTreeWithStubs<{ loader: Route }>(
+        new URL('../../app/routes/api.page-sections/route.ts', import.meta.url),
+        STUBS,
+        'site-reader'
+      )
+    ).loader({
+      request: new Request(`${HOST}/api/page-sections?pageId=p-pub&blockId=lock`, {
+        headers: visitor('pending-owner'),
+      }),
+      context: onSite('cs52'),
+    });
+    expect(activity.status).toBe(404);
+    const comments = await commentsLoader({
+      request: new Request(`${HOST}/api/page-comments?pageId=p-pub`, {
+        headers: visitor('pending-owner'),
+      }),
+      context: onSite('cs52'),
+    });
+    expect(comments.status).toBe(404);
+    expect(fakes.sectionWrites).toEqual([]);
+    expect(fakes.audits).toEqual([]);
+  });
+});
+
+test.describe('"View as" audit on load: HEAD and a failing write', () => {
+  test('a HEAD load writes no row, on the site and in the app', async () => {
+    await sitePage('week-1', 'imp-student-x', { method: 'HEAD' });
+    await appPage('imp-student-x', 'p-pub', 'HEAD');
+    expect(fakes.audits).toEqual([]);
+    // Control: the same loads as GET write one row each.
+    await sitePage('week-1', 'imp-student-x');
+    await appPage('imp-student-x');
+    expect(fakes.audits.map(row => (row.data as { via: string }).via)).toEqual(['site', 'web']);
+  });
+
+  test('a failing audit write does not fail the page, on the site or in the app', async () => {
+    fakes.auditThrows = true;
+    const site = await sitePage('week-1', 'imp-student-x');
+    expect(site.status).toBe(200);
+    expect(site.island.payload.readerSections.member).toBe(true);
+    const app = await appPage('imp-student-x');
+    expect((app.reader as { readerSections: { member: boolean } }).readerSections.member).toBe(
+      true
+    );
+    const home = await homeLoader({
+      ...routerArgs(`${HOST}/_site/cs52`, { headers: visitor('imp-student-x') }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    expect((home.data.island as ReaderIslandData).payload.readerSections.member).toBe(true);
+  });
+});
+
+test.describe('the class site’s schedule reads like its pages', () => {
+  const schedule = async (who: string | null) => {
+    const result = await scheduleLoader({
+      ...routerArgs(`${HOST}/_site/cs52/schedule`, { headers: visitor(who) }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    return new Headers(result.init?.headers).get('Cache-Control');
+  };
+
+  test('a pending member gets the members’ schedule; strangers and other classes the public one', async () => {
+    expect(await schedule(null)).toBe('public, max-age=60');
+    expect(await schedule('stranger')).toBe('private, no-store');
+    expect(await schedule('pending-y')).toBe('private, no-store');
+    expect(await schedule('pending-x')).toBe('private, no-store');
+    expect(await schedule('student-x')).toBe('private, no-store');
+    // The role the service lists with: null for a non-member, a role for a
+    // pending or accepted member (the service never lists drafts for anyone).
+    expect(fakes.scheduleRoles).toEqual([null, null, null, 'TEACHER', 'STUDENT']);
+  });
+
+  test('anyone signed in, with no recognizable cookie, is never served the shared copy', async () => {
+    const result = await scheduleLoader({
+      ...routerArgs(`${HOST}/_site/cs52/schedule`, { headers: { 'x-test-user': 'stranger' } }),
+      params: { subdomain: 'cs52' },
+      context: siteRouterContext({ customDomain: null, siteSubdomain: null }),
+    });
+    expect(new Headers(result.init?.headers).get('Cache-Control')).not.toContain('public');
   });
 });

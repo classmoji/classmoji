@@ -9,6 +9,8 @@ import { extensionsOfKind } from '@classmoji/services/media/router';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
 import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
 import { MediaDownloadLink } from '~/components/viewer/MediaDownloadLink.tsx';
+import { useAssetDisplayUrl } from '~/hooks/useAssetDisplayUrl.ts';
+import { useReaderSurface } from '~/components/reader/readerSurface.ts';
 import { currentPageOrigin, decideFrame } from './safeFrame.ts';
 import { SafeFrame } from './frameElement.ts';
 import { fieldBlockView, readerCanShowMedia } from './readOnlyGates.ts';
@@ -42,6 +44,11 @@ export const Video = createReactBlockSpec(videoConfig, {
     // custom block that puts a stored reference straight into `src` asks the
     // browser to fetch a repo path relative to the pages origin — a 404.
     const resolvedUrl = useResolvedFileUrl(url, props.editor.resolveFileUrl);
+    // Our hosts (the server's), and whether the server's display map resolved
+    // this reference: what the frame rule reads besides the URLs.
+    const { frameHosts } = useReaderSurface();
+    const displayUrl = useAssetDisplayUrl();
+    const serverResolved = Boolean(url) && displayUrl(url) !== url;
 
     // Which branch renders is decided by what the AUTHOR stored, never by what
     // the reference resolved to, so resolution can never flip a block between
@@ -105,7 +112,12 @@ export const Video = createReactBlockSpec(videoConfig, {
     // The iframe branch: https only, sandboxed, never our own media
     // (safeFrame.ts). A recognised provider is converted from the stored URL;
     // anything else frames from what the reference resolved to.
-    const frame = nativeVideo ? null : decideFrame(url, resolvedUrl, currentPageOrigin());
+    const frame = nativeVideo
+      ? null
+      : decideFrame(url, resolvedUrl, currentPageOrigin(), {
+          hosts: frameHosts,
+          serverResolved,
+        });
 
     // A reader is never handed a player for media that cannot play: a
     // reference still unresolved, or the placeholder for one that could not

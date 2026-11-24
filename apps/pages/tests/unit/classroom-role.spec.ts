@@ -64,10 +64,11 @@ test.describe('every reader of a member’s role asks the same helper', () => {
     expect(HELPER).toContain('getPrisma().classroomMembership.findMany({');
     expect(HELPER).toContain('return highestRole(rows.map(row => row.role));');
     expect(HELPER).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
-    expect(TENANT).toContain(
-      'const acceptedRoles = memberships.map(membership => membership.role);'
-    );
+    // The site: the highest ACCEPTED role is the member's role; a pending
+    // row's highest counts (for reading only) when there is no accepted one.
+    expect(TENANT).toContain('.filter(membership => membership.has_accepted_invite === true)');
     expect(TENANT).toContain('highestRole(acceptedRoles)');
+    expect(TENANT).toContain('.filter(membership => membership.has_accepted_invite !== true)');
   });
 
   test('the classroom index, its action, the pages API and the form fill', () => {

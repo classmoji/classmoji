@@ -2,6 +2,8 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { embedConfig } from '@classmoji/page-schema';
 import { IconWorld } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
+import { useAssetDisplayUrl } from '~/hooks/useAssetDisplayUrl.ts';
+import { useReaderSurface } from '~/components/reader/readerSurface.ts';
 import { currentPageOrigin, decideFrame } from './safeFrame.ts';
 import { SafeFrame } from './frameElement.ts';
 import { fieldBlockView } from './readOnlyGates.ts';
@@ -21,6 +23,11 @@ export const Embed = createReactBlockSpec(embedConfig, {
     // against the pages origin. BlockNote calls `resolveFileUrl` for its own
     // file blocks only, so a custom block has to make the call itself.
     const resolvedUrl = useResolvedFileUrl(url, props.editor.resolveFileUrl);
+    // Our hosts (the server's), and whether the server's display map resolved
+    // this reference: the two things the frame rule reads besides the URLs.
+    const { frameHosts } = useReaderSurface();
+    const displayUrl = useAssetDisplayUrl();
+    const serverResolved = Boolean(url) && displayUrl(url) !== url;
 
     const view = fieldBlockView(editable, Boolean(url));
     // A reader of an empty embed gets nothing: the URL box is an author's.
@@ -38,7 +45,7 @@ export const Embed = createReactBlockSpec(embedConfig, {
                   props: { url: e.target.value },
                 })
               }
-              placeholder="Embed anything (PDFs, Google Docs, Google Maps, Spotify...)"
+              placeholder="Paste a link to embed (Google Docs, Google Maps, Spotify...). A PDF link shows as a card."
               className="embed-input"
               style={{
                 width: '100%',
@@ -55,8 +62,12 @@ export const Embed = createReactBlockSpec(embedConfig, {
       );
     }
 
-    // https only, sandboxed, never our own media (safeFrame.ts).
-    const decision = decideFrame(url, resolvedUrl, currentPageOrigin());
+    // https only, sandboxed, never our own hosts or media; a PDF not of the
+    // class's own is a card (safeFrame.ts).
+    const decision = decideFrame(url, resolvedUrl, currentPageOrigin(), {
+      hosts: frameHosts,
+      serverResolved,
+    });
     if (decision.kind === 'none' && !editable) return null;
 
     return (

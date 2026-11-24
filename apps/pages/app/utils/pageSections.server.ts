@@ -154,6 +154,8 @@ export interface ReaderSections {
   staff: boolean;
   /** There is a session user (member or not). */
   signedIn: boolean;
+  /** Signed in and an accepted member of the classroom (impersonated or not). */
+  member: boolean;
   /** Signed in, accepted member, not impersonated, classroom open to them. */
   canCheck: boolean;
   /** canCheck, an accepted student, and not a reveal-all reader. */
@@ -266,6 +268,7 @@ export function readerSectionsFor({
   return {
     staff: viewer.revealAll,
     signedIn,
+    member,
     canCheck,
     canUnlock: canCheck && viewer.canUnlock,
     checked: member && state ? [...state.checked] : [],

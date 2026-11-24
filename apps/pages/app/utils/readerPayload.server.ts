@@ -2,6 +2,7 @@ import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 
 import type { ReaderComments } from '~/components/comments/types.ts';
+import type { FrameHosts } from '~/components/editor/blocks/safeFrame.ts';
 import { emptyPageDocument } from './legacyPage.ts';
 import {
   hasScheduleEntry,
@@ -127,6 +128,15 @@ export interface BuildReaderPayloadInput {
   page: ReaderPageRow;
   classroom: ReaderClassroom;
   viewer: ReaderViewer | null;
+  /**
+   * With no `viewer`: there is a session user all the same (the class site's
+   * signed-in non-member). Their section state is the anonymous one with
+   * `signedIn` true, and nothing else differs: a locked section tells them
+   * only members can unlock it instead of sending them to sign in.
+   */
+  signedIn?: boolean;
+  /** Our own hosts for the frame rule (`utils/frameHosts.server.ts`). */
+  frameHosts: FrameHosts | null;
   options: {
     /** The asset lifetime the caller chose (`contentDelivery.tierFor`). */
     tier: string;
@@ -178,6 +188,7 @@ const MEDIA_BLOCK_TYPES: ReadonlySet<string> = new Set(['image', 'file', 'audio'
 export const ANONYMOUS_READER_SECTIONS: Readonly<ReaderSections> = Object.freeze({
   staff: false,
   signedIn: false,
+  member: false,
   canCheck: false,
   canUnlock: false,
   checked: [],
@@ -202,6 +213,7 @@ export async function buildReaderPayload(
   const { content, page, classroom, viewer, options } = input;
   const readerSections: ReaderSections = viewer?.readerSections ?? {
     ...ANONYMOUS_READER_SECTIONS,
+    signedIn: input.signedIn === true,
     checked: [],
     unlocked: {},
   };
@@ -361,5 +373,6 @@ export async function buildReaderPayload(
     links,
     scheduleHref,
     description: describeBlocks(finalBlocks),
+    frameHosts: input.frameHosts,
   };
 }
