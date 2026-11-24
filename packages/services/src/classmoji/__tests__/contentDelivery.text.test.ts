@@ -331,10 +331,16 @@ describe('fetchContentText transport circuit', () => {
 
     const budget = textReadBudget();
     await fetchContentText(ctx, DECK_PATH, { budget });
+    // The first read asks twice: a fast transport failure is retried once, at
+    // once, on another connection (`fetchWithHedge`). Both fail, so the
+    // circuit trips.
+    expect(attempts).toHaveLength(2);
+    expect(budget.workerUnavailable).toBe(true);
+
     await fetchContentText(ctx, 'slides/lecture-1/deck.json', { budget });
 
-    expect(attempts).toHaveLength(1);
-    expect(budget.workerUnavailable).toBe(true);
+    // ...and the second read never reaches the Worker at all.
+    expect(attempts).toHaveLength(2);
   });
 
   it('does NOT trip on a plain map miss', async () => {

@@ -1189,10 +1189,17 @@ const DEFAULT_ASSET_MAX_AGE_MS = 6 * 60 * 60 * 1000;
  * Imported dynamically so this module stays free of `contentDelivery.service`
  * at load time — the save paths that import THIS file also import that one, and
  * a static edge here would close the cycle.
+ *
+ * Exported for its test, which pins that the sweep reads without a hedge.
  */
-const deliveryFetchBody: FetchBody = async (classroom, path) => {
+export const deliveryFetchBody: FetchBody = async (classroom, path) => {
   const { fetchContentText } = await import('./contentDelivery.service.ts');
-  const got = await fetchContentText({ classroom }, path, { label: 'index-reconcile' });
+  // No hedge: nobody is waiting on a sweep over every classroom, so a stalled
+  // read may take the whole ceiling rather than send a second request.
+  const got = await fetchContentText({ classroom }, path, {
+    label: 'index-reconcile',
+    hedge: false,
+  });
   return got ? { text: got.text, sha: got.sha } : null;
 };
 
