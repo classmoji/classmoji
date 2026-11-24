@@ -19,7 +19,7 @@ import {
   type CollabRejectReason,
 } from '@classmoji/collab';
 
-import { LEGACY_PAGE_NOTICE } from './legacyPage.ts';
+import { LEGACY_PAGE_WRITE_REFUSAL } from './legacyPage.ts';
 
 export type { CollabLoaderData, CollabRejectReason };
 
@@ -139,8 +139,9 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
       return { action: 'prompt', message: 'Couldn’t connect to live editing. Try again.' };
     case 'legacy-html':
       // The loader gives a legacy page no live room (utils/legacyPage.ts);
-      // this is a page that turned legacy after it loaded. Same copy.
-      return { action: 'readonly', message: LEGACY_PAGE_NOTICE };
+      // this is a page that turned legacy after it loaded, its content still
+      // on screen: it can't be edited (the legacy write refusal's copy).
+      return { action: 'readonly', message: LEGACY_PAGE_WRITE_REFUSAL };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this page.' };

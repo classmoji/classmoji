@@ -354,10 +354,12 @@ test.describe('refusals', () => {
       message: 'Couldn’t connect to live editing. Try again.',
     });
     expect(rejectionNotice('forbidden').action).toBe('readonly');
-    // The legacy-page notice's own copy (utils/legacyPage.ts), nothing about when.
+    // Shown over editor content already on screen: it can't be edited (the
+    // legacy pages' own write refusal, utils/legacyPage.ts), not "can't be shown".
     expect(rejectionNotice('legacy-html')).toEqual({
       action: 'readonly',
-      message: "This page is in an old format and can't be shown.",
+      message:
+        "This page is in an old format and can't be changed here. The Classmoji team can convert it.",
     });
     for (const reason of [
       'legacy-html',
