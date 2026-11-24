@@ -292,3 +292,46 @@ test.describe('a locked section as each reader sees it', () => {
     expect(shown.links).toBe(1);
   });
 });
+
+test.describe('a click selects nothing in the reader', () => {
+  test('a block made the selected node gets no selection overlay', async ({ page }) => {
+    await mountReader(page, [
+      { type: 'navGrid', props: {} },
+      { type: 'callout', props: { emoji: '🔥' }, content: 'A callout' },
+      { type: 'terminal', props: { code: 'npm install', title: 'Terminal' } },
+    ]);
+    // BlockNote's rule, read from its own stylesheet: the test fails if the
+    // class it keys on is ever renamed, instead of passing on nothing.
+    const drawn = await page.evaluate(() => {
+      const results: { type: string | null; before: string; after: string }[] = [];
+      for (const content of document.querySelectorAll('.bn-block-content')) {
+        const wrapper = content.parentElement?.classList.contains('react-renderer')
+          ? content.parentElement
+          : content;
+        const target = content.firstElementChild;
+        if (!target) continue;
+        const before = getComputedStyle(target, '::after').content;
+        wrapper.classList.add('ProseMirror-selectednode');
+        const after = getComputedStyle(target, '::after').content;
+        const editor = content.closest('.bn-editor') as HTMLElement;
+        // The same node in an EDITABLE editor must still get the overlay.
+        editor.setAttribute('contenteditable', 'true');
+        const editable = getComputedStyle(target, '::after').content;
+        editor.setAttribute('contenteditable', 'false');
+        wrapper.classList.remove('ProseMirror-selectednode');
+        results.push({
+          type: content.getAttribute('data-content-type'),
+          before,
+          after: `${after}|${editable}`,
+        });
+      }
+      return results;
+    });
+    expect(drawn.length).toBeGreaterThanOrEqual(3);
+    for (const block of drawn) {
+      const [reader, editable] = block.after.split('|');
+      expect(reader, `${block.type} in the reader`).toBe('none');
+      expect(editable, `${block.type} in an editor`).toBe('""');
+    }
+  });
+});
