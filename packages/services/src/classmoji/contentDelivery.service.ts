@@ -38,6 +38,7 @@ import {
   recordFolderTreesAfterCommit,
 } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
+import { describeFetchError, fetchWithHedge, formatHedgeReport } from './hedgedFetch.ts';
 // Zero-import string rules, shared with the editor.
 import {
   encodeRepoPath,
@@ -2286,13 +2287,44 @@ export function textReadBudget(): TextReadBudget {
  *
  * Raising it would make a stalled Worker hold the render open for longer with
  * nothing gained; lowering it would start losing races the Worker was going to
- * win. It is per-leg rather than a bound on the read as a whole, for the reason
- * above: a ceiling on how long any single leg may stall, with the fallbacks
- * behind it still a correct answer worth waiting for. Every text read is one a
+ * win. It is per-tier (Worker, contents API, CDN) rather than a bound on the
+ * read as a whole, for the reason above: a ceiling on how long any single tier
+ * may stall, with the fallbacks behind it still a correct answer worth waiting
+ * for. The Worker tier may send two requests (see `HEDGE_DELAY_MS`), and they
+ * share this one ceiling, measured from the first. Every text read is one a
  * person is waiting on, so nobody asks for less — the one caller that did was
  * the slides index's per-deck thumbnail, and that is a stored image now.
  */
 const TEXT_FETCH_TIMEOUT_MS = 6000;
+
+/**
+ * How long the Worker read waits for response headers before it asks again on
+ * another connection (`fetchWithHedge`).
+ *
+ * A healthy read is an edge or R2 hit and has its headers in tens to hundreds
+ * of milliseconds, so 1.5 s is well past anything a working connection takes;
+ * it is also well inside `TEXT_FETCH_TIMEOUT_MS`, so a second request started
+ * here still has four and a half seconds to answer before the read gives up.
+ * The case it is for is a request that sits on a connection that never
+ * answers while other reads to the same origin succeed: without the second
+ * request, that reader waits out the whole ceiling and is then served the
+ * slower GitHub path.
+ *
+ * The price: a genuinely cold pull (see above, seconds) also crosses 1.5 s,
+ * so it sends one duplicate request, which the Worker answers with a second
+ * origin pull. Whichever answers first is used and the other is aborted. Warm
+ * on save keeps cold reads rare, and it is one request, never more.
+ */
+const HEDGE_DELAY_MS = 1500;
+
+/**
+ * A Worker read slower than this, end to end, logs one line with its timings
+ * (`formatHedgeReport`), as does every read that fails, is refused, or sent a
+ * second request (however quickly that one answered: it is the only trace a
+ * reset or stalled connection leaves). A fast read on one request logs nothing
+ * beyond the per-render `source=worker` line.
+ */
+const SLOW_TEXT_READ_LOG_MS = 1000;
 
 /**
  * The bound on the map refresh a read may trigger.
@@ -2372,13 +2404,21 @@ export async function fetchContentText(
     skipCache?: boolean;
     fallback?: TextFallback;
     budget?: TextReadBudget;
+    /**
+     * Whether the Worker read may send a second request when the first stalls
+     * (`HEDGE_DELAY_MS`). On by default, because nearly every read is one a
+     * person is waiting on. A caller nobody waits on (a background sweep over
+     * every classroom) passes `false`: it can afford the ceiling, and a hedge
+     * there only doubles the requests a slow Worker is already struggling with.
+     */
+    hedge?: boolean;
   } = {}
 ): Promise<ContentText | null> {
   const path = normalizeRepoRelative(repoPath);
   if (!path) return null;
 
   const fallback = opts.fallback ?? 'api-then-cdn';
-  const viaWorker = await readTextThroughWorker(ctx, path, opts.budget);
+  const viaWorker = await readTextThroughWorker(ctx, path, opts.budget, opts.hedge ?? true);
   const result =
     viaWorker ?? (fallback === 'none' ? null : await readTextFromGitHub(ctx, path, fallback, opts));
 
@@ -2684,7 +2724,8 @@ async function warmOneBlob(
 async function readTextThroughWorker(
   ctx: TextReadContext,
   path: string,
-  budget?: TextReadBudget
+  budget: TextReadBudget | undefined,
+  hedge: boolean
 ): Promise<ContentText | null> {
   if (!isContentDeliveryEnabled(ctx.classroom)) return null;
   // A previous probe in this render already found the Worker unreachable.
@@ -2726,38 +2767,68 @@ async function readTextThroughWorker(
   // row says nothing about the next path the caller probes.
   if (!asset || asset.type !== 'blob') return null;
 
-  try {
-    const url = await signTextUrl(ctx.classroom, env, asset, ext);
-    // A refusal is a MISS, not a dead origin: fall back for this path and leave
-    // the per-render circuit closed, exactly as a map miss above does.
-    if (!url) return null;
-
-    const response = await fetch(url, { signal: AbortSignal.timeout(TEXT_FETCH_TIMEOUT_MS) });
-    if (!response.ok) {
-      // A refusal is an ANSWER, not a dead origin: the Worker is up and said
-      // no. Fall back for this path and leave the per-render circuit closed.
-      console.warn(
-        `[contentDelivery] Worker returned ${response.status} for ${path} ` +
-          `(classroom ${ctx.classroom.id}); falling back`
-      );
-      return null;
-    }
-
-    return { text: await response.text(), sha: asset.sha, source: 'worker' };
-  } catch (error) {
-    // A throw here is transport — a timeout, a DNS failure, a refused socket —
-    // and it is about the ORIGIN rather than this file. Trip the circuit so the
-    // rest of this render does not queue up behind the same dead connection.
-    // Our own timeout expiring trips it too: a render that has already outrun
-    // the ceiling will not do better on the next path.
+  // The transport-failure line. Its prefix is what operators search for; the
+  // fields after it are numbers and public values only, never the signed URL.
+  const failed = (fields: string): null => {
+    // A failure here is transport — a timeout, a DNS failure, a refused or
+    // reset socket, on both requests when two ran — and it is about the ORIGIN
+    // rather than this file. Trip the circuit so the rest of this render does
+    // not queue up behind the same dead connection. Our own ceiling expiring
+    // trips it too: a render that has already outrun it will not do better on
+    // the next path. A first request that stalled and was rescued by the
+    // second is a success and never reaches this.
     if (budget) budget.workerUnavailable = true;
     console.warn(
       `[contentDelivery] Worker text read failed for ${path} (classroom ${ctx.classroom.id}); ` +
-        'skipping the Worker for the rest of this read:',
-      error instanceof Error ? error.message : error
+        `skipping the Worker for the rest of this read: ${fields}`
+    );
+    return null;
+  };
+
+  let url: string | null;
+  try {
+    url = await signTextUrl(ctx.classroom, env, asset, ext);
+  } catch (error) {
+    return failed(`error=${describeFetchError(error)}`);
+  }
+  // A refusal is a MISS, not a dead origin: fall back for this path and leave
+  // the per-render circuit closed, exactly as a map miss above does.
+  if (!url) return null;
+
+  // Hedged unless the caller said otherwise: see `HEDGE_DELAY_MS`. A non-OK
+  // answer is still an answer, so the body is read only for a 2xx and a
+  // refusal comes back as `null`. The reader owns the winning response: a
+  // refusal's body is cancelled so its connection goes back to the pool.
+  const outcome = await fetchWithHedge(
+    url,
+    async response => {
+      if (response.ok) return await response.text();
+      response.body?.cancel().catch(() => {});
+      return null;
+    },
+    { ceilingMs: TEXT_FETCH_TIMEOUT_MS, hedgeDelayMs: HEDGE_DELAY_MS, hedge }
+  );
+  const fields = formatHedgeReport(outcome.report);
+  if (!outcome.ok) return failed(`error=${outcome.error} ${fields}`);
+
+  if (outcome.value === null) {
+    // A refusal is an ANSWER, not a dead origin: the Worker is up and said
+    // no. Fall back for this path and leave the per-render circuit closed.
+    console.warn(
+      `[contentDelivery] Worker returned ${outcome.report.status} for ${path} ` +
+        `(classroom ${ctx.classroom.id}); falling back ${fields}`
     );
     return null;
   }
+
+  // A read the second request rescued is evidence too, however quickly it
+  // finished: it is the only trace a reset or stalled connection leaves.
+  if (outcome.report.totalMs > SLOW_TEXT_READ_LOG_MS || outcome.report.hedge !== 'none') {
+    console.warn(
+      `[contentDelivery] Worker text read slow for ${path} (classroom ${ctx.classroom.id}): ${fields}`
+    );
+  }
+  return { text: outcome.value, sha: asset.sha, source: 'worker' };
 }
 
 /**
