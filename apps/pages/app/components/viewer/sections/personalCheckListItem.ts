@@ -1,4 +1,5 @@
 import { sectionStoreFor } from './sectionCheckbox.ts';
+import { tickBurst } from './tickBurst.ts';
 
 /**
  * A student check list item (`checkListItem` with `personal: true`), in the
@@ -99,11 +100,14 @@ export function withPersonalCheckbox<T extends CheckListItemNodeView>(
   // The box's native toggle is the reader's tick; the store answers with the
   // optimistic state on the next render (and puts it back if the POST fails).
   const onChange = () => {
-    if (!store.get().canCheck) {
+    const { canCheck, checked, toggleCheck } = store.get();
+    if (!canCheck) {
       sync();
       return;
     }
-    store.get().toggleCheck(block.id);
+    const turningOn = !checked.has(block.id);
+    toggleCheck(block.id);
+    if (turningOn) tickBurst(input);
   };
   input.addEventListener('change', onChange);
 

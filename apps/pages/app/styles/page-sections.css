@@ -12,6 +12,9 @@
 
 :root {
   --pg-primary: var(--color-primary, #1f883d);
+  /* The tick burst's rays (viewer/sections/tickBurst.ts): 2px lines need a
+     lighter green on a dark page. */
+  --pg-burst: var(--pg-primary);
   --pg-skel: rgba(55, 53, 47, 0.2);
   --pg-skel-hi: rgba(55, 53, 47, 0.05);
   --pg-glass-a: rgba(255, 255, 255, 0.5);
@@ -35,6 +38,7 @@
 }
 
 .dark {
+  --pg-burst: #3fb950;
   --pg-skel: rgba(255, 255, 255, 0.17);
   --pg-skel-hi: rgba(255, 255, 255, 0.04);
   --pg-glass-a: rgba(38, 38, 38, 0.62);
@@ -209,6 +213,18 @@
 .pg-section-check:hover::after,
 .pg-section-check:focus-visible::after {
   opacity: 1;
+}
+
+/* No tooltip while the tick burst plays: the rays fly where it sits. */
+.pg-section-check.pg-section-check--burst::after {
+  opacity: 0;
+  transition: none;
+}
+
+/* A student check list item: ticked in the reader's check colour, as the
+   heading box is. Other check list items keep BlockNote's box. */
+.bn-block-content[data-content-type='checkListItem'] > div > input.pg-personal-check {
+  accent-color: var(--pg-primary);
 }
 
 /* A student check list item that cannot be ticked here (signed out, not a
