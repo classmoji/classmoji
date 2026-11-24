@@ -45,7 +45,6 @@ import {
 } from '@classmoji/utils/upload-concurrency';
 import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
-import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
 import {
   NO_SECTION_VIEWER,
   SECTION_NO_STORE_HEADERS,
@@ -57,8 +56,14 @@ import {
   signInUrlFor,
   type SectionReaderState,
 } from '~/utils/pageSections.server.ts';
-import { readerCommentsFor, type CommentViewer } from '~/utils/pageComments.server.ts';
-import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
+import {
+  appLinkPolicy,
+  buildReaderPayload,
+  type ReaderClassroom,
+  type ReaderViewer,
+} from '~/utils/readerPayload.server.ts';
+import type { ReaderPayload } from '~/utils/readerPayload.ts';
+import { appScheduleHref, readerPayloadDeps } from '~/utils/readerDeps.server.ts';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -417,17 +422,19 @@ export const loader = async ({
   // or not its snapshot answered: the room is seeded from the HTML.
   const legacyReadOnly = legacyInGit && canEdit && !collab;
 
-  // Page comments read the stored blocks themselves (the service redacts them
-  // for this reader), the same document `/api/page-comments` anchors against:
-  // a legacy HTML page has no stored block ids, so it counts page-level only.
-  const commentBlocks = format === 'json' && Array.isArray(content) ? content : [];
+  // The shared reader (`PageReader`) or an editor: exactly the client's split
+  // (route.tsx's `canEdit` is `canEdit && !preview && !liveUnavailable &&
+  // !legacyReadOnly`). Every path that renders the reader gets its payload
+  // from `buildReaderPayload`; the editors keep the document below, which is
+  // NEVER link-redacted (a save would drop the links it removed).
+  const readerShown = !canEdit || previewActive || liveUnavailable || legacyReadOnly;
 
   // Locked bodies this reader may not see leave the document HERE, before
-  // anything is derived from it: the asset and srcset maps, the download map
-  // and the payload all read `viewerContent` from now on, so a body's text,
-  // its image refs and its media ids never reach them. Non-mutating (the
-  // content read may be a shared cache entry). Editors (canEdit: live, git and
-  // preview paths alike) and the teaching team keep the whole document.
+  // anything is derived from it: the editor's asset maps, the staff chip
+  // counts and the preview highlights all read `viewerContent` from now on.
+  // Non-mutating (the content read may be a shared cache entry). Editors
+  // (canEdit: live, git and preview paths alike) and the teaching team keep
+  // the whole document. The reader payload runs the same rule itself.
   viewerContent = documentForReader(viewerContent, {
     revealAll,
     unlocked: readerSections.unlocked,
@@ -450,40 +457,43 @@ export const loader = async ({
   // if something in between throws first.
   sectionStatsPending?.catch(() => {});
 
-  // Page comments (`readerComments`): open-thread counts for a signed-in
-  // accepted member who may read this page's comments (the service's
-  // `commentAccess`), from the reader rule already read above. Not on a
-  // preview branch (its blocks are not what the threads were written on).
-  // Absent from the payload for everyone else. A failed count leaves the key
-  // out rather than failing the page. Started here, awaited with the payload.
-  const commentCtx =
-    authData?.userId && sectionViewer.acceptedRole !== null && !previewActive
-      ? ClassmojiService.pageComments.commentContext({
-          userId: authData.userId,
-          // The service's answer (only NO_SECTION_VIEWER has no accepted role).
-          viewer: sectionViewer as CommentViewer,
-          page,
-          classroom: page.classroom,
-          blocks: commentBlocks,
-          unlockedSectionIds: Object.keys(readerSections.unlocked),
-        })
-      : null;
-  const readerCommentsPending = commentCtx?.access.canRead
-    ? ClassmojiService.pageComments
-        .countsForViewer(commentCtx)
-        .then(counts =>
-          readerCommentsFor({
-            signedIn: true,
-            access: commentCtx.access,
-            impersonated: isImpersonatedSession(authData),
-            counts,
+  // The viewer the reader payload is built for: exactly the reader rule read
+  // above (any invite state, as this loader has always read it), with this
+  // reader's own section state. Null for a signed-out visitor.
+  const readerViewer: ReaderViewer | null = authData?.userId
+    ? {
+        userId: authData.userId,
+        access: sectionViewer,
+        readerSections,
+        impersonated: isImpersonatedSession(authData),
+      }
+    : null;
+
+  // Page comments in an EDITOR (`readerComments`): open-thread counts for a
+  // signed-in accepted member who may read this page's comments (the
+  // service's `commentAccess`). The reader's come with its payload, from the
+  // same function. Read from the stored blocks (the service redacts them for
+  // this reader), the document `/api/page-comments` anchors against: a legacy
+  // HTML page has no stored block ids, so it counts page-level only. Absent
+  // for everyone else; a failed count leaves the key out. Started here,
+  // awaited with the payload.
+  const editorCommentsPending =
+    !readerShown && readerViewer && sectionViewer.acceptedRole !== null && !previewActive
+      ? readerPayloadDeps
+          .readerComments({
+            userId: readerViewer.userId,
+            viewer: sectionViewer,
+            page,
+            classroom: page.classroom,
+            blocks: format === 'json' && Array.isArray(content) ? content : [],
+            unlockedSectionIds: Object.keys(readerSections.unlocked),
+            impersonated: readerViewer.impersonated,
           })
-        )
-        .catch(error => {
-          console.warn('[pages] comment counts unavailable:', error);
-          return undefined;
-        })
-    : undefined;
+          .catch(error => {
+            console.warn('[pages] comment counts unavailable:', error);
+            return undefined;
+          })
+      : undefined;
 
   // Which blocks the pending preview adds or edits — the changes the preview
   // makes, against the page as it was when the preview started (its
@@ -528,42 +538,52 @@ export const loader = async ({
     preview: previewActive,
     isPublic: page.is_public,
   });
+
+  // The reader: its document, URL maps, download map, links, section state and
+  // comments, all from the document as it ships (readerPayload.server.ts).
+  //
+  // Download buttons only where this view drew them before: the viewer of a
+  // reader, or staff on a preview — the editor draws none, and a staff member
+  // shown the page read-only for another reason (live editing unreachable, a
+  // legacy page) gets none either (`viewerShown`).
+  const viewerShown = !canEdit || previewActive;
+  const reader: ReaderPayload | null = readerShown
+    ? await buildReaderPayload(
+        {
+          // The read itself: the builder strips locked bodies on its own.
+          content: { blocks: content, cover: jsonCoverImage, format },
+          page,
+          classroom: page.classroom as unknown as ReaderClassroom,
+          viewer: readerViewer,
+          options: {
+            tier: resolveTier,
+            previewActive,
+            surface: 'app',
+            offerDownloads: viewerShown,
+          },
+          // A signed-out reader's way in: each locked section links here.
+          signInUrl: () => signInUrlFor(url.href),
+          links: appLinkPolicy(page.classroom.slug),
+          scheduleHref: () => appScheduleHref(page.classroom),
+        },
+        readerPayloadDeps
+      )
+    : null;
+
+  // The editors' URL maps. ONE pass for both. Two sequential resolves read the
+  // clock twice, and an expiry that moves between the two reads mints a
+  // different `src` for the same file — at which point every candidate list is
+  // thrown away, because the pairing is by string equality. On `edit` the
+  // expiry is an exact `now + 4h`, so it moves on EVERY tick. The cover is in
+  // the ref list for its display URL; it does not need candidates, because
+  // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
   const assetCtx = assetResolveContext(
     page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     resolveTier
   );
-  // ONE pass for both. Two sequential resolves read the clock twice, and an
-  // expiry that moves between the two reads mints a different `src` for the
-  // same file — at which point every candidate list is thrown away, because the
-  // pairing is by string equality. On `edit` the expiry is an exact `now + 4h`,
-  // so it moves on EVERY tick; on `week` and `month` it only moves across a
-  // bucket boundary (or the roll-forward near one). Rare on a reader, constant
-  // for an editor, and wrong in both cases. The cover is in the
-  // ref list for its display URL; it does not need candidates, because
-  // `HeaderImage` renders it as a CSS background, where `srcset` means nothing.
-  const { assets: resolvedAssets, srcSets: resolvedSrcSets } = await resolveDocumentAssets(
-    assetCtx,
-    viewerContent,
-    [coverImage?.url]
-  );
-
-  // Which media files the READER may download (`ref → boolean`, nothing
-  // else): a signed-in member looking at the viewer — the editor draws no
-  // download buttons, and an anonymous reader of a public page gets none. Only
-  // where the classroom can sign at all (`assetCtx`), because the button's
-  // route can mint nothing otherwise. The URL itself is minted on click.
-  //
-  // Drawn for the role that route reads — ACCEPTED memberships only — not the
-  // one that opened this page, so a pending invite draws no button that would
-  // 404 (`downloadMapRole`).
-  const viewerShown = !canEdit || previewActive;
-  const downloadRole =
-    authData?.userId && userRole && viewerShown && assetCtx
-      ? downloadMapRole(sectionViewer.acceptedRole, page.is_draft)
-      : null;
-  const mediaDownloads: MediaDownloads = downloadRole
-    ? await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)
-    : {};
+  const { assets: resolvedAssets, srcSets: resolvedSrcSets } = reader
+    ? { assets: {}, srcSets: {} }
+    : await resolveDocumentAssets(assetCtx, viewerContent, [coverImage?.url]);
 
   // Where this editor's uploads go (`storageTargetFor` on the client): the
   // repository, media, or a refusal it can state before a byte is sent. Staff
@@ -597,7 +617,7 @@ export const loader = async ({
         }).contentCompare(repoName, 'main', previewBranch)
       : null;
 
-  const readerComments = readerCommentsPending ? await readerCommentsPending : undefined;
+  const readerComments = editorCommentsPending ? await editorCommentsPending : undefined;
 
   return {
     page: {
@@ -635,10 +655,15 @@ export const loader = async ({
           }
         : null,
     },
-    // A live editor renders these read-only until its room has synced; the
-    // editable document then comes from the room, never from here.
-    content: viewerContent,
-    coverImage,
+    // The shared reader's payload (`buildReaderPayload`) on every path that
+    // renders `PageReader`; null for the editors.
+    reader,
+    // The EDITORS' document (never link-redacted: a save would drop what
+    // redaction removed). A live editor renders it read-only until its room
+    // has synced; the editable document then comes from the room, never from
+    // here. Null when the reader is shown (its document is `reader.content`).
+    content: reader ? null : viewerContent,
+    coverImage: reader ? null : coverImage,
     // Live editing: the room to join, or null for the git editor / a reader.
     collab,
     // Assigned inside `readContent`, which TypeScript's narrowing does not follow.
@@ -651,8 +676,9 @@ export const loader = async ({
     legacyReadOnly,
     // The preview's added/edited block ids and removed count (preview only).
     previewChanges,
-    // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
-    // as-is" (an external image, or the delivery layer switched off).
+    // The editors' display map: `{ storedRef: signedUrl }`. Absent keys mean
+    // "use the ref as-is" (an external image, or the delivery layer switched
+    // off). The reader's is `reader.assets`.
     resolvedAssets,
     // Also display-only, and keyed the SAME way — `{ storedRef: srcset }` —
     // because the consumer is the image block, which holds the stored reference
@@ -660,21 +686,20 @@ export const loader = async ({
     // An absent key means "one size only", which is the right answer for a gif,
     // an svg, and anything that is not an image.
     resolvedSrcSets,
-    // `{ storedRef: downloadable }` for the media files a member may download.
-    mediaDownloads,
     // This reader's own checks and unlocks, and what they may do (see
-    // `readerSectionsFor`). Never anyone else's rows.
+    // `readerSectionsFor`); the same object the reader payload carries.
+    // Never anyone else's rows.
     readerSections,
-    // A signed-out reader's way in: each locked section links here.
-    signInUrl: authData?.userId ? null : signInUrlFor(url.href),
     // `{ students, unlocks: { blockId: count }, checks: { blockId: count } }`
     // for the staff chips; accepted OWNER/TEACHER only (the same readers the
     // staff lists answer). Null for everyone else, and for a page with no
     // locked section and no checkable heading.
     sectionStats: sectionStatsPending ? await sectionStatsPending : null,
-    // `{ counts, pageLevel, open, canWrite, canResolve, frozen }` for a
-    // signed-in accepted member (`readerCommentsFor`); the key is ABSENT for
-    // everyone else, never null. Threads load lazily from `/api/page-comments`.
+    // The EDITORS' comments: `{ counts, pageLevel, open, canWrite, canResolve,
+    // frozen }` for a signed-in accepted member (`readerCommentsFor`); the key
+    // is ABSENT for everyone else, never null (the reader's are in
+    // `reader.readerComments`, under the same rule). Threads load lazily from
+    // `/api/page-comments`.
     ...(readerComments ? { readerComments } : {}),
     userRole,
     canEdit,

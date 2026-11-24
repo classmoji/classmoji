@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { toast } from 'react-toastify';
+import { toastNotify, type ReaderNotify } from '~/components/reader/notify.ts';
 
 import type {
   CommentIntent,
@@ -21,7 +21,13 @@ import type {
  * the one held here at once; a GET started before that answer is dropped, so
  * a slow list never overwrites a newer action.
  */
-const API = '/api/page-comments';
+const API_PATH = '/api/page-comments';
+
+/** Where the API lives and how failures are told (the reader host's; defaults: this origin, toasts). */
+export interface PageCommentsHost {
+  apiBase?: string;
+  notify?: ReaderNotify;
+}
 
 const SLOW_DOWN = 'Slow down — try again in a moment.';
 const LOCKED = 'This classroom is locked. Comments are read-only.';
@@ -80,7 +86,16 @@ export interface PageCommentsData {
   act: (payload: CommentIntent) => Promise<boolean>;
 }
 
-export function usePageComments(pageId: string, enabled: boolean): PageCommentsData {
+export function usePageComments(
+  pageId: string,
+  enabled: boolean,
+  host: PageCommentsHost = {}
+): PageCommentsData {
+  // Read through refs so `load` and `act` keep their identities.
+  const apiRef = useRef(`${host.apiBase ?? ''}${API_PATH}`);
+  apiRef.current = `${host.apiBase ?? ''}${API_PATH}`;
+  const notifyRef = useRef(host.notify ?? toastNotify);
+  notifyRef.current = host.notify ?? toastNotify;
   const [threads, setThreads] = useState<CommentThread[] | null>(null);
   const [early, setEarly] = useState<CommentThread[]>([]);
   const [viewer, setViewer] = useState<CommentsViewer | null>(null);
@@ -142,7 +157,7 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
     const promise = (async () => {
       setLoading(true);
       try {
-        const response = await fetch(`${API}?pageId=${encodeURIComponent(page)}`, {
+        const response = await fetch(`${apiRef.current}?pageId=${encodeURIComponent(page)}`, {
           credentials: 'same-origin',
           headers: { accept: 'application/json' },
         });
@@ -151,7 +166,7 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
           | null;
         if (pageRef.current !== page || generation.current !== started) return;
         if (!response.ok || !body || !Array.isArray(body.threads)) {
-          if (!quiet) toast.error(response.status === 429 ? SLOW_DOWN : LOAD_FAILED);
+          if (!quiet) notifyRef.current.error(response.status === 429 ? SLOW_DOWN : LOAD_FAILED);
           setFailed(true);
           return;
         }
@@ -163,7 +178,7 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
         if (body.viewer?.frozen) setFrozen(true);
       } catch {
         if (pageRef.current === page) {
-          if (!quiet) toast.error(LOAD_FAILED);
+          if (!quiet) notifyRef.current.error(LOAD_FAILED);
           setFailed(true);
         }
       } finally {
@@ -183,7 +198,7 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
       let response: Response;
       let body: (CommentsActionResponse & ErrorBody) | null;
       try {
-        response = await fetch(API, {
+        response = await fetch(apiRef.current, {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/json' },
           credentials: 'same-origin',
@@ -191,17 +206,17 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
         });
         body = (await response.json().catch(() => null)) as typeof body;
       } catch {
-        toast.error(ACTION_FAILED[payload.intent]);
+        notifyRef.current.error(ACTION_FAILED[payload.intent]);
         return false;
       }
       if (pageRef.current !== page) return false;
 
       if (!response.ok || body?.ok !== true) {
-        if (response.status === 429) toast.error(SLOW_DOWN);
+        if (response.status === 429) notifyRef.current.error(SLOW_DOWN);
         else if (isLocked(response.status, body)) {
           setFrozen(true);
-          toast.error(LOCKED);
-        } else toast.error(messageOf(body, ACTION_FAILED[payload.intent]));
+          notifyRef.current.error(LOCKED);
+        } else notifyRef.current.error(messageOf(body, ACTION_FAILED[payload.intent]));
         return false;
       }
 

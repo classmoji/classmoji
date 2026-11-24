@@ -17,6 +17,7 @@ import {
   GITLAB_STALE_TOKEN,
   REPOSITORY_NOT_READABLE,
   decideCollab,
+  formatReport,
   gitlabTokenFreshForDryRun,
   hasFailures,
   pageFileState,
@@ -24,6 +25,7 @@ import {
   provesNoOpMerge,
   runLegacyConversion,
   seededContent,
+  summaryCounts,
   throughSchema,
   type CollabRowMeta,
   type CollabSnapshot,
@@ -538,6 +540,70 @@ describe('runLegacyConversion', () => {
       Array(3).fill(['skipped', REPOSITORY_NOT_READABLE])
     );
     expect(hasFailures(summary)).toBe(false);
+    // Not called legacy: whether they are is not known.
+    expect(summary.pages.every(p => p.legacy === false)).toBe(true);
+    const counts = summaryCounts(summary);
+    expect(counts.legacy).toEqual({
+      found: 0,
+      wouldConvert: 0,
+      converted: 0,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(counts.repositoryNotReadable).toBe(3);
+    const text = formatReport(summary);
+    expect(text).toContain('0 legacy page(s): 0 would convert, 0 converted, 0 skipped, 0 failed');
+    expect(text).toContain('3 page(s) in a repository that could not be read');
+  });
+
+  it('the summary counts legacy pages apart from unreadable repositories and failed listings', () => {
+    const page = (over: Record<string, unknown>) => ({
+      pageId: 'p',
+      classroom: 'org/c',
+      title: 't',
+      contentPath: 'pages/t',
+      visibility: 'public' as const,
+      blockCount: null,
+      collab: 'not checked' as const,
+      action: 'skipped' as const,
+      legacy: false,
+      ...over,
+    });
+    const summary = {
+      pages: [
+        page({ legacy: true, action: 'would convert' }),
+        page({ legacy: true, action: 'would convert' }),
+        page({ legacy: true, action: 'converted' }),
+        page({ legacy: true, action: 'skipped', reason: 'collab row dirty' }),
+        page({ legacy: true, action: 'failed', reason: 'error: boom' }),
+        ...Array.from({ length: 98 }, () => page({ reason: REPOSITORY_NOT_READABLE })),
+        page({ action: 'failed', reason: 'the repository could not be listed: 502' }),
+        page({ reason: GITLAB_STALE_TOKEN }),
+      ],
+      notLegacy: { converted: 4, noFiles: 2, noRepo: 1 },
+    } as Parameters<typeof summaryCounts>[0];
+    const counts = summaryCounts(summary);
+    expect(counts.legacy).toEqual({
+      found: 5,
+      wouldConvert: 2,
+      converted: 1,
+      skipped: 1,
+      failed: 1,
+    });
+    expect(counts.skippedReasons).toEqual({ 'collab row dirty': 1 });
+    expect(counts.repositoryNotReadable).toBe(98);
+    expect(counts.classroomNotChecked).toEqual({
+      'failed: the repository could not be listed: 502': 1,
+      [`skipped: ${GITLAB_STALE_TOKEN}`]: 1,
+    });
+    const text = formatReport(summary).split('\n').slice(-6).join('\n');
+    expect(text).toContain('5 legacy page(s): 2 would convert, 1 converted, 1 skipped, 1 failed');
+    expect(text).toContain('  skipped 1: collab row dirty');
+    expect(text).toContain('98 page(s) in a repository that could not be read');
+    expect(text).not.toMatch(/10\d legacy/);
+    expect(text).toContain(
+      'not legacy: 4 with content.json, 2 with no content file, 1 without a content repository'
+    );
   });
 
   it('flags (and still converts) a page in a LOCKED or archived classroom', async () => {

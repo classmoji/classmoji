@@ -23,11 +23,16 @@ export function useMediaDownloadHref(ref: unknown): string | null {
   return typeof ref === 'string' && ref ? lookup(ref) : null;
 }
 
-/** The lookup for one page: a button only for a ref the loader said yes to. */
+/**
+ * The lookup for one page: a button only for a ref the loader said yes to.
+ * `origin` prefixes the link ('' on the pages host itself, which serves the
+ * route; the pages origin where the reader is mounted on another host).
+ */
 export function mediaDownloadLookup(
   pageId: string,
-  downloads: MediaDownloads | null | undefined
+  downloads: MediaDownloads | null | undefined,
+  origin = ''
 ): MediaDownloadLookup {
   if (!downloads) return NO_MEDIA_DOWNLOADS;
-  return ref => (downloads[ref] === true ? mediaDownloadHref(pageId, ref) : null);
+  return ref => (downloads[ref] === true ? mediaDownloadHref(pageId, ref, origin) : null);
 }

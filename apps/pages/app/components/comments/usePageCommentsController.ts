@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { usePageComments, type PageCommentsData } from '~/hooks/usePageComments.ts';
+import {
+  usePageComments,
+  type PageCommentsData,
+  type PageCommentsHost,
+} from '~/hooks/usePageComments.ts';
 import { CommentsBridge } from './commentsBridge.ts';
 import type { CommentAnchor, CommentResolution } from './commentsPlugin.ts';
 import { shouldRefetch, type RefetchReason } from './refetchPolicy.ts';
@@ -57,10 +61,12 @@ const NO_RESOLUTION: CommentResolution = Object.freeze({});
 
 export function usePageCommentsController(
   pageId: string,
-  readerComments: ReaderComments | null | undefined
+  readerComments: ReaderComments | null | undefined,
+  /** Where the API lives and how failures are told (the reader host's). */
+  host: PageCommentsHost = {}
 ): PageCommentsController | null {
   const enabled = Boolean(readerComments);
-  const data = usePageComments(pageId, enabled);
+  const data = usePageComments(pageId, enabled, host);
   const { threads, early, viewer, load, act } = data;
 
   const [bridge] = useState(() => new CommentsBridge());

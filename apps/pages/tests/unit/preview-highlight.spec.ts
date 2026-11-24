@@ -110,8 +110,15 @@ test.describe('the preview bar summary', () => {
       'utf8'
     );
     expect(route).toContain("previewHighlightCss(previewChanges, 'preview-highlight')");
-    expect(route).toContain("className={previewHighlightStyle ? 'preview-highlight' : undefined}");
+    expect(route).toContain('css: previewHighlightStyle,');
     expect(route).toContain('changesSummary={previewSummary}');
+    // The shared reader draws the preview the route hands it.
+    const reader = readFileSync(
+      fileURLToPath(new URL('../../app/components/reader/PageReader.tsx', import.meta.url)),
+      'utf8'
+    );
+    expect(reader).toContain("className={preview?.css ? 'preview-highlight' : undefined}");
+    expect(reader).toContain('{preview?.css && <style>{preview.css}</style>}');
   });
 });
 

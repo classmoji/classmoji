@@ -215,6 +215,13 @@ export interface PageReport {
   commit?: string;
   /** Reported, never a reason to skip: e.g. the classroom is LOCKED or archived. */
   flags?: string[];
+  /**
+   * Git was read and holds the page as legacy (`index.html`, no
+   * `content.json`). False for a page reported for its CLASSROOM before its
+   * own files were read (the repository not readable or not listed, a stale
+   * Gitlab token): whether it is legacy is not known.
+   */
+  legacy: boolean;
 }
 
 export interface RunSummary {
@@ -486,6 +493,7 @@ function baseReport(page: LegacyPageRow): PageReport {
     blockCount: null,
     collab: 'not checked',
     action: 'skipped',
+    legacy: false,
   };
 }
 
@@ -684,10 +692,15 @@ export async function runLegacyConversion(
       log(`[legacy-pages] ${classroomLabel(classroom)} ${page.content_path}: legacy`);
       let report: PageReport;
       try {
-        report = await convertOne(deps, page, state.htmlSha);
+        report = { ...(await convertOne(deps, page, state.htmlSha)), legacy: true };
       } catch (error) {
         // One page's error never stops the batch.
-        report = { ...baseReport(page), action: 'failed', reason: `error: ${errText(error)}` };
+        report = {
+          ...baseReport(page),
+          action: 'failed',
+          reason: `error: ${errText(error)}`,
+          legacy: true,
+        };
       }
       const flags = classroomFlags(classroom);
       summary.pages.push(flags.length ? { ...report, flags } : report);
@@ -718,10 +731,76 @@ export function formatReport(summary: RunSummary): string {
       ...(p.reason ? [`— ${p.reason}`] : []),
     ].join('  ')
   );
-  const { converted, noFiles, noRepo } = summary.notLegacy;
-  lines.push(
-    `${summary.pages.length} legacy page(s); not legacy: ${converted} with content.json, ` +
-      `${noFiles} with no content file, ${noRepo} without a content repository`
-  );
+  lines.push(...summaryLines(summaryCounts(summary)));
   return lines.join('\n');
+}
+
+export interface SummaryCounts {
+  /** Pages git holds as legacy, and what became of them. */
+  legacy: {
+    found: number;
+    wouldConvert: number;
+    converted: number;
+    skipped: number;
+    failed: number;
+  };
+  /** Legacy pages skipped, by reason. */
+  skippedReasons: Record<string, number>;
+  /** Pages whose repository could not be read: NOT known to be legacy. */
+  repositoryNotReadable: number;
+  /** Other pages reported for their classroom before their files were read, by reason. */
+  classroomNotChecked: Record<string, number>;
+  notLegacy: RunSummary['notLegacy'];
+}
+
+/** The run's numbers, legacy pages apart from pages whose files were never read. */
+export function summaryCounts(summary: RunSummary): SummaryCounts {
+  const counts: SummaryCounts = {
+    legacy: { found: 0, wouldConvert: 0, converted: 0, skipped: 0, failed: 0 },
+    skippedReasons: {},
+    repositoryNotReadable: 0,
+    classroomNotChecked: {},
+    notLegacy: { ...summary.notLegacy },
+  };
+  for (const page of summary.pages) {
+    if (!page.legacy) {
+      if (page.reason === REPOSITORY_NOT_READABLE) counts.repositoryNotReadable += 1;
+      else {
+        const key = `${page.action}: ${page.reason ?? 'unknown'}`;
+        counts.classroomNotChecked[key] = (counts.classroomNotChecked[key] ?? 0) + 1;
+      }
+      continue;
+    }
+    counts.legacy.found += 1;
+    if (page.action === 'would convert') counts.legacy.wouldConvert += 1;
+    else if (page.action === 'converted') counts.legacy.converted += 1;
+    else if (page.action === 'failed') counts.legacy.failed += 1;
+    else {
+      counts.legacy.skipped += 1;
+      const reason = page.reason ?? 'unknown';
+      counts.skippedReasons[reason] = (counts.skippedReasons[reason] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+/** The summary as the terminal prints it. */
+export function summaryLines(counts: SummaryCounts): string[] {
+  const { legacy, notLegacy } = counts;
+  const lines = [
+    `${legacy.found} legacy page(s): ${legacy.wouldConvert} would convert, ` +
+      `${legacy.converted} converted, ${legacy.skipped} skipped, ${legacy.failed} failed`,
+  ];
+  for (const [reason, n] of Object.entries(counts.skippedReasons)) {
+    lines.push(`  skipped ${n}: ${reason}`);
+  }
+  lines.push(`${counts.repositoryNotReadable} page(s) in a repository that could not be read`);
+  for (const [reason, n] of Object.entries(counts.classroomNotChecked)) {
+    lines.push(`${n} page(s) not checked (${reason})`);
+  }
+  lines.push(
+    `not legacy: ${notLegacy.converted} with content.json, ` +
+      `${notLegacy.noFiles} with no content file, ${notLegacy.noRepo} without a content repository`
+  );
+  return lines;
 }

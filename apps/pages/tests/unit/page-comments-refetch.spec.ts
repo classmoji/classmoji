@@ -109,21 +109,28 @@ test.describe('wiring', () => {
   });
 
   test('the strip mounts once, after the title and Draft chip, before every host', () => {
-    const mounts = route.match(/<PageDiscussion /g) ?? [];
-    expect(mounts).toHaveLength(1);
-    const strip = route.indexOf('<PageDiscussion ');
-    const draft = route.indexOf('Draft\n');
-    const title = route.indexOf("{pageTitle || 'Untitled'}");
-    // Every JSX host (git editor, live editor, live pre-sync viewer, viewer).
-    const hosts = [...route.matchAll(/<(PageEditor|BlockNoteViewer)\n/g)].map(m => m.index ?? -1);
-    expect(hosts.length).toBe(4);
-    const firstHost = Math.min(...hosts);
-    expect(title).toBeGreaterThan(0);
-    expect(draft).toBeGreaterThan(title);
-    expect(strip).toBeGreaterThan(draft);
-    expect(strip).toBeLessThan(firstHost);
-    // Only with a controller (null for anonymous, non-members, previews).
-    expect(route).toMatch(/\{comments && \(\s*<PageDiscussion controller=\{comments\}/);
+    // The editors' page (route.tsx: git editor, live editor, live pre-sync
+    // viewer) and the reader's (PageReader: the viewer), each once.
+    const reader = source('../../app/components/reader/PageReader.tsx');
+    for (const [file, text, title, hostCount] of [
+      ['route', route, "{pageTitle || 'Untitled'}", 3],
+      ['reader', reader, "{page.title || 'Untitled'}", 1],
+    ] as const) {
+      const mounts = text.match(/<PageDiscussion\s/g) ?? [];
+      expect(mounts, file).toHaveLength(1);
+      const strip = text.search(/<PageDiscussion\s/);
+      const draft = text.indexOf('Draft\n');
+      const at = text.indexOf(title);
+      const hosts = [...text.matchAll(/<(PageEditor|BlockNoteViewer)\n/g)].map(m => m.index ?? -1);
+      expect(hosts.length, file).toBe(hostCount);
+      const firstHost = Math.min(...hosts);
+      expect(at, file).toBeGreaterThan(0);
+      expect(draft, file).toBeGreaterThan(at);
+      expect(strip, file).toBeGreaterThan(draft);
+      expect(strip, file).toBeLessThan(firstHost);
+      // Only with a controller (null for anonymous, non-members, previews).
+      expect(text, file).toMatch(/\{comments && \(\s*<PageDiscussion\s+controller=\{comments\}/);
+    }
   });
 
   test('the strip reads the controller, never the API', () => {

@@ -1572,18 +1572,35 @@ test.describe('readerComments (the loader contract)', () => {
     expect(loaderBody).toContain('...(readerComments ? { readerComments } : {}),');
     expect(loaderBody).not.toMatch(/readerComments:\s*readerComments/);
     expect(loaderBody).not.toMatch(/readerComments\s*\?\?\s*null/);
-    // Built by the pure builder, only for a signed-in accepted member, never on
-    // a preview branch, from the one reader rule already read.
+    // The editors' (the reader's come in its payload, under the same rule):
+    // only for a signed-in accepted member, never on a preview branch, from
+    // the one reader rule already read.
     expect(loaderBody).toMatch(
-      /authData\?\.userId && sectionViewer\.acceptedRole !== null && !previewActive/
+      /!readerShown && readerViewer && sectionViewer\.acceptedRole !== null && !previewActive/
     );
-    expect(loaderBody).toContain('readerCommentsFor({');
-    expect(loaderBody).toContain('const readerCommentsPending = commentCtx?.access.canRead');
     expect(loaderBody.match(/pageSections\.sectionViewer\(/g)).toHaveLength(1);
     // The counts read the stored document, the one /api/page-comments anchors against.
     expect(loaderBody).toContain(
-      "const commentBlocks = format === 'json' && Array.isArray(content) ? content : [];"
+      "blocks: format === 'json' && Array.isArray(content) ? content : [],"
     );
-    expect(loaderBody).toContain('blocks: commentBlocks,');
+    // The read itself goes to the reader payload, not the section-redacted copy.
+    expect(loaderBody).toContain('content: { blocks: content, cover: jsonCoverImage, format },');
+
+    // The reader payload: the same rule, the key absent unless there are counts.
+    const BUILDER = source('../../app/utils/readerPayload.server.ts');
+    expect(BUILDER).toMatch(
+      /viewer &&\s*viewer\.access\.acceptedRole !== null &&\s*!options\.previewActive/
+    );
+    expect(BUILDER).toMatch(
+      /const commentBlocks =\s*content\.format === 'json' && Array\.isArray\(content\.blocks\) \? content\.blocks : \[\];/
+    );
+    expect(BUILDER).toContain('blocks: commentBlocks,');
+    expect(BUILDER).toContain('...(readerComments ? { readerComments } : {}),');
+    // Both build them the one way: the service's access, then readerCommentsFor.
+    const DEPS = source('../../app/utils/readerDeps.server.ts');
+    expect(DEPS).toContain('if (!context.access.canRead) return undefined;');
+    expect(DEPS).toContain(
+      'return readerCommentsFor({ signedIn: true, access: context.access, impersonated, counts });'
+    );
   });
 });

@@ -10,6 +10,8 @@
  * snapshot answers with converted blocks.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import { importWithStubs, routerArgs, stubModule } from '../helpers/dataRequest.helpers.ts';
@@ -130,6 +132,16 @@ export const notifyPreviewChanged = async () => {};
 export const readEditorName = async () => 'u';
 export const requestCheckpoint = async () => ({});
 `),
+  '/app/utils/readerDeps.server.ts': stubModule(`
+export const readerPayloadDeps = {
+  assetContext: () => null,
+  resolveAssets: async () => ({ assets: {}, srcSets: {} }),
+  loadMediaDownloads: async () => ({}),
+  linkedPages: async () => [],
+  readerComments: async () => undefined,
+};
+export const appScheduleHref = async () => null;
+`),
   '/app/utils/collabPreview.server.ts': stubModule(`
 export const acceptPreviewLive = async () => ({});
 export const normalizePageBlocks = x => x;
@@ -141,7 +153,13 @@ export const previewBaseContent = async () => null;
 };
 
 interface LoaderData {
+  /** The document the page shows: the reader's on a read-only path, else the editors'. */
   content: unknown;
+  reader?: { content: unknown } | null;
+  /** Which document shipped: the reader payload's, or the editors' `content`. */
+  shipped: 'reader' | 'editor';
+  /** The top-level (editors') `content` exactly as the loader sent it. */
+  editorContent: unknown;
   collab: unknown;
   canEdit: boolean;
   legacyNotice: 'live' | 'unshown' | null;
@@ -174,10 +192,17 @@ async function view(over: Partial<Fakes>): Promise<LoaderData> {
     writes: 0,
     ...over,
   });
-  return loader({
+  const data = await loader({
     ...routerArgs('http://localhost:6100/cs1/page-1'),
     params: { classroomSlug: 'cs1', pageId: 'page-1' },
   });
+  // A read-only path ships its document in the reader payload, an editor in `content`.
+  return {
+    ...data,
+    content: data.reader ? data.reader.content : data.content,
+    shipped: data.reader ? 'reader' : 'editor',
+    editorContent: data.content,
+  };
 }
 
 test.describe('in-app page loader, a page git holds as legacy HTML', () => {
@@ -239,6 +264,49 @@ test.describe('in-app page loader, a page git holds as legacy HTML', () => {
     const ta = await view({ userId: 'ta', role: 'ASSISTANT', gitFormat: 'json' });
     expect(ta.legacyNotice).toBeNull();
     expect(ta.content).toEqual(CONVERTED);
+  });
+});
+
+test.describe('in-app page loader: the reader and the editors never share a document', () => {
+  // The reader's document is link-redacted (a dropped link would be deleted by
+  // a save), so it must never be the one an editor mounts.
+  test('editors get `content` and no reader payload', async () => {
+    for (const over of [
+      { userId: 'owner', role: 'OWNER' as const, gitFormat: 'json' as const },
+      { userId: 'owner', role: 'OWNER' as const, gitFormat: 'json' as const, collabEnabled: false },
+    ]) {
+      const data = await view(over);
+      expect(data.shipped).toBe('editor');
+      expect(data.reader).toBeNull();
+      expect(data.editorContent).toEqual(CONVERTED);
+    }
+  });
+
+  test('every read-only path gets the reader payload and no editor document', async () => {
+    for (const over of [
+      { userId: 'stu', role: 'STUDENT' as const, gitFormat: 'json' as const },
+      { gitFormat: 'json' as const },
+      { userId: 'ta', role: 'ASSISTANT' as const, gitFormat: 'json' as const },
+      // A legacy page with no live editing: the owner reads it.
+      { userId: 'owner', role: 'OWNER' as const, collabEnabled: false },
+    ]) {
+      const data = await view(over);
+      expect(data.shipped, JSON.stringify(over)).toBe('reader');
+      expect(data.editorContent, JSON.stringify(over)).toBeNull();
+    }
+  });
+
+  test('the route re-seeds its editor when the reader gives way to an editor on the same page', () => {
+    const route = readFileSync(
+      fileURLToPath(new URL('../../app/routes/$classroomSlug.$pageId/route.tsx', import.meta.url)),
+      'utf8'
+    );
+    expect(route).toContain(
+      'if (lastPageIdRef.current !== page.id || lastShownReaderRef.current !== Boolean(reader)) {'
+    );
+    const reset = route.slice(route.indexOf('lastShownReaderRef.current = Boolean(reader);'));
+    expect(reset.slice(0, 400)).toContain('setEditorDoc(content);');
+    expect(reset.slice(0, 400)).toContain('setContentToken(contentSha);');
   });
 });
 

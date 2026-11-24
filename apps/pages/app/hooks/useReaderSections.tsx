@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useRevalidator } from 'react-router';
-import { toast } from 'react-toastify';
+import { toastNotify, type ReaderNotify } from '~/components/reader/notify.ts';
 
 /**
  * A reader's own state on one page's sections: which checkable headings they
@@ -124,7 +123,7 @@ export function useReaderSections(): ReaderSectionsValue {
   return useContext(ReaderSectionsContext);
 }
 
-const API = '/api/page-sections';
+const API_PATH = '/api/page-sections';
 const CHECK_FAILED = 'Couldn’t save that. Try again.';
 const UNLOCK_FAILED = 'Couldn’t unlock this section. Try again.';
 const OPEN_FAILED = 'Couldn’t open this section. Reload the page.';
@@ -138,20 +137,46 @@ interface SectionsResponse {
 }
 
 /**
+ * What the host gives the reader's section state: how to load the page again
+ * after an unlock (`refresh`), how to tell the reader something failed
+ * (`notify`), and where the API lives (`apiBase`, '' for this origin).
+ *
+ * `refresh` must resolve once the host's NEW payload — content with the
+ * section's body AND a new `readerSections` object — is what this hook is
+ * given, and reject when it could not be loaded. The pages app passes its
+ * route revalidation; a host without a router passes a fetch that swaps the
+ * payload in. The default rejects: an unlock is then recorded but reported as
+ * not opened, never left hanging.
+ */
+export interface ReaderSectionsHost {
+  refresh?: () => Promise<unknown>;
+  notify?: ReaderNotify;
+  apiBase?: string;
+}
+
+const NO_REFRESH = () => Promise.reject(new Error('This page cannot be loaded again here.'));
+
+/**
  * The reader's state for the page in view.
  *
  * Ticks and unlocks both POST with a plain `fetch`, so any refusal or network
- * error stays here (a toast, the glass back) and never reaches the route's
+ * error stays here (a notice, the glass back) and never reaches the host's
  * error page. A tick changes nothing else the page shows, so it stops there.
- * A recorded unlock then revalidates the route: the loader's `content` comes
- * back with the section's body in it, the viewer inserts it and settles the
- * unlock (`settleOpen`), and only then does the section show as unlocked.
+ * A recorded unlock then asks the host for the page again (`refresh`): its
+ * `content` comes back with the section's body in it, the viewer inserts it
+ * and settles the unlock (`settleOpen`), and only then does the section show
+ * as unlocked. "Came back" is a new `readerSections` identity.
  */
 export function useReaderSectionsState(
   pageId: string,
   readerSections: ReaderSections | null | undefined,
-  signInUrl: string | null = null
+  signInUrl: string | null = null,
+  host: ReaderSectionsHost = {}
 ): ReaderSectionsValue {
+  const notify = host.notify ?? toastNotify;
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const api = `${host.apiBase ?? ''}${API_PATH}`;
   const known = Boolean(readerSections);
   const staff = readerSections?.staff === true;
   const canCheck = readerSections?.canCheck === true;
@@ -209,10 +234,10 @@ export function useReaderSectionsState(
             return next;
           });
         } else {
-          toast.error(CHECK_FAILED);
+          notifyRef.current.error(CHECK_FAILED);
         }
       };
-      fetch(API, {
+      fetch(api, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
@@ -224,7 +249,7 @@ export function useReaderSectionsState(
         })
         .catch(() => settle(false));
     },
-    [canCheck, pageId]
+    [canCheck, pageId, api]
   );
 
   // Unlocks: the loader's, plus the ones answered in this visit.
@@ -262,11 +287,10 @@ export function useReaderSectionsState(
     justUnlocked.current.clear();
   }, [pageId]);
 
-  // `revalidate` is read through a ref: the revalidator's identity changes
-  // with its state, and `unlock` should not.
-  const revalidator = useRevalidator();
-  const revalidateRef = useRef(revalidator.revalidate);
-  revalidateRef.current = revalidator.revalidate;
+  // `refresh` is read through a ref: a host's function identity may change
+  // with its state (the app's revalidator does), and `unlock` should not.
+  const refreshRef = useRef(host.refresh ?? NO_REFRESH);
+  refreshRef.current = host.refresh ?? NO_REFRESH;
   const statusRef = useRef(status);
   statusRef.current = status;
   const readerSectionsRef = useRef(readerSections);
@@ -283,7 +307,7 @@ export function useReaderSectionsState(
     });
     if (!opened) {
       justUnlocked.current.delete(blockId);
-      toast.error(OPEN_FAILED);
+      notifyRef.current.error(OPEN_FAILED);
     }
   }, []);
 
@@ -299,7 +323,7 @@ export function useReaderSectionsState(
           return rest;
         });
 
-      fetch(API, {
+      fetch(api, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
@@ -309,21 +333,21 @@ export function useReaderSectionsState(
           const body = (await response.json().catch(() => null)) as SectionsResponse | null;
           if (!response.ok || body?.ok !== true) {
             posted();
-            toast.error(UNLOCK_FAILED);
+            notifyRef.current.error(UNLOCK_FAILED);
             return;
           }
           const at =
             typeof body.unlockedAt === 'string' ? body.unlockedAt : new Date().toISOString();
-          // Recorded. The body reaches the reader only through the page
-          // loader: reload the route, and the section stays a (broken) card
-          // until the viewer has put the body in and calls `settleOpen`.
+          // Recorded. The body reaches the reader only through the host's
+          // payload: load the page again, and the section stays a (broken)
+          // card until the viewer has put the body in and calls `settleOpen`.
           justUnlocked.current.add(blockId);
           setAnswered(prev => ({ ...prev, [blockId]: at }));
           setReloading(prev => ({ ...prev, [blockId]: readerSectionsRef.current }));
           statusRef.current = { ...statusRef.current, [blockId]: 'reloading' };
           posted();
           try {
-            await revalidateRef.current();
+            await refreshRef.current();
           } catch {
             // The unlock is recorded, but this page did not get the body.
             settleOpen(blockId, false);
@@ -331,10 +355,10 @@ export function useReaderSectionsState(
         })
         .catch(() => {
           posted();
-          toast.error(UNLOCK_FAILED);
+          notifyRef.current.error(UNLOCK_FAILED);
         });
     },
-    [canUnlock, pageId, settleOpen]
+    [canUnlock, pageId, settleOpen, api]
   );
 
   const takeJustUnlocked = useCallback((blockId: string) => {
