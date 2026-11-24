@@ -348,6 +348,9 @@ describe('outside pushes without a merge base', () => {
     server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub')] });
     const a = open();
     await a.synced;
+    // Unpushed edits: kept and recorded (a clean doc would be reseeded instead).
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(0, 'x'));
+    await waitFor(() => server.store.storeCalls > 0, 3000, 'edit stored');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
     error.mockRestore();

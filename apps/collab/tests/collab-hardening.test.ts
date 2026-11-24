@@ -445,16 +445,33 @@ describe('outside pushes', () => {
     expect(typeof conflict!.at).toBe('string');
   });
 
-  it('keeps the live doc and answers 409 when no base is readable', async () => {
+  it('over unpushed edits: keeps the live doc and answers 409 when no base is readable', async () => {
     server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub wholesale')] });
     const a = open();
     await a.synced;
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(3, ', live'));
+    await waitFor(() => server.store.storeCalls > 0, 3000, 'edit stored');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
     error.mockRestore();
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('no-merge-base');
-    expect(plain(a.doc, 'p1')).toBe('One');
+    expect(plain(a.doc, 'p1')).toBe('One, live');
+  });
+
+  it('with nothing unpushed: no readable base reseeds from git (nothing to lose)', async () => {
+    server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub wholesale')] });
+    const a = open();
+    await a.synced;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
+    error.mockRestore();
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'reseeded', reason: 'no-merge-base' });
+    await waitFor(() => a.closeCodes.includes(4409), 3000, 'room closed');
+    expect((await server.store.get('page', PAGE))!.last_conflict ?? null).toBeNull();
   });
 
   it('ignores our own push and a push whose file we already descend from', async () => {
