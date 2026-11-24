@@ -20,6 +20,8 @@
     "./team-set-score": "./src/classmoji/teamSetScore.ts",
     "./trigger-config": "./src/helper/triggerConfig.ts",
     "./import-progress": "./src/classmoji/importProgress.ts",
+    "./markdown-importer": "./src/content/markdownImporter.ts",
+    "./page-import-contract": "./src/classmoji/pageImport.contract.ts",
     "./media/router": "./src/media/storageRouter.ts",
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",
     "./render-contract": "./src/render/contract.ts",

@@ -9,6 +9,19 @@
  * policy, which is set to a single attempt here), and a retrieve that throws or
  * times out is treated as "not known yet" and polled again until the deadline.
  * A wait that never learned the status reports `{ outcome: 'timeout', status: null }`.
+ *
+ * A completed run reports its `output` (the task's return value, as
+ * `runs.retrieve` resolves it, offloaded outputs included); a caller that
+ * needs it treats a missing output as a failure.
+ *
+ * `maxPollMs` above `pollMs` backs the polling off (each wait 1.5x the last,
+ * up to `maxPollMs`): every retrieve of a run with a large payload downloads
+ * that payload again.
+ *
+ * `failFastStatuses` (opt-in; no other caller passes it) ends the wait the
+ * first time the run is seen in one of them, reported as `failed` with that
+ * status: e.g. `PENDING_VERSION`, a run for a task the deployed worker does
+ * not have yet, which would otherwise sit until the deadline.
  */
 import { runs } from '@trigger.dev/sdk';
 
@@ -23,7 +36,7 @@ const FAILED_RUN_STATUSES = new Set([
 ]);
 
 export type RunOutcome =
-  | { outcome: 'completed' }
+  | { outcome: 'completed'; output: unknown }
   | { outcome: 'failed'; status: string }
   | { outcome: 'timeout'; status: string | null };
 
@@ -44,10 +57,19 @@ export const waitForRunOutcome = async (
     timeoutMs = 45_000,
     pollMs = 1_000,
     callTimeoutMs = 5_000,
-  }: { timeoutMs?: number; pollMs?: number; callTimeoutMs?: number } = {}
+    maxPollMs = pollMs,
+    failFastStatuses = [],
+  }: {
+    timeoutMs?: number;
+    pollMs?: number;
+    callTimeoutMs?: number;
+    maxPollMs?: number;
+    failFastStatuses?: readonly string[];
+  } = {}
 ): Promise<RunOutcome> => {
   const deadline = Date.now() + timeoutMs;
   let status: string | null = null;
+  let interval = pollMs;
 
   for (;;) {
     const remaining = deadline - Date.now();
@@ -60,15 +82,18 @@ export const waitForRunOutcome = async (
       );
       status = String(run.status);
       if (status === 'COMPLETED' || status === 'COMPLETED_SUCCESSFULLY') {
-        return { outcome: 'completed' };
+        return { outcome: 'completed', output: run.output };
       }
-      if (FAILED_RUN_STATUSES.has(status)) return { outcome: 'failed', status };
+      if (FAILED_RUN_STATUSES.has(status) || failFastStatuses.includes(status)) {
+        return { outcome: 'failed', status };
+      }
     } catch (error) {
       // A network blip or a slow API is not an answer: keep polling.
       console.warn(`[runWait] could not read run ${runId}:`, error);
     }
 
-    if (Date.now() + pollMs >= deadline) return { outcome: 'timeout', status };
-    await sleep(pollMs);
+    if (Date.now() + interval >= deadline) return { outcome: 'timeout', status };
+    await sleep(interval);
+    interval = Math.min(maxPollMs, Math.round(interval * 1.5));
   }
 };

@@ -223,7 +223,8 @@ export default defineConfig({
     // (`__dirname`-relative default stylesheet, `require.resolve` of the XHR
     // sync worker), so a bundled copy throws on import. It comes in through
     // @blocknote/server-util (@classmoji/page-schema/html): the HTML -> blocks
-    // converter `@classmoji/services` loads on a page create from HTML.
+    // converter `page-import-convert` runs for a page create from markdown or
+    // HTML (the web app and the MCP server no longer convert in process).
     // `content-checkpoint` no longer needs it (@classmoji/page-schema/server
     // is jsdom-free). Kept external, the CLI installs the version the importer
     // resolves.

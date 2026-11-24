@@ -79,6 +79,49 @@ describe('waitForRunOutcome', () => {
     });
   });
 
+  it("a completed run hands back the task's output", async () => {
+    retrieve.mockResolvedValue({ status: 'COMPLETED', output: { ok: true, blocks: [] } });
+    await expect(waitForRunOutcome('run-1', { timeoutMs: 200, ...fast })).resolves.toEqual({
+      outcome: 'completed',
+      output: { ok: true, blocks: [] },
+    });
+  });
+
+  it('backs the polling off up to maxPollMs', async () => {
+    retrieve.mockResolvedValue({ status: 'EXECUTING' });
+    await waitForRunOutcome('run-1', {
+      timeoutMs: 400,
+      pollMs: 20,
+      maxPollMs: 60,
+      callTimeoutMs: 20,
+    });
+    // 20, 30, 45, 60, 60, ... ms between polls: far fewer than 400/20.
+    expect(retrieve.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(retrieve.mock.calls.length).toBeGreaterThan(3);
+  });
+
+  it('a run in a fail-fast status ends the wait at once, as failed with that status', async () => {
+    retrieve.mockResolvedValue({ status: 'PENDING_VERSION' });
+    const started = Date.now();
+    await expect(
+      waitForRunOutcome('run-1', {
+        timeoutMs: 5_000,
+        ...fast,
+        failFastStatuses: ['PENDING_VERSION'],
+      })
+    ).resolves.toEqual({ outcome: 'failed', status: 'PENDING_VERSION' });
+    expect(retrieve).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('without the option PENDING_VERSION is still waited on (other callers unaffected)', async () => {
+    retrieve.mockResolvedValue({ status: 'PENDING_VERSION' });
+    await expect(waitForRunOutcome('run-1', { timeoutMs: 60, ...fast })).resolves.toEqual({
+      outcome: 'timeout',
+      status: 'PENDING_VERSION',
+    });
+  });
+
   it('a retrieve that hangs is cut off and the wait still ends by the deadline', async () => {
     retrieve.mockReturnValue(new Promise(() => {}));
     const started = Date.now();

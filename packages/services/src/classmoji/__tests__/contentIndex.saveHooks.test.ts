@@ -131,6 +131,9 @@ const { savePageContent, acceptPreview, previewBranchName } =
   await import('../pageContent.service.ts');
 const { acceptDeckPreview } = await import('../../slides/deckPreview.service.ts');
 const { createPage } = await import('../page.service.ts');
+// The blocks a create from HTML is handed (converted by the caller, on
+// Trigger.dev), made here with the same converter.
+const { htmlToPageBlocks } = await import('@classmoji/page-schema/html');
 const { saveDeck, previewBranchName: deckPreviewBranchName } =
   await import('../../slides/slideContent.service.ts');
 
@@ -274,7 +277,7 @@ describe('a page create', () => {
       classroomId: CLASSROOM_ID,
       title: 'Imported Page',
       createdBy: 'user-1',
-      html: '<h2>Week one</h2><p>Read chapter two.</p>',
+      blocks: await htmlToPageBlocks('<h2>Week one</h2><p>Read chapter two.</p>'),
     });
     await settle();
 

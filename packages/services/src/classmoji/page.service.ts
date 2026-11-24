@@ -18,7 +18,7 @@ import {
   preparePageContent,
   previewBranchName,
 } from './pageContent.service.ts';
-import { convertPageHtml, storeCommittedAssetPaths } from './pageHtmlBlocks.ts';
+import { storeCommittedAssetPaths } from './pageHtmlBlocks.ts';
 import type { Prisma } from '@classmoji/database/client';
 import * as gitlabInstanceService from './gitlabInstance.service.ts';
 
@@ -395,9 +395,10 @@ export async function ensureContentRepo(classroomId: string) {
 }
 
 /**
- * The `content.json` a page created from HTML is committed with.
+ * The `content.json` a page created from converted HTML is committed with.
  *
- * Converted with the legacy-page converter, then written in exactly the bytes a
+ * The blocks come from the `page-import-convert` task (`pageImport.service`),
+ * the legacy-page converter run on Trigger.dev. Written in exactly the bytes a
  * save would produce (`preparePageContent`): every signed URL of ours turned
  * back into the reference behind it — `html` from an agent can carry the
  * display URLs it was shown — and the block structure normalized. No cover:
@@ -408,20 +409,19 @@ export async function ensureContentRepo(classroomId: string) {
  * that names one of `files` is stored as its bare repo path when the classroom
  * is served signed, and as it came otherwise (see `storeCommittedAssetPaths`).
  */
-async function contentJsonFromHtml({
+async function contentJsonFromBlocks({
   ctx,
   title,
   contentPath,
-  html,
+  blocks: converted,
   files,
 }: {
   ctx: ContentRepoContext;
   title: string;
   contentPath: string;
-  html: string;
+  blocks: unknown[];
   files: PageFileUpload[];
 }): Promise<string> {
-  const converted = await convertPageHtml(html, { title });
   const blocks = storeCommittedAssetPaths(converted, {
     login: ctx.gitOrgLogin,
     repo: ctx.repoName,
@@ -445,63 +445,31 @@ async function contentJsonFromHtml({
 }
 
 /**
- * Orchestrated page creation: content-repo folder + content.json (+ any extra
- * files) on GitHub, DB row, optional repository link, manifest refresh.
+ * The checks `createPage` runs before it writes anything, on their own: the
+ * plan's page limit, the content path the title maps to (refused when a page
+ * already uses it, which also catches a repeated title), and a link target
+ * outside the classroom. Same errors, messages and codes as `createPage`.
  *
- * Every page is created with a `content.json`. Live editing, the granular
- * content tools and the block editor all need one, and a page created as bare
- * `index.html` stays a legacy page until someone converts it.
+ * The import callers (web single and batch import, MCP `page_create` with
+ * `html`) run it BEFORE they spend a Trigger run on the conversion, so a page
+ * that would be refused anyway is refused at once. `createPage` runs it again.
  *
- * @param html   Initial content as HTML (a markdown import, MCP `page_create`).
- *               Converted to blocks (`htmlToPageBlocks`, the converter the
- *               viewer runs on a legacy page) and committed as content.json
- *               ONLY — no index.html. Omitted: a blank page.
- * @param files  Extra files to commit in the same batch (full repo paths,
- *               e.g. `pages/{slug}/assets/foo.png`) — the import flow's images.
- * @param ensureRepo  Skip the exists/create check when the caller already ran
- *                    ensureContentRepo (batch import).
- * @param commitMessage  Override the default commit message
- *                       (`Create page: {title}` / `Import page: {title}`).
+ * @returns The content path the page will be created at.
  */
-export async function createPage({
+export async function preflightCreatePage({
   classroomId,
   title,
-  html,
-  files = [],
-  createdBy,
   linkRepositoryId = null,
-  ensureRepo = true,
-  commitMessage,
 }: {
   classroomId: string;
   title: string;
-  html?: string;
-  files?: PageFileUpload[];
-  createdBy: string;
   linkRepositoryId?: string | null;
-  ensureRepo?: boolean;
-  commitMessage?: string;
-}) {
-  // Before any Github write, so a refused page leaves nothing in the repo.
-  // create() checks again at the insert; that is the guard for callers that
-  // skip this function.
+}): Promise<{ contentPath: string }> {
+  // create() checks the limit again at the insert; that is the guard for
+  // callers that skip this function.
   await assertCanCreateContent(classroomId, 'pages');
 
-  const ctx = await resolveContentRepo(classroomId);
-
-  // The callers that pass `files` placed them under this same
-  // `freePageContentPath` (`<path>/assets/…`), so the page and its files agree.
-  // Should the free path have moved since (another page took it), the page
-  // would land away from its files: refused instead, before any write.
   const contentPath = await freePageContentPath(classroomId, title);
-  if (files.some(file => !file.path.startsWith(`${contentPath}/`))) {
-    throw Object.assign(
-      new Error(
-        `The page's files are not under its content path '${contentPath}'. Please try again.`
-      ),
-      { code: PAGE_CONTENT_PATH_CONFLICT }
-    );
-  }
 
   // Distinct titles can normalize to the SAME content path ("Lab 1" and
   // "Lab-1" → pages/lab-1), and content_path carries no unique constraint —
@@ -527,12 +495,75 @@ export async function createPage({
     await assertLinkTargetsInClassroom(classroomId, { repositoryId: linkRepositoryId });
   }
 
+  return { contentPath };
+}
+
+/**
+ * Orchestrated page creation: content-repo folder + content.json (+ any extra
+ * files) on GitHub, DB row, optional repository link, manifest refresh.
+ *
+ * Every page is created with a `content.json`. Live editing, the granular
+ * content tools and the block editor all need one, and a page created as bare
+ * `index.html` stays a legacy page until someone converts it.
+ *
+ * @param blocks Initial content as page blocks, already converted by the
+ *               caller (`pageImport.convertMarkdown` / `convertHtml`, the
+ *               `page-import-convert` task: a markdown import, MCP
+ *               `page_create`'s `html`). Committed as content.json ONLY — no
+ *               index.html. Omitted: a blank page.
+ * @param files  Extra files to commit in the same batch (full repo paths,
+ *               e.g. `pages/{slug}/assets/foo.png`) — the import flow's images.
+ * @param ensureRepo  Skip the exists/create check when the caller already ran
+ *                    ensureContentRepo (batch import).
+ * @param commitMessage  Override the default commit message
+ *                       (`Create page: {title}` / `Import page: {title}`).
+ */
+export async function createPage({
+  classroomId,
+  title,
+  blocks,
+  files = [],
+  createdBy,
+  linkRepositoryId = null,
+  ensureRepo = true,
+  commitMessage,
+}: {
+  classroomId: string;
+  title: string;
+  blocks?: unknown[];
+  files?: PageFileUpload[];
+  createdBy: string;
+  linkRepositoryId?: string | null;
+  ensureRepo?: boolean;
+  commitMessage?: string;
+}) {
+  // Before any Github write, so a refused page leaves nothing in the repo.
+  // Callers that convert first ran this already (before spending a run); it
+  // runs again here because the classroom may have changed since.
+  const { contentPath } = await preflightCreatePage({ classroomId, title, linkRepositoryId });
+
+  const ctx = await resolveContentRepo(classroomId);
+
+  // The callers that pass `files` placed them under this same
+  // `freePageContentPath` (`<path>/assets/…`), so the page and its files agree.
+  // Should the free path have moved since (another page took it), the page
+  // would land away from its files: refused instead, before any write.
+  if (files.some(file => !file.path.startsWith(`${contentPath}/`))) {
+    throw Object.assign(
+      new Error(
+        `The page's files are not under its content path '${contentPath}'. Please try again.`
+      ),
+      { code: PAGE_CONTENT_PATH_CONFLICT }
+    );
+  }
+
   const jsonPath = `${contentPath}/content.json`;
 
-  // HTML becomes content.json, converted HERE — before anything is written, so
-  // a conversion that fails leaves no commit and no row behind.
+  // Converted blocks become content.json HERE — before anything is written, so
+  // a canonicalization that fails leaves no commit and no row behind. (The
+  // conversion itself ran before this call, in the caller.)
   const htmlContentJson =
-    html != null ? await contentJsonFromHtml({ ctx, title, contentPath, html, files }) : null;
+    blocks != null ? await contentJsonFromBlocks({ ctx, title, contentPath, blocks, files }) : null;
 
   if (ensureRepo) {
     await ensureContentRepoExists(ctx);

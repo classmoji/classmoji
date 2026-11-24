@@ -4,13 +4,12 @@ import {
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
-import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import {
   PAGE_IMPORT_TOO_LARGE_MESSAGE,
   oversizedImportFileMessage,
   readPageImportForm,
 } from '~/utils/pageImportBody.server';
-import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import { markdownImportFiles } from '~/utils/pageImportFiles.server';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,
@@ -80,6 +79,16 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
     return Response.json({ error: 'Classroom content repo not configured' });
   }
 
+  // Every page of a batch converts on Trigger.dev; without it the drawer does
+  // not offer Batch Import, and a post here anyway is refused before the
+  // content repo is touched.
+  if (
+    (intent === 'batch-init' || intent === 'batch-import-single') &&
+    !ClassmojiService.pageImport.isPageImportAvailable()
+  ) {
+    return Response.json({ error: ClassmojiService.pageImport.PAGE_IMPORT_MESSAGES.unavailable });
+  }
+
   // Initialize batch import - creates repo if needed
   if (intent === 'batch-init') {
     try {
@@ -102,7 +111,9 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
 
       // Get markdown and images
       const markdownFile = formData.get('markdown') as File;
-      const imageFiles = formData.getAll('images') as File[];
+      const imageFiles = formData
+        .getAll('images')
+        .filter((file): file is File => typeof file !== 'string');
 
       // One commit carries the page and every image, so one image over the
       // repository's cap is refused here, by name, before anything is written.
@@ -111,64 +122,34 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
 
       const markdownText = await markdownFile.text();
 
-      // Process markdown and images
-      const { html, imageMap, unmatchedImages } = await processMarkdownImport(
-        markdownText,
-        imageFiles,
-        {
+      // The checks createPage would refuse this page with (page limit, a title
+      // whose path is taken, a repository outside the classroom), before a run
+      // is spent on the conversion; same errors, so the same failure row.
+      // A title the conversion would refuse is refused first, with a sentence.
+      ClassmojiService.pageImport.assertImportTitle(title);
+      await ClassmojiService.page.preflightCreatePage({
+        classroomId: classroom.id,
+        title,
+        linkRepositoryId: moduleId,
+      });
+
+      // Markdown -> blocks on Trigger.dev, which sees the images' names only
+      // and says where each goes. A conversion that fails or times out throws
+      // a PageImportError whose message lands in the batch's failure list;
+      // nothing is created for this page.
+      const conversion = await ClassmojiService.pageImport.convertMarkdown({
+        markdown: markdownText,
+        title,
+        imageNames: imageFiles.map(file => file.name),
+        options: {
           org: gitOrgLogin,
           repo: contentRepo,
           contentPath,
           assetsFolder,
           provider: classroom.git_organization?.provider,
-        }
-      );
-
-      // Prepare files to upload
-      const filesToUpload: Array<{
-        path: string;
-        content: File;
-        encoding: 'binary';
-      }> = [];
-
-      // Add all matched images
-      imageMap.forEach(imageInfo => {
-        filesToUpload.push({
-          path: imageInfo.newPath,
-          content: imageInfo.file,
-          encoding: 'binary',
-        });
+        },
       });
-
-      // Add unmatched images (cast back to File since we know the inputs were File objects)
-      (unmatchedImages as unknown as File[]).forEach(file => {
-        const timestamp = Date.now();
-        const sanitizedName = file.name
-          .toLowerCase()
-          .replace(/[^a-z0-9.-]/g, '-')
-          .replace(/-+/g, '-');
-        const newFilename = `${sanitizedName.split('.')[0]}-${timestamp}.${sanitizedName.split('.').pop()}`;
-        const newPath = `${contentPath}/assets/${newFilename}`;
-
-        filesToUpload.push({
-          path: newPath,
-          content: file,
-          encoding: 'binary',
-        });
-      });
-
-      // Convert File objects to buffers
-      const uploadFiles: Array<{ path: string; content: string; encoding: 'base64' | 'utf-8' }> =
-        await Promise.all(
-          filesToUpload.map(async file => ({
-            path: file.path,
-            content: Buffer.from(await file.content.arrayBuffer()).toString('base64'),
-            encoding: 'base64' as const,
-          }))
-        );
-
-      // Wrap HTML content
-      const wrappedHtml = wrapHtmlContent(html, 2);
+      const uploadFiles = await markdownImportFiles(conversion, imageFiles, contentPath);
 
       // Orchestrated create: upload (content.json + assets) + DB row + optional
       // repository link + manifest refresh (packages/services page.createPage).
@@ -176,7 +157,7 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
       const page = await ClassmojiService.page.createPage({
         classroomId: classroom.id,
         title,
-        html: wrappedHtml,
+        blocks: conversion.blocks,
         files: uploadFiles,
         createdBy: userId,
         linkRepositoryId: moduleId,

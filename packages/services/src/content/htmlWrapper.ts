@@ -1,6 +1,8 @@
 /**
- * Wraps HTML body content in a complete HTML document with styling
- * Used when creating pages from markdown imports
+ * Wraps HTML body content in a complete HTML document with styling.
+ * Used when creating pages from markdown imports: the `page-import-convert`
+ * task wraps the importer's HTML in it before converting it to blocks
+ * (moved here from the web app, which no longer converts).
  */
 export const wrapHtmlContent = (bodyContent: string | null, width = 2) => {
   // Map width values to percentages

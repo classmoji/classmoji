@@ -61,3 +61,24 @@ export function oversizedImportFileMessage(files: Array<FormDataEntryValue>): st
   }
   return null;
 }
+
+/**
+ * The most a page create that is NOT an import may send: a title and an
+ * intent. Such a create takes no upload slot (the drawer marks an import in
+ * its query string, `?intent=import`), so its body is held to this instead.
+ */
+export const PAGE_CREATE_FORM_MAX_BYTES = 64 * 1024;
+
+/** What a person reads when a non-import create's form is over its cap. */
+export const PAGE_CREATE_FORM_TOO_LARGE_MESSAGE =
+  'This form is larger than expected. Reload the page and try again.';
+
+/** A non-import create's form, or null when it was over its small cap. */
+export async function readPageCreateForm(request: Request): Promise<FormData | null> {
+  try {
+    return await readLimitedFormData(request, uploadBodyLimit(PAGE_CREATE_FORM_MAX_BYTES));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) return null;
+    throw error;
+  }
+}
