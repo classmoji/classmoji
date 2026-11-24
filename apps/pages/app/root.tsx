@@ -24,7 +24,6 @@ import {
 } from '@classmoji/utils/sentry';
 import { prisma, getAuthSession, GIT_IDENTITY } from '~/utils/db.server.ts';
 import { classifyFormsPath } from '~/utils/formsPaths.ts';
-import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import { VIEW_PENDING_ATTRIBUTE } from '@classmoji/services/render-contract';
 import { isRenderDataRequest, renderDataRequestRefusal } from '~/render/headers.server.ts';
 import useStore from '~/store';
@@ -461,10 +460,15 @@ const RenderDocument = () => {
 /**
  * Document shell for class websites (/_site/*).
  *
- * Deliberately bundle-less: no <Scripts/>, no <ScrollRestoration/>, no
- * hydration, no Mantine/Toast providers, no dev-only preamble — only the two
- * inline scripts the CSP hashes. Whatever ships here is the whole page. <Links/> stays because it carries the app's CSS
- * bundle (Tailwind + BlockNote/Mantine styles) that renders page content.
+ * Never hydrated: no <Scripts/>, no <ScrollRestoration/>, no route manifest,
+ * no dev-only preamble. The one inline script is the dark-mode one, whose
+ * hash is in the site CSP (site/headers.server.ts). A page's document is
+ * drawn in the browser by the reader island, whose tags (stylesheets, module
+ * preloads, data block, module script from `/assets/`) the page and home
+ * routes render themselves (`ReaderIsland`); its toasts and Mantine provider
+ * live inside the island root. The reader handles Copy itself, so the old
+ * static render's inline copy script is gone. <Links/> stays: it carries the
+ * app's CSS bundle (Tailwind + BlockNote/Mantine styles).
  */
 const SiteDocument = () => {
   return (
@@ -488,9 +492,6 @@ const SiteDocument = () => {
       </head>
       <body className="bg-white dark:bg-[#191919]" suppressHydrationWarning>
         <Outlet />
-        {/* Copy buttons and the copy guard for code and terminal blocks. Its
-            hash is the CSP's other `script-src` entry (site/headers.server.ts). */}
-        <script dangerouslySetInnerHTML={{ __html: SITE_COPY_SCRIPT }} />
       </body>
     </html>
   );
@@ -552,8 +553,8 @@ export function ErrorBoundary() {
           {/* `dark:` is class-driven (styles/tailwind.css), so a document that
               never sets the class is stuck in light mode however dark the OS
               is. DARK_MODE_SCRIPT and not the App twin: a class site's
-              `script-src` allows only its own two hashes
-              (site/headers.server.ts), and this is one of them. */}
+              `script-src` allows only its hash (site/headers.server.ts). An
+              error document mounts no reader, so it has no island tags. */}
           <script dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }} />
         </head>
         <body className="bg-gray-50 dark:bg-[#191919]">

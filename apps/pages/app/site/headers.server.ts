@@ -1,8 +1,5 @@
-import { createHash } from 'node:crypto';
-
 import { COOKIE_PREFIX, sessionCookieRegexFor } from '@classmoji/auth/secret';
 
-import { SITE_COPY_SCRIPT } from './copyScript.ts';
 import { frameAncestorOrigins } from './env.server.ts';
 
 /**
@@ -29,8 +26,8 @@ import { frameAncestorOrigins } from './env.server.ts';
 
 /**
  * SHA-256 of the flash-free dark-mode script inlined by `SiteDocument` in
- * `app/root.tsx` — one of the two scripts a class-site document contains
- * (the other is `SITE_COPY_SCRIPT`, below).
+ * `app/root.tsx` — the one inline script a class-site document contains
+ * (a reader document also loads the island's module from `/assets/`).
  *
  * Hardcoded because root.tsx does not export the string (and is owned by
  * another workstream). `tests/unit/site-headers.spec.ts` re-derives this hash
@@ -38,15 +35,6 @@ import { frameAncestorOrigins } from './env.server.ts';
  * updating this constant breaks a test rather than the site's CSP.
  */
 export const DARK_MODE_SCRIPT_HASH = "'sha256-zE9lMCBH7j47LO0x2JTz3HAviU8juJhY/nTgMO3guIQ='";
-
-/**
- * SHA-256 of `SITE_COPY_SCRIPT` (Copy buttons + copy guard), which
- * `SiteDocument` inlines at the end of the body. Derived from the string
- * itself: both live in this app, so there is nothing to drift.
- */
-export const SITE_COPY_SCRIPT_HASH = `'sha256-${createHash('sha256')
-  .update(SITE_COPY_SCRIPT, 'utf8')
-  .digest('base64')}'`;
 
 /**
  * Match the session cookie better-auth sets for a given `cookiePrefix`.
@@ -75,21 +63,50 @@ export function hasSessionCookie(request: Request): boolean {
 }
 
 /**
+ * What a document that mounts the reader island needs from the policy
+ * (`page.tsx`, `home.tsx`). Absent for every other site response.
+ */
+export type SiteReaderPolicy = {
+  /**
+   * The document's own origin in a build: `script-src` admits exactly its
+   * `/assets/` path (the island's entry, its chunks and the lazily loaded
+   * Shiki grammars, all hashed module scripts; `modulepreload` is governed by
+   * `script-src` too). Null in dev, where Vite serves modules from other paths
+   * and `'self'` is kept.
+   */
+  assetsOrigin: string | null;
+  /**
+   * Whether the reader may call this origin's API (`connect-src 'self'`): a
+   * member's ticks, unlocks, comments and the payload after an unlock, all
+   * passed through on the class SUBDOMAIN only (`server/siteHost.ts`). False on
+   * a custom domain, where no session exists and nothing may be called.
+   */
+  connect: boolean;
+};
+
+/**
  * Content-Security-Policy for every class-site response.
  *
- * `script-src` allows exactly two hashes and nothing else (the dark-mode and
- * copy scripts) — class sites ship no bundle, no hydration and no third-party
- * tags, so anything that executes on one is by definition something we did
- * not put there. `style-src` needs
- * `'unsafe-inline'` because BlockNote's serializer emits inline `style`
- * attributes (image widths, column ratios) and Google Fonts' stylesheet is
- * loaded from `fonts.googleapis.com` by the shared document head.
+ * `script-src`: the dark-mode script's hash, and — only on a document that
+ * mounts the reader island — this origin's `/assets/` path (`'self'` in dev).
+ * Nothing else executes on a class site: no inline script but the dark-mode
+ * one, no third-party tags. (The old static render's inline copy script is
+ * gone: the reader handles Copy itself.)
+ *
+ * `connect-src 'none'` everywhere except a reader document on the class
+ * subdomain (`'self'`), where a member's reader calls the passed-through API.
+ * `style-src` needs `'unsafe-inline'` because BlockNote and Mantine set inline
+ * styles (image widths, column ratios, Shiki's colour variables) and inject
+ * <style>, and Google Fonts' stylesheet is loaded by the shared document head.
  */
-export function contentSecurityPolicy(): string {
+export function contentSecurityPolicy(reader?: SiteReaderPolicy | null): string {
   const frameAncestors = frameAncestorOrigins();
+  const scripts = reader
+    ? `${reader.assetsOrigin ? `${reader.assetsOrigin.replace(/\/+$/, '')}/assets/` : "'self'"} ${DARK_MODE_SCRIPT_HASH}`
+    : DARK_MODE_SCRIPT_HASH;
   return [
     "default-src 'none'",
-    `script-src ${DARK_MODE_SCRIPT_HASH} ${SITE_COPY_SCRIPT_HASH}`,
+    `script-src ${scripts}`,
     // Author content routinely embeds images from anywhere; `https:` + `data:`
     // is the narrowest policy that does not break existing pages.
     "img-src 'self' https: data:",
@@ -97,7 +114,7 @@ export function contentSecurityPolicy(): string {
     "font-src 'self' https://fonts.gstatic.com data:",
     "media-src 'self' https:",
     'frame-src https:',
-    "connect-src 'none'",
+    `connect-src ${reader?.connect ? "'self'" : "'none'"}`,
     "base-uri 'none'",
     "form-action 'self'",
     `frame-ancestors ${frameAncestors.length > 0 ? frameAncestors.join(' ') : "'none'"}`,
@@ -112,6 +129,8 @@ export type SiteHeaderOptions = {
   noindex?: boolean;
   /** Override the content type (resource routes: robots.txt). */
   contentType?: string;
+  /** This document mounts the reader island (`SiteReaderPolicy`). */
+  reader?: SiteReaderPolicy | null;
 };
 
 /**
@@ -125,6 +144,7 @@ export function siteHeaders({
   cacheable = false,
   noindex = false,
   contentType,
+  reader = null,
 }: SiteHeaderOptions): Headers {
   const headers = new Headers();
 
@@ -141,7 +161,7 @@ export function siteHeaders({
     headers.set('Cache-Control', 'no-store');
   }
 
-  headers.set('Content-Security-Policy', contentSecurityPolicy());
+  headers.set('Content-Security-Policy', contentSecurityPolicy(reader));
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
@@ -163,8 +183,20 @@ function fallbackSiteHeaders(): Headers {
   return headers;
 }
 
-/** Header names whose value must come from the winning source verbatim. */
-const DECISION_HEADERS = ['Cache-Control', 'Vary', 'X-Robots-Tag', 'Content-Type'];
+/**
+ * Header names whose value must come from the winning source verbatim. The
+ * CSP is one of them: a reader document's policy (scripts from `/assets/`,
+ * `connect-src 'self'` on the subdomain) is decided by its loader, and an
+ * error response's narrower one by `siteHeaders` where it was thrown. A source
+ * that carries none leaves the fallback's narrow policy in place.
+ */
+const DECISION_HEADERS = [
+  'Cache-Control',
+  'Vary',
+  'X-Robots-Tag',
+  'Content-Type',
+  'Content-Security-Policy',
+];
 
 export type RouteHeaderArgs = {
   loaderHeaders?: Headers;

@@ -43,6 +43,20 @@ const { sanitizeForwardedHost, rewriteSiteRequests } = createSiteHostMiddleware(
 // (@react-router/express honours it when building the request URL).
 app.use(sanitizeForwardedHost);
 
+// Every response this server sends is declared as what it is, never sniffed:
+// static files, the host middleware's own answers (health, not-found) and
+// every React Router response. Added when the headers are written, and only
+// when the response has none (routes that set it keep theirs, never doubled).
+app.use((_req, res, next) => {
+  const writeHead = res.writeHead;
+  res.writeHead = function (this: typeof res, ...args: Parameters<typeof writeHead>) {
+    if (!res.hasHeader('X-Content-Type-Options'))
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    return writeHead.apply(this, args);
+  } as typeof writeHead;
+  next();
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chrome DevTools well-known URL (noop to prevent 404 errors)
 // ─────────────────────────────────────────────────────────────────────────────

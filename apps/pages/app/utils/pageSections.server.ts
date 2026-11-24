@@ -63,6 +63,55 @@ export const SECTION_NO_STORE_HEADERS: Readonly<Record<string, string>> = Object
 });
 
 /**
+ * Headers on every JSON answer of the reader API routes (`/api/page-sections`,
+ * `/api/page-comments`, `/api/page-reader`): never cached, never sniffed.
+ */
+export const READER_API_JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  ...SECTION_NO_STORE_HEADERS,
+  'X-Content-Type-Options': 'nosniff',
+});
+
+/**
+ * A reader API call that arrived on a class-site SUBDOMAIN (the host
+ * middleware passed it through and stamped the subdomain). The route module
+ * builds it from that stamp (`app/site/apiBinding.server.ts`); on the pages
+ * host itself there is none.
+ *
+ * Present, it binds the call to that site: the handler answers its ordinary
+ * 404 unless `allows` says this page may be served to this user there (the
+ * site active, the page in the site's classroom, not a draft, visible on the
+ * site to an accepted member). Without it, any subdomain would answer
+ * cookie-authenticated calls for any classroom's page. A POST also needs
+ * `Content-Type: application/json` (415 otherwise, before the body is read),
+ * and audit rows say `via: 'site'`.
+ */
+export interface SiteApiBinding {
+  allows(args: {
+    page: { id: string; classroom_id: string; is_draft: boolean; is_public?: boolean };
+    userId: string;
+  }): Promise<boolean>;
+}
+
+/**
+ * Is this a request another site set off? `Sec-Fetch-Site` present and not
+ * `same-origin` (`cross-site`, `same-site` — another class's subdomain — or
+ * `none`). A request without the header (an older client, a script) is not
+ * judged by it. On a class-site host the AUDITED reads refuse such a request,
+ * so another tenant's page cannot write VIEW rows in a visiting member's name
+ * with an `<img>`.
+ */
+export function isForeignFetch(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  return site !== null && site !== 'same-origin';
+}
+
+/** Is the request body declared JSON (`application/json`, any parameters)? */
+export function isJsonContentType(request: Request): boolean {
+  const type = (request.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  return type === 'application/json';
+}
+
+/**
  * What `ClassmojiService.pageSections.sectionViewer` answers: the one reader
  * rule (see that function for each field).
  */
@@ -344,6 +393,7 @@ export interface SectionsPage {
   id: string;
   classroom_id: string;
   is_draft: boolean;
+  is_public?: boolean;
   classroom: { status: ClassroomStatus | string };
 }
 
@@ -405,6 +455,8 @@ export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
   audit(entry: SectionAuditEntry): Promise<unknown>;
   /** A write the service refused as malformed (→ 400). */
   isValidationError(error: unknown): boolean;
+  /** Set when the call arrived on a class-site host (`SiteApiBinding`). */
+  site?: SiteApiBinding | null;
 }
 
 /**
@@ -431,7 +483,8 @@ export interface SectionAuditEntry {
   action: 'CREATE' | 'DELETE' | 'VIEW';
   data: {
     tool: string;
-    via: 'web';
+    /** 'site' when the call arrived on a class-site host. */
+    via: 'web' | 'site';
     page_id: string;
     block_id: string;
     [key: string]: string | boolean;
@@ -459,7 +512,7 @@ async function auditQuietly(
 export const SECTION_REQUEST_MAX_BYTES = 4 * 1024;
 
 function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: { ...SECTION_NO_STORE_HEADERS } });
+  return Response.json(body, { status, headers: { ...READER_API_JSON_HEADERS } });
 }
 
 const fail = (status: number, error: string) => json({ error }, status);
@@ -512,6 +565,8 @@ async function sectionsPost<P extends SectionsPage>(
     console.warn('[page-sections] refused cross-site request:', origin.reason, origin.origin);
     return fail(403, 'Forbidden');
   }
+  // On a class site, a JSON body or nothing (before the body is read).
+  if (deps.site && !isJsonContentType(request)) return fail(415, 'Unsupported media type');
 
   const text = await readCappedBody(request, SECTION_REQUEST_MAX_BYTES);
   if (text === null) return fail(413, 'Request too large');
@@ -529,6 +584,8 @@ async function sectionsPost<P extends SectionsPage>(
 
   const page = await deps.findPage(body.pageId);
   if (!page) return notFound();
+  if (deps.site && !(await deps.site.allows({ page, userId: session.userId }))) return notFound();
+  const via = deps.site ? 'site' : 'web';
 
   const viewer = await deps.sectionViewer({
     userId: session.userId,
@@ -577,7 +634,7 @@ async function sectionsPost<P extends SectionsPage>(
           action: 'CREATE',
           data: {
             tool: 'page_section_unlock',
-            via: 'web',
+            via,
             page_id: page.id,
             block_id: body.blockId,
           },
@@ -605,7 +662,7 @@ async function sectionsPost<P extends SectionsPage>(
         action: checked ? 'CREATE' : 'DELETE',
         data: {
           tool: 'page_section_check',
-          via: 'web',
+          via,
           page_id: page.id,
           block_id: body.blockId,
           checked,
@@ -659,12 +716,16 @@ async function sectionsGet<P extends SectionsPage>(
   const pageId = url.searchParams.get('pageId');
   const blockId = url.searchParams.get('blockId');
 
+  // On a class site this audited read answers only this origin's own pages.
+  if (deps.site && isForeignFetch(request)) return notFound();
+
   const session = await deps.getSession(request);
   if (!session) return fail(401, 'Sign in to continue');
 
   if (!isRowId(pageId)) return notFound();
   const page = await deps.findPage(pageId);
   if (!page) return notFound();
+  if (deps.site && !(await deps.site.allows({ page, userId: session.userId }))) return notFound();
 
   const viewer = await deps.sectionViewer({
     userId: session.userId,
@@ -711,7 +772,7 @@ async function sectionsGet<P extends SectionsPage>(
       action: 'VIEW',
       data: {
         tool: kind === 'check' ? 'page_section_checks' : 'page_section_unlocks',
-        via: 'web',
+        via: deps.site ? 'site' : 'web',
         page_id: page.id,
         block_id: blockId,
         ...(session.impersonatedBy ? { impersonated_by: session.impersonatedBy } : {}),

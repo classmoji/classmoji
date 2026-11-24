@@ -1,7 +1,7 @@
 /**
  * The reader island: the shared page reader (`PageReader`) mounted with
  * `createRoot` into a server-rendered document that React Router does not
- * hydrate (the MCP's page render today, the class site next). Its data comes
+ * hydrate (the MCP's page render and the class site). Its data comes
  * from the inline `<script type="application/json">` the server wrote
  * (`ReaderIsland.tsx`); nothing here touches a router.
  *
@@ -21,7 +21,6 @@ import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
 import { PageReader } from '~/components/reader/PageReader.tsx';
-import type { ReaderPayload } from '~/utils/readerPayload.ts';
 import {
   READER_ISLAND_DATA_ID,
   READER_ISLAND_ROOT_ID,
@@ -30,32 +29,10 @@ import {
 } from './contract.ts';
 import { markIslandReady, showIslandError } from './islandDom.ts';
 import { readerSettled } from './readiness.ts';
+import { hostOptionsFor, type ReaderIslandHost } from './hostOptions.ts';
+import { keepScrollPosition } from './scrollMemory.ts';
 
-/** What the host page gives the reader beyond its data. */
-export interface ReaderIslandHost {
-  /**
-   * Load the page again (after an unlock, or once when a signed URL expired)
-   * and resolve with the NEW payload; reject when it could not be loaded.
-   * None: nothing refreshes (the reader reports an unlock as not opened, and
-   * an expired image stays as it is).
-   */
-  onRefresh?: () => Promise<ReaderPayload>;
-}
-
-/**
- * The host options for a surface. `render` (the MCP's page render) has a view
- * token and no session: no refresh, and the reader makes no API call.
- *
- * SEAM for the class site: `site` will supply `onRefresh` here (a fetch of
- * `/api/page-reader?pageId=` for the session's viewer, members only).
- */
-export function hostOptionsFor(data: ReaderIslandData): ReaderIslandHost {
-  switch (data.surface) {
-    case 'render':
-    default:
-      return {};
-  }
-}
+export { hostOptionsFor, type ReaderIslandHost };
 
 const noToastHotKey = () => false;
 
@@ -83,7 +60,16 @@ class IslandBoundary extends Component<{ children: ReactNode }, { failed: boolea
   }
 }
 
-function ReaderIslandApp({ data, host }: { data: ReaderIslandData; host: ReaderIslandHost }) {
+function ReaderIslandApp({
+  data,
+  host,
+  onSettled,
+}: {
+  data: ReaderIslandData;
+  host: ReaderIslandHost;
+  /** Run once the reader is on screen and settled (the site's scroll restore). */
+  onSettled?: () => void;
+}) {
   // Once per document: a later remount of the viewer is not a new arrival.
   const settling = useRef(false);
   const content = data.payload.content;
@@ -94,13 +80,16 @@ function ReaderIslandApp({ data, host }: { data: ReaderIslandData; host: ReaderI
     // The reader is on screen: a failure while WAITING (not drawing) still
     // ends in ready, never in the error state.
     void readerSettled(root, content).then(
-      how => markIslandReady(how),
+      how => {
+        onSettled?.();
+        markIslandReady(how);
+      },
       error => {
         console.warn('[reader-island] readiness check failed', error);
         markIslandReady('unsettled');
       }
     );
-  }, [content]);
+  }, [content, onSettled]);
 
   return (
     <MantineProvider theme={MANTINE_THEME}>
@@ -126,6 +115,8 @@ function ReaderIslandApp({ data, host }: { data: ReaderIslandData; host: ReaderI
         downloadOrigin={data.downloadOrigin ?? ''}
         {...(host.onRefresh ? { onRefresh: host.onRefresh } : {})}
         onReady={onReady}
+        // The class site draws the cover and title in its own chrome.
+        bodyOnly={data.surface === 'site'}
       />
     </MantineProvider>
   );
@@ -142,13 +133,19 @@ export function mountReaderIsland(host?: ReaderIslandHost): void {
     showIslandError(new Error('The reader island has no root or no data.'));
     return;
   }
+  // The class site keeps the visitor's place on reload and Back.
+  const restoreScroll = data.surface === 'site' ? keepScrollPosition(window) : undefined;
   // The server's loading line goes when React takes the root over.
   createRoot(rootElement, {
     onUncaughtError: error => showIslandError(error),
   }).render(
     <StrictMode>
       <IslandBoundary>
-        <ReaderIslandApp data={data} host={host ?? hostOptionsFor(data)} />
+        <ReaderIslandApp
+          data={data}
+          host={host ?? hostOptionsFor(data)}
+          onSettled={restoreScroll}
+        />
       </IslandBoundary>
     </StrictMode>
   );

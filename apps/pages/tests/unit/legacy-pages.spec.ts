@@ -272,7 +272,7 @@ test.describe('the class site', () => {
   test('the notice is staff-only on both site routes, from the render’s flag', () => {
     expect(SITE_RENDER_SOURCE).toContain("legacyFormat: content.format === 'html',");
     for (const route of [SITE_PAGE_SOURCE, SITE_HOME_SOURCE]) {
-      expect(route).toContain('legacyNotice: isStaff(viewer) && rendered.legacyFormat,');
+      expect(route).toContain('legacyNotice: isStaff(viewer) && view.legacyFormat,');
       expect(route).toContain('{legacyNotice ? <LegacyPageNotice layout="inline" /> : null}');
     }
   });

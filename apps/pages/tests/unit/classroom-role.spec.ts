@@ -64,7 +64,10 @@ test.describe('every reader of a member’s role asks the same helper', () => {
     expect(HELPER).toContain('getPrisma().classroomMembership.findMany({');
     expect(HELPER).toContain('return highestRole(rows.map(row => row.role));');
     expect(HELPER).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
-    expect(TENANT).toContain('highestRole(memberships.map(membership => membership.role))');
+    expect(TENANT).toContain(
+      'const acceptedRoles = memberships.map(membership => membership.role);'
+    );
+    expect(TENANT).toContain('highestRole(acceptedRoles)');
   });
 
   test('the classroom index, its action, the pages API and the form fill', () => {

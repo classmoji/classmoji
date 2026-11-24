@@ -75,6 +75,13 @@ export interface PageReaderProps {
   preview?: { css: string | null; coverChanged: boolean } | null;
   /** Called once the document is on screen. */
   onReady?: () => void;
+  /**
+   * The host draws the page's cover and title itself, in its own column (the
+   * class site, whose server-rendered chrome keeps them in the first paint):
+   * the reader then renders only the page discussion and the document, with
+   * no cover, no title, no draft chip and no column of its own.
+   */
+  bodyOnly?: boolean;
 }
 
 const NO_REFRESH = () => Promise.reject(new Error('This page cannot be loaded again here.'));
@@ -110,6 +117,7 @@ export function PageReader({
   notices = null,
   preview = null,
   onReady,
+  bodyOnly = false,
 }: PageReaderProps) {
   // A refresh that came back with a payload (a host with no router) replaces
   // content AND section state in one update — the unlock settles on a new
@@ -225,7 +233,7 @@ export function PageReader({
         data-reader-surface={surface}
         {...(ready ? { 'data-reader-ready': 'true' } : {})}
       >
-        {coverUrl && (
+        {coverUrl && !bodyOnly && (
           <ReaderCover
             imageUrl={coverUrl}
             position={cover?.position ?? 50}
@@ -234,15 +242,21 @@ export function PageReader({
         )}
 
         <div
-          className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${pageWidthClass(page.width)} ${coverUrl ? 'mt-12' : 'mt-16'}`}
+          className={
+            bodyOnly
+              ? undefined
+              : `mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${pageWidthClass(page.width)} ${coverUrl ? 'mt-12' : 'mt-16'}`
+          }
         >
-          <div>
-            <h1 className="text-5xl font-bold text-gray-900 dark:text-white mb-6">
-              {page.title || 'Untitled'}
-            </h1>
-          </div>
+          {!bodyOnly && (
+            <div>
+              <h1 className="text-5xl font-bold text-gray-900 dark:text-white mb-6">
+                {page.title || 'Untitled'}
+              </h1>
+            </div>
+          )}
 
-          {page.is_draft && (
+          {page.is_draft && !bodyOnly && (
             <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
               Draft
             </span>
@@ -256,7 +270,7 @@ export function PageReader({
             />
           )}
 
-          <div className="mt-2">
+          <div className={bodyOnly ? undefined : 'mt-2'}>
             {!isClient ? (
               /* SSR placeholder — BlockNote requires browser APIs */
               <LoadingContent />

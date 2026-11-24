@@ -25,7 +25,12 @@ import {
   renderDataRequestRefusal,
   renderPageHeaders,
 } from '../../app/render/headers.server.ts';
-import { DARK_MODE_SCRIPT_HASH, SITE_COPY_SCRIPT_HASH } from '../../app/site/headers.server.ts';
+import { createHash } from 'node:crypto';
+import { DARK_MODE_SCRIPT_HASH } from '../../app/site/headers.server.ts';
+import { SITE_COPY_SCRIPT } from '../../app/site/copyScript.ts';
+
+/** The old static site's inline copy script, by hash (no policy names it). */
+const SITE_COPY_SCRIPT_HASH = `'sha256-${createHash('sha256').update(SITE_COPY_SCRIPT, 'utf8').digest('base64')}'`;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -347,7 +352,7 @@ test.describe('the render page CSP (its own, not the class site’s)', () => {
       ...FIXED,
       'script-src': `https://pages.classmoji.io/assets/ ${DARK_MODE_SCRIPT_HASH}`,
     });
-    // The site's copy script is not in this document, so not in this policy.
+    // The old site copy script is in no document, so not in this policy.
     expect(csp).not.toContain(SITE_COPY_SCRIPT_HASH);
     expect(csp).not.toContain("'self' 'sha");
     expect(csp).not.toContain('unsafe-eval');

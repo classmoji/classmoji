@@ -24,6 +24,7 @@ import {
   parseHostHeader,
   resolveSiteHostConfig,
   resolveSiteRequest,
+  SITE_API_PATHS,
   type SiteHostConfig,
 } from '../../server/siteHost.ts';
 
@@ -993,7 +994,7 @@ test.describe('custom-origin marker', () => {
     rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
 
     expect(req.url).toBe('/_site/cs52/syllabus');
-    expect(buildSiteLoadContext(req)).toEqual({ customDomain: 'cs52.me' });
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: 'cs52.me', siteSubdomain: null });
   });
 
   test('a subdomain request is explicitly NOT marked', () => {
@@ -1005,7 +1006,7 @@ test.describe('custom-origin marker', () => {
     const req = fakeReq('/syllabus', { host: 'cs52.lvh.me' });
     rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
 
-    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null });
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null, siteSubdomain: null });
   });
 
   test('an inbound header can NEVER become the marker', () => {
@@ -1025,12 +1026,166 @@ test.describe('custom-origin marker', () => {
     });
     rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
 
-    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null });
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null, siteSubdomain: null });
   });
 
   test('a request the middleware never saw reads as not-custom', () => {
-    expect(buildSiteLoadContext(fakeReq('/', {}))).toEqual({ customDomain: null });
-    expect(buildSiteLoadContext(undefined)).toEqual({ customDomain: null });
-    expect(buildSiteLoadContext({ __classmojiCustomDomain: 42 })).toEqual({ customDomain: null });
+    expect(buildSiteLoadContext(fakeReq('/', {}))).toEqual({
+      customDomain: null,
+      siteSubdomain: null,
+    });
+    expect(buildSiteLoadContext(undefined)).toEqual({ customDomain: null, siteSubdomain: null });
+    expect(buildSiteLoadContext({ __classmojiCustomDomain: 42 })).toEqual({
+      customDomain: null,
+      siteSubdomain: null,
+    });
+  });
+});
+
+// ─── The members' reader API on a class-site subdomain ──────────────────────
+
+test.describe('site API passthrough', () => {
+  const customConfigForApi: SiteHostConfig = {
+    ...devConfig,
+    resolveCustomHost: host => (host === 'cs52.me' ? 'cs52' : null),
+  };
+
+  test('exactly three paths, passed through and stamped on a subdomain', () => {
+    expect([...SITE_API_PATHS].sort()).toEqual([
+      '/api/page-comments',
+      '/api/page-reader',
+      '/api/page-sections',
+    ]);
+    for (const path of SITE_API_PATHS) {
+      expect(resolveSiteRequest(path, 'cs52.lvh.me', devConfig)).toEqual({
+        action: 'site-api',
+        subdomain: 'cs52',
+      });
+      // The query string does not change the decision.
+      expect(resolveSiteRequest(`${path}?pageId=abc`, 'cs52.lvh.me', devConfig)).toEqual({
+        action: 'site-api',
+        subdomain: 'cs52',
+      });
+    }
+  });
+
+  test('every other API path is rewritten into the _site tree (where it 404s)', () => {
+    for (const path of [
+      '/api/pages/cs52',
+      '/api/media-download',
+      '/api/asset-urls',
+      '/api/media-url',
+      '/api/page-sections/',
+      '/api/page-sections/x',
+      '/api/page-sections.data',
+      '/API/page-sections',
+      '/api/page-sectionsx',
+      '/api/page%2Dsections',
+      '/api%2Fpage-sections',
+      '/x/api/page-sections',
+      '//api/page-sections',
+    ]) {
+      const resolution = resolveSiteRequest(path, 'cs52.lvh.me', devConfig);
+      expect(resolution.action, path).not.toBe('site-api');
+    }
+  });
+
+  test('dot segments and their encodings are refused before the passthrough', () => {
+    for (const path of [
+      '/api/x/../page-sections',
+      '/api/%2e%2e/api/page-sections',
+      '/api/./page-sections',
+      '/api/.%2E/api/page-reader',
+      '/foo/..\\api/page-comments',
+    ]) {
+      expect(resolveSiteRequest(path, 'cs52.lvh.me', devConfig), path).toEqual({
+        action: 'not-found',
+        reason: 'dot-segment',
+      });
+    }
+  });
+
+  test('a backslash normalizes to the exact path, so it is the same route, stamped', () => {
+    // The URL parser turns `\` into `/` for http(s): what the adapter routes
+    // on is `/api/page-sections`, so the decision must be made on that.
+    expect(resolveSiteRequest('/api\\page-sections', 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'site-api',
+      subdomain: 'cs52',
+    });
+    expect(resolveSiteRequest('/api\\page-sections', 'cs52.me', customConfigForApi)).toMatchObject({
+      action: 'rewrite',
+    });
+  });
+
+  test('NEVER on a custom domain: rewritten like any page path', () => {
+    for (const path of SITE_API_PATHS) {
+      expect(resolveSiteRequest(path, 'cs52.me', customConfigForApi)).toEqual({
+        action: 'rewrite',
+        url: `/_site/cs52${path}`,
+        subdomain: 'cs52',
+        customDomain: 'cs52.me',
+      });
+    }
+  });
+
+  test('the canonical host and an unknown host are unchanged', () => {
+    expect(resolveSiteRequest('/api/page-sections', 'localhost:7140', devConfig)).toEqual({
+      action: 'pass',
+    });
+    expect(resolveSiteRequest('/api/page-sections', 'evil.example', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'unknown-host',
+    });
+  });
+
+  test('the middleware leaves the URL alone and stamps the subdomain; the load context reads it', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware(
+      { SITE_BASE_DOMAIN: 'lvh.me', PAGES_URL: 'http://localhost:7140' },
+      { resolveCustomHost: host => (host === 'cs52.me' ? 'cs52' : null) }
+    );
+    const req = fakeReq('/api/page-sections?pageId=p', { host: 'cs52.lvh.me:7140' });
+    let nexted = false;
+    rewriteSiteRequests(
+      req,
+      fakeRes() as unknown as Response,
+      (() => {
+        nexted = true;
+      }) as NextFunction
+    );
+    expect(nexted).toBe(true);
+    expect(req.url).toBe('/api/page-sections?pageId=p');
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null, siteSubdomain: 'cs52' });
+
+    // The same path on the custom domain: rewritten, and NOT stamped.
+    const custom = fakeReq('/api/page-sections', { host: 'cs52.me' });
+    rewriteSiteRequests(custom, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+    expect(custom.url).toBe('/_site/cs52/api/page-sections');
+    expect(buildSiteLoadContext(custom)).toEqual({ customDomain: 'cs52.me', siteSubdomain: null });
+
+    // A page on the subdomain, and the canonical host: not stamped.
+    const page = fakeReq('/syllabus', { host: 'cs52.lvh.me' });
+    rewriteSiteRequests(page, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+    expect(buildSiteLoadContext(page).siteSubdomain).toBeNull();
+    const canonical = fakeReq('/api/page-sections', { host: 'localhost:7140' });
+    rewriteSiteRequests(canonical, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+    expect(buildSiteLoadContext(canonical).siteSubdomain).toBeNull();
+  });
+
+  test('a stamp written before the middleware runs is overwritten; a header never is one', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware({
+      SITE_BASE_DOMAIN: 'lvh.me',
+      PAGES_URL: 'http://localhost:7140',
+    });
+    const req = fakeReq('/api/page-sections', {
+      host: 'localhost:7140',
+      __classmojiSiteSubdomain: 'cs52',
+      'x-site-subdomain': 'cs52',
+    });
+    (req as unknown as Record<string, unknown>).__classmojiSiteSubdomain = 'cs52';
+    rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+    expect(buildSiteLoadContext(req).siteSubdomain).toBeNull();
+    // A malformed value never reads as a subdomain.
+    expect(buildSiteLoadContext({ __classmojiSiteSubdomain: 'a.b' }).siteSubdomain).toBeNull();
+    expect(buildSiteLoadContext({ __classmojiSiteSubdomain: 42 }).siteSubdomain).toBeNull();
   });
 });

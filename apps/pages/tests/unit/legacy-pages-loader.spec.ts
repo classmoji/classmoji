@@ -351,9 +351,8 @@ export const isMember = viewer => viewer.role !== null;
 export const publicPathOf = pathname => pathname;
 `),
   './pageRender.server.ts': stubModule(`
-export const renderPageForViewer = async () => ({ title: 'Week 1', html: '<div></div>', coverImage: null, legacyFormat: true });
-export const describeFromHtml = () => null;
-export const siteArticleWidthClass = () => 'max-w-4xl';
+export const loadSitePageView = async () => ({ title: 'Week 1', coverImage: null, description: null, legacyFormat: true, island: { payload: { content: [], assets: {}, srcSets: {} } }, assets: {} });
+export const siteReaderPolicy = () => ({ assetsOrigin: null, connect: true });
 `),
   './headers.server.ts': stubModule(
     'export const siteHeaders = () => ({}); export const routeSiteHeaders = () => new Headers();'

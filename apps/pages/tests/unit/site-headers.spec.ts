@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import {
   DARK_MODE_SCRIPT_HASH,
-  SITE_COPY_SCRIPT_HASH,
+  contentSecurityPolicy,
   hasSessionCookie,
   routeSiteHeaders,
   sessionCookieRegexFor,
@@ -33,6 +33,15 @@ const request = (headers: Record<string, string> = {}): Request =>
   new Request('http://cs52.lvh.me/syllabus', { headers });
 
 const anonymous = () => request();
+
+/** The old static render's inline copy script, by hash: in NO site policy any more. */
+const SITE_COPY_SCRIPT_HASH = `'sha256-${crypto
+  .createHash('sha256')
+  .update(SITE_COPY_SCRIPT, 'utf8')
+  .digest('base64')}'`;
+
+const directive = (csp: string, name: string) =>
+  csp.split('; ').find(part => part.startsWith(`${name} `));
 const signedIn = () => request({ cookie: 'classmoji.session_token=abc123' });
 
 test.describe('cache policy', () => {
@@ -157,16 +166,62 @@ test.describe('security headers', () => {
     expect(headers.get('Permissions-Policy')).toBe('camera=(), microphone=(), geolocation=()');
   });
 
-  test('CSP locks the page down to exactly two hashed scripts', () => {
+  // CHANGED with the reader island (was: `script-src` = the dark-mode and
+  // copy-script hashes, `connect-src 'none'`, on every response). Now:
+  //   - every response: the dark-mode hash only (the copy script is gone);
+  //   - a document that mounts the reader island additionally admits this
+  //     origin's `/assets/` (`'self'` in dev), and `connect-src 'self'` on the
+  //     class subdomain only (`'none'` on a custom domain).
+  test('a response with no reader runs exactly the dark-mode script and connects nowhere', () => {
     const csp = siteHeaders({ request: anonymous() }).get('Content-Security-Policy') ?? '';
     expect(csp).toContain("default-src 'none'");
-    const scriptSrc = csp.split('; ').find(part => part.startsWith('script-src'));
-    expect(scriptSrc).toBe(`script-src ${DARK_MODE_SCRIPT_HASH} ${SITE_COPY_SCRIPT_HASH}`);
+    expect(directive(csp, 'script-src')).toBe(`script-src ${DARK_MODE_SCRIPT_HASH}`);
     expect(csp).not.toContain("'unsafe-eval'");
-    expect(csp).not.toContain("script-src 'self'");
+    expect(csp).not.toContain("'self' 'sha256");
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("form-action 'self'");
-    expect(csp).toContain("connect-src 'none'");
+    expect(directive(csp, 'connect-src')).toBe("connect-src 'none'");
+  });
+
+  test('a reader document on the subdomain: scripts from its /assets/ only, connections to itself', () => {
+    const csp =
+      siteHeaders({
+        request: anonymous(),
+        reader: { assetsOrigin: 'https://cs52.classmoji.io', connect: true },
+      }).get('Content-Security-Policy') ?? '';
+    expect(directive(csp, 'script-src')).toBe(
+      `script-src https://cs52.classmoji.io/assets/ ${DARK_MODE_SCRIPT_HASH}`
+    );
+    expect(directive(csp, 'connect-src')).toBe("connect-src 'self'");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("img-src 'self' https: data:");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+    expect(csp).toContain("media-src 'self' https:");
+    expect(csp).toContain('frame-src https:');
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("form-action 'self'");
+  });
+
+  test('a reader document on a custom domain connects nowhere', () => {
+    const csp = contentSecurityPolicy({
+      assetsOrigin: 'https://course.example.edu',
+      connect: false,
+    });
+    expect(directive(csp, 'script-src')).toBe(
+      `script-src https://course.example.edu/assets/ ${DARK_MODE_SCRIPT_HASH}`
+    );
+    expect(directive(csp, 'connect-src')).toBe("connect-src 'none'");
+  });
+
+  test("in dev (no build origin) the island's modules come from 'self'", () => {
+    const csp = contentSecurityPolicy({ assetsOrigin: null, connect: true });
+    expect(directive(csp, 'script-src')).toBe(`script-src 'self' ${DARK_MODE_SCRIPT_HASH}`);
+  });
+
+  test('the old copy script is in no policy', () => {
+    for (const reader of [null, { assetsOrigin: 'https://x.test', connect: true }]) {
+      expect(contentSecurityPolicy(reader)).not.toContain(SITE_COPY_SCRIPT_HASH);
+    }
   });
 
   test('frame-ancestors names first-party origins, never a tenant wildcard', () => {
@@ -228,12 +283,10 @@ test.describe('the CSP script hash tracks root.tsx', () => {
     expect(`'sha256-${derived}'`).toBe(DARK_MODE_SCRIPT_HASH);
   });
 
-  test('the copy script hash is the hash of the copy script', () => {
-    const derived = crypto.createHash('sha256').update(SITE_COPY_SCRIPT, 'utf8').digest('base64');
-    expect(SITE_COPY_SCRIPT_HASH).toBe(`'sha256-${derived}'`);
-  });
-
-  test('root.tsx inlines exactly the two hashed scripts in the site document', () => {
+  // CHANGED with the reader island (was: exactly the dark-mode AND copy
+  // scripts). The reader's module script comes from the page route
+  // (`ReaderIsland`), from /assets/, never inline.
+  test('root.tsx inlines exactly the dark-mode script in the site document', () => {
     const rootPath = path.join(__dirname, '../../app/root.tsx');
     const source = fs.readFileSync(rootPath, 'utf-8');
 
@@ -247,14 +300,11 @@ test.describe('the CSP script hash tracks root.tsx', () => {
 
     const inlineScripts =
       siteDocument.match(/dangerouslySetInnerHTML=\{\{ __html: (\w+) \}\}/g) ?? [];
-    expect(
-      inlineScripts,
-      'site document must inline exactly the dark-mode and copy scripts'
-    ).toEqual([
+    expect(inlineScripts, 'site document must inline exactly the dark-mode script').toEqual([
       'dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }}',
-      'dangerouslySetInnerHTML={{ __html: SITE_COPY_SCRIPT }}',
     ]);
-    expect(siteDocument.match(/dangerouslySetInnerHTML/g)).toHaveLength(2);
+    expect(siteDocument.match(/dangerouslySetInnerHTML/g)).toHaveLength(1);
+    expect(siteDocument).not.toContain('SITE_COPY_SCRIPT');
     // A script bundle on a site page would defeat the whole design.
     expect(siteDocument).not.toContain('<Scripts');
     expect(siteDocument).not.toContain('<ScrollRestoration');
@@ -305,6 +355,24 @@ test.describe('route headers export', () => {
     const merged = routeSiteHeaders({ parentHeaders, loaderHeaders });
 
     expect(merged.get('Cache-Control')).toBe('public, max-age=60');
+  });
+
+  test("a reader document's policy reaches the response; an error's narrower one wins over it", () => {
+    const reader = { assetsOrigin: 'https://cs52.classmoji.io', connect: true };
+    const parentHeaders = siteHeaders({ request: anonymous() });
+    const loaderHeaders = siteHeaders({ request: anonymous(), cacheable: true, reader });
+    const merged = routeSiteHeaders({ parentHeaders, loaderHeaders });
+    expect(directive(merged.get('Content-Security-Policy') ?? '', 'connect-src')).toBe(
+      "connect-src 'self'"
+    );
+    expect(merged.get('Content-Security-Policy')).toContain('https://cs52.classmoji.io/assets/');
+
+    const errorHeaders = siteHeaders({ request: anonymous(), noindex: true });
+    const failed = routeSiteHeaders({ parentHeaders, loaderHeaders, errorHeaders });
+    expect(failed.get('Content-Security-Policy')).not.toContain('/assets/');
+    expect(directive(failed.get('Content-Security-Policy') ?? '', 'connect-src')).toBe(
+      "connect-src 'none'"
+    );
   });
 
   test('a resource route content type survives the merge', () => {

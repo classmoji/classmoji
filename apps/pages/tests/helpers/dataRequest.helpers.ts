@@ -65,3 +65,46 @@ export async function importWithStubs<T>(
     hooks.deregister();
   }
 }
+
+/** This app's own source tree (what `importTreeWithStubs` loads fresh). */
+const APP_SOURCE = new URL('../../', import.meta.url).href;
+
+/**
+ * `importWithStubs`, for a whole module TREE: every module of this app the
+ * imported module reaches (under `apps/pages/app/` and `apps/pages/server/`)
+ * is loaded as a FRESH copy for `tag`, and ANY import in that tree whose
+ * resolved path ends with a stub key (or whose specifier is one) is swapped.
+ * So a route and the real modules it calls run as in production with only
+ * their I/O (the database, git, signing, the island's build assets) faked,
+ * however deep the I/O import sits. Packages outside this app load as they
+ * are. One tag per distinct set of stubs.
+ */
+export async function importTreeWithStubs<T>(
+  moduleUrl: URL,
+  stubs: Record<string, string>,
+  tag: string
+): Promise<T> {
+  const marker = `tree=${encodeURIComponent(tag)}`;
+  const inTree = (url: string | undefined) => Boolean(url && url.includes(marker));
+  const own = (url: string) =>
+    url.startsWith(`${APP_SOURCE}app/`) || url.startsWith(`${APP_SOURCE}server/`);
+  const withMarker = (url: string) => `${url}${url.includes('?') ? '&' : '?'}${marker}`;
+  const hooks = registerHooks({
+    resolve(specifier, context, next) {
+      if (!inTree(context.parentURL)) return next(specifier, context);
+      if (specifier.endsWith('.css') && stubs['.css'])
+        return { url: stubs['.css'], shortCircuit: true };
+      if (stubs[specifier]) return { url: stubs[specifier], shortCircuit: true };
+      const resolved = next(specifier, context);
+      const path = resolved.url.split('?')[0];
+      const suffix = Object.keys(stubs).find(key => path.endsWith(key));
+      if (suffix) return { url: stubs[suffix], shortCircuit: true };
+      return own(resolved.url) ? { ...resolved, url: withMarker(resolved.url) } : resolved;
+    },
+  });
+  try {
+    return (await import(withMarker(moduleUrl.href))) as T;
+  } finally {
+    hooks.deregister();
+  }
+}

@@ -17,7 +17,7 @@ export const READER_ISLAND_DATA_ID = 'reader-island-data';
 /**
  * Everything the island mounts the reader with, as the server decided it.
  * Generic on purpose: the MCP's page render passes `surface: 'render'`, the
- * class site will pass `'site'` with its own origins.
+ * class site passes `'site'` with its own origins.
  */
 export interface ReaderIslandData {
   surface: ReaderSurfaceKind;
