@@ -70,9 +70,14 @@ A page git holds as legacy HTML (`pages/<slug>/index.html`, no
 `legacy-html` before anything is seeded: no `collab_docs` row (a reseed
 marker stays a marker), no checkpoint, nothing left loaded. The internal API
 answers the same refusal as 422 `{ error: 'legacy-html' }` to a snapshot,
-ops, a cover, a preview merge, and an outside push that leaves the page as
-HTML only; legacy HTML at a push's `before` is not a merge base (the merge
-falls back to the room's own `source_sha`, else `no-merge-base`). Closing,
+ops, a cover and a preview merge. Legacy HTML at a push's `before` is not a
+merge base (the merge falls back to the room's own `source_sha`). An outside
+push collab cannot take (no readable merge base, or a page left as HTML
+only) reseeds a doc that holds nothing unpushed (`{ action: 'reseeded' }`,
+the room closes); over unpushed edits it keeps the live doc, records
+`last_conflict` (reason `no-merge-base` / `legacy-html`, which the
+checkpoint worker honours: it stops re-notifying that commit) and answers
+409 / 422. Closing,
 resetting and the title/width notice never seed, so they still work. Who
 does what with the refusal: the pages loader gives such a page no live room
 at all (staff see the "can't be shown" notice), MCP reads fall back to git and

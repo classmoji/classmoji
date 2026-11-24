@@ -12,6 +12,7 @@
  *        → { applied: true, version } | 409 { error: 'conflicts', conflicts, autoMerged? }
  *   POST /internal/:kind/:id/external       { sha, before? }
  *        → { action: 'merged' | 'reseeded' | 'none', … } | 409 { error: 'no-merge-base' }
+ *          | 422 { error: 'legacy-html' }
  *   POST /internal/:kind/:id/checkpoint     { message?, actor } → { version }
  *   POST /internal/:kind/:id/close          { reason } → { closed }   (sockets: 4409 reload)
  *   POST /internal/:kind/:id/preview-changed {} → { broadcast }  (stateless { type: 'preview-changed' })
@@ -30,11 +31,14 @@
  * at that ref), `before` the commit before it. Base = the file at `before`
  * when readable, else the row's `source_sha` blob; an EMPTY base when there
  * was no file to descend from (seeded blank, or no file at `before`). With
- * a base that existed but cannot be read, the live doc is kept, the row's
- * `last_conflict` records it (reason `no-merge-base`) and the call answers
- * 409 `no-merge-base` (final: the worker stops re-notifying that commit; the
- * sweeper alerts). A `sha` equal to the row's `pushed_commit`, or whose file
- * is the blob the doc already descends from, is a no-op.
+ * a base that existed but cannot be read, or a push that leaves a page as
+ * legacy HTML only: a doc with nothing unpushed is reseeded from git
+ * (`{ action: 'reseeded' }`); one with unpushed edits is kept, the row's
+ * `last_conflict` records it (reason `no-merge-base` / `legacy-html`) and the
+ * call answers 409 `no-merge-base` / 422 `legacy-html` (final: the worker
+ * stops re-notifying that commit; the sweeper alerts). A `sha` equal to the
+ * row's `pushed_commit`, or whose file is the blob the doc already descends
+ * from, is a no-op.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -657,23 +661,47 @@ async function external(
     };
   };
 
-  // No readable merge base: the outside edit is NOT in the live doc. Record
-  // it on the row (the editor shows it; the worker stops re-notifying this
-  // commit) and answer 409 — retrying cannot find a base that is not there.
+  // A push the live doc cannot take: no readable merge base (409
+  // `no-merge-base`), or the page left as legacy HTML only (422
+  // `legacy-html`, someone removed or broke content.json by hand). When the
+  // doc holds nothing unpushed there is nothing to lose: reseed it from git
+  // (the room closes, the next open seeds from the file as it now is, or is
+  // refused for legacy HTML). Otherwise the outside edit is NOT in the live
+  // doc: record it on the row (the worker stops re-notifying this commit, the
+  // sweeper alerts) and answer the refusal — retrying cannot change it.
   const mergeOrRecord = async () => {
     try {
       return await merge();
     } catch (err) {
-      if (err instanceof CollabHttpError && err.body.error === 'no-merge-base') {
-        await runtime.deps.store.setLastConflict(kind, id, {
-          at: new Date().toISOString(),
-          sha,
-          ids: [],
-          reason: 'no-merge-base',
-        });
+      const code = err instanceof CollabHttpError ? err.body.error : null;
+      if (code !== 'no-merge-base' && code !== 'legacy-html') throw err;
+      if (!(await holdsUnpushedEdits())) {
+        try {
+          const reset = await runtime.resetDoc(kind, id, EXTERNAL_ACTOR, { discard: false });
+          return { action: 'reseeded', epoch: reset.epoch, closed: reset.closed, reason: code };
+        } catch (resetErr) {
+          // Edited meanwhile (unpushed-edits): keep it and record, as below.
+          if (!(resetErr instanceof CollabHttpError && resetErr.status === 409)) throw resetErr;
+        }
       }
+      await runtime.deps.store.setLastConflict(kind, id, {
+        at: new Date().toISOString(),
+        sha,
+        ids: [],
+        reason: code,
+      });
       throw err;
     }
+  };
+
+  /** Unpushed edits, read fresh (the merge attempt may have loaded the doc). */
+  const holdsUnpushedEdits = async () => {
+    await runtime.flush(kind, id);
+    const current = await runtime.deps.store.get(kind, id);
+    return (
+      (!!current && !isReseedMarker(current) && current.version > current.pushed_version) ||
+      runtime.hasUnstoredChanges(kind, id)
+    );
   };
 
   const loaded = !!runtime.loadedDocument(kind, id);

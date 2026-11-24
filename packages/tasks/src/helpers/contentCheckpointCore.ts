@@ -939,13 +939,22 @@ async function checkpointDocs(
     const e = excluded.get(docKey(c.row.kind, c.row.doc_id));
     if (!e) continue;
     // Collab already answered this very commit "cannot merge" (no merge
-    // base): asking again gets the same answer. Stay dirty and reported (the
-    // sweeper alerts); a person has to settle it.
+    // base, or the push left the page as legacy HTML only): asking again gets
+    // the same answer. Stay dirty and reported (the sweeper alerts); a person
+    // has to settle it.
     const conflict = lastConflictOf.get(docKey(c.row.kind, c.row.doc_id)) as
       | { sha?: unknown; reason?: unknown }
       | null
       | undefined;
-    const unmergeable = conflict?.reason === 'no-merge-base' && conflict.sha === e.headCommit;
+    const unmergeableWhy =
+      conflict?.sha !== e.headCommit
+        ? null
+        : conflict.reason === 'no-merge-base'
+          ? 'no merge base'
+          : conflict.reason === 'legacy-html'
+            ? 'it left the page as legacy HTML only'
+            : null;
+    const unmergeable = unmergeableWhy !== null;
     log.warn('content-checkpoint: outside edit waiting for collab', {
       classroomId,
       kind: c.row.kind,
@@ -959,7 +968,7 @@ async function checkpointDocs(
       status: 'refused',
       code: 'outside-edit-pending',
       reason: unmergeable
-        ? `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}) and collab could not merge it (no merge base); needs a person`
+        ? `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}) and collab could not merge it (${unmergeableWhy}); needs a person`
         : `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`,
     });
     if (unmergeable) continue;

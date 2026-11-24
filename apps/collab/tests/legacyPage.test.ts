@@ -158,7 +158,39 @@ describe('outside pushes and legacy HTML', () => {
     server.world.blobs.set('seed-sha', JSON.stringify({ blocks: [paragraph('p1', 'One')] }));
   });
 
-  it('a push that leaves only index.html is refused 422 legacy-html; the live page is kept', async () => {
+  /** A live edit that is stored but not pushed: the doc is dirty. */
+  async function editLive(a: TestClient) {
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'insert', blocks: [paragraph('n1', 'Live')], position: { at: 'end' } }],
+    });
+    expect(res.status).toBe(200);
+    await waitFor(() => textsOf(a.doc).includes('Live'), 3000, 'live edit');
+    await server.runtime.flush('page', PAGE);
+    const row = (await server.store.get('page', PAGE))!;
+    expect(row.version).toBeGreaterThan(row.pushed_version);
+  }
+
+  it('a push that leaves only index.html over unpushed edits: 422 legacy-html, kept, recorded', async () => {
+    const a = open();
+    await a.synced;
+    await editLive(a);
+    server.world.contentAt.set(`${PAGE}@c3`, { html: LEGACY_HTML });
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+      sha: 'c3',
+      before: 'b1',
+    });
+    expect([res.status, res.body.error]).toEqual([422, 'legacy-html']);
+    expect(textsOf(server.runtime.loadedDocument('page', PAGE)!)).toEqual(['One', 'Live']);
+    // Recorded with a reason the checkpoint worker honours: it stops re-notifying c3.
+    expect((await server.store.get('page', PAGE))!.last_conflict).toMatchObject({
+      sha: 'c3',
+      ids: [],
+      reason: 'legacy-html',
+    });
+  });
+
+  it('a push that leaves only index.html with nothing unpushed: reseeded, the room closed', async () => {
     const a = open();
     await a.synced;
     server.world.contentAt.set(`${PAGE}@c3`, { html: LEGACY_HTML });
@@ -166,9 +198,68 @@ describe('outside pushes and legacy HTML', () => {
       sha: 'c3',
       before: 'b1',
     });
-    expect([res.status, res.body.error]).toEqual([422, 'legacy-html']);
-    expect(textsOf(server.runtime.loadedDocument('page', PAGE)!)).toEqual(['One']);
-    expect((await server.store.get('page', PAGE))!.last_conflict ?? null).toBeNull();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'reseeded', epoch: 2, reason: 'legacy-html' });
+    await waitFor(() => a.closeCodes.includes(4409), 3000, 'room closed');
+    const row = (await server.store.get('page', PAGE))!;
+    expect(row.state.byteLength).toBe(0);
+    expect(row.last_conflict ?? null).toBeNull();
+  });
+
+  describe('a clean row an older collab seeded from index.html, when content.json lands', () => {
+    beforeEach(async () => {
+      // The row as the old conversion left it: index.html's blob as source_sha.
+      const doc = pageContentToYDoc({ blocks: [paragraph('p1', 'Converted once')] });
+      await server.store.insertSeed({
+        kind: 'page',
+        doc_id: PAGE,
+        classroom_id: CLASSROOM_ID,
+        state: Y.encodeStateAsUpdate(doc),
+        schema_version: SCHEMA_VERSION,
+        source_sha: 'html-sha',
+      });
+      doc.destroy();
+      // Git still holds index.html only while the room is open (served from the row).
+      server.world.content.set(PAGE, { html: LEGACY_HTML });
+      server.world.blobs.set('html-sha', LEGACY_HTML);
+      server.world.contentAt.set(`${PAGE}@b1`, { html: LEGACY_HTML });
+      server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('p1', 'Converted once')] });
+    });
+
+    it('open with nothing unpushed: no merge base, so it is reseeded (nothing recorded)', async () => {
+      const a = open();
+      await a.synced;
+      expect(textsOf(a.doc)).toEqual(['Converted once']);
+      const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+        sha: 'c2',
+        before: 'b1',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ action: 'reseeded', epoch: 2, reason: 'no-merge-base' });
+      await waitFor(() => a.closeCodes.includes(4409), 3000, 'room closed');
+      const row = (await server.store.get('page', PAGE))!;
+      expect(row.state.byteLength).toBe(0);
+      expect(row.last_conflict ?? null).toBeNull();
+    });
+
+    it('open with unpushed edits: kept, 409 no-merge-base, recorded', async () => {
+      const a = open();
+      await a.synced;
+      await editLive(a);
+      const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+        sha: 'c2',
+        before: 'b1',
+      });
+      expect([res.status, res.body.error]).toEqual([409, 'no-merge-base']);
+      expect(textsOf(server.runtime.loadedDocument('page', PAGE)!)).toEqual([
+        'Converted once',
+        'Live',
+      ]);
+      expect((await server.store.get('page', PAGE))!.last_conflict).toMatchObject({
+        sha: 'c2',
+        reason: 'no-merge-base',
+      });
+    });
   });
 
   it('legacy HTML at `before` is no merge base: the blob the room descends from is used', async () => {
