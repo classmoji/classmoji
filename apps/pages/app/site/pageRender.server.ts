@@ -46,6 +46,12 @@ export type RenderedSitePage = {
   title: string;
   html: string;
   coverImage: { url: string; position?: number } | null;
+  /**
+   * The page is still legacy HTML in git and renders empty
+   * (utils/legacyPage.ts). The route shows the staff notice from it, for
+   * staff only.
+   */
+  legacyFormat: boolean;
 };
 
 /**
@@ -212,6 +218,7 @@ export async function renderPageForViewer(
     title: page.title || 'Untitled',
     html: siteArticleWrapper(rendered.html),
     coverImage,
+    legacyFormat: content.format === 'html',
   };
 }
 

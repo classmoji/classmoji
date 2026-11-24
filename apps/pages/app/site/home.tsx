@@ -18,6 +18,7 @@ import {
 } from './pageRender.server.ts';
 import { pagesUrl } from './env.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
+import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
 
 /**
  * `/` — the site root.
@@ -72,6 +73,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
         coverImage: null,
         description: null,
         editHref: null,
+        legacyNotice: false,
         // The landing has no page behind it; the default keeps its column
         // exactly where it has always been.
         widthClass: siteArticleWidthClass(null),
@@ -100,6 +102,9 @@ export const loader = async (args: LoaderFunctionArgs) => {
       coverImage: rendered.coverImage,
       description: describeFromHtml(rendered.html),
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${home.id}` : null,
+      // A page still in the old format renders empty; its staff are told why.
+      // Staff are members, so this response is never shared-cacheable.
+      legacyNotice: isStaff(viewer) && rendered.legacyFormat,
       // The home page is a page like any other, and it is the one most likely
       // to have been widened for a directory or a row of profiles.
       widthClass: siteArticleWidthClass(home.width),
@@ -150,6 +155,7 @@ const SiteHome = () => {
     isAnonymous,
     signInHref,
     widthClass,
+    legacyNotice,
   } = useLoaderData<typeof loader>();
 
   if (kind === 'landing') {
@@ -186,6 +192,7 @@ const SiteHome = () => {
             {title}
           </h1>
         </div>
+        {legacyNotice ? <LegacyPageNotice layout="inline" /> : null}
         {/* Server-serialized by BlockNote with the static viewer schema; this
             page ships no client bundle to hydrate it. */}
         <div dangerouslySetInnerHTML={{ __html: html! }} />

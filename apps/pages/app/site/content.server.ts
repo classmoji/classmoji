@@ -1,7 +1,5 @@
 import { ClassmojiService, ContentService } from '@classmoji/services';
 
-import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
-
 /**
  * Content loading for class websites.
  *
@@ -47,8 +45,9 @@ export class SiteContentUnavailableError extends Error {
 }
 
 export type SitePageContent = {
+  /** 'html': a legacy page (index.html only), shown empty; see utils/legacyPage.ts. */
   format: 'json' | 'html' | 'none';
-  /** BlockNote blocks; already migrated when the source was legacy HTML. */
+  /** BlockNote blocks; empty for a legacy page and for a page with no file. */
   blocks: unknown[];
   coverImage: { url: string; position?: number } | null;
 };
@@ -56,7 +55,6 @@ export type SitePageContent = {
 /** The page fields a content read needs. */
 export type SiteContentPage = {
   content_path: string;
-  /** Tells a legacy page's title `<h1>` from a content heading. */
   title?: string | null;
 };
 
@@ -141,12 +139,16 @@ async function readContentFile(
  *
  * `content.json` first, `index.html` (legacy) second, empty document last —
  * the same precedence the editor uses, so a page looks the same on both
- * surfaces. Legacy HTML always goes through `migrateHtmlToBlockNote`; there is
- * no second HTML rendering path to keep in sync.
+ * surfaces. A legacy page is NOT converted (utils/legacyPage.ts): it comes
+ * back as `format: 'html'` with no blocks, an empty article whose staff are
+ * told why. Its HTML is only probed for, never read into the render.
+ *
+ * `readFile` is for tests.
  */
 export async function loadSitePageContent(
   page: SiteContentPage,
-  classroom: SiteContentClassroom
+  classroom: SiteContentClassroom,
+  readFile: typeof readContentFile = readContentFile
 ): Promise<SitePageContent> {
   const orgLogin = classroom.git_organization?.login;
   const repo = classroom.content_repo;
@@ -157,12 +159,7 @@ export async function loadSitePageContent(
     return { format: 'none', blocks: [], coverImage: null };
   }
 
-  const jsonFile = await readContentFile(
-    classroom,
-    orgLogin,
-    repo,
-    `${page.content_path}/content.json`
-  );
+  const jsonFile = await readFile(classroom, orgLogin, repo, `${page.content_path}/content.json`);
 
   if (jsonFile?.content) {
     let parsed: unknown;
@@ -198,19 +195,10 @@ export async function loadSitePageContent(
     };
   }
 
-  const htmlFile = await readContentFile(
-    classroom,
-    orgLogin,
-    repo,
-    `${page.content_path}/index.html`
-  );
+  const htmlFile = await readFile(classroom, orgLogin, repo, `${page.content_path}/index.html`);
 
   if (htmlFile?.content) {
-    // Takes the render lock itself (it swaps the same JSDOM globals).
-    const blocks = await migrateHtmlToBlockNote(htmlFile.content, {
-      title: page.title ?? undefined,
-    });
-    return { format: 'html', blocks: blocks as unknown[], coverImage: null };
+    return { format: 'html', blocks: [], coverImage: null };
   }
 
   return { format: 'none', blocks: [], coverImage: null };

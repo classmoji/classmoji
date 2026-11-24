@@ -1603,9 +1603,9 @@ const COVER_NO_CONTENT_GUIDANCE =
 
 const COVER_LEGACY_GUIDANCE =
   'This page is still legacy HTML (index.html), which has nowhere to record a cover image. ' +
-  'Write its content as BlockNote blocks with a page_content_apply replace_all op (that ' +
-  'creates content.json), then set the cover; or set the cover in the web editor, which ' +
-  'converts the page.';
+  'Opening it in the web editor does not convert it: the Classmoji team converts such pages. ' +
+  'To set a cover now, write its content as BlockNote blocks with a page_content_apply ' +
+  'replace_all op (that creates content.json and replaces the old content), then set the cover.';
 
 /**
  * CONTENT_CONFLICT for a tool that takes no sha. page_content_apply's version
@@ -1836,9 +1836,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
 
     const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
 
-    // The web's savePageCoverImage converts a legacy page on the way past;
-    // the MCP does not run the converter (BlockNote's server editor, jsdom),
-    // and writing content.json without it would silently drop the page's HTML.
+    // Nothing converts a legacy page on the way past (the web's cover save
+    // refuses one too), and writing content.json without its blocks would
+    // silently drop the page's HTML.
     if (content.format === 'html') {
       throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
     }

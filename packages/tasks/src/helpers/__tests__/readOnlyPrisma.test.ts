@@ -6,6 +6,7 @@ import {
   directEndpointUrl,
   enforceReadOnlySession,
   openReadOnlySession,
+  readOnlyStartupUrl,
   requireReadOnlyAck,
 } from '../readOnlyPrisma.ts';
 
@@ -65,6 +66,18 @@ describe('requireReadOnlyAck', () => {
     expect(() => requireReadOnlyAck({})).toThrow(/CLASSMOJI_DRY_RUN_ACK=read-only/);
     expect(() => requireReadOnlyAck({ CLASSMOJI_DRY_RUN_ACK: 'yes' })).toThrow();
     expect(() => requireReadOnlyAck({ CLASSMOJI_DRY_RUN_ACK: 'read-only' })).not.toThrow();
+  });
+});
+
+describe('readOnlyStartupUrl', () => {
+  it('adds the read-only startup parameter and a small pool, keeping the rest', () => {
+    const url = new URL(
+      readOnlyStartupUrl('postgresql://u:p@ep-cool-123.us-east-2.aws.neon.tech/db?sslmode=require')
+    );
+    expect(url.searchParams.get('options')).toBe('-c default_transaction_read_only=on');
+    expect(url.searchParams.get('connection_limit')).toBe('2');
+    expect(url.searchParams.get('sslmode')).toBe('require');
+    expect(url.hostname).toBe('ep-cool-123.us-east-2.aws.neon.tech');
   });
 });
 
@@ -185,6 +198,24 @@ describe.skipIf(!RUN_DB)('openReadOnlySession (real database)', () => {
       await expect(
         client.$executeRawUnsafe('CREATE TEMP TABLE read_only_probe (x int)')
       ).resolves.toBeDefined();
+    } finally {
+      await client.$disconnect();
+    }
+  });
+
+  it('a pooled client on readOnlyStartupUrl starts every session read-only (the services client of a dry run)', async () => {
+    const client = createPgPrismaClient(readOnlyStartupUrl(DATABASE_URL, { pool: 3 }));
+    try {
+      const probe = () =>
+        client.$queryRawUnsafe<{ pid: number; ro: string }[]>(
+          "SELECT pg_backend_pid() AS pid, current_setting('default_transaction_read_only') AS ro, pg_sleep(0.05)::text AS slept"
+        );
+      const rows = (await Promise.all(Array.from({ length: 6 }, probe))).map(([row]) => row);
+      expect(new Set(rows.map(row => row.pid)).size).toBeGreaterThan(1);
+      expect(rows.map(row => row.ro)).toEqual(Array(6).fill('on'));
+      await expect(
+        client.$executeRawUnsafe('CREATE TEMP TABLE read_only_probe (x int)')
+      ).rejects.toThrow(/read-only/);
     } finally {
       await client.$disconnect();
     }

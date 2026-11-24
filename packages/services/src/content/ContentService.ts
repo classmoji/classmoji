@@ -546,7 +546,15 @@ export class ContentService {
         },
       ]);
     } catch (error: unknown) {
-      if (createOnly && hasStatus(error, 422)) {
+      // Only Gitlab's "already exists" answer (gitlab.commit maps it to 422
+      // `File already exists: …`) is the existence race; any other 422 keeps
+      // its own message.
+      if (
+        createOnly &&
+        hasStatus(error, 422) &&
+        error instanceof Error &&
+        error.message.startsWith('File already exists')
+      ) {
         const conflict = new Error(
           `File already exists: ${path} (create-only write refused)`
         ) as Error & { status: number };
@@ -1641,6 +1649,58 @@ export class ContentService {
       return result;
     } catch (error: unknown) {
       if (hasStatus(error, 404)) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Every file under `folder` (recursively) on the repository's default
+   * branch, from ONE snapshot of it: path and blob sha, no bytes.
+   *
+   * GitHub: the branch head's tree, read recursively in one call
+   * (`readFolderTree`, which walks it a level at a time when GitHub truncates
+   * the listing, and throws for a single folder too large to list whole).
+   * Gitlab: the recursive repository tree at the default branch (every page
+   * followed). Never cached. An absent repository or folder is an empty list.
+   */
+  static async listFolderFiles({
+    gitOrganization,
+    repo,
+    folder,
+  }: {
+    gitOrganization: GitOrganizationRecord;
+    repo: string;
+    folder: string;
+  }): Promise<Array<{ path: string; sha: string }>> {
+    const root = folder.replace(/\/+$/, '');
+    try {
+      if (isGitLab(gitOrganization)) {
+        const branch = await gitlab.gitlabDefaultBranch(gitOrganization, repo);
+        const entries = await gitlab.listFolder(gitOrganization, repo, root, branch, true);
+        return entries
+          .filter(entry => entry.type === 'file')
+          .map(entry => ({ path: entry.path, sha: entry.sha }));
+      }
+      const octokit = await getOctokit(gitOrganization);
+      const owner = gitOrganization.login;
+      const branch = await resolveContentBranch(gitOrganization, owner, repo);
+      const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+      });
+      const { data: commitData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
+        { owner, repo, commit_sha: refData.object.sha }
+      );
+      const { files } = await readFolderTree(octokit, owner, repo, commitData.tree.sha, root);
+      const prefix = root ? `${root}/` : '';
+      return files.map(file => ({ path: `${prefix}${file.relativePath}`, sha: file.sha }));
+    } catch (error: unknown) {
+      if (hasStatus(error, 404) || hasStatus(error, 409)) {
+        // 404: no repository; 409: GitHub's answer for an empty repository.
         return [];
       }
       throw error;

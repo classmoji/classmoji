@@ -35,7 +35,6 @@ import {
 import { SITE_STYLES } from '~/site/styles.ts';
 import { redactDocumentForViewer } from '~/site/redact.server.ts';
 import { allBlockTypes, OVERRIDDEN_BLOCK_TYPES } from '~/site/viewerSchema.server.ts';
-import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import { AGENT_CURSOR_LABEL_CSS } from '~/components/editor/collab/liveCursor.ts';
 
@@ -759,16 +758,6 @@ test.describe('resilience', () => {
     expect(html).toContain('data-content-type="paragraph"');
   });
 
-  test('legacy HTML survives the migration path and renders', async () => {
-    const legacy =
-      '<html><body><h1>Old Title</h1><p>Legacy body text.</p>' +
-      '<ul><li>one</li><li>two</li></ul></body></html>';
-    const blocks = await migrateHtmlToBlockNote(legacy);
-    const { html } = await renderSitePage({ blocks, resolveLink });
-    expect(html).toContain('Legacy body text.');
-    expect(html).toContain('data-content-type="bulletListItem"');
-  });
-
   /**
    * The regression this guards: BlockNote serializes by swapping
    * `globalThis.window`/`document` for JSDOM. Two renders in flight at once
@@ -803,40 +792,22 @@ test.describe('resilience', () => {
     });
   });
 
-  test('renders remain correct when interleaved with legacy migrations', async () => {
-    const work = Array.from({ length: 6 }, (_, i) =>
-      i % 2 === 0
-        ? renderSitePage({
-            blocks: [{ type: 'paragraph', content: text(`direct-${i}`) }],
-            resolveLink,
-          }).then(r => r.html)
-        : migrateHtmlToBlockNote(`<body><p>migrated-${i}</p></body>`)
-            .then(blocks => renderSitePage({ blocks, resolveLink }))
-            .then(r => r.html)
-    );
-
-    const results = await Promise.all(work);
-    results.forEach((html, i) => {
-      expect(html).toContain(i % 2 === 0 ? `direct-${i}` : `migrated-${i}`);
-    });
-  });
-
-  test('a legacy migration takes the render lock itself (viewer loader, cover save)', async () => {
+  test('a render waits for whoever holds the render lock', async () => {
     let release!: () => void;
     const held = withServerBlockNoteLock(() => new Promise<void>(resolve => (release = resolve)));
-    let migrated = false;
-    const migration = migrateHtmlToBlockNote('<body><p>after the render</p></body>').then(
-      blocks => {
-        migrated = true;
-        return blocks;
-      }
-    );
+    let rendered = false;
+    const render = renderSitePage({
+      blocks: [{ type: 'paragraph', content: text('after the holder') }],
+      resolveLink,
+    }).then(result => {
+      rendered = true;
+      return result;
+    });
     await new Promise(resolve => setTimeout(resolve, 20));
-    expect(migrated, 'migration ran while another render held the lock').toBe(false);
+    expect(rendered, 'the render ran while the lock was held').toBe(false);
     release();
     await held;
-    const [first] = (await migration) as Array<{ content?: Array<{ text?: string }> }>;
-    expect(first.content?.[0]?.text).toBe('after the render');
+    expect((await render).html).toContain('after the holder');
   });
 });
 

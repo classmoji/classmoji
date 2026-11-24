@@ -925,6 +925,18 @@ describe('legacy HTML read guidance', () => {
     expect(result.message).not.toMatch(/could not be converted/);
   });
 
+  it('page_render of a page git holds as legacy HTML: nothing to render until edited or converted', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
+    const { readPageForRender } = await import('../pageRender.ts');
+    await expect(readPageForRender(PLAIN_DRAFT as never, 'main')).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('has no content to render until it is edited'),
+    });
+    await expect(readPageForRender(PLAIN_DRAFT as never, 'main')).rejects.not.toMatchObject({
+      message: expect.stringMatching(/open it once|does not convert/),
+    });
+  });
+
   it('no live editing: a replace_all writes content.json', async () => {
     mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
     const result = parse(

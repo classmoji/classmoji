@@ -1,14 +1,14 @@
 import { ClassmojiService } from './db.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
+import { LegacyPageFormatError } from './legacyPage.ts';
 
 /**
  * Thin wrappers around the shared page-content service
  * (packages/services/src/classmoji/pageContent.service.ts).
  *
  * What stays app-local here:
- * - the migrateHtmlToBlockNote fallback in savePageCoverImage (the legacy
- *   HTML converter runs BlockNote's server editor, kept out of
- *   packages/services),
+ * - savePageCoverImage's read-modify-write (and its refusal of a legacy
+ *   page, see utils/legacyPage.ts),
  * - the Web API File → Buffer adapter for uploads.
  */
 
@@ -75,40 +75,44 @@ export async function savePageContent(
 
 /**
  * Save only the cover image metadata to content.json without requiring editor
- * blocks. Loads the current content, migrating legacy HTML to BlockNote JSON
- * so it isn't lost when content.json is first created.
+ * blocks: a read-modify-write of the current content.
  *
  * F5: this is a read-modify-write of the whole file — the read bypasses the
  * 60s cache and the write is CAS'd on the read's sha, so a cover-image change
  * can never revert content edits that landed in between (throws status 409
  * instead; callers surface "page changed — try again").
  *
+ * A legacy page (index.html only) is refused with `LegacyPageFormatError`
+ * (422) before anything is written: it is no longer converted here, and a
+ * content.json written without its blocks would hide the page's content.
+ *
  * The blank-blocks branch below is reached only for a page that genuinely has
  * no content file: the read rejects when it cannot reach the repo rather than
  * reporting a live page as having none, so nothing here starts a whole-file
  * rewrite from an empty document on a failed read.
+ *
+ * `deps` is for tests.
  */
 export async function savePageCoverImage(
   page: PageForContent,
-  coverImage: CoverImage | null
+  coverImage: CoverImage | null,
+  deps: { load?: typeof loadPageContent; save?: typeof savePageContent } = {}
 ): Promise<{ sha: string }> {
-  const { format, content, sha } = await loadPageContent(page, { skipCache: true });
+  const load = deps.load ?? loadPageContent;
+  const save = deps.save ?? savePageContent;
+  const { format, content, sha } = await load(page, { skipCache: true });
 
   let currentBlocks: unknown;
   if (format === 'json') {
     currentBlocks = content;
   } else if (format === 'html') {
-    // Migrate HTML content so we don't lose it when creating content.json
-    const { migrateHtmlToBlockNote } = await import('./migration.server.ts');
-    currentBlocks = await migrateHtmlToBlockNote(content as string, { title: page.title });
+    throw new LegacyPageFormatError();
   } else {
     currentBlocks = [{ type: 'paragraph', content: [] }];
   }
 
-  const result = await savePageContent(page, currentBlocks, {
+  const result = await save(page, currentBlocks, {
     coverImage,
-    // Only content.json's own sha is a valid precondition — the 'html'
-    // fallback sha belongs to index.html, a different file than this write.
     ...(format === 'json' && sha ? { expectedSha: sha } : {}),
   });
   // Returned so the editor can refresh its conflict token — a cover write

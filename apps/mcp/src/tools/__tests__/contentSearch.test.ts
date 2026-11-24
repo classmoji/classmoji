@@ -709,7 +709,7 @@ describe('content_get', () => {
     expect(ctxArg.classroom.content_repo).toBe('content-cs52');
   });
 
-  it('falls back to a legacy page body only after content.json misses', async () => {
+  it('never reads a legacy page body: the web shows such a page empty', async () => {
     rawRows = [];
     setPrismaRows({
       page: { findFirst: () => pageRecord({ is_draft: false, title: 'Legacy Page' }) },
@@ -724,17 +724,15 @@ describe('content_get', () => {
         : null
     );
 
-    const payload = await call(
-      contentGetTool,
-      { classroom: 'org/slug', kind: 'page', id: PAGE_ID },
-      STUDENT
-    );
+    const result = await contentGetTool
+      .handler({ classroom: 'org/slug', kind: 'page', id: PAGE_ID }, STUDENT as never)
+      .then(r => JSON.stringify(r))
+      .catch((error: unknown) => String(error));
 
-    expect(payload.source_path).toBe('pages/unreleased-final-project/index.html');
-    expect(payload.text).toContain('Office hours are Tuesday.');
+    expect(result).not.toContain('Office hours are Tuesday.');
+    expect(result).not.toContain('index.html');
     expect(mocks.fetchContentText.mock.calls.map(c => c[1])).toEqual([
       'pages/unreleased-final-project/content.json',
-      'pages/unreleased-final-project/index.html',
     ]);
   });
 

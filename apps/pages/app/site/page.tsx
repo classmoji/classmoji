@@ -13,6 +13,7 @@ import {
 import { pagesUrl } from './env.server.ts';
 import { signInPathFor } from './returnTo.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
+import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
 
 /**
  * `/{pageSlug}` — one authored page, rendered as static HTML.
@@ -101,6 +102,9 @@ export const loader = async (args: LoaderFunctionArgs) => {
       // Staff edit their pages in the app, never here. The pill is the whole
       // bridge between the two surfaces.
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${page.id}` : null,
+      // A page still in the old format renders empty; its staff are told why.
+      // Staff are members, so this response is never shared-cacheable.
+      legacyNotice: isStaff(viewer) && rendered.legacyFormat,
     },
     {
       // Only a public page read by an anonymous visitor is shared-cacheable;
@@ -148,7 +152,8 @@ export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
 };
 
 const SitePage = () => {
-  const { title, html, coverImage, editHref, widthClass } = useLoaderData<typeof loader>();
+  const { title, html, coverImage, editHref, widthClass, legacyNotice } =
+    useLoaderData<typeof loader>();
 
   return (
     <article>
@@ -160,6 +165,7 @@ const SitePage = () => {
             {title}
           </h1>
         </div>
+        {legacyNotice ? <LegacyPageNotice layout="inline" /> : null}
         {/* The document is serialized server-side by BlockNote's own exporter
             with a schema whose every block renders static, sanitized markup —
             see viewerSchema.server.ts. There is no client bundle on this page

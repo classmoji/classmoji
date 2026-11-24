@@ -30,7 +30,13 @@ import {
   savePageCoverImage,
   uploadPageAsset,
 } from '~/utils/content.server.ts';
-import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
+import {
+  LEGACY_PAGE_WRITE_REFUSAL,
+  LegacyPageFormatError,
+  emptyPageDocument,
+  legacyNoticeFor,
+} from '~/utils/legacyPage.ts';
+import { pageIsLegacyInGit } from '~/utils/legacyPage.server.ts';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,
@@ -361,6 +367,7 @@ export const loader = async ({
           content: Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [],
           coverImage: snapshot.content?.coverImage ?? null,
           sha: null,
+          fromLiveRoom: true,
         };
       } catch (error) {
         console.warn('[pages] Live snapshot unavailable; resolving assets from git:', error);
@@ -375,21 +382,40 @@ export const loader = async ({
           : { viaWorker: true }
     );
   };
-  const { format, content, coverImage: jsonCoverImage, sha: contentFileSha } = await readContent();
+  const read: Awaited<ReturnType<typeof loadPageContent>> & { fromLiveRoom?: boolean } =
+    await readContent();
+  const { format, content, coverImage: jsonCoverImage, sha: contentFileSha } = read;
 
   let viewerContent: unknown;
 
   if (format === 'json') {
     viewerContent = content;
-  } else if (format === 'html') {
-    // Migrate HTML to BlockNote JSON for viewing
-    viewerContent = await migrateHtmlToBlockNote(content as string, { title: page.title });
   } else {
-    // Empty page — and only that: 'none' now means both files 404'd, so an
-    // unreadable content repo rejects out of the loader to the error boundary
-    // instead of rendering (and handing the editor) a live page as blank.
-    viewerContent = [{ type: 'paragraph', content: [] }];
+    // 'none': an empty page — and only that: 'none' means both files 404'd,
+    // so an unreadable content repo rejects out of the loader to the error
+    // boundary instead of rendering (and handing the editor) a live page as
+    // blank. 'html': a legacy page git still holds as `index.html` only. It
+    // is NOT converted here (utils/legacyPage.ts): the document is empty.
+    viewerContent = emptyPageDocument();
   }
+
+  // Legacy in git, decided from git (or the asset map), never from the live
+  // room: a room answers with collab's converted blocks whether or not git
+  // has content.json, so its 'json' says nothing about what readers get.
+  // Asked only for staff, the only viewers it changes anything for.
+  const staff = canEdit || sectionViewer.canViewDrafts;
+  const legacyInGit = !staff
+    ? false
+    : read.fromLiveRoom
+      ? await pageIsLegacyInGit(page)
+      : format === 'html';
+  // The notice: staff only; the live editor's copy when this viewer joins the
+  // room (their editor works as on any page), "can't be shown" otherwise.
+  const legacyNotice = legacyNoticeFor({ legacyInGit, staff, liveEditor: Boolean(collab) });
+  // No git editor for a legacy page: it would only offer to save the empty
+  // document over it. A live classroom's editor is never gated here, whether
+  // or not its snapshot answered: the room is seeded from the HTML.
+  const legacyReadOnly = legacyInGit && canEdit && !collab;
 
   // Page comments read the stored blocks themselves (the service redacts them
   // for this reader), the same document `/api/page-comments` anchors against:
@@ -618,6 +644,11 @@ export const loader = async ({
     // Assigned inside `readContent`, which TypeScript's narrowing does not follow.
     liveCheckpoint: liveCheckpoint as LiveCheckpoint | null,
     liveUnavailable,
+    // Staff only, on a page git still holds as legacy HTML: which notice
+    // ('live' | 'unshown'), and whether the git editor is withheld
+    // (utils/legacyPage.ts). Null / false for everyone else.
+    legacyNotice,
+    legacyReadOnly,
     // The preview's added/edited block ids and removed count (preview only).
     previewChanges,
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
@@ -1008,6 +1039,13 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
               { status: 409 }
             );
           }
+          // A legacy page (index.html only): the editor was handed an EMPTY
+          // document for it (it is no longer converted on read), so saving
+          // would write that over the page's content. Never, whatever the
+          // client posted (utils/legacyPage.ts).
+          if (existing.format === 'html') {
+            return Response.json({ error: LEGACY_PAGE_WRITE_REFUSAL }, { status: 422 });
+          }
         }
 
         // Semantic save-merge (Phase 7.5): the token IS the 3-way base — a
@@ -1301,6 +1339,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       });
       return Response.json({ success: true, sha });
     } catch (error: unknown) {
+      if (error instanceof LegacyPageFormatError) {
+        return Response.json({ error: error.message }, { status: error.status });
+      }
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: savePageCoverImage's CAS write lost to a concurrent content
         // edit — nothing was written, and retrying re-reads fresh content.
@@ -1344,6 +1385,10 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       // which means something else entirely.
       const routed = ClassmojiService.media.mediaRoutingResponse(error);
       if (routed) return routed;
+      // A legacy page: the upload went through, the cover was refused.
+      if (error instanceof LegacyPageFormatError) {
+        return Response.json({ error: error.message }, { status: error.status });
+      }
       // Too large, a type this classroom does not take, a bad name: the
       // uploader's to fix, so a 4xx with the service's sentence (413/415/400).
       const refused = uploadRefusalStatus(error);
