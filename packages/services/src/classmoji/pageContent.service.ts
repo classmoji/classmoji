@@ -168,13 +168,15 @@ async function readContentFile({
  * A `content.json` that exists but cannot be read as JSON. An error, never a
  * legacy page: reading a converted page as legacy HTML would take its live
  * editor away (collab refuses legacy pages) and show its readers an empty page.
+ * `code` is a caller error the MCP registry reports as `invalid_params`.
  */
 export class PageContentFormatError extends Error {
   readonly status = 500;
+  readonly code = 'PAGE_CONTENT_UNREADABLE';
   readonly path: string;
   readonly sha: string;
   constructor(path: string, sha: string, options?: { cause?: unknown }) {
-    super(`${path} exists but is not valid JSON`, options);
+    super(`This page's saved content (${path}) can't be read: it is not valid JSON.`, options);
     this.name = 'PageContentFormatError';
     this.path = path;
     this.sha = sha;
@@ -527,13 +529,11 @@ export async function preparePageContent(
   // only a 404 counts as absence.
   //
   // A file we cannot PARSE is the deliberate exception: it has no cover we can
-  // preserve, and the save proceeds so the editor can repair it. That matters
-  // because a corrupt content.json loads as 'html' or 'none' (loadPageContent's
-  // parse failure falls through to the HTML probe), so the editor arrives here
-  // with no json sha and this save is the only way back short of git —
-  // refusing would leave the instructor unable to fix the page at all. The
-  // cover goes with the file it was stored in, and both the load and the line
-  // below record why.
+  // preserve, and the save proceeds, so a caller that rewrites the whole page
+  // (an agent's replace_all, a script) repairs it. The editors cannot get here
+  // for such a page: `loadPageContent` throws `PageContentFormatError` for it,
+  // so the page's loaders fail before an editor is handed one. The cover goes
+  // with the file it was stored in, and the line below records why.
   //
   // A caller that genuinely wants this file rewritten regardless passes
   // `coverImage` explicitly (`null` to remove it), which skips the re-read —

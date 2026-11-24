@@ -246,6 +246,9 @@ describe('pageContent.loadPageContent', () => {
       await expect(loadPageContent(page)).rejects.toMatchObject({
         name: 'PageContentFormatError',
         sha: 'bad',
+        // A caller error the MCP registry reports as invalid_params.
+        code: 'PAGE_CONTENT_UNREADABLE',
+        message: expect.stringMatching(/pages\/syllabus\/content\.json.*can't be read/),
       });
       expect(getContentMock).toHaveBeenCalledTimes(1);
     }
