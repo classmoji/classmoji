@@ -1190,6 +1190,23 @@
   width: 100%;
 }
 
+/* An embed or video URL that is not framed (SafeFrame.tsx): the URL as a link,
+   or as text when it is not an http(s) one. Long URLs wrap. */
+.bn-frame-fallback {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* What an author stored that a reader is shown nothing for (unplayable media). */
+.bn-frame-unavailable {
+  color: rgba(55, 53, 47, 0.65);
+}
+
+.dark .bn-frame-unavailable {
+  color: rgba(255, 255, 255, 0.55);
+}
+
 /* Empty state wrappers - Notion-like appearance */
 .embed-input-wrapper-empty,
 .video-input-wrapper-empty {

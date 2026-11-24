@@ -1,23 +1,27 @@
 import { createReactBlockSpec } from '@blocknote/react';
 import { calloutConfig } from '@classmoji/page-schema';
+import { nextCalloutEmoji } from './readOnlyGates.ts';
 
 export const Callout = createReactBlockSpec(calloutConfig, {
   render: props => {
+    // Only an author's click changes the emoji: a reader's would write to a
+    // read-only document.
+    const editable = props.editor.isEditable;
     return (
       <div className="callout-block">
         <div
           className="callout-emoji"
           contentEditable={false}
-          onClick={() => {
-            // Simple emoji picker: cycle through common emojis
-            const emojis = ['💡', '⚡', '🔥', '📌', '🎯', '💬', '🚀', '⭐'];
-            const currentIndex = emojis.indexOf(props.block.props.emoji);
-            const nextEmoji = emojis[(currentIndex + 1) % emojis.length];
-            props.editor.updateBlock(props.block, {
-              props: { emoji: nextEmoji },
-            });
-          }}
-          style={{ cursor: 'pointer', fontSize: '1.5rem' }}
+          onClick={
+            editable
+              ? () =>
+                  // Simple emoji picker: cycle through common emojis
+                  props.editor.updateBlock(props.block, {
+                    props: { emoji: nextCalloutEmoji(props.block.props.emoji) },
+                  })
+              : undefined
+          }
+          style={{ cursor: editable ? 'pointer' : undefined, fontSize: '1.5rem' }}
         >
           {props.block.props.emoji}
         </div>

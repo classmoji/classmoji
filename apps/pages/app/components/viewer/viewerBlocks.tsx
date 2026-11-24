@@ -21,6 +21,8 @@ import {
 } from '@classmoji/page-schema';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
+import { readerCanShowMedia } from '~/components/editor/blocks/readOnlyGates.ts';
+import { useResolvedFileUrl } from '~/components/editor/blocks/useResolvedFileUrl.ts';
 import { useMediaDownloadHref } from '~/hooks/useMediaDownloads.ts';
 import { MediaDownloadLink } from './MediaDownloadLink.tsx';
 import { LockedSectionView, type LockedSectionViewProps } from './sections/LockedSectionView.tsx';
@@ -30,7 +32,8 @@ import { withPersonalCheckbox } from './sections/personalCheckListItem.ts';
 /**
  * The schema the read-only page viewer renders with: the editor's, with the
  * `file` and `audio` blocks able to show a reader's download button, the
- * heading able to carry a reader's tick box (checkable sections), a student
+ * heading able to carry a reader's tick box (checkable sections), empty or
+ * unshowable file and audio blocks drawing nothing (`useReaderShowsFile`), a student
  * check list item's box handed to the reader (`sections/personalCheckListItem.ts`),
  * and the locked section drawn for a reader (`sections/LockedSectionView.tsx`).
  *
@@ -69,8 +72,25 @@ function WithDownload({ props, children }: { props: FileLikeProps; children: Rea
   );
 }
 
+/**
+ * Whether a reader gets this file or audio block at all: not with no URL
+ * (BlockNote would draw its "Add file" button), and not for media that cannot
+ * be shown (`readerCanShowMedia`). Decided on the same resolution the blocks
+ * use, which is synchronous for every reference the loader shipped.
+ */
+function useReaderShowsFile(props: {
+  block: { props: { url?: unknown } };
+  editor: { isEditable: boolean; resolveFileUrl?: (url: string) => Promise<string> };
+}): boolean {
+  const url = typeof props.block.props.url === 'string' ? props.block.props.url : '';
+  const resolved = useResolvedFileUrl(url, props.editor.resolveFileUrl);
+  return props.editor.isEditable || readerCanShowMedia(url, resolved);
+}
+
 function ViewerFile(props: WrapperProps) {
   const href = useMediaDownloadHref(props.block.props.url);
+  const shows = useReaderShowsFile(props);
+  if (!shows) return null;
   if (!href) return <FileBlockWrapper {...props} />;
   return (
     <WithDownload props={props as unknown as FileLikeProps}>
@@ -83,6 +103,8 @@ type AudioProps = Parameters<typeof AudioBlock>[0];
 
 function ViewerAudio(props: AudioProps) {
   const href = useMediaDownloadHref(props.block.props.url);
+  const shows = useReaderShowsFile(props);
+  if (!shows) return null;
   if (!href) return <AudioBlock {...props} />;
   const preview =
     props.block.props.showPreview === false ? (

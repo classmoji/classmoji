@@ -101,6 +101,38 @@ export function isMediaUrl(url: unknown, deliveryOrigin: string | null | undefin
   );
 }
 
+/**
+ * Anything in the `media:` scheme, well-formed reference or not. No browser
+ * fetches it, so a block holding one after resolution has nothing to show.
+ */
+export function hasMediaScheme(value: unknown): value is string {
+  return typeof value === 'string' && /^media:/i.test(value);
+}
+
+/**
+ * A media URL by PATH SHAPE alone, on any host: a signed media URL or the
+ * placeholder for one that could not be signed.
+ *
+ * For the browser, which is never told the delivery origin (see
+ * `isRetryableDeliveryUrl`, which judges by shape for the same reason). Use it
+ * only to REFUSE something — never to frame, play or trust a URL: a foreign
+ * host can serve this path, and refusing that host's URL too is the safe side.
+ * Anything that grants should take the origin and use `isMediaUrl`.
+ */
+export function hasMediaUrlShape(url: unknown): url is string {
+  return (
+    typeof url === 'string' && (MEDIA_DELIVERY_URL.test(url) || MEDIA_PLACEHOLDER_URL.test(url))
+  );
+}
+
+/**
+ * The placeholder for a media reference that could not be signed, by path
+ * shape alone, on any host. Same rule as `hasMediaUrlShape`: refusals only.
+ */
+export function hasMediaPlaceholderShape(url: unknown): url is string {
+  return typeof url === 'string' && MEDIA_PLACEHOLDER_URL.test(url);
+}
+
 /** Whether a failed load of this URL is worth one loader revalidation. */
 export function isRetryableDeliveryUrl(url: unknown): boolean {
   return typeof url === 'string' && RETRYABLE_DELIVERY_URL.test(url);
