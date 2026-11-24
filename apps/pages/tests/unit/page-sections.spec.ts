@@ -360,6 +360,8 @@ test.describe('readerSections (the loader contract)', () => {
       staff: false,
       signedIn: false,
       member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -372,13 +374,15 @@ test.describe('readerSections (the loader contract)', () => {
       staff: false,
       signedIn: true,
       member: true,
+      showChecks: true,
+      showUnlock: true,
       canCheck: true,
       canUnlock: true,
       ...state,
     });
   });
 
-  test('impersonated student: sees the state, can do nothing', () => {
+  test('impersonated student ("View as"): drawn as the student sees it, can do nothing', () => {
     const out = readerSectionsFor({
       ...base,
       signedIn: true,
@@ -386,14 +390,22 @@ test.describe('readerSections (the loader contract)', () => {
       impersonated: true,
       state,
     });
-    expect(out.canCheck).toBe(false);
-    expect(out.canUnlock).toBe(false);
-    // Still a member: a locked section is a closed card, never the members-only line.
-    expect(out.member).toBe(true);
-    expect(out.checked).toEqual(state.checked);
+    expect(out).toEqual({
+      staff: false,
+      signedIn: true,
+      // Still a member: a locked section is the student's card, never the members-only line.
+      member: true,
+      // The student's ticks and hold control are drawn...
+      showChecks: true,
+      showUnlock: true,
+      // ...and nothing can be written.
+      canCheck: false,
+      canUnlock: false,
+      ...state,
+    });
   });
 
-  test('a classroom closed to the reader (UNPUBLISHED): state shown, nothing writable', () => {
+  test('a classroom closed to the reader (UNPUBLISHED): state sent, not drawn, nothing writable', () => {
     const out = readerSectionsFor({
       ...base,
       signedIn: true,
@@ -401,8 +413,32 @@ test.describe('readerSections (the loader contract)', () => {
       classroomOpen: false,
       state,
     });
-    expect(out).toMatchObject({ signedIn: true, canCheck: false, canUnlock: false });
+    expect(out).toMatchObject({
+      signedIn: true,
+      showChecks: false,
+      showUnlock: false,
+      canCheck: false,
+      canUnlock: false,
+    });
     expect(out.unlocked).toEqual(state.unlocked);
+  });
+
+  test('impersonated in a closed classroom: nothing drawn, nothing writable', () => {
+    const out = readerSectionsFor({
+      ...base,
+      signedIn: true,
+      viewer: STUDENT_VIEWER,
+      impersonated: true,
+      classroomOpen: false,
+      state,
+    });
+    expect(out).toMatchObject({
+      member: true,
+      showChecks: false,
+      showUnlock: false,
+      canCheck: false,
+      canUnlock: false,
+    });
   });
 
   test('teaching team: staff, may check, never unlock', () => {
@@ -412,7 +448,31 @@ test.describe('readerSections (the loader contract)', () => {
       viewer: TA_VIEWER,
       state: { checked: [], unlocked: {} },
     });
-    expect(out).toMatchObject({ staff: true, canCheck: true, canUnlock: false });
+    expect(out).toMatchObject({
+      staff: true,
+      showChecks: true,
+      showUnlock: false,
+      canCheck: true,
+      canUnlock: false,
+    });
+  });
+
+  test('teaching team viewed as ("View as"): ticks drawn, no hold control, nothing writable', () => {
+    const out = readerSectionsFor({
+      ...base,
+      signedIn: true,
+      viewer: TA_VIEWER,
+      impersonated: true,
+      state: { checked: ['h-top'], unlocked: {} },
+    });
+    expect(out).toMatchObject({
+      staff: true,
+      showChecks: true,
+      showUnlock: false,
+      canCheck: false,
+      canUnlock: false,
+      checked: ['h-top'],
+    });
   });
 
   test('student with a pending TEACHER invite (edits): staff, no unlock', () => {
@@ -425,7 +485,13 @@ test.describe('readerSections (the loader contract)', () => {
       ]),
       state: { checked: [], unlocked: {} },
     });
-    expect(out).toMatchObject({ staff: true, canCheck: true, canUnlock: false });
+    expect(out).toMatchObject({
+      staff: true,
+      showChecks: true,
+      showUnlock: false,
+      canCheck: true,
+      canUnlock: false,
+    });
   });
 
   test('signed in without an accepted membership: no state even if handed one', () => {
@@ -434,11 +500,23 @@ test.describe('readerSections (the loader contract)', () => {
       staff: false,
       signedIn: true,
       member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
       unlocked: {},
     });
+    // Viewing as a non-member draws nothing either.
+    expect(
+      readerSectionsFor({
+        ...base,
+        signedIn: true,
+        viewer: NO_SECTION_VIEWER,
+        impersonated: true,
+        state,
+      })
+    ).toMatchObject({ member: false, showChecks: false, showUnlock: false, checked: [] });
   });
 
   test('impersonation is read off better-auth and the dev fallback alike', () => {
@@ -2380,21 +2458,35 @@ test.describe('student check lists: viewer, editor, slash menu', () => {
     children: [],
   });
 
-  test('personalItemState: the reader’s own state when they can tick, else the author’s', async () => {
+  test('personalItemState: the reader’s own state where shown, ticked only when they can tick', async () => {
     const { personalItemState } =
       await import('~/components/viewer/sections/personalCheckListItem.ts');
     const mine = new Set(['a']);
+    const can = { showChecks: true, canCheck: true };
     expect(
-      personalItemState({ canCheck: true, checked: mine, blockId: 'a', authorChecked: false })
+      personalItemState({ ...can, checked: mine, blockId: 'a', authorChecked: false })
     ).toEqual({ checked: true, interactive: true });
+    expect(personalItemState({ ...can, checked: mine, blockId: 'b', authorChecked: true })).toEqual(
+      {
+        checked: false,
+        interactive: true,
+      }
+    );
+    // "View as": the student's state, not the author's, and not tickable.
+    const viewAs = { showChecks: true, canCheck: false };
     expect(
-      personalItemState({ canCheck: true, checked: mine, blockId: 'b', authorChecked: true })
-    ).toEqual({ checked: false, interactive: true });
+      personalItemState({ ...viewAs, checked: mine, blockId: 'a', authorChecked: false })
+    ).toEqual({ checked: true, interactive: false });
     expect(
-      personalItemState({ canCheck: false, checked: mine, blockId: 'a', authorChecked: false })
+      personalItemState({ ...viewAs, checked: mine, blockId: 'b', authorChecked: true })
+    ).toEqual({ checked: false, interactive: false });
+    // Not shown: the author's state, disabled.
+    const none = { showChecks: false, canCheck: false };
+    expect(
+      personalItemState({ ...none, checked: mine, blockId: 'a', authorChecked: false })
     ).toEqual({ checked: false, interactive: false });
     expect(
-      personalItemState({ canCheck: false, checked: new Set(), blockId: 'b', authorChecked: true })
+      personalItemState({ ...none, checked: new Set(), blockId: 'b', authorChecked: true })
     ).toEqual({ checked: true, interactive: false });
   });
 
@@ -2409,7 +2501,12 @@ test.describe('student check lists: viewer, editor, slash menu', () => {
     const editor = { isEditable: false };
     const store = sectionStoreFor(editor);
     const toggled: string[] = [];
-    store.set({ canCheck: false, checked: new Set(), toggleCheck: id => toggled.push(id) });
+    store.set({
+      showChecks: false,
+      canCheck: false,
+      checked: new Set(),
+      toggleCheck: id => toggled.push(id),
+    });
 
     // The author ticked it; a reader who cannot tick sees that, disabled.
     const view = withPersonalCheckbox(
@@ -2422,6 +2519,19 @@ test.describe('student check lists: viewer, editor, slash menu', () => {
     expect(input.disabled).toBe(true);
     expect(input.checked).toBe(true);
     expect(view.dom.getAttribute('data-checked')).toBe('true');
+
+    // "View as": the student's state (ticked), disabled; a change event
+    // (forced) does not toggle anything and puts the box back.
+    store.set({ showChecks: true, checked: new Set(['item-1']) });
+    expect(input.disabled).toBe(true);
+    expect(input.checked).toBe(true);
+    store.set({ checked: new Set() });
+    expect(input.checked).toBe(false);
+    expect(view.dom.hasAttribute('data-checked')).toBe(false);
+    input.checked = true;
+    input.dispatchEvent(new (g.window as { Event: typeof Event }).Event('change'));
+    expect(toggled).toEqual([]);
+    expect(input.checked).toBe(false);
 
     // A reader who can tick: their own (empty) state, enabled.
     store.set({ canCheck: true });
@@ -2451,6 +2561,55 @@ test.describe('student check lists: viewer, editor, slash menu', () => {
     view.destroy?.();
     store.set({ checked: new Set() });
     expect(input.checked).toBe(true); // unsubscribed
+  });
+
+  test('a checkable heading’s box: hidden, the student’s state inert ("View as"), or tickable', async () => {
+    const { withSectionCheckbox, sectionStoreFor } =
+      await import('~/components/viewer/sections/sectionCheckbox.ts');
+    const doc = (g.window as { document: Document }).document;
+    const editor = {};
+    const store = sectionStoreFor(editor);
+    const toggled: string[] = [];
+    store.set({
+      showChecks: false,
+      canCheck: false,
+      checked: new Set(),
+      toggleCheck: id => toggled.push(id),
+    });
+    const view = withSectionCheckbox(
+      { dom: doc.createElement('div') } as never,
+      { id: 'h-1', content: text('Setup') },
+      editor
+    ) as View;
+    const box = view.dom.querySelector('.pg-section-check') as HTMLButtonElement;
+    const click = () => box.dispatchEvent(new (g.window as { Event: typeof Event }).Event('click'));
+
+    // Nothing drawn: hidden.
+    expect(box.hidden).toBe(true);
+
+    // "View as": the student's tick, drawn but inert, no tooltip, the state as its name.
+    store.set({ showChecks: true, checked: new Set(['h-1']) });
+    expect(box.hidden).toBe(false);
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    expect(box.disabled).toBe(true);
+    expect(box.dataset.tooltip).toBeUndefined();
+    expect(box.getAttribute('aria-label')).toBe("'Setup' done");
+    click();
+    expect(toggled).toEqual([]);
+    store.set({ checked: new Set() });
+    expect(box.getAttribute('aria-checked')).toBe('false');
+    expect(box.getAttribute('aria-label')).toBe("'Setup' not done");
+
+    // A reader who can tick: enabled, the tooltip, and a click toggles.
+    store.set({ canCheck: true });
+    expect(box.disabled).toBe(false);
+    expect(box.dataset.tooltip).toBe('Mark done');
+    expect(box.getAttribute('aria-label')).toBe("Mark 'Setup' done");
+    click();
+    expect(toggled).toEqual(['h-1']);
+
+    view.destroy?.();
+    expect(view.dom.querySelector('.pg-section-check')).toBeNull();
   });
 
   test('the shared item in a read-only editor is BlockNote’s: the author’s state, disabled', async () => {

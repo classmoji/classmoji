@@ -29,9 +29,12 @@ import {
  *   and when they opened it.
  * - locked: a card whose body is frosted glass over placeholder lines (the
  *   real body was never sent), with a hold-to-unlock control. The POST goes
- *   out only when the hold completes. Signed-in readers who may not unlock
- *   (not an accepted member, impersonated, classroom closed to them) get the
- *   card without the control.
+ *   out only when the hold completes. Viewing as a student ("View as",
+ *   `showUnlock` without `canUnlock`) draws the same card, control and note
+ *   included, but the control is disabled and nothing is posted. Other
+ *   signed-in members who may not unlock (the classroom closed to them, a
+ *   member who neither unlocks nor reveals all) get the card without the
+ *   control.
  * - signed out (a public page): one compact row, the padlock and the title,
  *   that links to sign-in; hovering or focusing it says "Sign in to unlock".
  *   No card, no glass, no hold.
@@ -65,7 +68,8 @@ export interface LockedSectionViewProps {
 
 const NO_FILLED: ReadonlySet<string> = new Set();
 
-type Mode = 'staff' | 'unlocked' | 'hold' | 'closed' | 'signin' | 'members';
+/** `view`: the student's card and control, inert ("View as"). */
+type Mode = 'staff' | 'unlocked' | 'hold' | 'view' | 'closed' | 'signin' | 'members';
 
 export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   const sections = useReaderSections();
@@ -97,6 +101,7 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   else if (sections.staff) mode = 'staff';
   else if (unlockedAt && !pending && filled && (!breaking || breakDone)) mode = 'unlocked';
   else if (sections.canUnlock || pending || breaking) mode = 'hold';
+  else if (sections.showUnlock) mode = 'view';
   else if (!sections.signedIn) mode = 'signin';
   else if (!sections.member) mode = 'members';
   else mode = 'closed';
@@ -158,7 +163,7 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   }, [mode, id, sections, title]);
 
   const metaText = mode === 'unlocked' ? formatUnlockedAt(unlockedAt) : '';
-  const card = mode === 'hold' || mode === 'closed';
+  const card = mode === 'hold' || mode === 'view' || mode === 'closed';
 
   if (mode === 'signin') {
     return <SignInToUnlock title={title} href={sections.signInUrl} />;
@@ -203,12 +208,13 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
           key={attempt}
           blockId={id}
           title={title}
+          control={mode === 'hold' || mode === 'view'}
           canUnlock={mode === 'hold'}
           waiting={pending}
           onComplete={onComplete}
         />
       ) : null}
-      {mode === 'hold' ? (
+      {mode === 'hold' || mode === 'view' ? (
         <p className="pg-locked-note" id={`pg-locked-note-${id}`} contentEditable={false}>
           Staff can see when you unlock this.
         </p>
@@ -226,12 +232,16 @@ const SKELETON = [92, 78, 86, 44, 70];
 function HoldStage({
   blockId,
   title,
+  control,
   canUnlock,
   waiting,
   onComplete,
 }: {
   blockId: string;
   title: string;
+  /** Draw the hold control (ring, padlock button, label). */
+  control: boolean;
+  /** The control works; false with `control` draws it disabled ("View as"). */
   canUnlock: boolean;
   /** The POST is out (also true for a card rebuilt mid-unlock). */
   waiting: boolean;
@@ -451,7 +461,7 @@ function HoldStage({
           className={`pg-locked-ctrl pg-locked-fade${broken ? ' pg-gone' : ''}`}
           style={shattered ? { transform: 'scale(.85)' } : undefined}
         >
-          {canUnlock ? (
+          {control ? (
             <>
               <div className="pg-hold" ref={anchorRef}>
                 <div
@@ -479,11 +489,11 @@ function HoldStage({
                   ref={buttonRef}
                   type="button"
                   className="pg-hold-btn"
-                  aria-label={`Hold to unlock '${title}'`}
+                  aria-label={canUnlock ? `Hold to unlock '${title}'` : `'${title}' is locked`}
                   aria-describedby={`pg-locked-note-${blockId}`}
-                  disabled={broken}
+                  disabled={broken || !canUnlock}
                   onPointerDown={event => {
-                    if (event.button !== 0 || loop.current.done) return;
+                    if (!canUnlock || event.button !== 0 || loop.current.done) return;
                     event.preventDefault();
                     try {
                       event.currentTarget.setPointerCapture(event.pointerId);

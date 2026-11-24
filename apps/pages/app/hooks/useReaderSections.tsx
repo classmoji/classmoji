@@ -33,9 +33,22 @@ export interface ReaderSections {
    * it is read as a member (a signed-in reader then sees a closed card).
    */
   member?: boolean;
-  /** Signed in, accepted member, not impersonated: may tick headings. */
+  /**
+   * Draw this reader's tick state (heading boxes, student check list items,
+   * the done-section fade and gutter): an accepted member, classroom open.
+   * True under "View as" too, where nothing may be ticked. Optional: a
+   * payload without it is read as `canCheck`.
+   */
+  showChecks?: boolean;
+  /**
+   * `showChecks` and an accepted student who does not reveal all: draw the
+   * hold-to-unlock control. Optional: a payload without it is read as
+   * `canUnlock`.
+   */
+  showUnlock?: boolean;
+  /** `showChecks` and not impersonated: may tick (the POST is allowed). */
   canCheck: boolean;
-  /** `canCheck && !staff`: may unlock. */
+  /** `showUnlock` and not impersonated: may unlock. */
   canUnlock: boolean;
   /** This reader's ticked heading ids on this page. */
   checked: string[];
@@ -77,7 +90,13 @@ export interface ReaderSectionsValue {
    * member included, is told only members can unlock a locked section).
    */
   member: boolean;
+  /** Draw the tick state (true under "View as", where `canCheck` is false). */
+  showChecks: boolean;
+  /** Draw the hold-to-unlock control (true under "View as", where `canUnlock` is false). */
+  showUnlock: boolean;
+  /** May tick: `toggleCheck` POSTs only when this is true. */
   canCheck: boolean;
+  /** May unlock: `unlock` POSTs only when this is true. */
   canUnlock: boolean;
   /** Ticked headings, with ticks in flight applied. */
   checked: ReadonlySet<string>;
@@ -116,6 +135,8 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   signedIn: false,
   signInUrl: null,
   member: false,
+  showChecks: false,
+  showUnlock: false,
   canCheck: false,
   canUnlock: false,
   checked: NOTHING,
@@ -194,6 +215,10 @@ export function useReaderSectionsState(
   const signedIn =
     typeof readerSections?.signedIn === 'boolean' ? readerSections.signedIn : canCheck;
   const canUnlock = readerSections?.canUnlock === true;
+  // Acting implies drawing; a payload without the draw flags (an older
+  // loader, a cached page) draws exactly what it may act on.
+  const showChecks = readerSections?.showChecks === true || canCheck;
+  const showUnlock = readerSections?.showUnlock === true || canUnlock;
   const member = typeof readerSections?.member === 'boolean' ? readerSections.member : signedIn;
 
   // Ticks: the loader's set, plus confirmed ticks it has not reloaded yet,
@@ -387,6 +412,8 @@ export function useReaderSectionsState(
       signedIn,
       signInUrl,
       member,
+      showChecks,
+      showUnlock,
       canCheck,
       canUnlock,
       checked,
@@ -405,6 +432,8 @@ export function useReaderSectionsState(
       signedIn,
       signInUrl,
       member,
+      showChecks,
+      showUnlock,
       canCheck,
       canUnlock,
       checked,

@@ -201,6 +201,8 @@ interface Fakes {
   sessionReads: number;
   contentFails: boolean;
   unlocked: Record<string, Record<string, string>>;
+  /** `<user>:<page>` → that reader's ticked ids. */
+  checked: Record<string, string[]>;
   audits: Array<Record<string, unknown>>;
   downloadsAsked: string[];
   sectionWrites: string[];
@@ -212,6 +214,7 @@ const fakes: Fakes = {
   sessionReads: 0,
   contentFails: false,
   unlocked: {},
+  checked: {},
   audits: [],
   downloadsAsked: [],
   sectionWrites: [],
@@ -293,7 +296,7 @@ export const ClassmojiService = {
         canUnlock: student && !revealAll, canSeeActivity: acceptedRole === 'OWNER' || acceptedRole === 'TEACHER',
         canViewDrafts: role !== null && TEAM.includes(role) };
     },
-    readerState: async ({ pageId, userId }) => ({ checked: [], unlocked: f().unlocked[userId + ':' + pageId] ?? {} }),
+    readerState: async ({ pageId, userId }) => ({ checked: f().checked[userId + ':' + pageId] ?? [], unlocked: f().unlocked[userId + ':' + pageId] ?? {} }),
     sectionViewer: async ({ userId, classroomId }) => {
       const rows = d().MEMBERSHIPS.filter(m => m.user === userId && m.classroom === classroomId)
         .map(m => ({ role: m.role, has_accepted_invite: m.accepted }));
@@ -461,6 +464,7 @@ test.beforeEach(() => {
     sessionReads: 0,
     contentFails: false,
     unlocked: {},
+    checked: {},
     audits: [],
     downloadsAsked: [],
     sectionWrites: [],
@@ -600,6 +604,8 @@ test.describe('non-members: one public payload', () => {
     });
     expect(island.payload.readerSections).toMatchObject({
       signedIn: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       staff: false,
@@ -668,6 +674,8 @@ test.describe('members and staff', () => {
     const payload = island.payload;
     expect(payload.readerSections).toMatchObject({
       signedIn: true,
+      showChecks: true,
+      showUnlock: true,
       canCheck: true,
       canUnlock: true,
       staff: false,
@@ -727,10 +735,54 @@ test.describe('members and staff', () => {
     expect(anonymous.data.description).not.toContain(SECRET);
   });
 
-  test('impersonated ("View as") member: read-only reader state', async () => {
+  test('impersonated ("View as") member: the student\'s reader state drawn, read-only', async () => {
     const { island } = await sitePage('week-1', 'imp-student-x');
-    expect(island.payload.readerSections).toMatchObject({ signedIn: true, canCheck: false });
+    expect(island.payload.readerSections).toMatchObject({
+      signedIn: true,
+      member: true,
+      showChecks: true,
+      showUnlock: true,
+      canCheck: false,
+      canUnlock: false,
+    });
     expect(island.payload.readerComments).toBeDefined();
+  });
+
+  test('"View as" a student: exactly that student\'s ticks, unlocks and bodies, never another reader\'s', async () => {
+    const T_STUDENT = '2026-11-01T00:00:00.000Z';
+    const T_OTHER = '2026-11-02T00:00:00.000Z';
+    // A: the student ticked the heading and unlocked nothing; another student
+    // of X ('both') and the admin ticked the item and unlocked the section.
+    fakes.checked['student-x:p-pub'] = ['h-check'];
+    fakes.checked['both:p-pub'] = ['item'];
+    fakes.unlocked['both:p-pub'] = { lock: T_OTHER };
+    fakes.checked['admin-1:p-pub'] = ['item', 'h-check'];
+    fakes.unlocked['admin-1:p-pub'] = { lock: T_OTHER };
+    let { island } = await sitePage('week-1', 'imp-student-x');
+    expect(island.payload.readerSections).toMatchObject({
+      member: true,
+      showChecks: true,
+      canCheck: false,
+      checked: ['h-check'],
+      unlocked: {},
+    });
+    expect(json(island)).not.toContain(SECRET);
+    expect(json(island)).not.toContain(T_OTHER);
+
+    // B: the other way round: the student unlocked it, the others did not.
+    fakes.checked = { 'student-x:p-pub': ['item'], 'both:p-pub': ['h-check'] };
+    fakes.unlocked = { 'student-x:p-pub': { lock: T_STUDENT }, 'admin-1:p-pub': {} };
+    ({ island } = await sitePage('week-1', 'imp-student-x'));
+    expect(island.payload.readerSections).toMatchObject({
+      checked: ['item'],
+      unlocked: { lock: T_STUDENT },
+    });
+    expect(json(island)).toContain(SECRET);
+    // And the other student, viewed as, gets neither.
+    fakes.checked['both:p-pub'] = ['h-check'];
+    const other = (await sitePage('week-1', 'imp-both')).island;
+    expect(other.payload.readerSections).toMatchObject({ checked: ['h-check'], unlocked: {} });
+    expect(json(other)).not.toContain(SECRET);
   });
 });
 
@@ -1278,6 +1330,8 @@ test.describe('a pending member reads the site’s members-only pages, and nothi
       staff: false,
       signedIn: true,
       member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -1376,8 +1430,12 @@ test.describe('a locked section for a signed-in non-member', () => {
     expect(await sections('stranger')).toMatchObject({ signedIn: true, member: false });
     expect(await sections('pending-x')).toMatchObject({ signedIn: true, member: false });
     expect(await sections('student-x')).toMatchObject({ signedIn: true, member: true });
-    // An impersonated member is still a member (a closed card, not the line).
-    expect(await sections('imp-student-x')).toMatchObject({ member: true, canUnlock: false });
+    // An impersonated member is still a member (the student's card, inert; not the line).
+    expect(await sections('imp-student-x')).toMatchObject({
+      member: true,
+      showUnlock: true,
+      canUnlock: false,
+    });
   });
 
   test('the reader: sign-in for a signed-out reader, the one members-only line for a signed-in non-member', async () => {
@@ -1527,6 +1585,8 @@ test.describe('a pending OWNER row on the site reads, and nothing more', () => {
       expect(island.payload.readerSections, slug).toMatchObject({
         staff: false,
         member: false,
+        showChecks: false,
+        showUnlock: false,
         canCheck: false,
         canUnlock: false,
       });

@@ -51,6 +51,11 @@ const WORKER_PORT = 8787;
 const BASE_URL = process.env.PAGE_SECTIONS_BASE_URL || getPagesBaseURL();
 
 const RUN = randomUUID().slice(0, 8);
+/**
+ * A user of the base seed stands in for the platform admin of a "View as"
+ * session (only the session's `impersonatedBy` makes it one).
+ */
+const ADMIN_LOGIN = 'fake-other-owner';
 const OUTER_SECRET = `OUTER-SECRET-${RUN}`;
 const INNER_SECRET = `INNER-SECRET-${RUN}`;
 const SOLO_SECRET = `SOLO-SECRET-${RUN}`;
@@ -62,6 +67,7 @@ const ID = {
   inner: randomUUID(),
   headingInOuter: randomUUID(),
   solo: randomUUID(),
+  personal: randomUUID(),
   bLock: randomUUID(),
   bHeading: randomUUID(),
 };
@@ -79,6 +85,14 @@ function documentA() {
         children: [],
       },
       { id: randomUUID(), type: 'paragraph', content: text('Public intro text'), children: [] },
+      {
+        id: ID.personal,
+        type: 'checkListItem',
+        // The author's box is unticked; a student's own tick is theirs.
+        props: { checked: false, personal: true },
+        content: text('Install Node'),
+        children: [],
+      },
       {
         id: randomUUID(),
         type: 'columnList',
@@ -279,13 +293,14 @@ async function startWorkerStub(): Promise<void> {
 }
 
 /**
- * A signed-in (or anonymous) HTTP client. Browserless on purpose: every
+ * A signed-in (or anonymous) HTTP client. Browserless on purpose: almost every
  * assertion here is about what the server sends, and a request context sees
- * exactly that. The session is minted the way `loginAsLogin` mints one (the
+ * exactly that. The one browser test ("View as" a student) carries the token
+ * `as` returns into a browser context, to check what the reader draws. The session is minted the way `loginAsLogin` mints one (the
  * dev test-login fallback reads it); `impersonatedBy` makes it a platform
  * admin's view-as session.
  */
-type Actor = { request: APIRequestContext };
+type Actor = { request: APIRequestContext; token?: string };
 const mintedTokens: string[] = [];
 const contexts: APIRequestContext[] = [];
 let page: Actor;
@@ -313,7 +328,7 @@ async function as(login?: string, impersonatedBy?: string): Promise<Actor> {
     extraHTTPHeaders: cookie ? { cookie } : {},
   });
   contexts.push(context);
-  return { request: context };
+  return { request: context, token: cookie ? cookie.split('=')[1] : undefined };
 }
 
 const viewPath = (s: Seeded) => `/${s.slug}/${s.pageId}`;
@@ -453,6 +468,9 @@ test.describe('page sections: what a reader receives', () => {
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
       signedIn: true,
+      member: true,
+      showChecks: true,
+      showUnlock: true,
       canCheck: true,
       canUnlock: true,
       checked: [],
@@ -470,6 +488,9 @@ test.describe('page sections: what a reader receives', () => {
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
       signedIn: false,
+      member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -560,6 +581,9 @@ test.describe('page sections: writes and isolation', () => {
     expect(after).toEqual({
       staff: false,
       signedIn: true,
+      member: true,
+      showChecks: true,
+      showUnlock: true,
       canCheck: true,
       canUnlock: true,
       checked: [ID.heading],
@@ -578,6 +602,9 @@ test.describe('page sections: writes and isolation', () => {
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
       signedIn: true,
+      member: true,
+      showChecks: true,
+      showUnlock: true,
       canCheck: true,
       canUnlock: true,
       checked: [],
@@ -648,7 +675,7 @@ test.describe('page sections: writes and isolation', () => {
   });
 
   test('an impersonated session writes nothing', async () => {
-    page = await as('fake-student-3', 'timofei7');
+    page = await as('fake-student-3', ADMIN_LOGIN);
     for (const [blockId, intent] of [
       [ID.heading, 'check'],
       [ID.solo, 'unlock'],
@@ -664,10 +691,111 @@ test.describe('page sections: writes and isolation', () => {
     expect(
       await prisma.pageSectionCheck.count({ where: { page_id: pageA.pageId, user_id: student3 } })
     ).toBe(0);
-    // The viewer still renders as that student (closed), with nothing to do.
+    // The viewer still renders as that student: their state drawn, nothing to do.
     const data = await loaderData(page, pageA);
     expect(data.text).not.toContain(SOLO_SECRET);
-    expect(readerSectionsOf(data.text)).toMatchObject({ canCheck: false, canUnlock: false });
+    expect(readerSectionsOf(data.text)).toMatchObject({
+      member: true,
+      showChecks: true,
+      showUnlock: true,
+      canCheck: false,
+      canUnlock: false,
+    });
+  });
+
+  test('"View as" a student: their ticks and unlocks drawn, every control inert, nothing written', async ({
+    browser,
+  }) => {
+    const prisma = await getTestPrisma();
+    const student2 = await userIdFor('fake-student-2');
+    try {
+      // The student ticks the heading and their check list item and unlocks solo.
+      // Student 2: student 3 stays the one whose impersonated session wrote nothing.
+      const student = await as('fake-student-2');
+      for (const [blockId, intent] of [
+        [ID.heading, 'check'],
+        [ID.personal, 'check'],
+        [ID.solo, 'unlock'],
+      ]) {
+        const res = await sections(student, pageA, { pageId: pageA.pageId, blockId, intent });
+        expect(res.status, `${intent} ${blockId}`).toBe(200);
+      }
+      const rows = async () => ({
+        checks: await prisma.pageSectionCheck.count({
+          where: { page_id: pageA.pageId, user_id: student2 },
+        }),
+        unlocks: await prisma.pageSectionUnlock.count({
+          where: { page_id: pageA.pageId, user_id: student2 },
+        }),
+      });
+      expect(await rows()).toEqual({ checks: 2, unlocks: 1 });
+
+      // An admin views as that student, in a real browser.
+      const admin = await as('fake-student-2', ADMIN_LOGIN);
+      const context = await browser.newContext({ baseURL: BASE_URL });
+      try {
+        await context.addCookies([
+          { name: 'classmoji.session_token', value: admin.token!, url: BASE_URL },
+        ]);
+        const tab = await context.newPage();
+        const posts: string[] = [];
+        tab.on('request', request => {
+          if (request.method() === 'POST' && request.url().includes('/api/page-sections')) {
+            posts.push(request.postData() ?? '');
+          }
+        });
+        await tab.goto(viewPath(pageA));
+        const block = (id: string) => tab.locator(`.bn-block[data-id="${id}"]`).first();
+
+        // The heading's box: shown, the student's tick, disabled.
+        const box = block(ID.heading).locator('.pg-section-check');
+        await expect(box).toBeVisible({ timeout: 30_000 });
+        await expect(box).toHaveAttribute('aria-checked', 'true');
+        await expect(box).toBeDisabled();
+        // The student's check list item: their tick (the author's is off), disabled.
+        const item = block(ID.personal).locator('input[type="checkbox"]');
+        await expect(item).toBeChecked();
+        await expect(item).toBeDisabled();
+        // The section they unlocked is open; the one they did not is their card,
+        // its hold control drawn and disabled.
+        await expect(tab.locator('body')).toContainText(SOLO_SECRET);
+        await expect(block(ID.solo).locator('.pg-locked').first()).toHaveAttribute(
+          'data-mode',
+          'unlocked'
+        );
+        const outer = block(ID.outer).locator('.pg-locked').first();
+        await expect(outer).toHaveAttribute('data-mode', 'view');
+        await expect(outer).toContainText('Hold to unlock');
+        const hold = outer.locator('.pg-hold-btn');
+        await expect(hold).toBeDisabled();
+        await expect(tab.locator('body')).not.toContainText(OUTER_SECRET);
+
+        // Clicking the box, the item and holding the padlock write nothing.
+        await box.click({ force: true });
+        await item.click({ force: true });
+        const at = await hold.boundingBox();
+        if (!at) throw new Error('the hold control is not drawn');
+        await tab.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+        await tab.mouse.down();
+        await tab.waitForTimeout(1600);
+        await tab.mouse.up();
+        await expect(box).toHaveAttribute('aria-checked', 'true');
+        await expect(item).toBeChecked();
+        await expect(outer).toHaveAttribute('data-mode', 'view');
+        expect(posts).toEqual([]);
+      } finally {
+        await context.close();
+      }
+      expect(await rows()).toEqual({ checks: 2, unlocks: 1 });
+    } finally {
+      // Back as it was, pass or fail: the staff list below counts who unlocked solo.
+      await prisma.pageSectionCheck.deleteMany({
+        where: { page_id: pageA.pageId, user_id: student2 },
+      });
+      await prisma.pageSectionUnlock.deleteMany({
+        where: { page_id: pageA.pageId, user_id: student2 },
+      });
+    }
   });
 });
 

@@ -76,6 +76,8 @@ function renderViewer(): ReaderViewer {
       staff: true,
       signedIn: false,
       member: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       canUnlock: false,
       checked: [],

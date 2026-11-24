@@ -19,7 +19,10 @@ import type { ReaderSectionsValue } from '~/hooks/useReaderSections.tsx';
  * read.
  */
 
-type StoreState = Pick<ReaderSectionsValue, 'canCheck' | 'checked' | 'toggleCheck'> & {
+type StoreState = Pick<
+  ReaderSectionsValue,
+  'showChecks' | 'canCheck' | 'checked' | 'toggleCheck'
+> & {
   /**
    * Locked sections open in this editor now: the body (children) is in, or
    * the section has no body (`openLockedSections`).
@@ -38,6 +41,7 @@ const stores = new WeakMap<object, SectionStore>();
 
 function createStore(): SectionStore {
   let state: StoreState = {
+    showChecks: false,
     canCheck: false,
     checked: new Set(),
     toggleCheck: () => {},
@@ -136,6 +140,10 @@ const CHECK_SVG =
  * Add the reader's tick box to a heading's node view (only for a heading the
  * author made checkable). Returns the same view with the box's teardown and
  * event/mutation handling folded in.
+ *
+ * Shown when the reader's tick state is drawn (`showChecks`); a reader who
+ * may not tick (`!canCheck`: "View as") gets the box with that state but
+ * inert: disabled, no tooltip, a label that states the state.
  */
 export function withSectionCheckbox<T extends HeadingNodeView>(
   view: T,
@@ -150,7 +158,6 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
   button.className = 'pg-section-check';
   button.contentEditable = 'false';
   button.setAttribute('role', 'checkbox');
-  button.setAttribute('aria-label', `Mark '${label}' done`);
   const box = document.createElement('span');
   box.className = 'pg-section-check-box';
   box.innerHTML = CHECK_SVG;
@@ -158,10 +165,18 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
 
   const sync = () => {
     const state = store.get();
-    button.hidden = !state.canCheck;
+    button.hidden = !state.showChecks;
     const on = state.checked.has(block.id);
     button.setAttribute('aria-checked', on ? 'true' : 'false');
-    button.dataset.tooltip = on ? 'Mark not done' : 'Mark done';
+    if (state.canCheck) {
+      button.disabled = false;
+      button.setAttribute('aria-label', `Mark '${label}' done`);
+      button.dataset.tooltip = on ? 'Mark not done' : 'Mark done';
+    } else {
+      button.disabled = true;
+      button.setAttribute('aria-label', on ? `'${label}' done` : `'${label}' not done`);
+      delete button.dataset.tooltip;
+    }
   };
   sync();
   const unsubscribe = store.subscribe(sync);
@@ -171,7 +186,9 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
   button.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    store.get().toggleCheck(block.id);
+    const state = store.get();
+    if (!state.canCheck) return;
+    state.toggleCheck(block.id);
   });
 
   view.dom.appendChild(button);

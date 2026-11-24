@@ -178,10 +178,10 @@ const BlockNoteViewer = ({
   // here on the first commit, before `isMounted` brings the view (and its
   // node views) in, and again on every change.
   const sectionStore = sectionStoreFor(editor);
-  const { canCheck, checked, toggleCheck } = readerSections;
+  const { showChecks, canCheck, checked, toggleCheck } = readerSections;
   useLayoutEffect(() => {
-    sectionStore.set({ canCheck, checked, toggleCheck });
-  }, [sectionStore, canCheck, checked, toggleCheck]);
+    sectionStore.set({ showChecks, canCheck, checked, toggleCheck });
+  }, [sectionStore, showChecks, canCheck, checked, toggleCheck]);
 
   // Which locked sections are open in this editor: the body is in, or the
   // section has none (`openLockedSections`). Published through the section
@@ -235,9 +235,11 @@ const BlockNoteViewer = ({
     }
   }, [content, editor, isMounted, publishFilled, unlockStatus, settleOpen]);
 
-  const fade = useSectionFade(content, checked, readerSections.canCheck);
+  // Drawn wherever the reader's ticks are shown ("View as" included), not
+  // only where they can be changed.
+  const fade = useSectionFade(content, checked, showChecks);
   // Tick boxes in the gutter, or inline where the gutter has no room.
-  const gutterRef = useSectionCheckGutter(readerSections.canCheck);
+  const gutterRef = useSectionCheckGutter(showChecks);
   const fadeRef = fade.containerRef;
   const [container, setContainer] = useState<HTMLElement | null>(null);
   const containerRef = useCallback(
