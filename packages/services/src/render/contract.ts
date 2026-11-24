@@ -19,6 +19,28 @@ export const VIEW_TOKEN_COOKIE = 'cm_view';
 export const VIEW_READY_ATTRIBUTE = 'data-render-ready';
 export const VIEW_READY_SELECTOR = `[${VIEW_READY_ATTRIBUTE}]`;
 
+/**
+ * On <html> in a page render's FIRST HTML when the page is drawn in the
+ * browser (the reader island) rather than by the server: the driver must then
+ * wait for `VIEW_READY_ATTRIBUTE` (or `VIEW_ERROR_ATTRIBUTE`) before it
+ * measures. A page without it is complete at `load` (the older static render).
+ */
+export const VIEW_PENDING_ATTRIBUTE = 'data-render-pending';
+/** Raised on <html> instead of the ready attribute when the page could not be drawn. */
+export const VIEW_ERROR_ATTRIBUTE = 'data-render-error';
+/**
+ * Ready or failed, on <html> ONLY: what a driver waiting on a pending page
+ * waits for. Never a bare attribute selector — the page's own content could
+ * carry the attribute on any element.
+ */
+export const VIEW_SETTLED_SELECTOR = `html[${VIEW_READY_ATTRIBUTE}], html[${VIEW_ERROR_ATTRIBUTE}]`;
+
+/** Whether a render page's HTML declares itself pending (the attribute on its <html> tag). */
+export function declaresPendingRender(html: string): boolean {
+  const tag = /<html\b[^>]*>/i.exec(html)?.[0] ?? '';
+  return new RegExp(`\\s${VIEW_PENDING_ATTRIBUTE}(?:[\\s=>/]|$)`, 'i').test(tag);
+}
+
 /** `window[VIEW_API_GLOBAL]` — the deck route's driver API (see deck route). */
 export const VIEW_API_GLOBAL = '__cmView';
 

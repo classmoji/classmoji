@@ -146,7 +146,10 @@ export function PageReader({
   const assets = useAssetMap(current.assets, page.id);
   // An expired signature on a stale tab re-resolves once instead of leaving a
   // page of broken images; the epoch rebuilds the viewer with the new map.
-  const assetEpoch = useAssetRetry(refresh);
+  // Only where the host can load the page again: with nothing to refresh
+  // from (the MCP's page render) a failed image must not rebuild the viewer
+  // under a measurement.
+  const assetEpoch = useAssetRetry(refresh, Boolean(onRefresh));
   // Comments: only for a member who may read them (the key is absent otherwise).
   const comments = usePageCommentsController(page.id, current.readerComments, {
     apiBase,
@@ -278,6 +281,8 @@ export function PageReader({
                     readerSections={sections}
                     comments={comments?.bridge ?? null}
                     headingAnchors
+                    // The MCP's page render shows every toggle's body.
+                    togglesOpen={surface === 'render'}
                     onMounted={handleMounted}
                   />
                 </div>

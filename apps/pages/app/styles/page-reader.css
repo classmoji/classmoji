@@ -75,3 +75,30 @@
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+
+/* --- toggles ------------------------------------------------------------ */
+
+/* Toggle list items and toggle headings start closed for readers and remember
+   each reader's choice (BlockNote's behaviour); the MCP's page render draws
+   them open (components/viewer/toggles.ts). A printed page shows every body,
+   on every surface: BlockNote hides a closed toggle's children with
+   `.bn-block:has(> … .bn-toggle-wrapper[data-show-children="false"]) >
+   .bn-block-group { display: none }`; this overrides it inside the reader.
+   The chevron turns as if open. */
+@media print {
+  .page-reader
+    .bn-block:has(> .bn-block-content > div > .bn-toggle-wrapper[data-show-children='false'])
+    > .bn-block-group,
+  .page-reader
+    .bn-block:has(
+      > .react-renderer > .bn-block-content > div > .bn-toggle-wrapper[data-show-children='false']
+    )
+    > .bn-block-group {
+    /* Same specificity as BlockNote's rule, which may load later. */
+    display: block !important;
+  }
+
+  .page-reader .bn-toggle-wrapper[data-show-children='false'] .bn-toggle-button {
+    transform: rotate(90deg);
+  }
+}

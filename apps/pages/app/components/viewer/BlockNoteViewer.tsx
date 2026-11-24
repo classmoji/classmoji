@@ -28,6 +28,7 @@ import {
 import { openLockedSections, sectionStoreFor } from './sections/sectionCheckbox.ts';
 import { useSectionFade } from './sections/useSectionFade.ts';
 import { useSectionCheckGutter } from './sections/useSectionCheckGutter.ts';
+import { openAllToggles } from './toggles.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -88,6 +89,12 @@ interface BlockNoteViewerProps {
    * it on (and scrolls to `location.hash` once the view is in).
    */
   headingAnchors?: boolean;
+  /**
+   * Draw every toggle list item and toggle heading open, and remember nothing
+   * (the MCP's page render, whose screenshot must show their bodies). Off:
+   * BlockNote's behaviour, closed until the reader opens one.
+   */
+  togglesOpen?: boolean;
   /** Called once the view is mounted (the reader's ready signal). */
   onMounted?: () => void;
 }
@@ -104,6 +111,7 @@ const BlockNoteViewer = ({
   comments = null,
   downloadOrigin = '',
   headingAnchors = false,
+  togglesOpen = false,
   onMounted,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
@@ -132,6 +140,8 @@ const BlockNoteViewer = ({
     ],
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
+  // Before the view (mounted below, after `isMounted`) builds its node views.
+  if (togglesOpen) openAllToggles(editor);
 
   useEffect(() => {
     setIsMounted(true);
