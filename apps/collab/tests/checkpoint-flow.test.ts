@@ -324,7 +324,7 @@ describe('manual reset', () => {
         return markReseed(kind, docId);
       };
       const reset = await internal(server, 'POST', `/page/${PAGE}/reset`, { actor });
-      const row = (await server.store.get('page', PAGE))!;
+      const row = await server.store.get('page', PAGE);
       if (reset.status === 200) {
         // Reseeded: the server never took the edit (the room's sockets were
         // closed before the row was marked), so the browser still holds it,
@@ -333,7 +333,7 @@ describe('manual reset', () => {
         expect(a.provider.hasUnsyncedChanges).toBe(true);
       } else {
         // Or refused: the row was not reseeded and the edit is kept.
-        expect(row.state.byteLength).toBeGreaterThan(0);
+        expect(row?.state.byteLength).toBeGreaterThan(0);
       }
     } finally {
       warn.mockRestore();

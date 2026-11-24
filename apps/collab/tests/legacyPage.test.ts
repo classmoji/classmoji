@@ -218,8 +218,8 @@ describe('outside pushes and legacy HTML', () => {
     // Final (4xx, not a 500 the worker would retry), and recorded so the
     // checkpoint worker stops re-notifying c5.
     expect([res.status, res.body.error]).toEqual([422, 'invalid-content']);
-    expect(textsOf(server.runtime.loadedDocument('page', PAGE)!)).toEqual(['One', 'Live']);
-    expect((await server.store.get('page', PAGE))!.last_conflict).toMatchObject({
+    expect(textsOf(a.doc)).toEqual(['One', 'Live']);
+    expect((await server.store.get('page', PAGE))?.last_conflict).toMatchObject({
       sha: 'c5',
       reason: 'invalid-content',
     });

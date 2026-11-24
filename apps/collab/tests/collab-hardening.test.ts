@@ -656,7 +656,7 @@ describe('a deck outside push with no merge base', () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ action: 'reseeded', epoch: 2, reason: 'no-merge-base' });
       await waitFor(() => a.closeCodes.includes(4409), 3000, '4409');
-      expect((await server.store.get('deck', 'deck-1'))!.last_conflict ?? null).toBeNull();
+      expect((await server.store.get('deck', 'deck-1'))?.last_conflict ?? null).toBeNull();
     } finally {
       warn.mockRestore();
     }
@@ -672,7 +672,7 @@ describe('a deck outside push with no merge base', () => {
     const res = await internal(server, 'POST', '/deck/deck-1/external', { sha: 'c7' });
     expect([res.status, res.body.error]).toEqual([409, 'no-merge-base']);
     expect(a.closeCodes).not.toContain(4409);
-    expect((await server.store.get('deck', 'deck-1'))!.last_conflict).toMatchObject({
+    expect((await server.store.get('deck', 'deck-1'))?.last_conflict).toMatchObject({
       sha: 'c7',
       reason: 'no-merge-base',
     });
