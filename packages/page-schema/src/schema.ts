@@ -389,6 +389,26 @@ export function codeBlockDisplayLanguage(language: unknown): string {
 }
 
 /**
+ * Where BlockNote 0.55 keeps the Shiki highlighter it loads lazily for code
+ * blocks (`lazyShikiPlugin`, not exported by `@blocknote/core`). The pages
+ * reader island waits on it before it calls a page drawn; a test here pins it
+ * against the installed BlockNote, so an upgrade that moves it fails a test.
+ */
+export const BLOCKNOTE_SHIKI_HIGHLIGHTER = Symbol.for('blocknote.shikiHighlighterPromise');
+
+/**
+ * The language BlockNote's highlighter is asked to paint a stored `language`
+ * in: the canonical id (`js` -> `javascript`, `bash` -> `shellscript`), or
+ * `text` — which it never sends to Shiki — for `plain`, `''` and any name the
+ * bundle does not have. Never the stored value itself: Shiki throws for a
+ * language its bundle lacks, inside BlockNote's highlight pass, and the pass
+ * stops there, leaving every code block AFTER it in the document unpainted.
+ */
+export function codeBlockHighlightLanguage(language: unknown): string {
+  return codeBlockDisplayLanguage(language);
+}
+
+/**
  * The name the language select shows for a stored `language` (`js` ->
  * `JavaScript`, anything unknown -> `Plain Text`). The class site prints it
  * as plain text where the editor has the select.
@@ -410,8 +430,9 @@ export function codeBlockLanguageName(language: unknown): string {
  * value, and the title bar gets the copy control (copyControl.ts) and, in
  * the editor, the collapse toggle; a collapsible block also gets the bar
  * along its bottom (codeCollapse.ts). Parse,
- * input rule, keyboard shortcuts, highlight language, the block's
- * `data-language` and `toExternalHTML` are BlockNote's, unchanged, so
+ * input rule, keyboard shortcuts, the block's `data-language` and
+ * `toExternalHTML` are BlockNote's, unchanged (the highlight language is the
+ * canonical one, `codeBlockHighlightLanguage`), so
  * documents read and write exactly as before; picking a language in the
  * select writes its canonical id.
  *
@@ -443,6 +464,14 @@ export function createPageCodeBlockSpec() {
     config,
     {
       ...implementation,
+      meta: {
+        ...implementation.meta,
+        // The canonical language, or plain text for one the bundle lacks
+        // (`codeBlockHighlightLanguage`): an unknown language stays plain and
+        // the code blocks after it are still highlighted.
+        highlight: (block: { props: { language?: unknown } }) =>
+          codeBlockHighlightLanguage(block.props.language),
+      },
       // A `function`: BlockNote calls it with `this.renderType` (a live node
       // view, or a one-off `blocksToFullHTML` render) and the node view's props.
       render: function (block, editor) {

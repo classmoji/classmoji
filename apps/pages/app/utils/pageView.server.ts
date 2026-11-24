@@ -4,16 +4,20 @@
  * The MCP's `page_render` tool points a headless browser here so an agent
  * that edits a page blind can SEE it: the page's document — the LIVE collab
  * document when the classroom edits live, git main otherwise, or the pending
- * preview branch — serialized by the same static BlockNote renderer the class
- * site uses, with assets signed at the page's own visibility tier.
+ * preview branch — drawn by the SHARED page reader (the one every reader
+ * sees), mounted in the browser by the reader island (app/reader-island/),
+ * with assets signed at the page's own visibility tier.
  *
  * Authorised by a view token in the `cm_view` cookie and nothing else: one
  * page, one target (`at:pin`), one host, 120 seconds. No session is read. The
- * root loader treats `/_render/` like a site path (bare, script-less document,
- * no login redirect), so this loader is the only gate.
+ * root loader treats `/_render/` as a bare document (`RenderDocument`: no
+ * hydration, no login redirect), so this loader is the only gate.
  *
- * Rendered for STAFF: every page link resolves (nothing is redacted as it
+ * Rendered for STAFF (`renderViewer`): every locked body is in, every page
+ * of the classroom the document links to is a link (nothing is redacted as it
  * would be for an anonymous visitor) — the caller passed the MCP's read gate.
+ * No comments, no downloads, no reader state: the payload asks the island
+ * for no API call, and its CSP allows none.
  */
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
@@ -25,36 +29,70 @@ import {
   type PageViewMeta,
 } from '@classmoji/services/render-contract';
 import { verifyDocViewToken } from '@classmoji/services/render-token';
-import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { CollabRequestError } from '~/utils/collabEnv.server.ts';
 import { fetchLiveSnapshot, liveEditingEnv } from '~/utils/collab.server.ts';
+import { readerPayloadDeps } from '~/utils/readerDeps.server.ts';
 import {
-  resolveSiteAssets,
-  resolveSiteCover,
-  siteArticleWidthClass,
-} from '~/site/pageRender.server.ts';
-import { renderSitePage, siteArticleWrapper } from '~/site/render.server.ts';
-import {
-  withoutUnresolvedMediaRefs,
-  coverWithoutUnresolvedMediaRef,
-} from '~/site/siteMedia.server.ts';
-import type { PageLinkResolver } from '~/site/viewerSchema.server.ts';
+  buildReaderPayload,
+  type ReaderLinkPolicy,
+  type ReaderViewer,
+} from '~/utils/readerPayload.server.ts';
+import { NO_SECTION_VIEWER } from '~/utils/pageSections.server.ts';
+import { readerIslandAssets } from '~/reader-island/assets.server.ts';
+import type { ReaderIslandData } from '~/reader-island/contract.ts';
+import type { ReaderIslandAssets } from '~/reader-island/ReaderIsland.tsx';
 
 /** The ONE refusal: unknown page, bad token and unreadable content look identical. */
 export function pageViewRefusal(): Response {
   return new Response('Forbidden', {
     status: 403,
-    headers: { ...VIEW_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' },
+    headers: {
+      ...VIEW_HEADERS,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Type': 'text/plain; charset=utf-8',
+    },
   });
 }
 
 export interface PageViewData {
-  title: string;
-  html: string;
-  coverImage: { url: string; position?: number } | null;
-  widthClass: string;
+  /** What the island mounts the reader with. */
+  island: ReaderIslandData;
+  /** Where the island's files are (dev source or build). */
+  assets: ReaderIslandAssets;
   meta: PageViewMeta;
 }
+
+/**
+ * The render's reader: staff. Every locked body is shown and nothing is
+ * recorded; no session, so no comments, no downloads and no reader state.
+ */
+function renderViewer(): ReaderViewer {
+  return {
+    // The view token names no one: nothing here is read or written per user.
+    userId: '',
+    access: { ...NO_SECTION_VIEWER, revealAll: true },
+    readerSections: {
+      staff: true,
+      signedIn: false,
+      canCheck: false,
+      canUnlock: false,
+      checked: [],
+      unlocked: {},
+    },
+    impersonated: false,
+  };
+}
+
+/**
+ * The render's link rule, as the render page always drew links: every page
+ * of the classroom that the document names (the builder looks them up in the
+ * page's own classroom only) is a link with its live title; it goes nowhere
+ * (`#`) — a screenshot has no one to follow it.
+ */
+const RENDER_LINK_POLICY: ReaderLinkPolicy = {
+  canOpen: () => true,
+  href: () => '#',
+};
 
 type Cover = { url: string; position?: number } | null;
 
@@ -140,39 +178,42 @@ export async function pageViewLoader({
   const loaded = await loadViewBlocks(page, query.at);
   if (!loaded) throw pageViewRefusal();
 
-  // Staff view: every page in the classroom resolves to a link.
-  const siblings = await prisma.page.findMany({
-    where: { classroom_id: page.classroom_id },
-    select: { id: true, title: true },
-  });
-  const titles = new Map(siblings.map(p => [p.id, p.title || 'Untitled']));
-  const resolveLink: PageLinkResolver = id =>
-    titles.has(id) ? { href: '#', title: titles.get(id) ?? 'Untitled' } : null;
-
-  const assetCtx = assetResolveContext(
-    page.classroom as unknown as Parameters<typeof assetResolveContext>[0],
-    ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
-  );
-  const { blocks, srcSets } = await resolveSiteAssets(
-    assetCtx,
-    Array.isArray(loaded.blocks) ? loaded.blocks : []
-  );
-  const rendered = await renderSitePage({
-    blocks: withoutUnresolvedMediaRefs(blocks),
-    resolveLink,
-    srcSets,
-    showSchedule: false,
-    downloads: {},
-  });
-  const coverImage = coverWithoutUnresolvedMediaRef(
-    await resolveSiteCover(assetCtx, loaded.coverImage)
+  const payload = await buildReaderPayload(
+    {
+      content: { blocks: loaded.blocks, cover: loaded.coverImage, format: 'json' },
+      page,
+      classroom: page.classroom as unknown as { id: string },
+      viewer: renderViewer(),
+      options: {
+        tier: ClassmojiService.contentDelivery.tierFor({
+          canEdit: false,
+          isPublic: page.is_public,
+        }),
+        previewActive: query.at === 'preview',
+        surface: 'render',
+        offerDownloads: false,
+        comments: false,
+      },
+      signInUrl: () => null,
+      links: RENDER_LINK_POLICY,
+      // No schedule tile: the render never drew one.
+      scheduleHref: async () => null,
+    },
+    readerPayloadDeps
   );
 
   return {
-    title: page.title || 'Untitled',
-    html: siteArticleWrapper(rendered.html),
-    coverImage,
-    widthClass: siteArticleWidthClass(page.width),
+    island: {
+      surface: 'render',
+      page: {
+        id: page.id,
+        title: page.title || 'Untitled',
+        width: page.width,
+        is_draft: page.is_draft,
+      },
+      payload,
+    },
+    assets: readerIslandAssets,
     meta: { kind: 'page', version: loaded.version },
   };
 }

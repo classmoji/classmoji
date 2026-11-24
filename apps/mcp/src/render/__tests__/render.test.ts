@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error -- jsdom ships no type declarations; only the constructor is used.
+import { JSDOM } from 'jsdom';
 import type { DeckJson } from '@classmoji/services/slides';
 import {
+  declaresPendingRender,
   parseViewQuery,
   viewTarget,
   viewTokenCookie,
@@ -11,6 +14,7 @@ import { allowRequest, RenderError, renderBackend, within } from '../browser.ts'
 import { LruCache } from '../cache.ts';
 import { deckIdSet, deckSlideOrder, overflowReport } from '../deckAgent.ts';
 import { metaFromHtml, sheetHtml } from '../deckRender.ts';
+import { waitForPageReady } from '../pageRender.ts';
 import { changedSlideIds, deckRenderTool } from '../../tools/render.ts';
 import { deckApplyTool } from '../../tools/deck.ts';
 import { pageContentApplyTool } from '../../tools/pageContent.ts';
@@ -309,5 +313,120 @@ describe('deadlines and meta', () => {
     expect(metaFromHtml(html)).toEqual(meta);
     expect(metaFromHtml('<body></body>')).toBeNull();
     expect(metaFromHtml('<script id="cm-view-meta">{nope</script>')).toBeNull();
+  });
+});
+
+describe('page render readiness (reader island vs static render)', () => {
+  const ISLAND_HTML =
+    '<!DOCTYPE html><html lang="en" data-render-pending=""><head></head><body><article></article></body></html>';
+  const STATIC_HTML =
+    '<!DOCTYPE html><html lang="en"><head></head><body><article><div class="site-article"></div></article></body></html>';
+
+  /**
+   * A Playwright page stand-in over a real DOM (jsdom): `waitForSelector`
+   * polls `querySelector` with the selector it is given, until its timeout;
+   * `evaluate` runs the function against that document. `script` changes the
+   * DOM over time, as the island would.
+   */
+  function domPage(html: string, script: (doc: Document) => void = () => {}) {
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+    const calls: Array<{ selector: string; options: { timeout: number } }> = [];
+    script(doc);
+    const page = {
+      calls,
+      doc,
+      waitForSelector: async (selector: string, options: { timeout: number }) => {
+        calls.push({ selector, options });
+        const end = Date.now() + options.timeout;
+        while (!doc.querySelector(selector)) {
+          if (Date.now() >= end) throw new Error(`Timeout ${options.timeout}ms exceeded.`);
+          await new Promise(r => setTimeout(r, 10));
+        }
+        return null;
+      },
+      evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => {
+        const g = globalThis as { document?: Document };
+        const before = g.document;
+        g.document = doc;
+        try {
+          return fn(arg);
+        } finally {
+          g.document = before;
+        }
+      },
+    };
+    return page as unknown as Parameters<typeof waitForPageReady>[0] & {
+      calls: typeof calls;
+      doc: Document;
+    };
+  }
+
+  it('reads the pending marker from the <html> tag only', () => {
+    expect(declaresPendingRender(ISLAND_HTML)).toBe(true);
+    expect(declaresPendingRender('<html data-render-pending><body></body></html>')).toBe(true);
+    expect(declaresPendingRender(STATIC_HTML)).toBe(false);
+    // Named in the body (a paragraph, a script) is not a declaration.
+    expect(declaresPendingRender('<html><body><p>data-render-pending</p></body></html>')).toBe(
+      false
+    );
+    expect(declaresPendingRender('<html data-render-pending-x=""><body></body></html>')).toBe(
+      false
+    );
+  });
+
+  it('waits for <html> to be marked ready, and returns how it settled', async () => {
+    const page = domPage(ISLAND_HTML, doc =>
+      setTimeout(
+        () => doc.documentElement.setAttribute('data-render-ready', 'highlight-timeout'),
+        50
+      )
+    );
+    await expect(waitForPageReady(page, ISLAND_HTML, 5000)).resolves.toBe('highlight-timeout');
+    expect(page.calls[0]).toEqual({
+      selector: 'html[data-render-ready], html[data-render-error]',
+      options: { state: 'attached', timeout: expect.any(Number) },
+    });
+  });
+
+  it('a ready attribute in the BODY (page content) is not ready: it waits until the timeout', async () => {
+    const page = domPage(ISLAND_HTML, doc => {
+      const fake = doc.createElement('div');
+      fake.setAttribute('data-render-ready', 'settled');
+      fake.setAttribute('data-render-error', 'x');
+      doc.body.appendChild(fake);
+    });
+    const started = Date.now();
+    const failure = await waitForPageReady(page, ISLAND_HTML, 300).catch(e => e);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(280);
+    expect(failure).toBeInstanceOf(RenderError);
+    expect(failure).toMatchObject({
+      code: 'RENDER_FAILED',
+      message: 'The page did not finish drawing within 1s.',
+    });
+  });
+
+  it('does not wait on the older static render (complete at load)', async () => {
+    const page = domPage(STATIC_HTML);
+    await expect(waitForPageReady(page, STATIC_HTML)).resolves.toBe('static');
+    expect(page.calls).toEqual([]);
+  });
+
+  it('a pending page that never settles is a RenderError naming the wait', async () => {
+    const page = domPage(ISLAND_HTML);
+    const failure = await waitForPageReady(page, ISLAND_HTML, 1000).catch(e => e);
+    expect(failure).toBeInstanceOf(RenderError);
+    expect(failure.message).toBe('The page did not finish drawing within 1s.');
+  });
+
+  it('a page that raised its error marker is a RenderError carrying the marker, not a screenshot', async () => {
+    const page = domPage(ISLAND_HTML, doc =>
+      doc.documentElement.setAttribute('data-render-error', 'ChunkLoadError')
+    );
+    const failure = await waitForPageReady(page, ISLAND_HTML).catch(e => e);
+    expect(failure).toBeInstanceOf(RenderError);
+    expect(failure.message).toBe(
+      'The page could not be drawn in the render browser (ChunkLoadError).'
+    );
   });
 });

@@ -3,7 +3,7 @@
  * page_content_apply.
  *
  * The page is rendered by the pages app's token-gated `/_render/page/:pageId`
- * (the class site's static BlockNote renderer, staff view), laid out 900px
+ * (the shared page reader, mounted in the browser; staff view), laid out 900px
  * wide and returned as JPEG chunks 1200px tall. Blocks the caller names are
  * outlined and located (top/bottom px, which chunk). See tools/render.ts for
  * the deck side and render/browser.ts for the browser.
@@ -212,13 +212,21 @@ export async function pageRenderResult(
     const prior = key ? pageCache.get(key) : undefined;
     const merged = new Map([...(prior?.images ?? []), ...images]);
     cached = { result: rest, images: merged };
-    if (key) pageCache.set(key, cached, { keepAge: true });
+    // A capture taken before the page finished drawing is not kept: the next
+    // call renders again instead of serving the degraded one.
+    if (key && (rest.drawn === 'settled' || rest.drawn === 'static')) {
+      pageCache.set(key, cached, { keepAge: true });
+    }
   }
   if (!cached) throw new ToolError('internal', 'The page could not be rendered', 'RENDER_FAILED');
   const entry = cached;
   const layout = entry.result;
   const notes: string[] = [];
   if (read.note) notes.push(read.note);
+  const degraded = layout.drawn !== 'settled' && layout.drawn !== 'static';
+  if (degraded) {
+    notes.push(`Captured before the page finished drawing (${layout.drawn}).`);
+  }
   if (read.version && layout.version !== read.version) {
     notes.push(`The page changed after it was read (${read.version}); this is ${layout.version}.`);
   }
@@ -252,6 +260,7 @@ export async function pageRenderResult(
     ...(missing.length ? { not_rendered: missing } : {}),
     ...(layout.clipped.length ? { clipped: layout.clipped } : {}),
     ...(layout.overflowX > 0 ? { overflow_x_px: layout.overflowX } : {}),
+    ...(degraded ? { drawn: layout.drawn } : {}),
     cached: fromCache,
     ms: Date.now() - started,
     ...(notes.length ? { note: notes.join(' ') } : {}),
@@ -288,7 +297,8 @@ export const pageRenderTool: ToolDefinition<PageRenderArgs> = {
     'hold them. chunk + max_chunks (default 3, up to 6) page through a long page. Also ' +
     'reports boxes that hide content behind a scrollbar (wide code blocks, tables) and ' +
     'horizontal overflow. at: main (alias live) is the page itself, the live document when ' +
-    'live editing is on; at: preview is the pending preview. Renders are cached per version.',
+    'live editing is on; at: preview is the pending preview. Renders are cached per version. ' +
+    'drawn (with a note) marks a capture taken before the page finished drawing.',
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {

@@ -32,6 +32,8 @@ async function routerImportsFrom(entry: string): Promise<string[]> {
       {
         name: 'router-probe',
         resolveId(source, importer) {
+          // Vite / React Router virtual modules (the island's dev preamble).
+          if (source.startsWith('virtual:')) return { id: source, external: true };
           if (!ROUTER.test(source)) return null;
           found.push(`${source} <- ${path.relative(APP_DIR, importer ?? '')}`);
           return { id: source, external: true };
@@ -57,6 +59,14 @@ test.describe('PageReader is router-free', () => {
 
   test('nothing reachable from PageReader imports react-router', async () => {
     expect(await routerImportsFrom('components/reader/PageReader.tsx')).toEqual([]);
+  });
+
+  test('nor anything reachable from the reader island (entry, mount, readiness)', async () => {
+    // The island is what mounts the reader with no router at all (the MCP's
+    // page render, the class site next); its own modules are held to the same
+    // rule. The dev-only HMR preamble import is a virtual module the probe
+    // leaves external.
+    expect(await routerImportsFrom('reader-island/entry.client.ts')).toEqual([]);
   });
 
   test('the probe does see a router import (the editor cover still has one)', async () => {

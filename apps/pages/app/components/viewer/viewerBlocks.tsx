@@ -3,6 +3,7 @@ import {
   audioParse,
   createAudioBlockConfig,
   createFileBlockConfig,
+  createToggleListItemBlockSpec,
   fileParse,
 } from '@blocknote/core';
 import {
@@ -28,6 +29,7 @@ import { MediaDownloadLink } from './MediaDownloadLink.tsx';
 import { LockedSectionView, type LockedSectionViewProps } from './sections/LockedSectionView.tsx';
 import { withSectionCheckbox } from './sections/sectionCheckbox.ts';
 import { withPersonalCheckbox } from './sections/personalCheckListItem.ts';
+import { withOpenToggle } from './toggles.ts';
 
 /**
  * The schema the read-only page viewer renders with: the editor's, with the
@@ -135,7 +137,8 @@ const DownloadableAudio = createReactBlockSpec(createAudioBlockConfig, config =>
 
 /**
  * The shared page heading with its render wrapped: a checkable heading gets
- * the reader's tick box (`withSectionCheckbox`). Built from a FRESH spec, not
+ * the reader's tick box (`withSectionCheckbox`), and a toggle heading is drawn
+ * open where the viewer opens every toggle (`toggles.ts`). Built from a FRESH spec, not
  * from `editorSchema.blockSpecs.heading`: a spec that has been through a
  * schema carries its ProseMirror node, whose node view closes over the
  * original render, and a schema reuses that node as is. Config, parse rules,
@@ -149,8 +152,8 @@ function createViewerHeadingSpec() {
     implementation: {
       ...base.implementation,
       render(this: unknown, ...args: Parameters<typeof render>) {
-        const view = render.apply(this as never, args);
         const [block, editor] = args;
+        const view = withOpenToggle(render.apply(this as never, args), editor as object);
         if ((block.props as { checkable?: unknown }).checkable !== true) return view;
         return withSectionCheckbox(view as never, block as never, editor as object);
       },
@@ -181,6 +184,25 @@ function createViewerCheckListItemSpec() {
   } as typeof base;
 }
 
+/**
+ * BlockNote's toggle list item with its render wrapped: drawn open where the
+ * viewer opens every toggle (`toggles.ts`). A FRESH spec, as the heading
+ * above; everything else is BlockNote's.
+ */
+function createViewerToggleListItemSpec() {
+  const base = createToggleListItemBlockSpec();
+  const render = base.implementation.render;
+  return {
+    ...base,
+    implementation: {
+      ...base.implementation,
+      render(this: unknown, ...args: Parameters<typeof render>) {
+        return withOpenToggle(render.apply(this as never, args), args[1] as object);
+      },
+    },
+  } as typeof base;
+}
+
 /** The locked section for a reader: same config, the reader's render. */
 const ReaderLockedSection = createReactBlockSpec(lockedSectionConfig, {
   render: props => (
@@ -198,6 +220,7 @@ export const viewerSchema = BlockNoteSchema.create({
     ...editorSchema.blockSpecs,
     heading: createViewerHeadingSpec(),
     checkListItem: createViewerCheckListItemSpec(),
+    toggleListItem: createViewerToggleListItemSpec(),
     file: DownloadableFile(),
     audio: DownloadableAudio(),
     lockedSection: ReaderLockedSection(),
