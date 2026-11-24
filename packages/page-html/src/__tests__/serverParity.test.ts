@@ -1,7 +1,7 @@
 /**
- * The jsdom-free Y.Doc conversions (`../server.ts`: a plain BlockNoteEditor
- * and `@blocknote/core/yjs`) give exactly what the path they replaced gave:
- * BlockNote's `ServerBlockNoteEditor` (from `../html.ts`) running the same
+ * The jsdom-free Y.Doc conversions (`@classmoji/page-schema/server`: a plain
+ * BlockNoteEditor and `@blocknote/core/yjs`) give exactly what the path they
+ * replaced gave: BlockNote's `ServerBlockNoteEditor` (from `../index.ts`) running the same
  * conversions, written here the way `server.ts` was before the split (same
  * FRAGMENT, `normalizeCodeBlockContent` before seeding, reads from a clone,
  * the cover in the meta map).
@@ -17,19 +17,29 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
-import { ALL_BLOCKS } from '../../../services/src/content/extract/__tests__/fixtures/allBlocks.ts';
-import { normalizeCodeBlockContent } from '../codeContent.ts';
-import { COVER_IMAGE_KEY, FRAGMENT, META_MAP } from '../constants.ts';
-import { parsePageContent, type PageContent, type PageCoverImage } from '../content.ts';
-import { createServerEditor, htmlToPageBlocks, type PageServerEditor } from '../html.ts';
+import {
+  COVER_IMAGE_KEY,
+  FRAGMENT,
+  META_MAP,
+  normalizeCodeBlockContent,
+  parsePageContent,
+  type PageContent,
+  type PageCoverImage,
+} from '@classmoji/page-schema';
 import {
   blocksToYDoc,
   createPageEditor,
   pageContentToYDoc,
   yDocToBlocks,
   yDocToPageContent,
-} from '../server.ts';
-import { codeBlocks, richCodeBlocks } from './fixtures/codeBlockLanguages.ts';
+} from '@classmoji/page-schema/server';
+
+import { ALL_BLOCKS } from '../../../services/src/content/extract/__tests__/fixtures/allBlocks.ts';
+import {
+  codeBlocks,
+  richCodeBlocks,
+} from '../../../page-schema/src/__tests__/fixtures/codeBlockLanguages.ts';
+import { createServerEditor, htmlToPageBlocks, type PageServerEditor } from '../index.ts';
 
 /* The pre-split `server.ts`, on BlockNote's server editor. */
 
@@ -104,7 +114,12 @@ async function fixtures(): Promise<Array<{ name: string; content: PageContent }>
     {
       name: 'kitchen-sink.content.json',
       content: parsePageContent(
-        read(new URL('./fixtures/kitchen-sink.content.json', import.meta.url))
+        read(
+          new URL(
+            '../../../page-schema/src/__tests__/fixtures/kitchen-sink.content.json',
+            import.meta.url
+          )
+        )
       ),
     },
     {

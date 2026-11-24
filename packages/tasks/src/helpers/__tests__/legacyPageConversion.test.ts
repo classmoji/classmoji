@@ -10,7 +10,7 @@ import * as Y from 'yjs';
 
 import { SCHEMA_VERSION } from '@classmoji/page-schema';
 import { pageContentToYDoc } from '@classmoji/page-schema/server';
-import { convertLegacyPageHtml, legacyPageLinkIds } from '@classmoji/page-schema/html';
+import { convertLegacyPageHtml, legacyPageLinkIds } from '@classmoji/page-html';
 import { ClassmojiService } from '@classmoji/services';
 
 import {

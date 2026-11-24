@@ -16,7 +16,7 @@ import { getPageEditor, type PageEditor } from './editor.ts';
  * imports jsdom or `@blocknote/server-util`, directly or through another
  * module, so it runs in Node and in workerd alike (a test pins that). HTML
  * parsing and rendering (the legacy `index.html` converter) are in the
- * Node-only `@classmoji/page-schema/html`. Keep it out of browser bundles
+ * Node-only `@classmoji/page-html`. Keep it out of browser bundles
  * anyway: the browser entry is `@classmoji/page-schema`.
  */
 

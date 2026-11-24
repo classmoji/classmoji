@@ -67,6 +67,9 @@ jobs:
               # content-checkpoint renders live docs with these.
               - 'packages/collab/**'
               - 'packages/page-schema/**'
+              # page-import-convert (and the legacy page script) convert HTML
+              # with this one.
+              - 'packages/page-html/**'
               # The chat agents mint their MCP tokens with this package
               # (@classmoji/auth/mcp-token), which apps/mcp checks them with.
               - 'packages/auth/**'

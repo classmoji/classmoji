@@ -5,7 +5,7 @@
  * room is refused (`legacy-html`, 422) before anything is seeded or stored,
  * and so is an outside push that leaves a page as HTML only. Legacy pages are
  * converted by the operator script (`packages/tasks/src/scripts/
- * convertLegacyPages.ts`); collab never loads `@classmoji/page-schema/html`,
+ * convertLegacyPages.ts`); collab never loads `@classmoji/page-html`,
  * `@blocknote/server-util` or jsdom (`scripts/check-no-dom-runtime.mjs
  * --entry apps/collab/src/index.ts` enforces it).
  *

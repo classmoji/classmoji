@@ -6,7 +6,7 @@ import { extractOwnRepoPath } from './contentRefs.ts';
  * import, a batch import, MCP `page_create`'s `html`).
  *
  * The conversion itself (HTML -> blocks, `htmlToPageBlocks` from
- * `@classmoji/page-schema/html`) no longer runs in this package: it needs
+ * `@classmoji/page-html`) no longer runs in this package: it needs
  * jsdom and BlockNote's server editor, which the web app and the MCP server
  * must not load. It runs in the `page-import-convert` Trigger task
  * (`pageImport.service.ts`), and `page.createPage` takes the blocks it made.

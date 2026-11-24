@@ -6,9 +6,10 @@
 // draws pages in the browser) and is meant to run where jsdom cannot, e.g.
 // Cloudflare Workers. The collab server converts no legacy page any more (they
 // are converted by an operator script). jsdom, `@blocknote/server-util` (which
-// imports jsdom) and `@classmoji/page-schema/html` (which uses both) stay
-// installed for tests, a Trigger task and scripts, so nothing stops a new
-// import from pulling them back into either server: this does.
+// imports jsdom) and `@classmoji/page-html` (which uses both; formerly
+// `@classmoji/page-schema/html`, still refused) stay installed for tests, a
+// Trigger task and scripts, so nothing stops a new import from pulling them
+// back into either server: this does.
 //
 // Two modes.
 //
@@ -36,8 +37,8 @@
 // are read with a real lexer (es-module-lexer) and requires with a tokenizer
 // that skips comments, strings, template literals and regular expressions, so
 // text that only mentions an import is never one. It fails on a forbidden
-// specifier, on a resolved file inside a forbidden package or
-// `packages/page-schema/src/{html,serverEditor}.ts`, on a first-party relative
+// specifier, on a resolved file inside a forbidden package (`packages/page-html`
+// included, however it is reached), on a first-party relative
 // import that does not resolve, on a first-party `import()` with a computed
 // specifier (it cannot be followed; a dependency's is listed with --verbose),
 // on a file it cannot lex, and on a walk that reached almost nothing.
@@ -56,12 +57,20 @@ import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const FORBIDDEN = ['jsdom', '@blocknote/server-util', '@classmoji/page-schema/html'];
+export const FORBIDDEN = [
+  'jsdom',
+  '@blocknote/server-util',
+  '@classmoji/page-html',
+  // Where the HTML converter lived before it moved to @classmoji/page-html.
+  '@classmoji/page-schema/html',
+];
 
-/** Source paths (in a source map's `sources`) that only a forbidden package has. */
+/** Source paths (in a source map's `sources`, or resolved files) only a forbidden package has. */
 const FORBIDDEN_SOURCES = [
   /(^|\/)node_modules\/jsdom\//,
   /(^|\/)node_modules\/@blocknote\/server-util\//,
+  /(^|\/)packages\/page-html\/src\//,
+  /(^|\/)node_modules\/@classmoji\/page-html\//,
   /(^|\/)packages\/page-schema\/src\/(html|serverEditor)\.ts$/,
 ];
 

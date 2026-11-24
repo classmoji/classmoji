@@ -218,6 +218,20 @@ test('the walk follows static, re-exported and lazy imports into packages', asyn
   assert.equal(files, 5);
 });
 
+test('@classmoji/page-html is forbidden by name and by where its files live', async () => {
+  assert.deepEqual(forbiddenImports('import { htmlToPageBlocks } from "@classmoji/page-html";\n'), [
+    '@classmoji/page-html',
+  ]);
+  const root = fixture({
+    'src/index.ts': "export * from '../packages/page-html/src/index.ts';\n",
+    'packages/page-html/src/index.ts': 'export const h = 1;\n',
+  });
+  const { problems } = await walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) });
+  assert.deepEqual(problems, [
+    'src/index.ts imports ../packages/page-html/src/index.ts (packages/page-html/src/index.ts)',
+  ]);
+});
+
 test('a resolved file inside a forbidden module fails, whatever the specifier', async () => {
   const root = fixture({
     'src/index.ts': "export * from '../packages/page-schema/src/server.ts';\n",

@@ -168,7 +168,7 @@ async function main(): Promise<void> {
     await Promise.all([
       import('@classmoji/services'),
       import('@classmoji/database'),
-      import('@classmoji/page-schema/html'),
+      import('@classmoji/page-html'),
     ]);
   const servicesDb = getPrisma();
   if (!write) {

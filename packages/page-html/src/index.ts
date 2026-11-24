@@ -1,21 +1,26 @@
 import { COLORS_DEFAULT } from '@blocknote/core';
+import {
+  codeBlockDisplayLanguage,
+  normalizeCodeBlockContent,
+  type PageBlock,
+} from '@classmoji/page-schema';
 
-import { normalizeCodeBlockContent } from './codeContent.ts';
-import type { PageBlock } from './content.ts';
-import { codeBlockDisplayLanguage } from './schema.ts';
 import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
 
 /**
- * `@classmoji/page-schema/html` (Node only: BlockNote's server editor, jsdom):
- * HTML -> page blocks (the `page-import-convert` Trigger task), the legacy
- * page conversion (`convertLegacyPageHtml`, the operator script
+ * `@classmoji/page-html` (Node only: BlockNote's server editor, jsdom): HTML
+ * -> page blocks (the `page-import-convert` Trigger task), the legacy page
+ * conversion (`convertLegacyPageHtml`, the operator script
  * `packages/tasks/src/scripts/convertLegacyPages.ts`), and the server editor
- * for tests that render HTML. No server loads it at runtime (collab and pages
- * are checked by `scripts/check-no-dom-runtime.mjs`). The Y.Doc conversions
- * are in the jsdom-free `@classmoji/page-schema/server`.
+ * for tests that render HTML. Its own package so that only what depends on
+ * it (the Trigger worker, tests) installs `@blocknote/server-util` and jsdom:
+ * `@classmoji/page-schema` (the block schema, and the jsdom-free Y.Doc
+ * conversions in `@classmoji/page-schema/server`) has neither. No server loads
+ * it at runtime (collab and pages are checked by
+ * `scripts/check-no-dom-runtime.mjs`).
  */
 export { createServerEditor, getServerEditor, type PageServerEditor } from './serverEditor.ts';
-export type { PageBlock } from './content.ts';
+export type { PageBlock } from '@classmoji/page-schema';
 
 /**
  * Legacy page HTML (`pages/<slug>/index.html`, written by the old
@@ -23,8 +28,7 @@ export type { PageBlock } from './content.ts';
  * script converts legacy pages in place with it (nothing converts one at
  * request time any more; collab seeded legacy rooms with it before it refused
  * legacy pages, so the script reproduces those blocks exactly). Node only
- * (BlockNote's server editor, jsdom); import it from
- * `@classmoji/page-schema/html`.
+ * (BlockNote's server editor, jsdom); import it from `@classmoji/page-html`.
  *
  * Three passes:
  *

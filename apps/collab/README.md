@@ -87,8 +87,8 @@ as final, the sweeper leaves the doc alone, and the operator script
 holds nothing" and converts the page. Rows an older collab seeded from
 `index.html` are still served as stored.
 
-Collab never loads jsdom, `@blocknote/server-util` or
-`@classmoji/page-schema/html`: `node scripts/check-no-dom-runtime.mjs --entry
+Collab never loads jsdom, `@blocknote/server-util` or `@classmoji/page-html`
+(collab depends only on `@classmoji/page-schema`, which declares neither): `node scripts/check-no-dom-runtime.mjs --entry
 apps/collab/src/index.ts` follows the runtime import graph from the
 entrypoint (static, literal lazy and transitive imports, resolved as Node
 resolves them) and fails on any of them. The image build runs it

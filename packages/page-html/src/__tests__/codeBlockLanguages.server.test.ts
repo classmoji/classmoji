@@ -8,16 +8,26 @@
 import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 
-import { serializePageContent, type PageContent } from '../content.ts';
-import { normalizeCodeBlockContent } from '../codeContent.ts';
-import { getServerEditor } from '../html.ts';
-import { blocksToYDoc, pageContentToYDoc, yDocToBlocks, yDocToPageContent } from '../server.ts';
+import {
+  normalizeCodeBlockContent,
+  serializePageContent,
+  type PageContent,
+} from '@classmoji/page-schema';
+import {
+  blocksToYDoc,
+  pageContentToYDoc,
+  yDocToBlocks,
+  yDocToPageContent,
+} from '@classmoji/page-schema/server';
+
+import { getServerEditor } from '../index.ts';
+// The page schema's own fixtures (shared with its jsdom-free tests).
 import {
   CODE_LANGUAGES,
   RICH_CODE_TEXT,
   codeBlocks,
   richCodeBlocks,
-} from './fixtures/codeBlockLanguages.ts';
+} from '../../../page-schema/src/__tests__/fixtures/codeBlockLanguages.ts';
 
 describe('code blocks with any stored language on the server', () => {
   it('blocksToFullHTML renders them without throwing, stored language intact', async () => {

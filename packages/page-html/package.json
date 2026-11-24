@@ -1,0 +1,23 @@
+{
+  "name": "@classmoji/page-html",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@blocknote/core": "^0.55.0",
+    "@blocknote/server-util": "^0.55.0",
+    "@classmoji/page-schema": "*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0",
+    "yjs": "^13.6.33"
+  }
+}

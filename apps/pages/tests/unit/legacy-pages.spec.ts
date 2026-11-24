@@ -145,6 +145,7 @@ test.describe('the in-app page route', () => {
     expect(LOADER_SOURCE).not.toContain('migration.server');
     expect(LOADER_SOURCE).not.toContain('migrateHtmlToBlockNote');
     expect(LOADER_SOURCE).not.toContain('@classmoji/page-schema/html');
+    expect(LOADER_SOURCE).not.toContain('@classmoji/page-html');
   });
 
   test('both cover intents answer the cover refusal with its own status', () => {

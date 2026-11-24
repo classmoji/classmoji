@@ -1,9 +1,8 @@
 /**
- * Collab never loads jsdom, `@blocknote/server-util` or
- * `@classmoji/page-schema/html` at runtime: the runtime import graph from
- * `src/index.ts` (static, lazy and transitive imports, as Node resolves them)
- * holds none of them. The image build runs the same check
- * (`apps/collab/Dockerfile`). Tests may still use `/html` to build fixtures.
+ * Collab never loads jsdom, `@blocknote/server-util` or `@classmoji/page-html`
+ * at runtime: the runtime import graph from `src/index.ts` (static, lazy and
+ * transitive imports, as Node resolves them) holds none of them. The image
+ * build runs the same check (`apps/collab/Dockerfile`).
  */
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +30,8 @@ describe('collab runtime', () => {
     const run = await runCheck();
     expect(run.stderr).not.toMatch(/loads a DOM at runtime/);
     expect(run.code).toBe(0);
-    expect(run.stdout).toMatch(/no jsdom, @blocknote\/server-util, @classmoji\/page-schema\/html/);
+    expect(run.stdout).toMatch(
+      /no jsdom, @blocknote\/server-util, @classmoji\/page-html, @classmoji\/page-schema\/html/
+    );
   }, 60_000);
 });

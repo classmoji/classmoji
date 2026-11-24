@@ -186,7 +186,7 @@ export interface LegacyDeps {
    */
   collabSnapshot: ((pageId: string) => Promise<CollabSnapshot | null>) | null;
   legacyPageLinkIds(html: string): string[];
-  /** `convertLegacyPageHtml` (`@classmoji/page-schema/html`) with `ensureBlockIds` bound. */
+  /** `convertLegacyPageHtml` (`@classmoji/page-html`) with `ensureBlockIds` bound. */
   convertLegacy(
     html: string,
     inputs: { title: string; classroomSlug: string; pagesInClassroom: ReadonlySet<string> }
