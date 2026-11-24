@@ -224,6 +224,14 @@ describe('readSnapshotResponse', () => {
     expect(() => readSnapshotResponse(503, { error: 'unavailable' })).toThrow('HTTP 503');
     expect(() => readSnapshotResponse(500, null)).toThrow('HTTP 500');
   });
+
+  it('a 2xx whose body is not a snapshot throws: never "collab holds nothing"', () => {
+    // The script reads the body with `.json().catch(() => null)`: an
+    // unparseable 200 arrives here as null.
+    for (const body of [null, 'oops', [], { live: false }, { content: { blocks: 'x' } }]) {
+      expect(() => readSnapshotResponse(200, body), JSON.stringify(body)).toThrow(/not a snapshot/);
+    }
+  });
 });
 
 describe('decideCollab', () => {

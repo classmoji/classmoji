@@ -104,10 +104,23 @@ export interface CollabSnapshot {
 /**
  * Collab's answer to the snapshot request: the document, or null when collab
  * refuses the page as legacy HTML (422 `legacy-html`: it holds no document
- * for it and seeds none). Anything else that is not 2xx throws.
+ * for it and seeds none). Anything else throws: a non-2xx, and a 2xx whose
+ * body is not a snapshot (unparseable, or the wrong shape) — only collab's
+ * explicit refusal may read as "collab holds nothing".
  */
 export function readSnapshotResponse(status: number, body: unknown): CollabSnapshot | null {
-  if (status >= 200 && status < 300) return body as CollabSnapshot;
+  if (status >= 200 && status < 300) {
+    const snapshot = body as Partial<CollabSnapshot> | null;
+    const ok =
+      !!snapshot &&
+      typeof snapshot === 'object' &&
+      !Array.isArray(snapshot) &&
+      typeof snapshot.live === 'boolean' &&
+      !!snapshot.content &&
+      Array.isArray(snapshot.content.blocks);
+    if (!ok) throw new Error(`HTTP ${status}: the body is not a snapshot`);
+    return snapshot as CollabSnapshot;
+  }
   const error = (body as { error?: unknown } | null)?.error;
   if (status === 422 && error === 'legacy-html') return null;
   throw new Error(`HTTP ${status}${typeof error === 'string' ? ` ${error}` : ''}`);
