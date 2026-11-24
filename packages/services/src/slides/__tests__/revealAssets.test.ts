@@ -29,13 +29,16 @@ import {
   HIGHLIGHT_PACKAGE_VERSION,
   HIGHLIGHT_VERSION,
   REVEAL_VERSION,
+  SOURCE_SANS_PRO_VERSION,
   highlightStyleCdnjsUrl,
   highlightStyleName,
   highlightStyleUrl,
+  isThemeFontStylesheet,
   revealCoreCssUrl,
   revealHighlightPluginCssUrl,
   revealHighlightPluginUrl,
   revealScriptUrl,
+  revealThemeExtraStylesheets,
   revealThemeUrl,
 } from '../revealAssets.ts';
 import type { DeckJson } from '../deckTypes.ts';
@@ -182,6 +185,11 @@ function pinnedReferences(text: string): Array<{ url: string; version: string; e
       new RegExp(`ajax\\/libs\\/highlight\\.js\\/${SEMVER}(?:\\/styles\\/${STYLE})?`, 'g'),
       HIGHLIGHT_PACKAGE_VERSION,
     ],
+    // The Source Sans Pro faces beige needs (revealThemeExtraStylesheets).
+    [
+      new RegExp(`@fontsource\\/source-sans-pro${AT}${SEMVER}(\\/[\\w./-]*)?`, 'g'),
+      SOURCE_SANS_PRO_VERSION,
+    ],
   ];
   const out: Array<{ url: string; version: string; expected: string }> = [];
   for (const [re, expected] of rules) {
@@ -192,7 +200,8 @@ function pinnedReferences(text: string): Array<{ url: string; version: string; e
 
 /** A version the scan cannot pin: a template, a quote (concatenation), a range or tag, or major/minor only. */
 const LOOSE_VERSION = `(?:\\$\\{|['"\`]|latest|next|[\\^~]|\\d+(?:\\.\\d+)?(?![.\\d]))`;
-const PACKAGE = '(?:reveal\\.js|highlight\\.js|@highlightjs\\/cdn-assets)';
+const PACKAGE =
+  '(?:reveal\\.js|highlight\\.js|@highlightjs\\/cdn-assets|@fontsource\\/source-sans-pro)';
 
 /** CDN URLs for reveal/highlight that name no version, or one assembled out of sight. */
 function looseReferences(text: string): string[] {
@@ -294,6 +303,15 @@ describe('the CDN URL scanner', () => {
       'a range',
       'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@^11.9.0/styles/github.min.css',
     ],
+    [
+      'a theme font at another version',
+      'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@5.2.5/400.css',
+    ],
+    [
+      'an unversioned theme font',
+      'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/400.css',
+    ],
+    ['a floating theme font', 'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@5/400.css'],
   ];
   for (const [shape, url] of flagged) {
     it(`flags ${shape}`, () => {
@@ -329,6 +347,14 @@ describe('the CDN URL scanner', () => {
     ],
     ['an npm module specifier', "import 'reveal.js/dist/reveal.css';"],
     ['a node_modules path', 'node_modules/highlight.js/styles/github.min.css'],
+    ...revealThemeExtraStylesheets('beige').map((url): [string, string] => [
+      `beige's font stylesheet ${url.slice(url.lastIndexOf('/') + 1)}`,
+      url,
+    ]),
+    [
+      'a theme font written by hand at the right version',
+      `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${SOURCE_SANS_PRO_VERSION}/600.css`,
+    ],
   ];
   for (const [shape, url] of passed) {
     it(`passes ${shape}`, () => {
@@ -488,6 +514,103 @@ describe('the generated document', () => {
   });
 });
 
+describe("beige's Source Sans Pro", () => {
+  const BEIGE: DeckJson = { ...DECK, theme: 'beige' };
+  const FONT_URLS = revealThemeExtraStylesheets('beige');
+  const fontLinks = (html: string) =>
+    [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"([^>]*)>/g)]
+      .filter(m => isThemeFontStylesheet(m[1]))
+      .map(m => m[1] + m[2]);
+
+  it('beige, and only beige, needs font stylesheets: 400 and 600, upright and italic', () => {
+    expect(FONT_URLS).toEqual(
+      ['400', '400-italic', '600', '600-italic'].map(
+        face =>
+          `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${SOURCE_SANS_PRO_VERSION}/${face}.css`
+      )
+    );
+    for (const theme of BUILTIN_THEMES) {
+      if (theme !== 'beige') expect(revealThemeExtraStylesheets(theme), theme).toEqual([]);
+    }
+    for (const other of ['shared:x', 'custom:x.css', 'nope']) {
+      expect(revealThemeExtraStylesheets(other)).toEqual([]);
+    }
+  });
+
+  it('a beige document loads them right after the theme, once, without media', () => {
+    const html = generateDeckHtml(BEIGE, { title: 'T' });
+    expect(fontLinks(html)).toEqual(FONT_URLS);
+    const urls = documentUrls(html);
+    expect(urls.indexOf(FONT_URLS[0])).toBe(urls.indexOf(revealThemeUrl('beige')) + 1);
+    for (const deck of [
+      { ...BEIGE, themeDark: 'black' },
+      { ...DECK, theme: 'white', themeDark: 'beige' },
+      { ...BEIGE, themeDark: 'beige' },
+    ]) {
+      expect(fontLinks(generateDeckHtml(deck, { title: 'T' })), JSON.stringify(deck)).toEqual(
+        FONT_URLS
+      );
+    }
+  });
+
+  it('no other theme gets them', () => {
+    for (const theme of BUILTIN_THEMES) {
+      if (theme === 'beige') continue;
+      const html = generateDeckHtml({ ...DECK, theme, themeDark: 'black' }, { title: 'T' });
+      expect(fontLinks(html), theme).toEqual([]);
+      expect(html).not.toContain('@fontsource');
+    }
+  });
+
+  it('a stored beige document reads back as the same deck: the font links are part of the theme', () => {
+    for (const deck of [BEIGE, { ...DECK, theme: 'white', themeDark: 'beige' }]) {
+      const html = generateDeckHtml(deck, { title: 'T' });
+      for (const doc of [html, html.replace(/ data-theme="[^"]*"/, '')]) {
+        const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+        expect(parsed.warnings).toEqual([]);
+        expect(parsed.deck.extraCss).toBeUndefined();
+        expect(generateDeckHtml(parsed.deck, { title: 'T' })).toBe(html);
+      }
+    }
+  });
+
+  it('an old beige document without them parses the same, and regenerates with them', () => {
+    const current = generateDeckHtml(BEIGE, { title: 'T' });
+    const old = current
+      .split('\n')
+      .filter(line => !line.includes('@fontsource'))
+      .join('\n');
+    expect(fontLinks(old)).toEqual([]);
+    const fromOld = parseDeckHtml(old, { idGen: seededIdGen() });
+    const fromCurrent = parseDeckHtml(current, { idGen: seededIdGen() });
+    expect(fromOld.warnings).toEqual([]);
+    expect(fromOld.deck).toEqual(fromCurrent.deck);
+    expect(generateDeckHtml(fromOld.deck, { title: 'T' })).toBe(current);
+  });
+
+  it('a font link stored at another version is still the theme’s, and regenerates pinned', () => {
+    const current = generateDeckHtml(BEIGE, { title: 'T' });
+    const stored = current.replaceAll(
+      `source-sans-pro@${SOURCE_SANS_PRO_VERSION}/`,
+      'source-sans-pro@5.2.5/'
+    );
+    expect(stored).toContain('source-sans-pro@5.2.5/');
+    const parsed = parseDeckHtml(stored, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toBeUndefined();
+    expect(generateDeckHtml(parsed.deck, { title: 'T' })).toBe(current);
+  });
+
+  it('on a deck whose theme needs no fonts, the same link is the author’s and stays extra css', () => {
+    const href = FONT_URLS[0];
+    const doc = generateDeckHtml(DECK, { title: 'T' }).replace(
+      '</head>',
+      `<link rel="stylesheet" href="${href}">\n</head>`
+    );
+    const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toEqual([{ href }]);
+  });
+});
+
 describe('both generations of stored documents parse the same', () => {
   const PLUGIN_CSS_OLD =
     'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css';
@@ -553,7 +676,11 @@ describe('both generations of stored documents parse the same', () => {
    * document with those links put back.
    */
   function heldLookDocument(deck: DeckJson): string {
-    let html = generateDeckHtml(deck, { title: 'T' });
+    // (No beige font links then either.)
+    let html = generateDeckHtml(deck, { title: 'T' })
+      .split('\n')
+      .filter(line => !line.includes('@fontsource/'))
+      .join('\n');
     for (const name of BUILTIN_THEMES) {
       html = html.replaceAll(
         revealThemeUrl(name),

@@ -14,6 +14,11 @@
  * (floats to latest), or is assembled from pieces it cannot read (a template
  * or a concatenation). It checks versions, not authorship: a URL written out
  * by hand at the right version passes.
+ *
+ * One asset is not a package anything installs: the Source Sans Pro faces
+ * reveal.js 6's beige theme names but never defines
+ * ({@link revealThemeExtraStylesheets}). Its version is pinned here and the
+ * same test holds every reference to it to {@link SOURCE_SANS_PRO_VERSION}.
  */
 
 const JSDELIVR = 'https://cdn.jsdelivr.net/npm';
@@ -34,6 +39,31 @@ export const HIGHLIGHT_VERSION = '11.11.1';
  * today; the two can move apart, so each is checked against its own source.
  */
 export const HIGHLIGHT_PACKAGE_VERSION = '11.11.1';
+
+/**
+ * `@fontsource/source-sans-pro` on jsDelivr: the Source Sans Pro faces the
+ * beige theme asks for. Not installed; pinned to a published release.
+ */
+export const SOURCE_SANS_PRO_VERSION = '5.3.0';
+
+/**
+ * The Source Sans Pro weights and styles loaded: the ones reveal.js 6's white
+ * and black themes embed (400 and 600, upright and italic; bold text is drawn
+ * from 600 there too), so beige sets type the way white does.
+ */
+const SOURCE_SANS_PRO_FACES = ['400', '400-italic', '600', '600-italic'] as const;
+
+/**
+ * Themes whose stylesheet names a font it does not define, and the
+ * stylesheets that define it. reveal.js 6.0.2's beige sets heading and body in
+ * 'Source Sans Pro' but only embeds League Gothic and imports Lato (neither
+ * used), so without these each device draws beige in its own sans-serif.
+ */
+const THEME_FONT_STYLESHEETS: Readonly<Record<string, readonly string[]>> = {
+  beige: SOURCE_SANS_PRO_FACES.map(
+    face => `${JSDELIVR}/@fontsource/source-sans-pro@${SOURCE_SANS_PRO_VERSION}/${face}.css`
+  ),
+};
 
 /** reveal.js's builtin themes: the editor's theme picker, the MCP's set_theme. */
 export const BUILTIN_THEMES = [
@@ -111,6 +141,24 @@ export function revealHighlightPluginCssUrl(name: string): string {
 /** A builtin theme's stylesheet. */
 export function revealThemeUrl(name: string): string {
   return `${JSDELIVR}/reveal.js@${REVEAL_VERSION}/dist/theme/${name}.css`;
+}
+
+/**
+ * Stylesheets a builtin theme needs beside its own (fonts it names but does
+ * not define), in load order; empty for every theme but beige, and for
+ * shared:/custom: themes. Every surface that draws a deck loads these with
+ * the theme.
+ */
+export function revealThemeExtraStylesheets(name: string): readonly string[] {
+  return Object.hasOwn(THEME_FONT_STYLESHEETS, name) ? THEME_FONT_STYLESHEETS[name] : [];
+}
+
+/**
+ * Is `href` one of the theme font stylesheets, at any version? (A stored
+ * document's copy is regenerated from its theme, never kept as extra css.)
+ */
+export function isThemeFontStylesheet(href: string): boolean {
+  return /\/npm\/@fontsource\/source-sans-pro@[^/]+\/[\w-]+\.css$/.test(href);
 }
 
 /** A highlight.js style (minified) on jsDelivr, for code in decks. */
