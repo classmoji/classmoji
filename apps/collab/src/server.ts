@@ -1063,8 +1063,12 @@ export class CollabRuntime {
       // Nothing may be typed into the room between the last check below and
       // the row being marked: an edit the server took then would be dropped
       // (the old room is never stored again). So the browsers' sockets close
-      // FIRST (4409 reload): a browser keeps what it had not sent, unsynced,
-      // for its reload. What reached the server before the close is stored by
+      // FIRST (4409 reload). The pages editor keeps what it had not sent,
+      // unsynced, and asks before reloading; the slides editor reloads behind
+      // its beforeunload prompt. A reset the check below then refuses has
+      // still closed the room: rare (an edit within a round trip of a clean
+      // checkpoint), and the reloads find everything that reached the server
+      // at the same epoch. What reached the server before the close is stored by
       // the flush and refuses the reset (a dirty row; markReseed refuses one
       // too). Closing the other way round — mark, then close — could not take
       // back an edit that landed while the mark was being written.
@@ -1101,7 +1105,9 @@ export class CollabRuntime {
       const entry = this.loaded.get(name);
       if (room && room.kind === kind && room.id === docId && entry) entry.deleted = true;
     }
-    const closed = closedFirst + this.closeSockets(kind, docId);
+    // Sockets closed above are still listed while they finish closing: count once.
+    const closedNow = this.closeSockets(kind, docId);
+    const closed = discard ? closedNow : closedFirst;
     console.warn(
       `[collab] ${kind}:${docId} reset to epoch ${marked.epoch} by ${actor.name} (${actor.userId})${discarded ? ', unpushed edits discarded' : ''}`
     );

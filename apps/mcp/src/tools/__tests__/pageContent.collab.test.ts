@@ -401,6 +401,19 @@ describe('live reads', () => {
     ).rejects.toMatchObject({ code });
   });
 
+  it('an unreadable content.json reads from git, which names the problem', async () => {
+    route('GET', 'snapshot', () => ({ status: 422, body: { error: 'invalid-content' } }));
+    const { PageContentFormatError } = await vi.importActual<
+      typeof import('../../../../../packages/services/src/classmoji/pageContent.service.ts')
+    >('../../../../../packages/services/src/classmoji/pageContent.service.ts');
+    mocks.loadPageContent.mockRejectedValueOnce(
+      new PageContentFormatError('pages/p/content.json', 'sha-1')
+    );
+    await expect(
+      pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({ code: 'PAGE_CONTENT_UNREADABLE' });
+  });
+
   it('get returns selected live blocks with the version', async () => {
     const result = parse(
       await pageContentGetTool.handler(

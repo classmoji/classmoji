@@ -46,7 +46,13 @@ export async function readLivePage(
         console.warn('[mcp] Live page snapshot unavailable, reading git:', error.message);
         return { fallbackNote: LIVE_FALLBACK_NOTE };
       }
-      if (error.code === 'legacy-html' || error.code === 'content-missing') {
+      // Collab holds nothing for these; the git read gives the real answer
+      // (an unreadable content.json becomes PAGE_CONTENT_UNREADABLE there).
+      if (
+        error.code === 'legacy-html' ||
+        error.code === 'content-missing' ||
+        error.code === 'invalid-content'
+      ) {
         return { fallbackNote: null };
       }
       if (error.status === 404)
