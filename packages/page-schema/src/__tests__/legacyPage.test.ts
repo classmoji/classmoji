@@ -1,8 +1,8 @@
 /**
  * `convertLegacyPageHtml` / `legacyPageLinkIds` (`../html.ts`): the legacy
- * page conversion live editing seeds with, as a pure function. The collab
- * suites (apps/collab/tests/legacyPage.test.ts, collab-hardening.test.ts) pin
- * what the collab server does with it; this pins the function's own rules.
+ * page conversion (the operator script's), as a pure function. The script's
+ * suite (packages/tasks/src/helpers/__tests__/legacyPageConversion.test.ts)
+ * pins what is written with it; this pins the function's own rules.
  */
 import { describe, expect, it, vi } from 'vitest';
 

@@ -73,8 +73,7 @@ const SPECIFIER_RES = [...STATIC_RES, DYNAMIC_RE, REQUIRE_RE];
  * `import(` whose argument is not one plain string literal (not `obj.import(`,
  * and not the bare `import()` prose writes).
  */
-const NON_LITERAL_IMPORT_RE =
-  /(?<![\w$.])import\(\s*(?!\)|["'][^"'`$]*["']\s*\)|`[^`$]*`\s*\))/g;
+const NON_LITERAL_IMPORT_RE = /(?<![\w$.])import\(\s*(?!\)|["'][^"'`$]*["']\s*\)|`[^`$]*`\s*\))/g;
 
 const isForbidden = spec => FORBIDDEN.some(name => spec === name || spec.startsWith(`${name}/`));
 const isForbiddenFile = file => FORBIDDEN_SOURCES.some(re => re.test(file.replace(/\\/g, '/')));
@@ -161,7 +160,8 @@ export function runtimeSpecifiers(src, file = 'x.js') {
     }
   }
   const imports = new Set();
-  for (const re of [...STATIC_RES, DYNAMIC_RE]) for (const m of code.matchAll(re)) imports.add(m[1]);
+  for (const re of [...STATIC_RES, DYNAMIC_RE])
+    for (const m of code.matchAll(re)) imports.add(m[1]);
   const requires = new Set();
   for (const m of code.matchAll(REQUIRE_RE)) requires.add(m[1]);
   const computed = [...code.matchAll(NON_LITERAL_IMPORT_RE)].length;
@@ -192,9 +192,9 @@ export function nodeResolve(spec, file, how) {
 /** Whether `import.meta.resolve` honours its parent argument in this process. */
 export function parentResolveWorks() {
   try {
-    return import.meta.resolve('./probe.js', 'file:///no-dom-runtime-probe/a.js').includes(
-      'no-dom-runtime-probe'
-    );
+    return import.meta
+      .resolve('./probe.js', 'file:///no-dom-runtime-probe/a.js')
+      .includes('no-dom-runtime-probe');
   } catch {
     return false;
   }
