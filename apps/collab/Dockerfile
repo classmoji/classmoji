@@ -51,6 +51,14 @@ RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
 COPY . .
 
+# Collab converts no legacy page: jsdom and BlockNote's server editor
+# (`@blocknote/server-util`, `@classmoji/page-schema/html`) are for tests,
+# Trigger tasks and scripts only. Collab runs its TypeScript unbundled, so this
+# follows the runtime import graph from the entrypoint (static, lazy and
+# transitive imports, resolved as Node resolves them) through the files the
+# production stage copies.
+RUN node scripts/check-no-dom-runtime.mjs --entry apps/collab/src/index.ts
+
 
 # ======================
 # Production stage
