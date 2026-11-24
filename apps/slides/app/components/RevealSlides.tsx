@@ -10,6 +10,7 @@ import {
 import {
   BUILTIN_THEMES as REVEAL_BUILTIN_THEMES,
   highlightStyleUrl,
+  revealThemeExtraStylesheets,
   revealThemeUrl,
 } from '@classmoji/services/slides/reveal-assets';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
@@ -299,6 +300,20 @@ const RevealSlides = forwardRef(function RevealSlides(
       }
     };
   }, [isClient, theme, customThemes, sharedThemes]);
+
+  // Fonts the builtin theme names but does not define (beige: Source Sans Pro).
+  useEffect(() => {
+    if (!isClient) return;
+    const links = revealThemeExtraStylesheets(theme).map(href => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.dataset.revealThemeFont = '';
+      document.head.appendChild(link);
+      return link;
+    });
+    return () => links.forEach(link => link.remove());
+  }, [isClient, theme]);
 
   // Code theme loading (single theme)
   useEffect(() => {

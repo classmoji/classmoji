@@ -11,8 +11,9 @@
  *   passes. The scan lists files with git, so it needs a git checkout.
  * - The generated document loads exactly those URLs, every theme and code
  *   theme the editor offers names a file the installed packages ship, and the
- *   parser reads both generations of stored documents (5.1.0 paths and 6.x
- *   paths) and both Dracula stylesheet paths.
+ *   parser reads every generation of stored documents (5.1.0 paths, 6.x
+ *   engine with 5.1.0 themes and 11.9.0 monokai/felipec, all 6.x) and both
+ *   Dracula stylesheet paths.
  */
 
 import { execFile } from 'node:child_process';
@@ -26,19 +27,18 @@ import {
   BUILTIN_THEMES,
   CODE_THEMES,
   HIGHLIGHT_PACKAGE_VERSION,
-  HIGHLIGHT_STYLE_VERSIONS,
   HIGHLIGHT_VERSION,
-  REVEAL_THEME_VERSION,
   REVEAL_VERSION,
+  SOURCE_SANS_PRO_VERSION,
   highlightStyleCdnjsUrl,
-  highlightStyleCdnjsVersion,
   highlightStyleName,
   highlightStyleUrl,
-  highlightStyleVersion,
+  isThemeFontStylesheet,
   revealCoreCssUrl,
   revealHighlightPluginCssUrl,
   revealHighlightPluginUrl,
   revealScriptUrl,
+  revealThemeExtraStylesheets,
   revealThemeUrl,
 } from '../revealAssets.ts';
 import type { DeckJson } from '../deckTypes.ts';
@@ -92,13 +92,6 @@ describe('engine versions match the installed packages', () => {
     const plugin = await text('node_modules/reveal.js/dist/plugin/highlight.js');
     const versions = new Set([...plugin.matchAll(/[`'"](11\.\d+\.\d+)[`'"]/g)].map(m => m[1]));
     expect([...versions]).toEqual([HIGHLIGHT_VERSION]);
-  });
-
-  it('a frozen highlight style really is frozen (an older version than the installed one)', () => {
-    for (const version of Object.values(HIGHLIGHT_STYLE_VERSIONS)) {
-      expect(version).not.toBe(HIGHLIGHT_VERSION);
-    }
-    expect(REVEAL_THEME_VERSION).not.toBe(REVEAL_VERSION);
   });
 
   it('the installed reveal.js still draws the play/unmute button the capture pages hide', async () => {
@@ -168,57 +161,47 @@ const SEMVER = '(\\d+\\.\\d+\\.\\d+)';
 /** A highlight.js style path below `styles/` (one folder deep at most), no extension. */
 const STYLE = '((?:[\\w-]+\\/)?[\\w.-]+?)(?:\\.min)?\\.css';
 
-/** The version a reveal.js file is loaded at: themes at the look version, the rest at the engine's. */
-const revealExpected = (path: string) =>
-  /\/theme\//.test(path) ? REVEAL_THEME_VERSION : REVEAL_VERSION;
-/** The version a highlight.js file is loaded at in decks (styles may be frozen). */
-const deckStyleExpected = (style: string | undefined) => {
-  const name = style ? highlightStyleName(style) : null;
-  return name ? highlightStyleVersion(name) : HIGHLIGHT_VERSION;
-};
-/** …and on cdnjs, for code the installed package highlights outside decks. */
-const cdnjsStyleExpected = (style: string | undefined) => {
-  const name = style ? highlightStyleName(style) : null;
-  return name ? highlightStyleCdnjsVersion(name) : HIGHLIGHT_PACKAGE_VERSION;
-};
-
-/** Every versioned reveal/highlight CDN reference in `text` and the version it must carry. */
+/**
+ * Every versioned reveal/highlight CDN reference in `text` and the version it
+ * must carry: every reveal.js file (themes included) at the installed reveal,
+ * every highlight.js file in decks at the version reveal's plugin bundles, and
+ * cdnjs styles (code outside decks) at the installed highlight.js package.
+ */
 function pinnedReferences(text: string): Array<{ url: string; version: string; expected: string }> {
-  const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+  const rules: Array<[RegExp, string]> = [
     // jsDelivr / unpkg / esm.sh / any npm CDN
-    [new RegExp(`reveal\\.js${AT}${SEMVER}(\\/[\\w./-]*)?`, 'g'), m => revealExpected(m[2] ?? '')],
-    [
-      new RegExp(`ajax\\/libs\\/reveal\\.js\\/${SEMVER}(\\/[\\w./-]*)?`, 'g'),
-      m => revealExpected(m[2] ?? ''),
-    ],
-    [
-      new RegExp(`highlight\\.js${AT}${SEMVER}(?:\\/styles\\/${STYLE})?`, 'g'),
-      m => deckStyleExpected(m[2]),
-    ],
+    [new RegExp(`reveal\\.js${AT}${SEMVER}(\\/[\\w./-]*)?`, 'g'), REVEAL_VERSION],
+    [new RegExp(`ajax\\/libs\\/reveal\\.js\\/${SEMVER}(\\/[\\w./-]*)?`, 'g'), REVEAL_VERSION],
+    [new RegExp(`highlight\\.js${AT}${SEMVER}(?:\\/styles\\/${STYLE})?`, 'g'), HIGHLIGHT_VERSION],
     [
       new RegExp(`@highlightjs\\/cdn-assets${AT}${SEMVER}(?:\\/styles\\/${STYLE})?`, 'g'),
-      m => deckStyleExpected(m[2]),
+      HIGHLIGHT_VERSION,
     ],
     [
       new RegExp(`highlightjs\\/cdn-release${AT}${SEMVER}(?:\\/build\\/styles\\/${STYLE})?`, 'g'),
-      m => deckStyleExpected(m[2]),
+      HIGHLIGHT_VERSION,
     ],
     [
       new RegExp(`ajax\\/libs\\/highlight\\.js\\/${SEMVER}(?:\\/styles\\/${STYLE})?`, 'g'),
-      m => cdnjsStyleExpected(m[2]),
+      HIGHLIGHT_PACKAGE_VERSION,
+    ],
+    // The Source Sans Pro faces beige needs (revealThemeExtraStylesheets).
+    [
+      new RegExp(`@fontsource\\/source-sans-pro${AT}${SEMVER}(\\/[\\w./-]*)?`, 'g'),
+      SOURCE_SANS_PRO_VERSION,
     ],
   ];
   const out: Array<{ url: string; version: string; expected: string }> = [];
   for (const [re, expected] of rules) {
-    for (const m of text.matchAll(re))
-      out.push({ url: m[0], version: m[1], expected: expected(m) });
+    for (const m of text.matchAll(re)) out.push({ url: m[0], version: m[1], expected });
   }
   return out;
 }
 
 /** A version the scan cannot pin: a template, a quote (concatenation), a range or tag, or major/minor only. */
 const LOOSE_VERSION = `(?:\\$\\{|['"\`]|latest|next|[\\^~]|\\d+(?:\\.\\d+)?(?![.\\d]))`;
-const PACKAGE = '(?:reveal\\.js|highlight\\.js|@highlightjs\\/cdn-assets)';
+const PACKAGE =
+  '(?:reveal\\.js|highlight\\.js|@highlightjs\\/cdn-assets|@fontsource\\/source-sans-pro)';
 
 /** CDN URLs for reveal/highlight that name no version, or one assembled out of sight. */
 function looseReferences(text: string): string[] {
@@ -254,12 +237,16 @@ describe('the CDN URL scanner', () => {
     ['a stale engine pin', 'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js'],
     ['a stale style pin', 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css'],
     [
-      'a theme at the engine version',
-      'https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/theme/white.css',
+      'a theme at the 5.1.0 look',
+      'https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css',
     ],
     [
-      'a frozen style at the new version',
-      'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/monokai.min.css',
+      'monokai at the 11.9.0 look',
+      'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/monokai.min.css',
+    ],
+    [
+      'felipec at the 11.9.0 look',
+      'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/felipec.min.css',
     ],
     [
       'Dracula at the wrong version',
@@ -270,8 +257,8 @@ describe('the CDN URL scanner', () => {
       'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css',
     ],
     [
-      'a frozen style on cdnjs at the new version',
-      'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/monokai.min.css',
+      'monokai on cdnjs at the 11.9.0 look',
+      'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai.min.css',
     ],
     ['reveal.js on cdnjs', 'https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css'],
     ['an `@` written %40', 'https://cdn.jsdelivr.net/npm/reveal.js%405.1.0/dist/reveal.css'],
@@ -316,6 +303,15 @@ describe('the CDN URL scanner', () => {
       'a range',
       'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@^11.9.0/styles/github.min.css',
     ],
+    [
+      'a theme font at another version',
+      'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@5.2.5/400.css',
+    ],
+    [
+      'an unversioned theme font',
+      'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/400.css',
+    ],
+    ['a floating theme font', 'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@5/400.css'],
   ];
   for (const [shape, url] of flagged) {
     it(`flags ${shape}`, () => {
@@ -328,13 +324,22 @@ describe('the CDN URL scanner', () => {
     ['the core css', revealCoreCssUrl()],
     ['the highlight plugin', revealHighlightPluginUrl()],
     ['a builtin theme', revealThemeUrl('white')],
-    ['a frozen style', highlightStyleUrl('monokai')],
+    ['monokai', highlightStyleUrl('monokai')],
+    ['felipec', highlightStyleUrl('felipec')],
     ['Dracula', highlightStyleUrl('dracula')],
     ['a cdnjs style', highlightStyleCdnjsUrl('github')],
-    ['a frozen cdnjs style', highlightStyleCdnjsUrl('monokai')],
+    ['monokai on cdnjs', highlightStyleCdnjsUrl('monokai')],
     [
       'a URL written by hand at the right version',
       'https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/reveal.js',
+    ],
+    [
+      'a theme written by hand at the right version',
+      'https://cdn.jsdelivr.net/npm/reveal.js@6.0.2/dist/theme/white.css',
+    ],
+    [
+      'monokai written by hand at the right version',
+      'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/monokai.min.css',
     ],
     [
       'cdn-assets at the right version',
@@ -342,6 +347,14 @@ describe('the CDN URL scanner', () => {
     ],
     ['an npm module specifier', "import 'reveal.js/dist/reveal.css';"],
     ['a node_modules path', 'node_modules/highlight.js/styles/github.min.css'],
+    ...revealThemeExtraStylesheets('beige').map((url): [string, string] => [
+      `beige's font stylesheet ${url.slice(url.lastIndexOf('/') + 1)}`,
+      url,
+    ]),
+    [
+      'a theme font written by hand at the right version',
+      `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${SOURCE_SANS_PRO_VERSION}/600.css`,
+    ],
   ];
   for (const [shape, url] of passed) {
     it(`passes ${shape}`, () => {
@@ -362,7 +375,7 @@ describe.runIf(GIT_CHECKOUT)('every reveal/highlight CDN URL in the repo', () =>
     expect(names).toContain('apps/slides/app/components/RevealSlides.tsx');
   });
 
-  it('carries the installed version (or the frozen look version for themes and frozen styles)', () => {
+  it('carries the installed version (themes and every code style included)', () => {
     const wrong: Finding[] = [];
     for (const [file, text] of files) {
       if (OLD_GENERATION_CORPUS.has(file)) continue;
@@ -414,36 +427,41 @@ function installedPath(url: string): string {
 }
 
 describe('the generated document', () => {
-  it('loads the engine, core css and highlight plugin at the installed version', () => {
+  it('loads the engine, core css, theme and highlight plugin at the installed version', () => {
     const html = generateDeckHtml(DECK, { title: 'T' });
     expect(documentUrls(html)).toEqual([
       `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/reveal.css`,
-      `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_THEME_VERSION}/dist/theme/white.css`,
+      `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/theme/white.css`,
       `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/github.min.css`,
       `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/reveal.js`,
       `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/plugin/highlight.js`,
     ]);
   });
 
-  it('keeps monokai at its frozen version, light/dark pairs included', () => {
+  it('loads monokai, felipec and both themes at the installed versions, light/dark pairs included', () => {
     const html = generateDeckHtml(
       {
         ...DECK,
         theme: 'night',
         themeDark: 'black',
         codeTheme: 'monokai',
-        codeThemeDark: 'github-dark',
+        codeThemeDark: 'felipec',
       },
       { title: 'T' }
     );
     const urls = documentUrls(html);
     expect(urls).toContain(
-      'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/monokai.min.css'
+      `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/monokai.min.css`
     );
     expect(urls).toContain(
-      `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/github-dark.min.css`
+      `https://cdn.jsdelivr.net/npm/highlight.js@${HIGHLIGHT_VERSION}/styles/felipec.min.css`
     );
-    expect(urls).toContain(revealThemeUrl('black'));
+    expect(urls).toContain(
+      `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/theme/night.css`
+    );
+    expect(urls).toContain(
+      `https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/theme/black.css`
+    );
   });
 
   it('names only engine files the installed reveal.js ships', async () => {
@@ -458,12 +476,11 @@ describe('the generated document', () => {
     }
   });
 
-  // Themes load at 5.1.0 and frozen styles at 11.9.0 while 6.0.2 and 11.11.1
-  // are installed: the installed file stands in for the CDN one (same names).
   it('names a stylesheet that exists for every builtin theme the editor offers', async () => {
     expect(BUILTIN_THEMES.length).toBeGreaterThan(0);
     for (const theme of BUILTIN_THEMES) {
       const url = revealThemeUrl(theme);
+      expect(url).toContain(`/reveal.js@${REVEAL_VERSION}/`);
       expect(await exists(installedPath(url)), url).toBe(true);
     }
   });
@@ -472,6 +489,7 @@ describe('the generated document', () => {
     expect(CODE_THEMES.length).toBeGreaterThan(0);
     for (const { value } of CODE_THEMES) {
       const url = highlightStyleUrl(value);
+      expect(url).toContain(`/highlight.js@${HIGHLIGHT_VERSION}/`);
       expect(await exists(installedPath(url)), url).toBe(true);
       const cdnjs = highlightStyleCdnjsUrl(value);
       expect(cdnjs.slice(cdnjs.indexOf('/styles/'))).toBe(url.slice(url.indexOf('/styles/')));
@@ -487,21 +505,128 @@ describe('the generated document', () => {
     );
   });
 
-  it('cdnjs styles (code outside decks) follow the installed package, frozen ones excepted', () => {
-    expect(highlightStyleCdnjsUrl('github')).toBe(
-      `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_PACKAGE_VERSION}/styles/github.min.css`
+  it('cdnjs styles (code outside decks) follow the installed package', () => {
+    for (const name of ['github', 'monokai', 'felipec']) {
+      expect(highlightStyleCdnjsUrl(name)).toBe(
+        `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HIGHLIGHT_PACKAGE_VERSION}/styles/${name}.min.css`
+      );
+    }
+  });
+});
+
+describe("beige's Source Sans Pro", () => {
+  const BEIGE: DeckJson = { ...DECK, theme: 'beige' };
+  const FONT_URLS = revealThemeExtraStylesheets('beige');
+  const fontLinks = (html: string) =>
+    [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"([^>]*)>/g)]
+      .filter(m => isThemeFontStylesheet(m[1]))
+      .map(m => m[1] + m[2]);
+
+  it('beige, and only beige, needs font stylesheets: 400 and 600, upright and italic', () => {
+    expect(FONT_URLS).toEqual(
+      ['400', '400-italic', '600', '600-italic'].map(
+        face =>
+          `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${SOURCE_SANS_PRO_VERSION}/${face}.css`
+      )
     );
-    expect(highlightStyleCdnjsUrl('monokai')).toBe(
-      'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai.min.css'
-    );
+    for (const theme of BUILTIN_THEMES) {
+      if (theme !== 'beige') expect(revealThemeExtraStylesheets(theme), theme).toEqual([]);
+    }
+    for (const other of ['shared:x', 'custom:x.css', 'nope']) {
+      expect(revealThemeExtraStylesheets(other)).toEqual([]);
+    }
   });
 
-  it('every frozen style is one the frozen version ships', async () => {
-    for (const name of Object.keys(HIGHLIGHT_STYLE_VERSIONS)) {
-      expect(highlightStyleUrl(name)).toContain(`@${HIGHLIGHT_STYLE_VERSIONS[name]}/styles/`);
-      // and one the installed package still ships (a deck may name it)
-      expect(await exists(`node_modules/highlight.js/styles/${name}.min.css`), name).toBe(true);
+  it('a beige document loads them right after the theme, once, without media', () => {
+    const html = generateDeckHtml(BEIGE, { title: 'T' });
+    expect(fontLinks(html)).toEqual(FONT_URLS);
+    const urls = documentUrls(html);
+    expect(urls.indexOf(FONT_URLS[0])).toBe(urls.indexOf(revealThemeUrl('beige')) + 1);
+    for (const deck of [
+      { ...BEIGE, themeDark: 'black' },
+      { ...DECK, theme: 'white', themeDark: 'beige' },
+      { ...BEIGE, themeDark: 'beige' },
+    ]) {
+      expect(fontLinks(generateDeckHtml(deck, { title: 'T' })), JSON.stringify(deck)).toEqual(
+        FONT_URLS
+      );
     }
+  });
+
+  it('no other theme gets them', () => {
+    for (const theme of BUILTIN_THEMES) {
+      if (theme === 'beige') continue;
+      const html = generateDeckHtml({ ...DECK, theme, themeDark: 'black' }, { title: 'T' });
+      expect(fontLinks(html), theme).toEqual([]);
+      expect(html).not.toContain('@fontsource');
+    }
+  });
+
+  it('a stored beige document reads back as the same deck: the font links are part of the theme', () => {
+    for (const deck of [BEIGE, { ...DECK, theme: 'white', themeDark: 'beige' }]) {
+      const html = generateDeckHtml(deck, { title: 'T' });
+      for (const doc of [html, html.replace(/ data-theme="[^"]*"/, '')]) {
+        const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+        expect(parsed.warnings).toEqual([]);
+        expect(parsed.deck.extraCss).toBeUndefined();
+        expect(generateDeckHtml(parsed.deck, { title: 'T' })).toBe(html);
+      }
+    }
+  });
+
+  it('an old beige document without them parses the same, and regenerates with them', () => {
+    const current = generateDeckHtml(BEIGE, { title: 'T' });
+    const old = current
+      .split('\n')
+      .filter(line => !line.includes('@fontsource'))
+      .join('\n');
+    expect(fontLinks(old)).toEqual([]);
+    const fromOld = parseDeckHtml(old, { idGen: seededIdGen() });
+    const fromCurrent = parseDeckHtml(current, { idGen: seededIdGen() });
+    expect(fromOld.warnings).toEqual([]);
+    expect(fromOld.deck).toEqual(fromCurrent.deck);
+    expect(generateDeckHtml(fromOld.deck, { title: 'T' })).toBe(current);
+  });
+
+  it('a font link stored at another version is still the theme’s, and regenerates pinned', () => {
+    const current = generateDeckHtml(BEIGE, { title: 'T' });
+    const stored = current.replaceAll(
+      `source-sans-pro@${SOURCE_SANS_PRO_VERSION}/`,
+      'source-sans-pro@5.2.5/'
+    );
+    expect(stored).toContain('source-sans-pro@5.2.5/');
+    const parsed = parseDeckHtml(stored, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toBeUndefined();
+    expect(generateDeckHtml(parsed.deck, { title: 'T' })).toBe(current);
+  });
+
+  it('on a deck whose theme needs no fonts, the same link is the author’s and stays extra css', () => {
+    const href = FONT_URLS[0];
+    const doc = generateDeckHtml(DECK, { title: 'T' }).replace(
+      '</head>',
+      `<link rel="stylesheet" href="${href}">\n</head>`
+    );
+    const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toEqual([{ href }]);
+  });
+
+  it('on a beige deck, an author’s own Source Sans Pro link stays extra css', () => {
+    const v = SOURCE_SANS_PRO_VERSION;
+    const own = [
+      { href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/700.css` },
+      { href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/index.css` },
+      { href: `https://example.com/npm/@fontsource/source-sans-pro@${v}/400.css` },
+      {
+        href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/400.css`,
+        media: 'print',
+      },
+    ];
+    const links = own
+      .map(c => `<link rel="stylesheet" href="${c.href}"${c.media ? ` media="${c.media}"` : ''}>`)
+      .join('\n');
+    const doc = generateDeckHtml(BEIGE, { title: 'T' }).replace('</head>', `${links}\n</head>`);
+    const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toEqual(own);
   });
 });
 
@@ -534,7 +659,7 @@ describe('both generations of stored documents parse the same', () => {
     }
   });
 
-  it('a regenerated document differs from its old-generation self only in the engine lines', () => {
+  it('a regenerated document differs from its old-generation self only in the asset lines', () => {
     const deck = parseDeckHtml(IMPORTER_FIXTURE, { idGen: seededIdGen() }).deck;
     const now = generateDeckHtml(deck, { title: 'T' }).split('\n');
     const before = now.map(line =>
@@ -548,13 +673,93 @@ describe('both generations of stored documents parse the same', () => {
     );
     const changed = now.filter((line, i) => line !== before[i]);
     expect(changed.map(line => line.trim().replace(/(href|src)="[^"]*"/, '$1="…"'))).toEqual([
+      // core css
       '<link rel="stylesheet" href="…">',
+      // theme light/dark/fallback
       '<link rel="stylesheet" href="…" media="(prefers-color-scheme: light)">',
       '<link rel="stylesheet" href="…" media="(prefers-color-scheme: dark)">',
       '<link rel="stylesheet" href="…" media="not all and (prefers-color-scheme)">',
+      // code style light/dark/fallback
+      '<link rel="stylesheet" href="…" media="(prefers-color-scheme: light)">',
+      '<link rel="stylesheet" href="…" media="(prefers-color-scheme: dark)">',
+      '<link rel="stylesheet" href="…" media="not all and (prefers-color-scheme)">',
+      // engine and highlight plugin
       '<script src="…"></script>',
       '<script src="…"></script>',
     ]);
+  });
+
+  /**
+   * What the generator wrote while themes were held at reveal.js 5.1.0 and
+   * monokai/felipec at highlight.js 11.9.0 (a 6.x engine around them): today's
+   * document with those links put back.
+   */
+  function heldLookDocument(deck: DeckJson): string {
+    // (No beige font links then either.)
+    let html = generateDeckHtml(deck, { title: 'T' })
+      .split('\n')
+      .filter(line => !line.includes('@fontsource/'))
+      .join('\n');
+    for (const name of BUILTIN_THEMES) {
+      html = html.replaceAll(
+        revealThemeUrl(name),
+        `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${name}.css`
+      );
+    }
+    for (const name of ['monokai', 'felipec']) {
+      html = html.replaceAll(
+        highlightStyleUrl(name),
+        `https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${name}.min.css`
+      );
+    }
+    return html;
+  }
+
+  /** The document with its `data-theme` / `data-code-theme` removed, so only the links name them. */
+  const linksOnly = (doc: string) =>
+    doc.replace(/ data-theme="[^"]*"/, '').replace(/ data-code-theme="[^"]*"/, '');
+
+  const HELD_LOOK_DECKS: DeckJson[] = [
+    { ...DECK, theme: 'night', codeTheme: 'monokai' },
+    { ...DECK, theme: 'beige', codeTheme: 'felipec' },
+    {
+      ...DECK,
+      theme: 'simple',
+      themeDark: 'dracula',
+      codeTheme: 'felipec',
+      codeThemeDark: 'monokai',
+    },
+    { ...DECK, theme: 'serif', themeDark: 'black', codeTheme: 'github', codeThemeDark: 'monokai' },
+  ];
+
+  it('a 5.1.0-theme / 11.9.0-monokai/felipec document reads back as the same deck', () => {
+    for (const deck of HELD_LOOK_DECKS) {
+      const stored = heldLookDocument(deck);
+      expect(stored).toContain('reveal.js@5.1.0/dist/theme/');
+      expect(stored).toMatch(/highlight\.js@11\.9\.0\/styles\/(?:monokai|felipec)\.min\.css/);
+      for (const html of [stored, linksOnly(stored)]) {
+        const parsed = parseDeckHtml(html, { idGen: seededIdGen() });
+        expect(parsed.warnings).toEqual([]);
+        expect(parsed.deck.extraCss).toBeUndefined();
+        expect(parsed.deck.theme).toBe(deck.theme);
+        expect(parsed.deck.themeDark).toBe(deck.themeDark);
+        expect(parsed.deck.codeTheme).toBe(deck.codeTheme);
+        expect(parsed.deck.codeThemeDark).toBe(deck.codeThemeDark);
+        expect(parsed.deck).toEqual(
+          parseDeckHtml(generateDeckHtml(deck, { title: 'T' }), { idGen: seededIdGen() }).deck
+        );
+      }
+    }
+  });
+
+  it('regenerating such a document loads the installed theme and code style', () => {
+    for (const deck of HELD_LOOK_DECKS) {
+      const parsed = parseDeckHtml(heldLookDocument(deck), { idGen: seededIdGen() });
+      const regenerated = generateDeckHtml(parsed.deck, { title: 'T' });
+      expect(regenerated).toBe(generateDeckHtml(deck, { title: 'T' }));
+      expect(regenerated).not.toContain('reveal.js@5.1.0');
+      expect(regenerated).not.toContain('highlight.js@11.9.0');
+    }
   });
 });
 

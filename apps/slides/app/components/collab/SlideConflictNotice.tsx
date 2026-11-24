@@ -1,16 +1,21 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { SlideConflictNotice as Notice } from '@classmoji/collab';
 
-import { revealCoreCssUrl, revealThemeUrl } from '@classmoji/services/slides/reveal-assets';
+import {
+  revealCoreCssUrl,
+  revealThemeExtraStylesheets,
+  revealThemeUrl,
+} from '@classmoji/services/slides/reveal-assets';
 
 import { BUILTIN_THEMES } from '~/components/RevealSlides';
 import { stripUnsafeMarkup } from '~/utils/collab/bridgeDom';
 
 const REVEAL_CSS = revealCoreCssUrl();
 
-function themeCss(theme: string): string {
+/** The theme's stylesheet, then the fonts it names but does not define (beige). */
+function themeCss(theme: string): string[] {
   const name = BUILTIN_THEMES.includes(theme) ? theme : 'white';
-  return revealThemeUrl(name);
+  return [revealThemeUrl(name), ...revealThemeExtraStylesheets(name)];
 }
 
 /** A slide's html as a static page (no scripts run: the frame is sandboxed). */
@@ -25,7 +30,9 @@ export function staticSlideDocument(html: string, theme: string): string {
     body = holder.innerHTML;
   }
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<link rel="stylesheet" href="${REVEAL_CSS}"><link rel="stylesheet" href="${themeCss(theme)}">
+<link rel="stylesheet" href="${REVEAL_CSS}">${themeCss(theme)
+    .map(href => `<link rel="stylesheet" href="${href}">`)
+    .join('')}
 <style>html,body{margin:0;height:100%;overflow:hidden}
 .reveal .slides{position:absolute;left:50%;top:50%;width:960px;height:700px;
 transform:translate(-50%,-50%) scale(var(--s,0.55));transform-origin:center}
