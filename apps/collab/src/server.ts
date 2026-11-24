@@ -1058,12 +1058,28 @@ export class CollabRuntime {
         pushedVersion: row.pushed_version,
       });
     }
-    // Typing that arrived since the flush would be dropped by the reseed.
-    if (!discard && this.hasUnstoredChanges(kind, docId)) {
-      throw new CollabHttpError(409, {
-        error: 'unpushed-edits',
-        message: 'the live doc was edited meanwhile; pass discard: true to drop the edits',
-      });
+    let closedFirst = 0;
+    if (!discard) {
+      // Nothing may be typed into the room between the last check below and
+      // the row being marked: an edit the server took then would be dropped
+      // (the old room is never stored again). So the browsers' sockets close
+      // FIRST (4409 reload): a browser keeps what it had not sent, unsynced,
+      // for its reload. What reached the server before the close is stored by
+      // the flush and refuses the reset (a dirty row; markReseed refuses one
+      // too). Closing the other way round — mark, then close — could not take
+      // back an edit that landed while the mark was being written.
+      closedFirst = this.closeSockets(kind, docId);
+      await this.flush(kind, docId);
+      const now = await this.deps.store.get(kind, docId);
+      if (
+        (now && !isReseedMarker(now) && now.version > now.pushed_version) ||
+        this.hasUnstoredChanges(kind, docId)
+      ) {
+        throw new CollabHttpError(409, {
+          error: 'unpushed-edits',
+          message: 'the live doc was edited meanwhile; pass discard: true to drop the edits',
+        });
+      }
     }
     let marked = dirty ? null : await this.deps.store.markReseed(kind, docId);
     // markReseed refuses a row that turned dirty meanwhile: only `discard` drops it.
@@ -1085,7 +1101,7 @@ export class CollabRuntime {
       const entry = this.loaded.get(name);
       if (room && room.kind === kind && room.id === docId && entry) entry.deleted = true;
     }
-    const closed = this.closeSockets(kind, docId);
+    const closed = closedFirst + this.closeSockets(kind, docId);
     console.warn(
       `[collab] ${kind}:${docId} reset to epoch ${marked.epoch} by ${actor.name} (${actor.userId})${discarded ? ', unpushed edits discarded' : ''}`
     );
@@ -1211,6 +1227,15 @@ export class CollabRuntime {
     // covers this edit even when a store was already running.
     await this.flush(kind, docId);
     const row = await this.deps.store.get(kind, docId);
+    // The room was reseeded while the edit ran (a reset): the old room is
+    // never stored again, so the edit is not kept. Say so (the caller re-reads
+    // and retries) rather than answer a version that does not hold it.
+    if (row && row.epoch !== epoch) {
+      throw new CollabHttpError(409, {
+        error: 'stale-epoch',
+        message: 'the live doc was reseeded while this edit ran; read it again and retry',
+      });
+    }
     return { result, version: row?.version ?? 0, epoch: row?.epoch ?? epoch };
   }
 

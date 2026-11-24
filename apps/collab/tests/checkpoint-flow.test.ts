@@ -304,6 +304,61 @@ describe('manual reset', () => {
     }
   });
 
+  it('an edit typed while the reset marks the row is never accepted and then dropped', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // A long store debounce: an edit the server takes stays unstored, so
+      // the database's own refusal (markReseed of a dirty row) cannot catch it.
+      await server.close();
+      await setup({ storeDebounceMs: 60_000 });
+      const a = open();
+      await a.synced;
+      // The edit lands while markReseed runs (after the reset's last checks).
+      const markReseed = server.store.markReseed.bind(server.store);
+      let serverGotEdit = false;
+      server.store.markReseed = async (kind, docId) => {
+        a.doc.transact(() => textOf(a.doc, 'p1').insert(0, 'late '));
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const live = server.runtime.loadedDocument('page', PAGE);
+        serverGotEdit = !!live && textOf(live, 'p1').toString().startsWith('late ');
+        return markReseed(kind, docId);
+      };
+      const reset = await internal(server, 'POST', `/page/${PAGE}/reset`, { actor });
+      const row = (await server.store.get('page', PAGE))!;
+      if (reset.status === 200) {
+        // Reseeded: the server never took the edit (the room's sockets were
+        // closed before the row was marked), so the browser still holds it,
+        // unsynced, for its reload.
+        expect(serverGotEdit).toBe(false);
+        expect(a.provider.hasUnsyncedChanges).toBe(true);
+      } else {
+        // Or refused: the row was not reseeded and the edit is kept.
+        expect(row.state.byteLength).toBeGreaterThan(0);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('an agent edit that a reset overtook fails (stale-epoch) instead of reporting success', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await server.close();
+      await setup({ storeDebounceMs: 60_000 });
+      const a = open();
+      await a.synced;
+      await expect(
+        server.runtime.withLiveEdit('page', PAGE, actor, async ctx => {
+          // A reset lands while the edit runs; then the edit writes.
+          await server.store.forceReseed('page', PAGE);
+          ctx.transact(doc => textOf(doc, 'p1').insert(0, 'agent '));
+        })
+      ).rejects.toMatchObject({ status: 409, body: { error: 'stale-epoch' } });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('a clean doc resets without discard', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
