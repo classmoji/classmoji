@@ -5,6 +5,7 @@ import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
 
 import { buildEmbeddedPageHref } from '~/routes/$classroomSlug/embedBridge.ts';
+import { fieldBlockView, pageLinkMayFetch } from './readOnlyGates.ts';
 
 /**
  * PageLink - Custom BlockNote block for linking to other pages in the classroom
@@ -197,6 +198,9 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
     const inputRef = useRef<HTMLInputElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const navigate = useNavigate();
+    // The page picker is an author's: a reader never searches, and never asks
+    // `/api/pages/…` for the classroom's pages.
+    const editable = props.editor.isEditable;
 
     // Get current page ID from URL
     useEffect(() => {
@@ -209,7 +213,15 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
 
     // Fetch pages when dropdown opens
     useEffect(() => {
-      if (isOpen && availablePages.length === 0 && !isLoading && typeof window !== 'undefined') {
+      if (
+        pageLinkMayFetch({
+          editable,
+          open: isOpen,
+          loaded: availablePages.length > 0,
+          loading: isLoading,
+        }) &&
+        typeof window !== 'undefined'
+      ) {
         const classroomSlug = window.location.pathname.split('/')[1];
 
         setIsLoading(true);
@@ -224,18 +236,18 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
             setIsLoading(false);
           });
       }
-    }, [isOpen, availablePages.length, isLoading]);
+    }, [editable, isOpen, availablePages.length, isLoading]);
 
     // Focus input when block is first inserted (empty state)
     useEffect(() => {
-      if (!pageId && inputRef.current) {
+      if (editable && !pageId && inputRef.current) {
         // Small delay to ensure the block is fully rendered
         const timer = setTimeout(() => {
           inputRef.current?.focus();
         }, 10);
         return () => clearTimeout(timer);
       }
-    }, [pageId]);
+    }, [editable, pageId]);
 
     // Filter pages: exclude current page, apply search
     const filteredPages = availablePages.filter(p => p.id !== currentPageId);
@@ -262,8 +274,11 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
       }
     };
 
-    // Empty state - no page selected yet
-    if (!pageId) {
+    // Empty state - no page selected yet. A reader of an empty link gets
+    // nothing: the search box is an author's.
+    const view = fieldBlockView(editable, Boolean(pageId));
+    if (view === 'nothing') return null;
+    if (view === 'empty-state') {
       return (
         <EmptyState
           searchQuery={searchQuery}

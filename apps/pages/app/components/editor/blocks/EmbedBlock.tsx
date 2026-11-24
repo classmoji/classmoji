@@ -2,12 +2,16 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { embedConfig } from '@classmoji/page-schema';
 import { IconWorld } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
+import { currentPageOrigin, decideFrame } from './safeFrame.ts';
+import { SafeFrame } from './frameElement.ts';
+import { fieldBlockView } from './readOnlyGates.ts';
 
 export const Embed = createReactBlockSpec(embedConfig, {
   // A NAMED function so React (and the hooks lint) sees a component — the
   // hook below is only legal inside one.
   render: function EmbedRenderer(props) {
     const { url } = props.block.props;
+    const editable = props.editor.isEditable;
 
     // The block stores a reference; this is the URL to frame it from. An
     // embed is usually a foreign page (a Google Doc, a CodeSandbox) and those
@@ -18,10 +22,13 @@ export const Embed = createReactBlockSpec(embedConfig, {
     // file blocks only, so a custom block has to make the call itself.
     const resolvedUrl = useResolvedFileUrl(url, props.editor.resolveFileUrl);
 
-    return (
-      <div contentEditable={false}>
-        {!url ? (
-          /* Empty state: icon + input */
+    const view = fieldBlockView(editable, Boolean(url));
+    // A reader of an empty embed gets nothing: the URL box is an author's.
+    if (view === 'nothing') return null;
+
+    if (view === 'empty-state') {
+      return (
+        <div contentEditable={false}>
           <div className="embed-input-wrapper-empty">
             <IconWorld size={20} className="embed-icon" />
             <input
@@ -44,34 +51,23 @@ export const Embed = createReactBlockSpec(embedConfig, {
               }}
             />
           </div>
-        ) : (
-          /* Populated state */
-          <div
-            style={{
-              position: 'relative',
-              paddingBottom: '56.25%',
-              height: 0,
-              overflow: 'hidden',
-              borderRadius: '0.5rem',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <iframe
-              src={resolvedUrl}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                border: 'none',
-              }}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              title="Embedded content"
-            />
-          </div>
-        )}
+        </div>
+      );
+    }
+
+    // https only, sandboxed, never our own media (safeFrame.ts).
+    const decision = decideFrame(url, resolvedUrl, currentPageOrigin());
+    if (decision.kind === 'none' && !editable) return null;
+
+    return (
+      <div contentEditable={false}>
+        <SafeFrame
+          decision={decision}
+          title="Embedded content"
+          editable={editable}
+          storedUrl={url}
+          boxStyle={{ border: '1px solid #e2e8f0' }}
+        />
       </div>
     );
   },

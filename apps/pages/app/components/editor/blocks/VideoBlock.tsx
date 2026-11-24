@@ -9,29 +9,12 @@ import { extensionsOfKind } from '@classmoji/services/media/router';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
 import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
 import { MediaDownloadLink } from '~/components/viewer/MediaDownloadLink.tsx';
+import { currentPageOrigin, decideFrame } from './safeFrame.ts';
+import { SafeFrame } from './frameElement.ts';
+import { fieldBlockView, readerCanShowMedia } from './readOnlyGates.ts';
 
 /** What a failed upload says when there is no refusal sentence to show. */
 const UPLOAD_INTERRUPTED = 'The upload could not finish. Check your connection and try again.';
-
-/**
- * Convert YouTube/Vimeo URLs to embeddable URLs
- */
-function getEmbedUrl(url: string): string {
-  if (!url) return '';
-
-  // YouTube
-  const ytMatch = url.match(
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/
-  );
-  if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}`;
-
-  // Vimeo
-  const vimeoMatch = url.match(/vimeo\.com\/(\d+)/);
-  if (vimeoMatch) return `https://player.vimeo.com/video/${vimeoMatch[1]}`;
-
-  // Direct video URL or already embeddable
-  return url;
-}
 
 /**
  * Formats the upload picker offers: `video/*`, plus every video extension the
@@ -50,7 +33,6 @@ export const Video = createReactBlockSpec(videoConfig, {
   render: function VideoRenderer(props) {
     const { url, caption } = props.block.props;
     const isEditable = props.editor.isEditable;
-    const embedUrl = getEmbedUrl(url);
     const media = usePageMedia();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState<string | null>(null);
@@ -67,11 +49,11 @@ export const Video = createReactBlockSpec(videoConfig, {
     // by its scheme — it has no extension to judge, and its signed URL ends
     // in a variant name rather than the format.
     //
-    // `getEmbedUrl` returning the input unchanged means it recognized no
-    // provider — and that passthrough case is exactly where a repo path can
-    // appear. A real YouTube/Vimeo embed is external by construction and is
-    // left alone.
-    const embedSrc = embedUrl === url ? resolvedUrl : embedUrl;
+    // No delivery origin here: `url` is what the author stored — a `media://`
+    // reference or a pasted link — so the scheme and the extension decide, and
+    // a media-shaped URL is judged like any other link (a signed one is saved
+    // back as its reference).
+    const nativeVideo = playsAsNativeVideo(url, null);
     // Until its display URL is known a media reference has nothing playable;
     // `media://` in `src` is a scheme no browser fetches.
     const videoSrc = isMediaRef(resolvedUrl) ? undefined : resolvedUrl;
@@ -116,9 +98,26 @@ export const Video = createReactBlockSpec(videoConfig, {
       if (item) setUrl(item.ref);
     };
 
+    const view = fieldBlockView(isEditable, Boolean(url));
+    // A reader of an empty video gets nothing: the URL box is an author's.
+    if (view === 'nothing') return null;
+
+    // The iframe branch: https only, sandboxed, never our own media
+    // (safeFrame.ts). A recognised provider is converted from the stored URL;
+    // anything else frames from what the reference resolved to.
+    const frame = nativeVideo ? null : decideFrame(url, resolvedUrl, currentPageOrigin());
+
+    // A reader is never handed a player for media that cannot play: a
+    // reference still unresolved, or the placeholder for one that could not
+    // be signed. Nothing renders instead of a broken element.
+    if (!isEditable) {
+      if (nativeVideo && !readerCanShowMedia(url, resolvedUrl)) return null;
+      if (frame?.kind === 'none') return null;
+    }
+
     return (
       <div contentEditable={false}>
-        {!url ? (
+        {view === 'empty-state' ? (
           /* Empty state: icon + input, and the two ways to bring a file */
           <div className="video-input-wrapper-empty">
             <IconPlayerPlay size={20} className="video-icon" />
@@ -185,11 +184,9 @@ export const Video = createReactBlockSpec(videoConfig, {
         ) : (
           /* Populated state */
           <>
-            {/* No delivery origin here: `url` is what the author stored — a
-                  `media://` reference or a pasted link — so the scheme and the
-                  extension decide, and a media-shaped URL is judged like any
-                  other link (a signed one is saved back as its reference). */}
-            {playsAsNativeVideo(url, null) ? (
+            {frame ? (
+              <SafeFrame decision={frame} title="Video" editable={isEditable} storedUrl={url} />
+            ) : (
               // eslint-disable-next-line jsx-a11y/media-has-caption -- user-uploaded content
               <video
                 src={videoSrc}
@@ -199,31 +196,6 @@ export const Video = createReactBlockSpec(videoConfig, {
                   borderRadius: '0.5rem',
                 }}
               />
-            ) : (
-              <div
-                style={{
-                  position: 'relative',
-                  paddingBottom: '56.25%',
-                  height: 0,
-                  overflow: 'hidden',
-                  borderRadius: '0.5rem',
-                }}
-              >
-                <iframe
-                  src={embedSrc}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    border: 'none',
-                  }}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  title="Video"
-                />
-              </div>
             )}
 
             {/* Caption */}
