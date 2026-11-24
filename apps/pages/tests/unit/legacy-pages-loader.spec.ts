@@ -5,9 +5,10 @@
  * server. The pure rules (`utils/legacyPage.ts`, the reader rules in
  * `pageSections.server.ts`, the live gates) run as they do in production.
  *
- * A legacy page here: git holds `index.html` and no `content.json`. In a live
- * classroom collab still seeds the room from that HTML, so the room's
- * snapshot answers with converted blocks.
+ * A legacy page here: git holds `index.html` and no `content.json`. Collab
+ * refuses its live room (`legacy-html`), so in a live classroom the loader
+ * must not hand out a room for it: no snapshot is asked when the probe says
+ * legacy, and a refused snapshot falls back to git, which decides.
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,11 +26,15 @@ interface Fakes {
   isPublic: boolean;
   /** What git holds for the page. */
   gitFormat: 'html' | 'json';
-  /** The live room's snapshot, or an error. */
-  snapshot: 'converted' | 'fails';
+  /**
+   * The live room's snapshot: the page's blocks, collab's refusal of a legacy
+   * page (422 `legacy-html`), or no answer.
+   */
+  snapshot: 'answers' | 'refused' | 'fails';
   /** What the asset-map/git probe answers, and how often it was asked. */
   probe: boolean;
   probeCalls: number;
+  snapshotCalls: number;
   gitReads: number;
   writes: number;
 }
@@ -40,9 +45,10 @@ const fakes: Fakes = {
   collabEnabled: true,
   isPublic: true,
   gitFormat: 'html',
-  snapshot: 'converted',
+  snapshot: 'answers',
   probe: true,
   probeCalls: 0,
+  snapshotCalls: 0,
   gitReads: 0,
   writes: 0,
 };
@@ -122,7 +128,9 @@ export const canonicalizeOpsAssets = async x => x;
 export const liveEditingEnv = classroom => (classroom.collab_enabled ? { httpUrl: 'http://collab', wsUrl: 'ws://collab', secret: 's' } : null);
 export const collabEditorData = async () => ({ room: 'page:page-1:1', token: 't' });
 export const fetchLiveSnapshot = async () => {
+  f().snapshotCalls += 1;
   if (f().snapshot === 'fails') throw new Error('timeout');
+  if (f().snapshot === 'refused') throw Object.assign(new Error('HTTP 422'), { status: 422, body: { error: 'legacy-html' } });
   return { epoch: 1, version: 3, live: false, content: { blocks: globalThis.__legacyConverted, coverImage: null } };
 };
 export const readPageBookkeeping = async () => null;
@@ -162,7 +170,7 @@ interface LoaderData {
   editorContent: unknown;
   collab: unknown;
   canEdit: boolean;
-  legacyNotice: 'live' | 'unshown' | null;
+  legacyNotice: boolean;
   legacyReadOnly: boolean;
 }
 
@@ -185,9 +193,10 @@ async function view(over: Partial<Fakes>): Promise<LoaderData> {
     collabEnabled: true,
     isPublic: true,
     gitFormat: 'html',
-    snapshot: 'converted',
+    snapshot: 'refused',
     probe: true,
     probeCalls: 0,
+    snapshotCalls: 0,
     gitReads: 0,
     writes: 0,
     ...over,
@@ -205,64 +214,96 @@ async function view(over: Partial<Fakes>): Promise<LoaderData> {
   };
 }
 
+/** The shape of a legacy page's view for staff who could edit: the reader, empty, the notice, no room. */
+function expectLegacyReader(data: LoaderData) {
+  expect(data.collab).toBeNull();
+  expect(data.shipped).toBe('reader');
+  expect(data.editorContent).toBeNull();
+  expect(data.content).toEqual(EMPTY);
+  expect(data.legacyNotice).toBe(true);
+  expect(data.legacyReadOnly).toBe(true);
+}
+
 test.describe('in-app page loader, a page git holds as legacy HTML', () => {
-  test('owner in a live classroom, snapshot answers: the live editor as before, with the live notice', async () => {
-    const data = await view({ userId: 'owner', role: 'OWNER' });
-    expect(data.collab).not.toBeNull();
-    expect(data.content).toEqual(CONVERTED);
-    expect(data.canEdit).toBe(true);
-    expect(data.legacyNotice).toBe('live');
-    expect(data.legacyReadOnly).toBe(false);
-    // Decided from git/the map, not from the snapshot's 'json'.
-    expect(fakes.probeCalls).toBe(1);
-    expect(fakes.gitReads).toBe(0);
+  for (const role of ['OWNER', 'TEACHER'] as const) {
+    test(`${role.toLowerCase()} in a live classroom: the "can't be shown" reader, no live room, no snapshot asked`, async () => {
+      const data = await view({ userId: 'u', role });
+      expectLegacyReader(data);
+      // The probe said legacy: the room was never asked, git decided.
+      expect(fakes.probeCalls).toBe(1);
+      expect(fakes.snapshotCalls).toBe(0);
+      expect(fakes.gitReads).toBe(1);
+      expect(fakes.writes).toBe(0);
+    });
+  }
+
+  test('owner in a live classroom, the probe misses it: collab refuses the snapshot, git decides the same', async () => {
+    const data = await view({ userId: 'owner', role: 'OWNER', probe: false });
+    expectLegacyReader(data);
+    expect(fakes.snapshotCalls).toBe(1);
+    expect(fakes.gitReads).toBe(1);
   });
 
-  test('owner in a live classroom, snapshot fails: as for any failed snapshot, the empty document and the notice', async () => {
-    const data = await view({ userId: 'owner', role: 'OWNER', snapshot: 'fails' });
+  test('owner in a live classroom, the room does not answer: git decides the same', async () => {
+    const data = await view({ userId: 'owner', role: 'OWNER', probe: false, snapshot: 'fails' });
+    expectLegacyReader(data);
+  });
+
+  test('the probe alone never withholds the live editor: git with content.json keeps it', async () => {
+    const data = await view({ userId: 'owner', role: 'OWNER', gitFormat: 'json', probe: true });
     expect(data.collab).not.toBeNull();
-    expect(data.content).toEqual(EMPTY);
-    expect(data.legacyNotice).toBe('live');
-    // Never gated where there is live editing.
+    expect(data.shipped).toBe('editor');
+    expect(data.editorContent).toEqual(CONVERTED);
+    expect(data.legacyNotice).toBe(false);
     expect(data.legacyReadOnly).toBe(false);
-    expect(fakes.probeCalls).toBe(0);
   });
 
   test('owner in a classroom without live editing: empty, "can\'t be shown", no git editor', async () => {
     const data = await view({ userId: 'owner', role: 'OWNER', collabEnabled: false });
-    expect(data.collab).toBeNull();
-    expect(data.content).toEqual(EMPTY);
-    expect(data.legacyNotice).toBe('unshown');
-    expect(data.legacyReadOnly).toBe(true);
+    expectLegacyReader(data);
+    expect(fakes.probeCalls).toBe(0);
+    expect(fakes.snapshotCalls).toBe(0);
   });
 
   test('assistant: empty with "can\'t be shown"', async () => {
     const data = await view({ userId: 'ta', role: 'ASSISTANT' });
     expect(data.collab).toBeNull();
     expect(data.content).toEqual(EMPTY);
-    expect(data.legacyNotice).toBe('unshown');
+    expect(data.legacyNotice).toBe(true);
     expect(data.legacyReadOnly).toBe(false);
+    expect(fakes.snapshotCalls).toBe(0);
   });
 
   test('student: empty, no notice', async () => {
     const data = await view({ userId: 'stu', role: 'STUDENT' });
     expect(data.content).toEqual(EMPTY);
-    expect(data.legacyNotice).toBeNull();
+    expect(data.legacyNotice).toBe(false);
     expect(fakes.probeCalls).toBe(0);
+    expect(fakes.snapshotCalls).toBe(0);
   });
 
   test('anonymous visitor on a public page: empty, no notice', async () => {
     const data = await view({});
     expect(data.content).toEqual(EMPTY);
-    expect(data.legacyNotice).toBeNull();
+    expect(data.legacyNotice).toBe(false);
     expect(data.legacyReadOnly).toBe(false);
   });
 
-  test('a page with content.json: no notice for anyone, even in the live editor', async () => {
-    const live = await view({ userId: 'owner', role: 'OWNER', gitFormat: 'json', probe: false });
-    expect(live.legacyNotice).toBeNull();
+  test('a page with content.json: no notice for anyone; the live editor reads the room', async () => {
+    const live = await view({
+      userId: 'owner',
+      role: 'OWNER',
+      gitFormat: 'json',
+      probe: false,
+      snapshot: 'answers',
+    });
+    expect(live.legacyNotice).toBe(false);
+    expect(live.collab).not.toBeNull();
+    expect(live.editorContent).toEqual(CONVERTED);
+    expect(fakes.snapshotCalls).toBe(1);
+    expect(fakes.gitReads).toBe(0);
     const ta = await view({ userId: 'ta', role: 'ASSISTANT', gitFormat: 'json' });
-    expect(ta.legacyNotice).toBeNull();
+    expect(ta.legacyNotice).toBe(false);
     expect(ta.content).toEqual(CONVERTED);
   });
 });
@@ -287,8 +328,9 @@ test.describe('in-app page loader: the reader and the editors never share a docu
       { userId: 'stu', role: 'STUDENT' as const, gitFormat: 'json' as const },
       { gitFormat: 'json' as const },
       { userId: 'ta', role: 'ASSISTANT' as const, gitFormat: 'json' as const },
-      // A legacy page with no live editing: the owner reads it.
+      // A legacy page, with or without live editing: the owner reads it.
       { userId: 'owner', role: 'OWNER' as const, collabEnabled: false },
+      { userId: 'owner', role: 'OWNER' as const },
     ]) {
       const data = await view(over);
       expect(data.shipped, JSON.stringify(over)).toBe('reader');

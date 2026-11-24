@@ -289,9 +289,9 @@ const PageRoute = () => {
   const comments = usePageCommentsController(page.id, isPreview || reader ? null : readerComments);
   // Live editing switched on but unreachable, with unsaved live edits: the
   // page is shown read-only (the loader explains why below the header). A
-  // page git still holds as legacy HTML gets no GIT editor either (it would
-  // only offer to save the empty document over it); the live editor is not
-  // affected (`legacyReadOnly` is never set where `collab` is).
+  // page git still holds as legacy HTML gets no editor either, live or git
+  // (utils/legacyPage.ts: collab refuses its room, and a git save would write
+  // the empty document over it); the loader sends no `collab` for it.
   const canEdit = canEditRole && !isPreview && !liveUnavailable && !legacyReadOnly;
   // Live editing (a classroom with collab on): the document is the room's,
   // and none of the git save machinery below runs — no ops diff, chooser,
@@ -1207,9 +1207,7 @@ const PageRoute = () => {
   const staffNotices = (
     <>
       {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
-      {legacyNotice && (
-        <LegacyPageNotice layout="bar" kind={legacyNotice} isEmbedded={isEmbedded} />
-      )}
+      {legacyNotice && <LegacyPageNotice layout="bar" isEmbedded={isEmbedded} />}
     </>
   );
 

@@ -354,9 +354,10 @@ test.describe('refusals', () => {
       message: 'Couldn’t connect to live editing. Try again.',
     });
     expect(rejectionNotice('forbidden').action).toBe('readonly');
+    // The legacy-page notice's own copy (utils/legacyPage.ts), nothing about when.
     expect(rejectionNotice('legacy-html')).toEqual({
       action: 'readonly',
-      message: 'This page uses an older format and can’t be edited live yet.',
+      message: "This page is in an old format and can't be shown.",
     });
     for (const reason of [
       'legacy-html',

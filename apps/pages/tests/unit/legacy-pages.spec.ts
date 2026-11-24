@@ -1,6 +1,6 @@
 /**
- * Legacy pages (index.html, no content.json) are no longer converted on read
- * (utils/legacyPage.ts). The pure rules, the git probe and the two content
+ * Legacy pages (index.html, no content.json) are converted nowhere at request
+ * time, not on read and not by collab (utils/legacyPage.ts). The pure rules, the git probe and the two content
  * reads are called directly (their I/O swapped for fakes). Who gets which
  * notice from the real loaders is in `legacy-pages-loader.spec.ts`; what is
  * left here as source pins is the client's gating and the cover intents'
@@ -12,13 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import {
-  LEGACY_PAGE_LIVE_NOTICE,
   LEGACY_PAGE_NOTICE,
   LEGACY_PAGE_WRITE_REFUSAL,
   LegacyPageFormatError,
   emptyPageDocument,
-  legacyNoticeFor,
-  legacyNoticeText,
+  legacyPageRule,
 } from '~/utils/legacyPage.ts';
 import { importWithStubs, stubModule } from '../helpers/dataRequest.helpers.ts';
 
@@ -32,11 +30,24 @@ const SITE_HOME_SOURCE = source('../../app/site/home.tsx');
 const SITE_RENDER_SOURCE = source('../../app/site/pageRender.server.ts');
 
 test.describe('the rule', () => {
-  test('staff only; the live editor’s copy in the room, "can’t be shown" elsewhere', () => {
-    expect(legacyNoticeFor({ legacyInGit: true, staff: true, liveEditor: true })).toBe('live');
-    expect(legacyNoticeFor({ legacyInGit: true, staff: true, liveEditor: false })).toBe('unshown');
-    expect(legacyNoticeFor({ legacyInGit: true, staff: false, liveEditor: false })).toBeNull();
-    expect(legacyNoticeFor({ legacyInGit: false, staff: true, liveEditor: true })).toBeNull();
+  test('staff get the notice; nobody who could edit gets an editor (live or git)', () => {
+    expect(legacyPageRule({ legacyInGit: true, staff: true, canEdit: true })).toEqual({
+      notice: true,
+      readOnly: true,
+    });
+    // An assistant: told, but has no editor to withhold.
+    expect(legacyPageRule({ legacyInGit: true, staff: true, canEdit: false })).toEqual({
+      notice: true,
+      readOnly: false,
+    });
+    expect(legacyPageRule({ legacyInGit: true, staff: false, canEdit: false })).toEqual({
+      notice: false,
+      readOnly: false,
+    });
+    expect(legacyPageRule({ legacyInGit: false, staff: true, canEdit: true })).toEqual({
+      notice: false,
+      readOnly: false,
+    });
   });
 
   test('the document shown is one empty paragraph, a fresh one each time', () => {
@@ -47,18 +58,13 @@ test.describe('the rule', () => {
 
   test('the copy', () => {
     expect(LEGACY_PAGE_NOTICE).toBe("This page is in an old format and can't be shown.");
-    expect(LEGACY_PAGE_LIVE_NOTICE).toBe(
-      'This page is in an old format. Readers see it empty until it is edited.'
-    );
-    expect(legacyNoticeText('live')).toBe(LEGACY_PAGE_LIVE_NOTICE);
-    expect(legacyNoticeText('unshown')).toBe(LEGACY_PAGE_NOTICE);
     const error = new LegacyPageFormatError();
     expect(error.status).toBe(422);
     expect(error.message).toBe(LEGACY_PAGE_WRITE_REFUSAL);
   });
 });
 
-test.describe('is the page legacy in git (when the content came from the live room)', () => {
+test.describe('is the page legacy in git (the probe before the live room is asked)', () => {
   const page = {
     content_path: 'pages/week-1',
     classroom: {
@@ -99,7 +105,7 @@ test.describe('is the page legacy in git (when the content came from the live ro
     expect(asked).toEqual(['pages/week-1/content.json', 'pages/week-1/index.html']);
   });
 
-  test('a failure answers false (it only decides a notice)', async () => {
+  test('a failure answers false (git’s own read decides)', async () => {
     const { pageIsLegacyInGit } = await probe();
     expect(
       await pageIsLegacyInGit(page, {
@@ -117,8 +123,9 @@ test.describe('the notice', () => {
   // markup is read from source.
   const NOTICE_SOURCE = source('../../app/components/LegacyPageNotice.tsx');
 
-  test('the copy by kind, the app’s amber notice look, in light and dark', () => {
-    expect(NOTICE_SOURCE).toContain('{legacyNoticeText(kind)}');
+  test('the one copy, the app’s amber notice look, in light and dark', () => {
+    expect(NOTICE_SOURCE).toContain('{LEGACY_PAGE_NOTICE}');
+    expect(NOTICE_SOURCE).not.toContain('kind');
     expect(NOTICE_SOURCE.match(/data-testid="legacy-page-notice"/g)).toHaveLength(2);
     for (const cls of [
       'bg-amber-50',
@@ -147,12 +154,18 @@ test.describe('the in-app page route', () => {
     expect(answers).toHaveLength(2);
   });
 
-  test('the client withholds only the GIT editor, and draws the notice it was given', () => {
+  test('the client withholds the editor, and draws the notice it was given', () => {
     expect(ROUTE_SOURCE).toContain(
       'const canEdit = canEditRole && !isPreview && !liveUnavailable && !legacyReadOnly;'
     );
     expect(ROUTE_SOURCE).toContain(
-      '<LegacyPageNotice layout="bar" kind={legacyNotice} isEmbedded={isEmbedded} />'
+      '{legacyNotice && <LegacyPageNotice layout="bar" isEmbedded={isEmbedded} />}'
+    );
+  });
+
+  test('the loader joins no live room for a legacy page', () => {
+    expect(LOADER_SOURCE).toContain(
+      'const collab: CollabLoaderData | null = legacyReadOnly ? null : liveCollab;'
     );
   });
 });

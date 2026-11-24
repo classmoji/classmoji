@@ -4,14 +4,16 @@ import { prisma } from './db.server.ts';
 
 /**
  * Whether git holds this page as a legacy page (`index.html`, no
- * `content.json`), asked when the loader's own content came from the live
- * room (which holds collab's converted blocks either way) and so says nothing
- * about what readers get.
+ * `content.json`), asked by the page loader for a live editor BEFORE it asks
+ * the live room: a page this says yes for is read from git instead (collab
+ * refuses its room anyway).
  *
  * The asset map first (one indexed read; every save and checkpoint records
  * `content.json` there): a `content.json` row means no, an `index.html` row
  * alone means yes. When the map has neither, git is asked. A failure answers
- * false: this decides a staff notice only, never what is shown or written.
+ * false. It is a probe, never the decision: the loader decides from git's own
+ * read (a wrong yes still gets the live editor once git returns content.json;
+ * a wrong no meets collab's refusal, and git is read then).
  *
  * `deps` is for tests.
  */
