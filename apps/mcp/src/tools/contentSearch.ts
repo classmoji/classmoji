@@ -632,17 +632,16 @@ const LIVE_RECORD_QUERY = {
 } as const;
 
 /**
- * The canonical source file for a document, in preference order.
+ * The canonical source file for a document.
  *
- * The same order the indexer's planner uses: `content.json` is a page's real
- * body and `index.html` is its legacy one, live only until a page is migrated.
- * A deck's `index.html` is generated from `deck.json` on every save and is what
- * a reader sees, so it — not the source — is what gets extracted.
+ * The same files the indexer reads: a page's body is its `content.json` and
+ * nothing else. A legacy page's `index.html` is shown by no surface (the web
+ * renders such a page empty) and is not indexed, so it is not read here
+ * either. A deck's `index.html` is generated from `deck.json` on every save and
+ * is what a reader sees, so it — not the source — is what gets extracted.
  */
 const sourceCandidates = (kind: 'page' | 'slide', contentPath: string): string[] =>
-  kind === 'page'
-    ? [`${contentPath}/content.json`, `${contentPath}/index.html`]
-    : [`${contentPath}/index.html`];
+  kind === 'page' ? [`${contentPath}/content.json`] : [`${contentPath}/index.html`];
 
 /**
  * Read one document from the content repo and extract it, for a viewer already

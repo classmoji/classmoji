@@ -113,7 +113,8 @@ export async function readPageForRender(
     throw new ToolError(
       'invalid_params',
       content.format === 'html'
-        ? 'This page still stores legacy HTML, so it cannot be rendered — open it once in the editor.'
+        ? 'This page is in an old format (legacy HTML) and has no content to render until it ' +
+            'is edited in the live editor or converted.'
         : 'This page has no content yet — nothing to render.'
     );
   }

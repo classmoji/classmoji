@@ -46,12 +46,11 @@ let renderQueue: Promise<unknown> = Promise.resolve();
 /**
  * Run `work` with exclusive use of the process's JSDOM globals.
  *
- * Exported because rendering is not the only thing that swaps them: the
- * legacy-HTML migration (`migrateHtmlToBlockNote`) runs page-schema's server
- * editor, and a migration running concurrently with a render corrupts both,
- * so it takes this lock itself. Anything that touches `ServerBlockNoteEditor`
- * on this process must go through here. Not reentrant: work running under it
- * must not call `migrateHtmlToBlockNote` or `renderSitePage`.
+ * Exported so that anything else on this process that touches
+ * `ServerBlockNoteEditor` (and so swaps the same globals) can take it too;
+ * today the site render is the only user (legacy pages are no longer
+ * converted on read). Not reentrant: work running under it must not call
+ * `renderSitePage`.
  */
 export function withServerBlockNoteLock<T>(work: () => Promise<T>): Promise<T> {
   // Chain onto the tail, swallowing the predecessor's rejection so one failed

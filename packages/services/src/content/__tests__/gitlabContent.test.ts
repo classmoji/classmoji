@@ -155,6 +155,9 @@ class FakeGitLab {
       const id = this.#commitId();
       for (const a of body.actions) {
         const current = next.get(a.file_path);
+        if (a.file_path.endsWith('/unprocessable.json')) {
+          return json(422, { message: 'Unprocessable: path not allowed' });
+        }
         if (a.action === 'create' && current) {
           return json(400, { message: 'A file with this name already exists' });
         }
@@ -363,6 +366,19 @@ describe('ContentService on a Gitlab content project', () => {
         createOnly: true,
       })
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('a create-only write refused for another reason keeps its own error (not a 409)', async () => {
+    const error = await ContentService.put({
+      gitOrganization,
+      repo,
+      path: 'pages/a/unprocessable.json',
+      content: 'x',
+      createOnly: true,
+    }).catch((e: unknown) => e as Error & { status?: number });
+    expect(error).toMatchObject({ status: 422 });
+    expect((error as Error).message).toContain('Unprocessable: path not allowed');
+    expect((error as Error).message).not.toContain('create-only write refused');
   });
 
   it('uploads a batch as one commit, creating and updating', async () => {

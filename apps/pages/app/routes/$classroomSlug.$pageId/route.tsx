@@ -61,6 +61,7 @@ import {
 import { LIVE_PAGE_MESSAGE } from '~/utils/liveGates.ts';
 import { createAssetResolver } from '~/utils/liveAssets.ts';
 import type { PageEditorHandle } from '~/components/editor/PageEditor.tsx';
+import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
 import {
   hasPreviewChanges,
   previewChangesSummary,
@@ -202,6 +203,8 @@ const PageRoute = () => {
     collab,
     liveCheckpoint,
     liveUnavailable,
+    legacyNotice,
+    legacyReadOnly,
     previewChanges,
     readerSections,
     signInUrl,
@@ -247,8 +250,11 @@ const PageRoute = () => {
   // and text are not what the threads were written on).
   const comments = usePageCommentsController(page.id, isPreview ? null : readerComments);
   // Live editing switched on but unreachable, with unsaved live edits: the
-  // page is shown read-only (the loader explains why below the header).
-  const canEdit = canEditRole && !isPreview && !liveUnavailable;
+  // page is shown read-only (the loader explains why below the header). A
+  // page git still holds as legacy HTML gets no GIT editor either (it would
+  // only offer to save the empty document over it); the live editor is not
+  // affected (`legacyReadOnly` is never set where `collab` is).
+  const canEdit = canEditRole && !isPreview && !liveUnavailable && !legacyReadOnly;
   // Live editing (a classroom with collab on): the document is the room's,
   // and none of the git save machinery below runs — no ops diff, chooser,
   // merged adoption, Cmd-S save, unload warning or unsaved tracking.
@@ -1178,6 +1184,9 @@ const PageRoute = () => {
       )}
       {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
       {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
+      {legacyNotice && (
+        <LegacyPageNotice layout="bar" kind={legacyNotice} isEmbedded={isEmbedded} />
+      )}
 
       {/* Embedded editors have no header: the live status floats instead. */}
       {isEmbedded && liveHeader && (

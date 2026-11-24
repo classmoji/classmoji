@@ -1696,7 +1696,7 @@ describe('page_cover_set', () => {
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 
-  it('names the in-band fix in the legacy refusal, and the web editor’s cover control', async () => {
+  it('names the in-band fix in the legacy refusal, and that the web editor does not convert it', async () => {
     mocks.loadPageContent.mockResolvedValue({
       format: 'html',
       blocks: '<h1>Legacy</h1>',
@@ -1707,7 +1707,10 @@ describe('page_cover_set', () => {
     const error = await setCover({ url: STORED_COVER.url }).catch((e: unknown) => e);
 
     expect((error as Error).message).toContain('page_content_apply replace_all');
-    expect((error as Error).message).toContain('set the cover in the web editor');
+    // The web editor's cover save refuses a legacy page too: nothing converts it there.
+    expect((error as Error).message).toContain('Opening it in the web editor does not convert it');
+    expect((error as Error).message).toContain('the Classmoji team converts such pages');
+    expect((error as Error).message).not.toContain('set the cover in the web editor');
     expect((error as Error).message).not.toContain('open it once');
   });
 

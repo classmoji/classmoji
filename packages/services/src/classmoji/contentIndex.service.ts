@@ -131,11 +131,6 @@ export interface PathTarget {
    * For `'file'` it is the path itself, which is also the `doc_id`.
    */
   docPath: string;
-  /**
-   * True for `pages/<slug>/index.html`, which is a page's LEGACY body. It is
-   * indexed only when the page has no `content.json`; see `indexOneFile`.
-   */
-  legacy: boolean;
 }
 
 export type PathClassification =
@@ -195,7 +190,7 @@ export function classifyPath(rawPath: string): PathClassification {
     if (!extract) return { indexable: false, reason: 'not_indexable' };
     return {
       indexable: true,
-      target: { kind: 'file', extract, sourcePath: path, docPath: path, legacy: false },
+      target: { kind: 'file', extract, sourcePath: path, docPath: path },
     };
   }
 
@@ -210,15 +205,14 @@ export function classifyPath(rawPath: string): PathClassification {
     if (file === 'content.json') {
       return {
         indexable: true,
-        target: { ...base, kind: 'page', extract: 'blocknote', legacy: false },
+        target: { ...base, kind: 'page', extract: 'blocknote' },
       };
     }
-    if (file === 'index.html') {
-      return {
-        indexable: true,
-        target: { ...base, kind: 'page', extract: 'page-html', legacy: true },
-      };
-    }
+    // A page's `index.html` is its LEGACY body, which no surface shows any
+    // more (a page in that format reads as empty), so it is never indexed:
+    // search must not find what the page will not show. A page has a body
+    // here only once it has `content.json`.
+    if (file === 'index.html') return { indexable: false, reason: 'legacy_page' };
     return { indexable: false, reason: 'not_indexable' };
   }
 
@@ -226,7 +220,7 @@ export function classifyPath(rawPath: string): PathClassification {
     if (file === 'index.html') {
       return {
         indexable: true,
-        target: { ...base, kind: 'slide', extract: 'deck-html', legacy: false },
+        target: { ...base, kind: 'slide', extract: 'deck-html' },
       };
     }
     // deck.json is the SOURCE; index.html is generated from it on every save and
@@ -501,20 +495,6 @@ export async function indexOneFile(args: IndexOneFileArgs): Promise<IndexResult>
 
     if (!classroomId || !sha || typeof body !== 'string') {
       return { outcome: 'skipped', reason: 'incomplete_args' };
-    }
-
-    // A page that has BOTH shapes is a `content.json` page with a legacy
-    // `index.html` still sitting beside it; the reader prefers the json and so
-    // does the index. Indexing both would put the same page in the corpus twice
-    // under one doc_id, with whichever wrote last deciding what it says.
-    if (target.legacy) {
-      const canonical = await getPrisma().contentAsset.findUnique({
-        where: {
-          classroom_id_path: { classroom_id: classroomId, path: `${target.docPath}/content.json` },
-        },
-        select: { sha: true },
-      });
-      if (canonical) return { outcome: 'skipped', reason: 'legacy_superseded' };
     }
 
     const doc = await resolveDoc(classroomId, target, docHint);
@@ -996,14 +976,13 @@ export async function planClassroomIndex(
   };
 
   for (const page of pages) {
-    // Canonical source, decided here and once: `content.json` when the repo has
-    // one, the legacy `index.html` only when it does not. Comparing the index
-    // row against whichever path happened to be in the map first would make a
-    // json-first page look permanently stale against its own dead html.
+    // A page's one source is `content.json`. A legacy page (`index.html`
+    // only) is not a document of the index at all (see `classifyPath`): it is
+    // left out of `consider`, so it is neither work nor a missing asset, and
+    // rows indexed from its html before are swept below as orphans.
     const json = `${page.content_path}/content.json`;
-    const html = `${page.content_path}/index.html`;
-    const canonical = shaByPath.has(json) ? json : shaByPath.has(html) ? html : null;
-    consider('page', page.id, page.title, canonical);
+    if (!shaByPath.has(json) && shaByPath.has(`${page.content_path}/index.html`)) continue;
+    consider('page', page.id, page.title, shaByPath.has(json) ? json : null);
   }
 
   for (const slide of slides) {
@@ -1064,7 +1043,9 @@ export async function planClassroomIndex(
   // So an empty map only licenses deletion when a sync in THIS run just
   // rebuilt it and still came back empty — which is the genuine "the repo has
   // no files any more" case. Anything else holds the `file` half and says so.
-  // Pages and slides sweep normally either way; they never depended on the map.
+  // Pages and slides sweep normally either way: they are enumerated from their
+  // rows, and the one page the map takes out of the live set is a legacy page
+  // it positively lists (index.html, no content.json), which an empty map never does.
   const assetsUnavailable = assets.length === 0 && opts.assetsSynced !== true;
 
   const orphans: IndexOrphan[] = [];
