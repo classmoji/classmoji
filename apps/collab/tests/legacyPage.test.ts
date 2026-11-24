@@ -206,6 +206,38 @@ describe('outside pushes and legacy HTML', () => {
     expect(row.last_conflict ?? null).toBeNull();
   });
 
+  it('a pushed content.json that does not parse, over unpushed edits: 422 invalid-content, recorded', async () => {
+    const a = open();
+    await a.synced;
+    await editLive(a);
+    server.world.contentAt.set(`${PAGE}@c5`, { corrupt: true });
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+      sha: 'c5',
+      before: 'b1',
+    });
+    // Final (4xx, not a 500 the worker would retry), and recorded so the
+    // checkpoint worker stops re-notifying c5.
+    expect([res.status, res.body.error]).toEqual([422, 'invalid-content']);
+    expect(textsOf(server.runtime.loadedDocument('page', PAGE)!)).toEqual(['One', 'Live']);
+    expect((await server.store.get('page', PAGE))!.last_conflict).toMatchObject({
+      sha: 'c5',
+      reason: 'invalid-content',
+    });
+  });
+
+  it('a pushed content.json that does not parse, nothing unpushed: reseeded', async () => {
+    const a = open();
+    await a.synced;
+    server.world.contentAt.set(`${PAGE}@c5`, { corrupt: true });
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+      sha: 'c5',
+      before: 'b1',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'reseeded', reason: 'invalid-content' });
+    await waitFor(() => a.closeCodes.includes(4409), 3000, 'room closed');
+  });
+
   describe('a clean row an older collab seeded from index.html, when content.json lands', () => {
     beforeEach(async () => {
       // The row as the old conversion left it: index.html's blob as source_sha.

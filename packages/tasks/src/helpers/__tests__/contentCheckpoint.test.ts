@@ -1335,6 +1335,7 @@ describe('Save-version requests and the remaining gaps', () => {
   it.each([
     ['no-merge-base', /no merge base/],
     ['legacy-html', /legacy HTML/],
+    ['invalid-content', /not valid JSON/],
   ])(
     'does not re-notify collab of an outside commit it already could not merge (%s)',
     async (reason, why) => {

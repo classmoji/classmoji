@@ -29,8 +29,9 @@ export interface CollabDocRow {
   /**
    * Last outside-push conflict: `{ at, sha, ids }` (null: none). `reason:
    * 'no-merge-base'` = that push could not be merged at all; `'legacy-html'`
-   * = it left the page as legacy HTML only. Either way nothing of it is in
-   * the live doc, and the worker stops re-notifying that commit.
+   * = it left the page as legacy HTML only; `'invalid-content'` = its
+   * content.json does not parse. In each case nothing of it is in the live
+   * doc, and the worker stops re-notifying that commit.
    */
   last_conflict: CollabConflict | null;
 }
@@ -39,7 +40,7 @@ export interface CollabConflict {
   at: string;
   sha: string;
   ids: string[];
-  reason?: 'no-merge-base' | 'legacy-html';
+  reason?: 'no-merge-base' | 'legacy-html' | 'invalid-content';
 }
 
 export interface NewCollabDoc {

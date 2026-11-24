@@ -939,9 +939,9 @@ async function checkpointDocs(
     const e = excluded.get(docKey(c.row.kind, c.row.doc_id));
     if (!e) continue;
     // Collab already answered this very commit "cannot merge" (no merge
-    // base, or the push left the page as legacy HTML only): asking again gets
-    // the same answer. Stay dirty and reported (the sweeper alerts); a person
-    // has to settle it.
+    // base, the push left the page as legacy HTML only, or its content.json
+    // does not parse): asking again gets the same answer. Stay dirty and
+    // reported (the sweeper alerts); a person has to settle it.
     const conflict = lastConflictOf.get(docKey(c.row.kind, c.row.doc_id)) as
       | { sha?: unknown; reason?: unknown }
       | null
@@ -953,7 +953,9 @@ async function checkpointDocs(
           ? 'no merge base'
           : conflict.reason === 'legacy-html'
             ? 'it left the page as legacy HTML only'
-            : null;
+            : conflict.reason === 'invalid-content'
+              ? 'its content.json is not valid JSON'
+              : null;
     const unmergeable = unmergeableWhy !== null;
     log.warn('content-checkpoint: outside edit waiting for collab', {
       classroomId,

@@ -662,19 +662,22 @@ async function external(
   };
 
   // A push the live doc cannot take: no readable merge base (409
-  // `no-merge-base`), or the page left as legacy HTML only (422
-  // `legacy-html`, someone removed or broke content.json by hand). When the
-  // doc holds nothing unpushed there is nothing to lose: reseed it from git
-  // (the room closes, the next open seeds from the file as it now is, or is
-  // refused for legacy HTML). Otherwise the outside edit is NOT in the live
-  // doc: record it on the row (the worker stops re-notifying this commit, the
-  // sweeper alerts) and answer the refusal — retrying cannot change it.
+  // `no-merge-base`), the page left as legacy HTML only (422 `legacy-html`,
+  // someone removed content.json by hand), or a content.json that does not
+  // parse (422 `invalid-content`). When the doc holds nothing unpushed there
+  // is nothing to lose: reseed it from git (the room closes, the next open
+  // seeds from the file as it now is, or is refused). Otherwise the outside
+  // edit is NOT in the live doc: record it on the row (the worker stops
+  // re-notifying this commit, the sweeper alerts) and answer the refusal —
+  // retrying cannot change it.
+  const UNMERGEABLE = new Set(['no-merge-base', 'legacy-html', 'invalid-content'] as const);
   const mergeOrRecord = async () => {
     try {
       return await merge();
     } catch (err) {
-      const code = err instanceof CollabHttpError ? err.body.error : null;
-      if (code !== 'no-merge-base' && code !== 'legacy-html') throw err;
+      const raw = err instanceof CollabHttpError ? err.body.error : null;
+      if (!UNMERGEABLE.has(raw as never)) throw err;
+      const code = raw as 'no-merge-base' | 'legacy-html' | 'invalid-content';
       if (!(await holdsUnpushedEdits())) {
         try {
           const reset = await runtime.resetDoc(kind, id, EXTERNAL_ACTOR, { discard: false });

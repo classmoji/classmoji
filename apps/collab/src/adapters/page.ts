@@ -233,6 +233,31 @@ function legacyHtmlRefusal(what: string): CollabHttpError {
   });
 }
 
+/**
+ * `deps.loadContent` with a content.json that exists but does not parse
+ * (`PageContentFormatError`) answered as a final 422 `invalid-content`: a
+ * retry reads the same file. Matched by name, so a second copy of the
+ * services module (tests, bundles) is recognised too.
+ */
+async function loadOrRefuse(
+  deps: PageAdapterDeps,
+  page: PageRecord,
+  options: { ref?: string },
+  what: string
+): Promise<LoadedContent> {
+  try {
+    return await deps.loadContent(page, options);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'PageContentFormatError') {
+      throw new CollabHttpError(422, {
+        error: 'invalid-content',
+        message: `${what}: content.json exists but is not valid JSON`,
+      });
+    }
+    throw err;
+  }
+}
+
 export function createPageAdapter(
   deps: PageAdapterDeps = defaultPageAdapterDeps
 ): CollabAdapter<'page', BlockOp> {
@@ -293,7 +318,7 @@ export function createPageAdapter(
 
     async seed({ docId }): Promise<SeedResult> {
       const page = await mustFindPage(docId);
-      const loaded = await deps.loadContent(page, {});
+      const loaded = await loadOrRefuse(deps, page, {}, `page ${docId}`);
       if (loaded.format === 'none') {
         // How the pages app creates a page: no files until the first save.
         const doc = pageContentToYDoc({
@@ -424,9 +449,15 @@ export function createPageAdapter(
         pageContent.normalizeBlockStructure(pageContent.ensureBlockIds(blocks));
 
       // theirs: content.json at the pushed commit. A push that leaves the
-      // page as legacy HTML only is refused (`legacy-html`, 422): the live
-      // doc is kept.
-      const theirsLoaded = await deps.loadContent(page, { ref: sha });
+      // page as legacy HTML only (`legacy-html`), or a content.json that does
+      // not parse (`invalid-content`), is refused with a 422: the live doc is
+      // kept.
+      const theirsLoaded = await loadOrRefuse(
+        deps,
+        page,
+        { ref: sha },
+        `page ${page.id} at ${sha}`
+      );
 
       // Already ours (our own push, a replay, an older push): nothing to do.
       if (theirsLoaded.sha && theirsLoaded.sha === ctx.row?.source_sha) {
