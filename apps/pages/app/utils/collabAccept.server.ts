@@ -14,6 +14,7 @@
 
 import { blockSummary } from '~/components/preview/conflictChooser.ts';
 import { CollabRequestError } from '~/utils/collabEnv.server.ts';
+import { LEGACY_PAGE_WRITE_REFUSAL } from '~/utils/legacyPage.ts';
 
 export type MergeChoice = 'ours' | 'theirs';
 
@@ -75,6 +76,10 @@ export function mergePreviewFailure(error: unknown): MergePreviewFailure {
       status: 503,
       message: 'Couldn’t reach live editing. Try again.',
     };
+  }
+  // Collab refuses a page git holds as legacy HTML: retrying cannot help.
+  if (error.status === 422 && body?.error === 'legacy-html') {
+    return { kind: 'failed', status: 422, message: LEGACY_PAGE_WRITE_REFUSAL };
   }
   return {
     kind: 'failed',

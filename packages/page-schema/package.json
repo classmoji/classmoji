@@ -6,7 +6,6 @@
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
     "./server": "./src/server.ts",
-    "./html": "./src/html.ts",
     "./sections": "./src/sections.ts"
   },
   "scripts": {
@@ -16,7 +15,6 @@
   "dependencies": {
     "@blocknote/code-block": "^0.55.0",
     "@blocknote/core": "^0.55.0",
-    "@blocknote/server-util": "^0.55.0",
     "@blocknote/xl-multi-column": "^0.55.0",
     "prosemirror-state": "^1.4.4",
     "react": "^19.3.1",

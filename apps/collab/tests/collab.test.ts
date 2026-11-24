@@ -287,12 +287,12 @@ describe('internal API', () => {
     expect(await server.store.get('page', PAGE)).toBeNull();
   });
 
-  it('seeds a legacy HTML page by converting it', async () => {
+  it('refuses to seed a legacy HTML page (legacy-html, nothing stored)', async () => {
     server.world.content.set(PAGE, 'html');
     const res = await internal(server, 'GET', `/page/${PAGE}/snapshot`);
-    expect(res.status).toBe(200);
-    const content = res.body.content as { blocks: { content: { text: string }[] }[] };
-    expect(content.blocks.map(b => b.content.map(c => c.text).join(''))).toEqual(['old']);
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('legacy-html');
+    expect(await server.store.get('page', PAGE)).toBeNull();
   });
 
   it('snapshots a live page from a clone, leaving the live doc untouched', async () => {

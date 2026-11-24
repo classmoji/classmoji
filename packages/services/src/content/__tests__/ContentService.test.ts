@@ -900,6 +900,101 @@ describe('compareBranches', () => {
   });
 });
 
+describe('getContent of a file over 1 MB (Contents API: encoding "none", empty content)', () => {
+  // GitHub's Contents API serves files of 1-100 MB with `content: ""` and
+  // `encoding: "none"` in its JSON form; the Git Blobs API serves them whole.
+  const big = JSON.stringify({ blocks: [{ type: 'paragraph', text: 'x'.repeat(1_200_000) }] });
+
+  it('reads the file through the Git Blobs API by its sha, text and raw', async () => {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          data: {
+            type: 'file',
+            encoding: 'none',
+            content: '',
+            size: Buffer.byteLength(big),
+            sha: 'big-sha',
+          },
+        };
+      }
+      expect(route).toBe('GET /repos/{owner}/{repo}/git/blobs/{file_sha}');
+      expect(params).toMatchObject({ repo: 'repo-big', file_sha: 'big-sha' });
+      const base64 = Buffer.from(big).toString('base64');
+      return { data: { content: `${base64.slice(0, 60)}\n${base64.slice(60)}`, sha: 'big-sha' } };
+    });
+
+    const text = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-big',
+      path: 'pages/a/content.json',
+      skipCache: true,
+    });
+    expect(text).toEqual({ content: big, sha: 'big-sha' });
+
+    const raw = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-big',
+      path: 'pages/a/content.json',
+      raw: true,
+      skipCache: true,
+    });
+    expect(raw).toEqual({ content: Buffer.from(big).toString('base64'), sha: 'big-sha' });
+  });
+
+  it('an empty file stays empty (no blob read)', async () => {
+    requestMock.mockResolvedValue({
+      data: { type: 'file', encoding: 'base64', content: '', size: 0, sha: 'empty-sha' },
+    });
+    const read = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-empty',
+      path: 'pages/a/content.json',
+      skipCache: true,
+    });
+    expect(read).toEqual({ content: '', sha: 'empty-sha' });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a large file is never kept in the response cache (each read goes to GitHub)', async () => {
+    // A 1.2 MB binary read raw, as the slides file route does: caching it
+    // would keep the whole base64 resident for the cache's lifetime.
+    const bytes = Buffer.alloc(1_200_000, 7);
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          data: { type: 'file', encoding: 'none', content: '', size: bytes.length, sha: 'mp4' },
+        };
+      }
+      return { data: { content: bytes.toString('base64'), sha: 'mp4' } };
+    });
+    for (let i = 0; i < 2; i++) {
+      const read = await ContentService.getContent({
+        gitOrganization,
+        repo: 'repo-large-cache',
+        path: 'slides/demo.mp4',
+        raw: true,
+      });
+      expect(read?.content.length).toBe(bytes.toString('base64').length);
+    }
+    expect(contentsGetCalls().total).toBe(2);
+  });
+
+  it('a small file is still cached (one GitHub read for two calls)', async () => {
+    requestMock.mockResolvedValue({
+      data: { type: 'file', encoding: 'base64', content: 'aGk=', size: 2, sha: 'small' },
+    });
+    for (let i = 0; i < 2; i++) {
+      await ContentService.getContent({
+        gitOrganization,
+        repo: 'repo-small-cache',
+        path: 'pages/a/content.json',
+      });
+    }
+    expect(contentsGetCalls().total).toBe(1);
+  });
+});
+
 describe('getBlobContent', () => {
   it('fetches a blob by sha via the Git Blobs API and decodes utf-8', async () => {
     requestMock.mockImplementation(async (route: string, params: RequestParams) => {

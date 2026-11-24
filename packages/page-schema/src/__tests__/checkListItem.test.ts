@@ -4,7 +4,7 @@
  * The page check list item: BlockNote's, plus `personal` (no default), through
  * every conversion the server does, and through Enter in a real editor (a new
  * line of a student check list stays personal). The server render is in
- * checkListItem.server.test.ts (node environment).
+ * `@classmoji/page-html`'s checkListItem.server.test.ts (node environment).
  */
 import { BlockNoteEditor, createCheckListItemBlockSpec } from '@blocknote/core';
 import { TextSelection } from 'prosemirror-state';

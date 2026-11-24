@@ -79,39 +79,29 @@ const LEGACY_GUIDANCE =
   'One replace_all op with BlockNote blocks writes content.json.';
 
 /**
- * A live classroom's read of a legacy page reached git while the live
- * service answered: the collab server converts a legacy page when its room
- * opens, so this is that conversion failing. Nothing edits it until fixed.
+ * A live classroom's read of a legacy page (it always reaches git: the
+ * collab server refuses a legacy page's room and converts nothing). Nothing
+ * edits it, live or through a preview, until it is converted.
  */
-const LEGACY_LIVE_FAILED_GUIDANCE =
-  "This page's legacy HTML (index.html, returned here as it is in git) could not be " +
-  'converted for live editing, so it cannot be edited live or through a preview until that ' +
-  'is fixed.';
+const LEGACY_LIVE_GUIDANCE =
+  'This page is in an old format (legacy HTML, index.html, returned here as it is in git). ' +
+  'It cannot be edited live or through a preview until it is converted; the Classmoji team ' +
+  'converts such pages.';
 
-/**
- * A live classroom's read of a legacy page reached git because the live
- * service did not answer (the note says so): live editing converts the page
- * when the service is back.
- */
-const LEGACY_LIVE_DOWN_GUIDANCE =
-  'Git still holds this page as legacy HTML (index.html). Live editing converts it to blocks ' +
-  "when the live service is back: retry then and edit it with mode: 'live'.";
-
-/** What a read of a legacy page tells the agent, by where the read came from. */
-function legacyReadGuidance(live: boolean, fallbackNote: boolean): string {
-  if (!live) return LEGACY_GUIDANCE;
-  return fallbackNote ? LEGACY_LIVE_DOWN_GUIDANCE : LEGACY_LIVE_FAILED_GUIDANCE;
+/** What a read of a legacy page tells the agent: live classroom or not. */
+function legacyReadGuidance(live: boolean): string {
+  return live ? LEGACY_LIVE_GUIDANCE : LEGACY_GUIDANCE;
 }
 
 /**
- * A preview cut from a legacy page in a live classroom: the live page is the
- * converted HTML, and a preview of it could never be accepted (there is no
- * block version of the page in git to merge it from).
+ * A preview cut from a legacy page in a live classroom could never be
+ * accepted (the accept merges into the live page, and a legacy page has no
+ * live page: collab refuses its room).
  */
 const LEGACY_LIVE_PREVIEW_REFUSAL =
-  'This page is still legacy HTML in git, so a preview of it could never be merged into the ' +
-  "live page and nothing was changed. Edit it with mode: 'live' (the live page is already " +
-  'converted to blocks); its first checkpoint writes content.json, and previews work after that.';
+  'This page is in an old format (legacy HTML), so nothing was changed: a preview of it could ' +
+  'never be merged, and it cannot be edited live either until it is converted. The Classmoji ' +
+  'team converts such pages.';
 
 /**
  * CONTENT_CONFLICT naming the ref that was compared: when a preview exists,
@@ -405,7 +395,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
         blocks: [],
         message:
           content.format === 'html'
-            ? legacyReadGuidance(liveState !== null && at === 'main', 'note' in fallback)
+            ? legacyReadGuidance(liveState !== null && at === 'main')
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
         ...fallback,
       });
@@ -508,7 +498,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
         ...(content.format === 'html' ? { sha_source: 'legacy_html', html: content.blocks } : {}),
         message:
           content.format === 'html'
-            ? legacyReadGuidance(liveState !== null && !ref, 'note' in fallback)
+            ? legacyReadGuidance(liveState !== null && !ref)
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
         ...fallback,
       });
@@ -842,10 +832,10 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
   });
 
   // A new preview of a legacy page in a live classroom could never be
-  // accepted (the accept merges from main's blocks, and main has none): the
-  // live page is the converted HTML, so the edit belongs there.
+  // accepted (the accept merges into the live page, and collab refuses a
+  // legacy page's room): nothing edits it until it is converted.
   if (liveState && committedTo === 'preview' && !loadRef && content.format === 'html') {
-    throw new ToolError('invalid_params', LEGACY_LIVE_PREVIEW_REFUSAL, 'LIVE_ONLY');
+    throw new ToolError('invalid_params', LEGACY_LIVE_PREVIEW_REFUSAL, 'LIVE_UNSUPPORTED');
   }
 
   // Legacy HTML (or missing) content: granular ops are meaningless — only a

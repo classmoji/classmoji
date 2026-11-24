@@ -231,15 +231,28 @@ describe('pageContent.loadPageContent', () => {
     expect(callArg(getContentMock, 1).path).toBe('pages/syllabus/index.html');
   });
 
-  it('falls back to index.html when content.json is malformed JSON', async () => {
-    getContentMock
-      .mockResolvedValueOnce({ content: '{not json', sha: 'bad' })
-      .mockResolvedValueOnce({ content: '<p>legacy</p>', sha: 'sha-html' });
+  it.each([
+    ['malformed JSON', '{not json'],
+    ['an empty file', ''],
+  ])(
+    'a content.json that exists but is %s is an error: never legacy, index.html is not read',
+    async (_what, content) => {
+      // A converted page whose content.json cannot be read as JSON is NOT a
+      // legacy page: reading it as one would take its editor away (live
+      // editing refuses legacy pages) and show readers an empty page.
+      // (Only content.json is queued: a second read would be the bug.)
+      getContentMock.mockResolvedValueOnce({ content, sha: 'bad' });
 
-    const result = await loadPageContent(page);
-    expect(result.format).toBe('html');
-    expect(result.sha).toBe('sha-html');
-  });
+      await expect(loadPageContent(page)).rejects.toMatchObject({
+        name: 'PageContentFormatError',
+        sha: 'bad',
+        // A caller error the MCP registry reports as invalid_params.
+        code: 'PAGE_CONTENT_UNREADABLE',
+        message: expect.stringMatching(/pages\/syllabus\/content\.json.*can't be read/),
+      });
+      expect(getContentMock).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('returns format none with a null sha when neither file exists (404 on both)', async () => {
     getContentMock.mockResolvedValue(null);
@@ -349,10 +362,10 @@ describe('pageContent.savePageContent', () => {
   });
 
   it('an UNPARSEABLE existing file does NOT stop the save — that save is the repair', async () => {
-    // A corrupt content.json loads as 'html' or 'none', so the editor reaches
-    // this save with no json sha and it is the only way back short of git. A
-    // file we cannot parse has no cover to preserve either way, so the key is
-    // dropped and the write goes through.
+    // A corrupt content.json fails to load (`PageContentFormatError`); a
+    // rewrite of it (an agent's replace_all, a script) is the way back short
+    // of git. A file we cannot parse has no cover to preserve either way, so
+    // the key is dropped and the write goes through.
     getContentMock.mockResolvedValueOnce({ content: '{not json', sha: 'old-sha' });
 
     await savePageContent(page, blocks);
@@ -505,6 +518,24 @@ describe('pageContent.loadPageContent viaWorker', () => {
       coverImage: null,
       sha: 'html-sha',
     });
+  });
+
+  it('a content.json the map serves unparsed is a miss: GitHub decides, index.html is never probed', async () => {
+    fetchContentTextMock.mockResolvedValueOnce({
+      text: '{trunc',
+      sha: 'map-sha',
+      source: 'worker',
+    });
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [{ id: 'b1' }] }),
+      sha: 'github-sha',
+    });
+
+    const result = await loadPageContent(keyedPage, { viaWorker: true });
+
+    expect(result).toMatchObject({ format: 'json', sha: 'github-sha' });
+    expect(fetchContentTextMock).toHaveBeenCalledTimes(1);
+    expect(getContentMock).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the GitHub read when the map has nothing', async () => {

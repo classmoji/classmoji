@@ -780,8 +780,9 @@ async function checkpointDocs(
           row,
           report: { ...base, paths: [prepared.path] },
           sourcePath: prepared.path,
-          // A legacy page was seeded from index.html: its source_sha is that
-          // file's until content.json exists.
+          // A legacy page's room seeded from index.html (collab did that
+          // before it refused legacy pages; such rows may remain): its
+          // source_sha is that file's until content.json exists.
           sourcePaths: [prepared.path, prepared.path.replace(/content\.json$/, 'index.html')],
           files: [{ path: prepared.path, content: prepared.content }],
           record: shas =>
@@ -938,13 +939,24 @@ async function checkpointDocs(
     const e = excluded.get(docKey(c.row.kind, c.row.doc_id));
     if (!e) continue;
     // Collab already answered this very commit "cannot merge" (no merge
-    // base): asking again gets the same answer. Stay dirty and reported (the
-    // sweeper alerts); a person has to settle it.
+    // base, the push left the page as legacy HTML only, or its content.json
+    // does not parse): asking again gets the same answer. Stay dirty and
+    // reported (the sweeper alerts); a person has to settle it.
     const conflict = lastConflictOf.get(docKey(c.row.kind, c.row.doc_id)) as
       | { sha?: unknown; reason?: unknown }
       | null
       | undefined;
-    const unmergeable = conflict?.reason === 'no-merge-base' && conflict.sha === e.headCommit;
+    const unmergeableWhy =
+      conflict?.sha !== e.headCommit
+        ? null
+        : conflict.reason === 'no-merge-base'
+          ? 'no merge base'
+          : conflict.reason === 'legacy-html'
+            ? 'it left the page as legacy HTML only'
+            : conflict.reason === 'invalid-content'
+              ? 'its content.json is not valid JSON'
+              : null;
+    const unmergeable = unmergeableWhy !== null;
     log.warn('content-checkpoint: outside edit waiting for collab', {
       classroomId,
       kind: c.row.kind,
@@ -958,7 +970,7 @@ async function checkpointDocs(
       status: 'refused',
       code: 'outside-edit-pending',
       reason: unmergeable
-        ? `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}) and collab could not merge it (no merge base); needs a person`
+        ? `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}) and collab could not merge it (${unmergeableWhy}); needs a person`
         : `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`,
     });
     if (unmergeable) continue;

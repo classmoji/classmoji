@@ -97,7 +97,7 @@ vi.mock('../contentAssets.service.ts', async () => ({
 // `page-import-convert` task, whose own suite pins the conversion). These
 // tests make them with the same converter, so what they assert about the
 // committed content.json reads realistic blocks.
-const { htmlToPageBlocks } = await import('@classmoji/page-schema/html');
+const { htmlToPageBlocks } = await import('@classmoji/page-html');
 const toBlocks = (html: string, title?: string) =>
   htmlToPageBlocks(html, title ? { title } : {}) as Promise<unknown[]>;
 

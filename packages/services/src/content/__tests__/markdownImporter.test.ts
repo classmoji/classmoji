@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { convertMarkdownToHtml, processMarkdownImport } from '../markdownImporter.ts';
-import { htmlToPageBlocks } from '@classmoji/page-schema/html';
+import { htmlToPageBlocks } from '@classmoji/page-html';
 import { storeCommittedAssetPaths } from '../../classmoji/pageHtmlBlocks.ts';
 
 const convertPageHtml = (html: string, { title }: { title?: string } = {}) =>

@@ -81,6 +81,11 @@ const KEPT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/;
 
 const responseCache = new Map<string, CacheEntry>();
 const CACHE_TTL = 60 * 1000; // 60 seconds
+/**
+ * Largest file `getContent` keeps in `responseCache`: what the Contents API
+ * serves inline. A larger one (read through the Blobs API) is never cached.
+ */
+const CACHE_MAX_BYTES = 1024 * 1024;
 
 /**
  * Generate cache key from org, repo, and path
@@ -808,12 +813,25 @@ export class ContentService {
         data = file;
       } else {
         const octokit = await getOctokit(resolvedOrg);
-        ({ data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        const { data: file } = (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
           owner: resolvedOrg.login,
           repo,
           path,
           ...(ref ? { ref } : {}),
-        }));
+        })) as { data: { content?: string; encoding?: string; size?: number; sha: string } };
+        // Files of 1-100 MB come back from the Contents API without their
+        // content (`encoding: 'none'`, `content: ''`): read them through the
+        // Git Blobs API by their sha, which serves up to 100 MB. Without this
+        // a large page reads as an empty file.
+        if (file.encoding === 'none' || (!file.content && (file.size ?? 0) > 0)) {
+          const { data: blob } = await octokit.request(
+            'GET /repos/{owner}/{repo}/git/blobs/{file_sha}',
+            { owner: resolvedOrg.login, repo, file_sha: file.sha }
+          );
+          data = { content: String(blob.content ?? ''), sha: file.sha };
+        } else {
+          data = { content: file.content ?? '', sha: file.sha };
+        }
       }
 
       // GitHub returns base64-encoded content for files
@@ -828,8 +846,12 @@ export class ContentService {
         sha: data.sha,
       };
 
-      // Cache the result (unless it's an image or a ref-bearing read)
-      if (!ref && !isImagePath(path)) {
+      // Cache the result (unless it's an image, a ref-bearing read, or a large
+      // file: the cache is in-process and unbounded, and a 1-100 MB file read
+      // through the Blobs API (a deck's video or PDF, read raw) would stay
+      // resident in full for the cache's lifetime).
+      const bytes = Math.floor((data.content.replace(/\s/g, '').length * 3) / 4);
+      if (!ref && !isImagePath(path) && bytes <= CACHE_MAX_BYTES) {
         setCache(cacheKeyWithRaw, result, cacheTtl);
       }
 

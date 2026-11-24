@@ -65,7 +65,7 @@ describe('extractText — page-html', () => {
 
   it('keeps the authored first <h1> and subtitle, which the page renderer drops', () => {
     // The page renderer's legacy converter (`htmlToPageBlocks`,
-    // packages/page-schema/src/html.ts) deletes both because it draws them
+    // packages/page-html/src/index.ts) deletes both because it draws them
     // from the DB row. An index
     // must not lose authored text that way.
     const { text } = page(wrapHtmlContent(body));

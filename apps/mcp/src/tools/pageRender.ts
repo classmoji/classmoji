@@ -114,7 +114,7 @@ export async function readPageForRender(
       'invalid_params',
       content.format === 'html'
         ? 'This page is in an old format (legacy HTML) and has no content to render until it ' +
-            'is edited in the live editor or converted.'
+            'is converted.'
         : 'This page has no content yet — nothing to render.'
     );
   }

@@ -270,6 +270,9 @@ const CALLER_ERROR_CODES = new Map<string, ToolErrorKind>([
   // A repository upload the storage router sends to media (a Pro video, or a
   // file over the repository's cap on a classroom with media).
   ['USE_MEDIA', 'invalid_params'],
+  // A page whose saved content.json exists but does not parse
+  // (`PageContentFormatError`): the message names the file.
+  ['PAGE_CONTENT_UNREADABLE', 'invalid_params'],
 ]);
 
 /**

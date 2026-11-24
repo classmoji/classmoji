@@ -6,7 +6,8 @@
  * block of more than 15 lines is drawn clipped with a bar along its bottom.
  * Drives a real editor (the page schema) for the node view: the bar, the
  * editor's toggle, live line counts and the caret opening the block. The
- * one-off server render is in collapsible.server.test.ts (node environment).
+ * one-off server render is in `@classmoji/page-html`'s
+ * collapsible.server.test.ts (node environment).
  */
 import { BlockNoteEditor, createCodeBlockSpec } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';

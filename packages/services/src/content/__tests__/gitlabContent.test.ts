@@ -24,6 +24,8 @@ class FakeGitLab {
   parents = new Map<string, string[]>();
   mrs = new Map<number, { source: string; target: string; state: string }>();
   n = 0;
+  /** A file larger than this comes back from the files API with no content (a size cap). */
+  contentLimit = Infinity;
 
   constructor(files: Record<string, string>) {
     const map = new Map<string, FakeFile>();
@@ -99,7 +101,12 @@ class FakeGitLab {
           'x-gitlab-last-commit-id': file.lastCommit,
         });
       }
-      return json(200, { content: file.bytes.toString('base64'), blob_id: gitBlobSha(file.bytes) });
+      return json(200, {
+        content: file.bytes.length > this.contentLimit ? '' : file.bytes.toString('base64'),
+        encoding: 'base64',
+        size: file.bytes.length,
+        blob_id: gitBlobSha(file.bytes),
+      });
     }
 
     m = path.match(/^\/repository\/blobs\/([^/]+)\/raw$/);
@@ -331,6 +338,19 @@ describe('ContentService on a Gitlab content project', () => {
     expect(
       await ContentService.getMeta({ gitOrganization, repo, path: 'nope', skipCache: true })
     ).toBeNull();
+  });
+
+  it('a file the files API answers without content is read through its blob', async () => {
+    const big = JSON.stringify({ blocks: [{ type: 'paragraph', text: 'y'.repeat(50_000) }] });
+    gitlab = new FakeGitLab({ 'pages/big/content.json': big });
+    gitlab.contentLimit = 1_000;
+    const file = await ContentService.getContent({
+      gitOrganization,
+      repo,
+      path: 'pages/big/content.json',
+      skipCache: true,
+    });
+    expect(file).toEqual({ content: big, sha: gitBlobSha(Buffer.from(big)) });
   });
 
   it('writes with a compare-and-swap on the blob id', async () => {

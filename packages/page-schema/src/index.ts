@@ -3,9 +3,9 @@
  * the collab server and the git worker. Browser- and server-safe: no React
  * renderers of its own, no DOM at import time, no app aliases (it runs under
  * `node --experimental-strip-types`). The Y.Doc helpers (a plain BlockNote
- * editor, no DOM) are in `@classmoji/page-schema/server`; HTML parsing and
- * rendering, which pull in @blocknote/server-util and jsdom, are in the
- * Node-only `@classmoji/page-schema/html`.
+ * editor, no DOM) are in `@classmoji/page-schema/server`. HTML parsing and
+ * rendering, which pull in @blocknote/server-util and jsdom, are in a package
+ * of their own, `@classmoji/page-html`, so this one installs neither.
  */
 export {
   SCHEMA_VERSION,

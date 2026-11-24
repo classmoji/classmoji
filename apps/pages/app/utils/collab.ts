@@ -19,6 +19,8 @@ import {
   type CollabRejectReason,
 } from '@classmoji/collab';
 
+import { LEGACY_PAGE_WRITE_REFUSAL } from './legacyPage.ts';
+
 export type { CollabLoaderData, CollabRejectReason };
 
 /** True when the page is edited live (the loader handed out collab data). */
@@ -136,10 +138,10 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
     case 'unavailable':
       return { action: 'prompt', message: 'Couldn’t connect to live editing. Try again.' };
     case 'legacy-html':
-      return {
-        action: 'readonly',
-        message: 'This page uses an older format and can’t be edited live yet.',
-      };
+      // The loader gives a legacy page no live room (utils/legacyPage.ts);
+      // this is a page that turned legacy after it loaded, its content still
+      // on screen: it can't be edited (the legacy write refusal's copy).
+      return { action: 'readonly', message: LEGACY_PAGE_WRITE_REFUSAL };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this page.' };
@@ -148,9 +150,8 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
 
 /**
  * Whether the refusal banner offers Reload. Not for `legacy-html`: collab
- * converts a legacy page on its first live open and refuses one only when the
- * conversion itself failed, which a reload does not change (the slides
- * banner, CollabNotices, hides it the same way).
+ * refuses a page git holds as legacy HTML, and a reload does not convert it
+ * (the slides banner, CollabNotices, hides it the same way).
  */
 export function refusalOffersReload(reason: LiveRefusal): boolean {
   return reason !== 'legacy-html';

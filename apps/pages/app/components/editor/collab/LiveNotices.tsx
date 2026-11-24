@@ -39,9 +39,8 @@ function Bar({
 
 /**
  * The banner for a live session that ended. Every case a reload can change
- * offers Reload; a legacy page collab could not convert does not (a reload
- * meets the same refusal). Nothing is shown while the route is reloading by
- * itself.
+ * offers Reload; a legacy page (refused by collab) does not (a reload meets
+ * the same refusal). Nothing is shown while the route is reloading by itself.
  */
 export function LiveRejectedBanner({
   reason,

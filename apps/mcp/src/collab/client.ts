@@ -536,13 +536,14 @@ export function liveWriteError(
     );
   }
   if (error.code === 'legacy-html') {
-    // The collab server converts a legacy page when its room opens; this is
-    // that conversion failing. A preview cannot help: one cut from the HTML
-    // in git cannot be merged into the live page.
+    // The collab server refuses a page git holds as legacy HTML (index.html,
+    // no content.json): it converts nothing. A preview cannot help either:
+    // one cut from the HTML in git cannot be merged into a live page.
     return new ToolError(
       'invalid_params',
-      "This page's legacy HTML could not be converted for live editing, so nothing was " +
-        "changed. It can't be edited live or through a preview until that is fixed.",
+      'This page is in an old format (legacy HTML), so nothing was changed. It cannot be ' +
+        'edited live or through a preview until it is converted; the Classmoji team converts ' +
+        'such pages.',
       'LIVE_UNSUPPORTED'
     );
   }
