@@ -4,19 +4,19 @@ import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-ro
 import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import { isMember, isStaff, publicPathOf, resolveSiteContext } from './tenant.server.ts';
-import {
-  describeFromHtml,
-  renderPageForViewer,
-  siteArticleWidthClass,
-  type SitePageRow,
-} from './pageRender.server.ts';
+import { loadSitePageView, siteReaderPolicy, type SitePageRow } from './pageRender.server.ts';
+import { siteArticleWidthClass } from './articleWidth.ts';
+import { imagePreloadMeta, imagePreloadsFor } from './imagePreloads.ts';
 import { pagesUrl } from './env.server.ts';
 import { signInPathFor } from './returnTo.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { LegacyPageNotice } from '~/components/LegacyPageNotice.tsx';
+import { ReaderIsland } from '~/reader-island/ReaderIsland.tsx';
 
 /**
- * `/{pageSlug}` — one authored page, rendered as static HTML.
+ * `/{pageSlug}` — one authored page: the site's chrome, cover and title from
+ * the server, the document drawn in the browser by the shared reader (the
+ * reader island, `pageRender.server.ts` builds what it mounts with).
  *
  * The three refusals are deliberately different responses, because they are
  * three different situations for the person reading:
@@ -73,24 +73,28 @@ export const loader = async (args: LoaderFunctionArgs) => {
     );
   }
 
-  const rendered = await renderPageForViewer(args, context, page);
+  const view = await loadSitePageView(args, context, page);
 
   return data(
     {
       courseName: site.classroom.name,
-      title: rendered.title,
+      title: view.title,
       // The home page is also servable at its own slug (sitePagePath links to
       // the slug, not `/`), so a route-based "this is a sub-page" test is not
       // enough — an authored link to the home page would render "Home › Home".
       // Gate the breadcrumb on identity with the nominated front page instead.
       isHomePage: page.id === site.home_page_id,
-      html: rendered.html,
-      coverImage: rendered.coverImage,
+      coverImage: view.coverImage,
+      island: view.island,
+      assets: view.assets,
+      // The first images of THIS viewer's payload, fetched while the island loads.
+      imagePreloads: imagePreloadsFor(view.island.payload),
       // The width the page was AUTHORED at, so the site column matches the
       // editor's. Resolved here because the page row exists in the loader and
       // nowhere else on this route.
       widthClass: siteArticleWidthClass(page.width),
-      description: describeFromHtml(rendered.html),
+      // From the NON-member document, whoever is reading (pageRender.server.ts).
+      description: view.description,
       // The whole point of a custom domain is that it becomes the address of
       // the course, so a verified one is what `rel=canonical`/`og:url` name —
       // from BOTH hostnames. `seoOrigin` is the single decision; see
@@ -104,15 +108,18 @@ export const loader = async (args: LoaderFunctionArgs) => {
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${page.id}` : null,
       // A page still in the old format renders empty; its staff are told why.
       // Staff are members, so this response is never shared-cacheable.
-      legacyNotice: isStaff(viewer) && rendered.legacyFormat,
+      legacyNotice: isStaff(viewer) && view.legacyFormat,
     },
     {
-      // Only a public page read by an anonymous visitor is shared-cacheable;
-      // siteHeaders downgrades this anyway when a session cookie is present.
+      // Only a public page read by a non-member is shared-cacheable, and
+      // siteHeaders downgrades this anyway when a session cookie is present:
+      // the island's data is part of this document, so a member's payload
+      // never reaches a shared cache.
       headers: siteHeaders({
         request,
         cacheable: page.is_public && !isMember(viewer),
         noindex: !page.is_public,
+        reader: siteReaderPolicy(request, context),
       }),
     }
   );
@@ -148,11 +155,12 @@ export const meta: MetaFunction<typeof loader> = ({ loaderData }) => {
           { tagName: 'link', rel: 'canonical', href: loaderData.canonical },
         ]
       : []),
+    ...imagePreloadMeta(loaderData.imagePreloads ?? []),
   ];
 };
 
 const SitePage = () => {
-  const { title, html, coverImage, editHref, widthClass, legacyNotice } =
+  const { title, coverImage, editHref, widthClass, legacyNotice, island, assets } =
     useLoaderData<typeof loader>();
 
   return (
@@ -166,11 +174,10 @@ const SitePage = () => {
           </h1>
         </div>
         {legacyNotice ? <LegacyPageNotice layout="inline" /> : null}
-        {/* The document is serialized server-side by BlockNote's own exporter
-            with a schema whose every block renders static, sanitized markup —
-            see viewerSchema.server.ts. There is no client bundle on this page
-            to re-hydrate it with. */}
-        <div dangerouslySetInnerHTML={{ __html: html }} />
+        {/* The document: the shared reader, mounted in the browser by the
+            reader island into this column (the site draws the cover and
+            title above it). The page is not hydrated. */}
+        <ReaderIsland assets={assets} data={island} className="site-reader-root" stalledFallback />
       </div>
     </article>
   );

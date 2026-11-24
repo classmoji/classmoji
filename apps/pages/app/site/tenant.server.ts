@@ -3,6 +3,7 @@ import type { Role } from '@classmoji/database/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { highestRole } from '~/utils/classroomRole.ts';
+import { impersonatorOf, isImpersonatedSession } from '~/utils/pageSections.server.ts';
 import { siteHeaders } from './headers.server.ts';
 import { siteOrigin } from './env.server.ts';
 import { siteLoadContext } from '../../server/loadContext.ts';
@@ -51,6 +52,16 @@ export type SiteViewer = {
   name: string | null;
   image: string | null;
   role: SiteViewerRole;
+  /**
+   * Every ACCEPTED role this user holds in the site's classroom (empty for an
+   * anonymous visitor or a non-member). The reader's viewer on the site is
+   * built from these and nothing else (`site/pageRender.server.ts`).
+   */
+  acceptedRoles: Role[];
+  /** A platform admin viewing as this user ("View as"). */
+  impersonated: boolean;
+  /** That admin's user id, for audit rows; null otherwise. */
+  impersonatedBy: string | null;
 };
 
 export type SiteContext = {
@@ -96,13 +107,16 @@ export type SitePageIndexEntry = {
   is_public: boolean;
 };
 
-const ANONYMOUS: SiteViewer = {
+const ANONYMOUS: SiteViewer = Object.freeze({
   userId: null,
   login: null,
   name: null,
   image: null,
   role: null,
-};
+  acceptedRoles: [],
+  impersonated: false,
+  impersonatedBy: null,
+}) as SiteViewer;
 
 /**
  * The slice of React Router's loader args the resolver needs.
@@ -173,7 +187,10 @@ export function rolePrefix(
  * between this and the app's `findByClassroomAndUser`, which is why site code
  * resolves the role itself instead of reusing that helper.
  */
-async function resolveViewer(request: Request, classroomId: string): Promise<SiteViewer> {
+export async function resolveSiteViewer(
+  request: Request,
+  classroomId: string
+): Promise<SiteViewer> {
   // A failed/absent session is the normal case on a public site, not an error.
   const authData = await getAuthSession(request).catch(() => null);
   if (!authData?.userId) return ANONYMOUS;
@@ -198,7 +215,8 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
   // Highest privilege wins: a TA who is also enrolled as a student sees the
   // staff view, never the narrower one — the rule the page editor and the
   // download route share.
-  const role: SiteViewerRole = highestRole(memberships.map(membership => membership.role));
+  const acceptedRoles = memberships.map(membership => membership.role);
+  const role: SiteViewerRole = highestRole(acceptedRoles);
 
   return {
     userId: user.id,
@@ -206,6 +224,9 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
     name: user.name,
     image: user.image,
     role,
+    acceptedRoles: role === null ? [] : acceptedRoles,
+    impersonated: isImpersonatedSession(authData),
+    impersonatedBy: impersonatorOf(authData),
   };
 }
 
@@ -385,7 +406,7 @@ async function loadSiteContext(
   if (lookup.state !== 'active') throw siteNotFound(request, 'unavailable');
 
   const site = lookup.site;
-  const viewer = await resolveViewer(request, site.classroom_id);
+  const viewer = await resolveSiteViewer(request, site.classroom_id);
 
   return {
     subdomain: site.subdomain,

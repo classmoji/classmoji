@@ -3,7 +3,7 @@
  *
  * The island (`app/reader-island/`) is a small client entry that mounts the
  * shared page reader into a server-routed, NON-hydrated document (the MCP's
- * page render today, the class site next). It is built by the SAME client
+ * page render and the class site). It is built by the SAME client
  * build as React Router's own entries: `READER_ISLAND_ENTRY` is added to the
  * client environment's rollup inputs (array form, which Vite's config merge
  * concatenates with React Router's).

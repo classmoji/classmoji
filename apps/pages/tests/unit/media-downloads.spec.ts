@@ -275,7 +275,15 @@ test.describe('the page loader', () => {
   });
 
   test('the class site asks only for a signed-in member', () => {
-    expect(SITE_RENDER_SOURCE).toContain('assetCtx && role && isMember(context.viewer)');
+    // Through the shared builder, which draws downloads only for a viewer; the
+    // site's viewer is null for anyone who is not an accepted member
+    // (site-reader.spec.ts runs it).
+    expect(SITE_RENDER_SOURCE).toContain(
+      'const readerViewer = await siteReaderViewer(viewer, page, site.classroom);'
+    );
+    expect(SITE_RENDER_SOURCE).toContain(
+      'if (!viewer.userId || viewer.role === null || viewer.acceptedRoles.length === 0) return null;'
+    );
   });
 });
 

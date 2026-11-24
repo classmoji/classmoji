@@ -1782,19 +1782,24 @@ test.describe('signInUrlFor', () => {
 
 test.describe('the class site', () => {
   const RENDER = source('../../app/site/pageRender.server.ts');
-  const body = RENDER.slice(RENDER.indexOf('export async function renderPageForViewer'));
+  const body = RENDER.slice(RENDER.indexOf('export async function buildSitePayload'));
 
-  test('redacts every locked body right after loading, before assets, downloads and render', () => {
-    const REDACT = 'const blocks = documentForSite(content.blocks);';
-    const redact = body.indexOf(REDACT);
-    expect(redact).toBeGreaterThan(body.indexOf('await loadSitePageContent('));
-    expect(body.indexOf('await resolveSiteAssets(assetCtx, blocks)')).toBeGreaterThan(redact);
-    expect(
-      body.indexOf('await loadMediaDownloads(context.site.classroom_id, blocks, role)')
-    ).toBeGreaterThan(redact);
-    // Nothing downstream reads the unredacted blocks again.
-    const after = body.slice(redact + REDACT.length, body.indexOf('\n}\n'));
-    expect(after).not.toContain('content.blocks');
+  // CHANGED with the reader island: the site no longer redacts and renders on
+  // its own. Its document goes through the shared builder, which removes the
+  // locked bodies this viewer may not see before assets, downloads or links
+  // read it (readerPayload.server.ts); a non-member viewer is null, so every
+  // body is removed for them (site-reader.spec.ts runs the real loaders).
+  test('the site hands the stored document to the shared builder with its own viewer', () => {
+    expect(body).toContain(
+      'const readerViewer = await siteReaderViewer(viewer, page, site.classroom);'
+    );
+    expect(body).toContain('return buildReaderPayload(');
+    expect(body).toContain('viewer: readerViewer,');
+    // The only other use of the stored blocks: the description, from the
+    // locked-stripped document.
+    expect(RENDER).toContain(
+      "return describeBlocks(content.format === 'json' ? documentForSite(content.blocks) : []);"
+    );
   });
 
   test('the staff _render/page view does not go through the site path', () => {
@@ -1880,9 +1885,13 @@ test.describe('the class site', () => {
     }
   });
 
-  test('the sign-in row is for anonymous renders only, through the site interstitial', () => {
-    expect(body).toMatch(/lockedSectionSignInHref: context\.viewer\.userId\s*\? null/);
-    expect(body).toContain('`${context.memberLinkOrigin}${signInPathFor(');
+  // CHANGED: the sign-in link is the same for EVERY non-member (anonymous or
+  // signed in), so their payloads are identical; the builder asks for it only
+  // when the viewer is null. Through the site interstitial, as before.
+  test('the sign-in link is not branched on a session, and goes through the site interstitial', () => {
+    expect(body).toContain('signInUrl: () => signInUrl,');
+    expect(RENDER).not.toMatch(/viewer\.userId\s*\?/);
+    expect(RENDER).toContain('`${context.memberLinkOrigin}${signInPathFor(publicPath)}`');
   });
 
   test('without an href (the staff view) there is no link, and the body renders as authored', async () => {
