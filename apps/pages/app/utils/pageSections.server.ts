@@ -156,9 +156,17 @@ export interface ReaderSections {
   signedIn: boolean;
   /** Signed in and an accepted member of the classroom (impersonated or not). */
   member: boolean;
-  /** Signed in, accepted member, not impersonated, classroom open to them. */
+  /**
+   * Draw this reader's tick state (heading boxes, student check list items,
+   * the done-section fade and gutter): an accepted member, classroom open to
+   * them. True under "View as", so an admin sees the student's ticks.
+   */
+  showChecks: boolean;
+  /** showChecks and `viewer.canUnlock`: draw the hold-to-unlock control. */
+  showUnlock: boolean;
+  /** showChecks and not impersonated: may tick (the POST is allowed). */
   canCheck: boolean;
-  /** canCheck, an accepted student, and not a reveal-all reader. */
+  /** showUnlock and not impersonated: may unlock. */
   canUnlock: boolean;
   checked: string[];
   unlocked: Record<string, string>;
@@ -264,13 +272,16 @@ export function readerSectionsFor({
   state: SectionReaderState | null;
 }): ReaderSections {
   const member = signedIn && viewer.acceptedRole !== null;
-  const canCheck = member && !impersonated && classroomOpen;
+  const showChecks = member && classroomOpen;
+  const showUnlock = showChecks && viewer.canUnlock;
   return {
     staff: viewer.revealAll,
     signedIn,
     member,
-    canCheck,
-    canUnlock: canCheck && viewer.canUnlock,
+    showChecks,
+    showUnlock,
+    canCheck: showChecks && !impersonated,
+    canUnlock: showUnlock && !impersonated,
     checked: member && state ? [...state.checked] : [],
     unlocked: member && state ? { ...state.unlocked } : {},
   };

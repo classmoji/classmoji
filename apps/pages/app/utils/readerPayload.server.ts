@@ -189,6 +189,8 @@ export const ANONYMOUS_READER_SECTIONS: Readonly<ReaderSections> = Object.freeze
   staff: false,
   signedIn: false,
   member: false,
+  showChecks: false,
+  showUnlock: false,
   canCheck: false,
   canUnlock: false,
   checked: [],

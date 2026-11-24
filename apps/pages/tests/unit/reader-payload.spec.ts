@@ -20,7 +20,11 @@ import {
   type ReaderViewer,
 } from '~/utils/readerPayload.server.ts';
 import { linkedPageIds, redactDocumentForViewer } from '~/utils/linkRedaction.server.ts';
-import { NO_SECTION_VIEWER, type SectionViewerAccess } from '~/utils/pageSections.server.ts';
+import {
+  NO_SECTION_VIEWER,
+  readerSectionsFor,
+  type SectionViewerAccess,
+} from '~/utils/pageSections.server.ts';
 import type { ReaderPayload } from '~/utils/readerPayload.ts';
 import { describeBlocks, navGridTiles, pageLinkRender } from '~/utils/readerPayload.ts';
 import { inAppPageHref } from '~/components/reader/readerSurface.ts';
@@ -249,20 +253,18 @@ function viewer(
   over: { unlocked?: Record<string, string>; checked?: string[]; impersonated?: boolean } = {}
 ): ReaderViewer {
   const impersonated = over.impersonated === true;
-  const canCheck = a.acceptedRole !== null && !impersonated;
   return {
     userId,
     access: a,
     impersonated,
-    readerSections: {
-      staff: a.revealAll,
+    // The loader's own rule, not a copy of it.
+    readerSections: readerSectionsFor({
       signedIn: true,
-      member: a.acceptedRole !== null,
-      canCheck,
-      canUnlock: canCheck && a.canUnlock,
-      checked: over.checked ?? [],
-      unlocked: over.unlocked ?? {},
-    },
+      viewer: a,
+      impersonated,
+      classroomOpen: true,
+      state: { checked: over.checked ?? [], unlocked: over.unlocked ?? {} },
+    }),
   };
 }
 
@@ -353,6 +355,8 @@ test.describe('buildReaderPayload — a signed-out reader', () => {
     expect(payload.signInUrl).toBe('https://webapp.test/?redirect=page-1');
     expect(payload.readerSections).toMatchObject({
       signedIn: false,
+      showChecks: false,
+      showUnlock: false,
       canCheck: false,
       checked: [],
       unlocked: {},
@@ -592,8 +596,12 @@ test.describe('buildReaderPayload — staff, previews, impersonation', () => {
       deps
     );
     expect(calls.comments[0].impersonated).toBe(true);
-    expect(payload.readerSections.canCheck).toBe(false);
-    expect(payload.readerSections.canUnlock).toBe(false);
+    expect(payload.readerSections).toMatchObject({
+      showChecks: true,
+      showUnlock: true,
+      canCheck: false,
+      canUnlock: false,
+    });
   });
 
   test('a non-json read ships the empty document', async () => {

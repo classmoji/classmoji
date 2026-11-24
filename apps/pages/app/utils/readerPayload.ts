@@ -40,7 +40,13 @@ export interface ReaderSectionsPayload {
    * unlock a locked section, instead of being sent to sign in.
    */
   member: boolean;
+  /** Draw this reader's ticks (true under "View as", where nothing may be ticked). */
+  showChecks: boolean;
+  /** Draw the hold-to-unlock control (true under "View as", where it is inert). */
+  showUnlock: boolean;
+  /** May tick: an accepted member, classroom open, not impersonated. */
   canCheck: boolean;
+  /** May unlock: `canCheck` and an accepted student who does not reveal all. */
   canUnlock: boolean;
   checked: string[];
   unlocked: Record<string, string>;

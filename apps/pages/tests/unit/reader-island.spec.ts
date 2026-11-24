@@ -49,6 +49,8 @@ function islandData(text = HOSTILE): ReaderIslandData {
         staff: true,
         signedIn: false,
         member: false,
+        showChecks: false,
+        showUnlock: false,
         canCheck: false,
         canUnlock: false,
         checked: [],

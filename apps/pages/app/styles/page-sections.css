@@ -211,6 +211,38 @@
   opacity: 1;
 }
 
+/* A student check list item that cannot be ticked here (signed out, not a
+   member, "View as"): no pointer. BlockNote's own rule sets one on every
+   item's box, hence the matching selector. */
+.bn-block-content[data-content-type='checkListItem'] > div > input.pg-personal-check:disabled {
+  cursor: default;
+}
+
+/* Shown but not tickable ("View as": the student's state, read-only): no
+   pointer, no hover border, no press, no tooltip. */
+.pg-section-check:disabled {
+  cursor: default;
+}
+
+.bn-block-content:hover > .pg-section-check:disabled .pg-section-check-box,
+.pg-section-check:disabled:hover .pg-section-check-box {
+  border-color: var(--pg-check-border);
+}
+
+.pg-section-check:disabled[aria-checked='true'] .pg-section-check-box,
+.bn-block-content:hover > .pg-section-check:disabled[aria-checked='true'] .pg-section-check-box {
+  border-color: var(--pg-primary);
+}
+
+.pg-section-check:disabled:active .pg-section-check-box {
+  transform: none;
+}
+
+.pg-section-check:disabled::after {
+  content: none;
+  display: none;
+}
+
 /* =====================================================================
    Checkable headings: the author's badge (editor)
    ===================================================================== */
@@ -751,7 +783,7 @@
     box-shadow 120ms ease;
 }
 
-.pg-hold-btn:hover {
+.pg-hold-btn:not(:disabled):hover {
   box-shadow:
     var(--shadow-hover),
     inset 0 0 0 1px var(--color-border-medium);
@@ -776,6 +808,8 @@
 
 .pg-hold-btn:disabled {
   cursor: default;
+  /* Inert ("View as", or mid-unlock): a swipe that starts here scrolls. */
+  touch-action: auto;
 }
 
 .pg-hold-btn svg {
