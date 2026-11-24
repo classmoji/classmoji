@@ -4,44 +4,42 @@
  * The logic of `scripts/convertLegacyPages.ts`, with every database, git and
  * collab call injected so the rules are testable with fakes.
  *
- * ## Why the blocks must be exactly collab's
+ * ## Why the blocks must be exactly what collab seeded
  *
- * Every classroom edits pages live. A `content.json` written by anything but
- * the checkpoint worker is an OUTSIDE edit: hook-station (Github) or the
- * checkpoint worker's `expectBase` backstop (any provider) triggers
- * `collab-external`, and collab's `mergeExternal` 3-way merges
- *   base   = the legacy `index.html` converted by collab's own conversion,
- *   theirs = the new `content.json`,
- *   ours   = the live document (seeded from that same conversion).
- * When theirs equals base the merge changes nothing; when it differs, the
- * difference is applied to the live document as if someone had edited it
- * (with fresh ids, content would be duplicated). So the file written here is
- * built exactly as collab seeds a legacy page (`convertLegacyPageHtml` with
- * the same inputs, `normalizeBlockStructure(ensureBlockIds(..))`, the DB
- * cover columns, through the page schema's Y.Doc) and prepared exactly as
- * the checkpoint worker prepares a page (`yDocToPageContent` →
- * `preparePageContent` with an explicit cover). Before anything is written
- * the merge collab would run is run here, and the page is skipped unless it
- * provably changes nothing, and unless the deployed collab server's own
- * snapshot of the page equals the blocks (the check against converter or
- * schema skew between this checkout and the deployment).
+ * Collab no longer converts legacy pages: it refuses their rooms
+ * (`legacy-html`) and stores nothing for them, so for a page with no
+ * `collab_docs` row the snapshot below answers 422 and the page is written
+ * as for any page nobody has open. But collab used to seed a legacy page's
+ * room from its own conversion of `index.html`, and such rows may remain. A
+ * `content.json` written by anything but the checkpoint worker is an OUTSIDE
+ * edit: hook-station (Github) or the checkpoint worker's `expectBase`
+ * backstop (any provider) triggers `collab-external`, and for a row that is
+ * open or dirty collab's `mergeExternal` 3-way merges theirs (the new
+ * `content.json`) into the live document (seeded from that conversion). So
+ * the file written here is built exactly as collab seeded a legacy page
+ * (`convertLegacyPageHtml` with the same inputs,
+ * `normalizeBlockStructure(ensureBlockIds(..))`, the DB cover columns, through
+ * the page schema's Y.Doc) and prepared exactly as the checkpoint worker
+ * prepares a page (`yDocToPageContent` → `preparePageContent` with an explicit
+ * cover). Before anything is written the merge is run here, and the page is
+ * skipped unless it provably changes nothing, and unless the collab server's
+ * own document of the page (when it holds one) equals the blocks (the check
+ * against converter or schema skew).
  *
  * ## What happens to each page once `content.json` lands
  *
- *  - no `collab_docs` row (or a reseed marker): nothing is live; the next
- *    open seeds from `content.json` (the same blocks and ids).
+ *  - no `collab_docs` row (or a reseed marker): nothing is live (collab
+ *    refused the room); the next open seeds from `content.json`.
  *  - a clean row, closed: `/external` marks it for reseed (Github push), or
  *    the next open sees git's sha moved and reseeds (`load()`); either way it
  *    reopens from `content.json`, same blocks.
- *  - a clean row, open in memory: `/external` merges; theirs == base, so the
- *    live document is unchanged and only `source_sha` moves to the new file.
- *  - a dirty row (live edits not yet checkpointed): the same no-op merge, then
- *    the next checkpoint writes the live document over `content.json`. Safe
- *    in theory, SKIPPED here anyway: someone is working on that page, and
- *    their own first checkpoint converts it.
+ *  - a clean row, open in memory: `/external` merges. Collab no longer reads
+ *    a legacy `index.html` as a merge base, so with that blob as the row's
+ *    `source_sha` it keeps the live document and records `no-merge-base`
+ *    (alerted, not applied): the live document already equals the file.
+ *  - a dirty row (live edits not yet checkpointed): SKIPPED: someone is
+ *    working on that page, and their own first checkpoint converts it.
  *  - a row open in a browser right now: SKIPPED (reported), as above.
- * The skips are belt and braces: a page opened between the check and the
- * write meets the same no-op merge.
  */
 
 import { isDeepStrictEqual } from 'node:util';
@@ -96,11 +94,23 @@ export interface CollabRowMeta {
   state: Uint8Array;
 }
 
-/** `GET /internal/page/:id/snapshot` (no viewer): the live, stored or would-be-seeded doc. */
+/** `GET /internal/page/:id/snapshot` (no viewer): the live or stored doc. */
 export interface CollabSnapshot {
   live: boolean;
   version: number;
   content: { blocks: unknown[]; coverImage?: PageCoverImage | null };
+}
+
+/**
+ * Collab's answer to the snapshot request: the document, or null when collab
+ * refuses the page as legacy HTML (422 `legacy-html`: it holds no document
+ * for it and seeds none). Anything else that is not 2xx throws.
+ */
+export function readSnapshotResponse(status: number, body: unknown): CollabSnapshot | null {
+  if (status >= 200 && status < 300) return body as CollabSnapshot;
+  const error = (body as { error?: unknown } | null)?.error;
+  if (status === 422 && error === 'legacy-html') return null;
+  throw new Error(`HTTP ${status}${typeof error === 'string' ? ` ${error}` : ''}`);
 }
 
 /** What `preparePageContent` returns: the exact bytes to commit. */
@@ -153,11 +163,15 @@ export interface LegacyDeps {
   listPageFiles(classroom: LegacyClassroom): Promise<Map<string, string>>;
   /** A blob's text by sha, null when it does not exist. */
   readBlob(classroom: LegacyClassroom, sha: string): Promise<string | null>;
-  /** Which of `ids` are pages of the classroom (collab's `pageIdsInClassroom`). */
+  /** Which of `ids` are pages of the classroom (as collab's old conversion looked them up). */
   pageIdsInClassroom(classroomId: string, ids: string[]): Promise<Set<string>>;
   collabRow(pageId: string): Promise<CollabRowMeta | null>;
-  /** Null when the collab server is not configured for this run. */
-  collabSnapshot: ((pageId: string) => Promise<CollabSnapshot>) | null;
+  /**
+   * The page's collab document (`readSnapshotResponse`): null when collab
+   * holds none and refuses to seed one (a legacy page with no row). The
+   * function is null when the collab server is not configured for this run.
+   */
+  collabSnapshot: ((pageId: string) => Promise<CollabSnapshot | null>) | null;
   legacyPageLinkIds(html: string): string[];
   /** `convertLegacyPageHtml` (`@classmoji/page-schema/html`) with `ensureBlockIds` bound. */
   convertLegacy(
@@ -337,7 +351,7 @@ export function decideCollab({
   return { ok: true, state };
 }
 
-// ─── The conversion collab seeds with ────────────────────────────────────────
+// ─── The conversion collab seeded with (before it refused legacy pages) ──────
 
 /** The cover a legacy page keeps only in its DB columns (collab's `legacyCover`). */
 export function legacyCover(page: LegacyPageRow): PageCoverImage | null {
@@ -361,7 +375,7 @@ export function throughSchema(ops: PageOps, blocks: Blocks): Blocks {
 }
 
 /**
- * The page as collab's `seed` builds it from the converted blocks — the same
+ * The page as collab's `seed` built it from the converted blocks — the same
  * normalisation, the DB cover, through the Y.Doc — read back the way the
  * checkpoint worker renders a page (`yDocToPageContent`), with the
  * worker's render guard.
@@ -415,9 +429,9 @@ export function firstDifference(a: Blocks, b: Blocks): string {
 }
 
 /**
- * The merge `mergeExternal` would run once the file lands, run here: base is
- * collab's conversion of the index.html, theirs the prepared file, ours the
- * document collab holds (or would seed). Null when it provably changes
+ * The 3-way merge of the file into the document, run here: base is the
+ * conversion of the index.html, theirs the prepared file, ours the document
+ * collab holds (or, with none, the conversion). Null when it provably changes
  * nothing; otherwise why not.
  */
 export function provesNoOpMerge({
@@ -513,7 +527,8 @@ async function convertOne(
   const report = baseReport(page);
   const skip = (reason: string): PageReport => ({ ...report, action: 'skipped', reason });
 
-  // Collab: the snapshot first (it stores pending edits), then the row.
+  // Collab: the snapshot first (it stores pending edits), then the row. A
+  // null snapshot is collab refusing the page as legacy HTML: it holds none.
   let snapshot: CollabSnapshot | null | 'not-configured' = 'not-configured';
   if (deps.collabSnapshot) {
     try {
@@ -530,8 +545,8 @@ async function convertOne(
   const html = await deps.readBlob(page.classroom, htmlSha);
   if (html === null) return skip(`index.html blob ${htmlSha} could not be read`);
 
-  // Collab's conversion inputs (adapters/page.ts `convertLegacy`): the links'
-  // pages read in ONE query scoped by the row's own classroom.
+  // The conversion inputs collab seeded legacy pages with: the links' pages
+  // read in ONE query scoped by the row's own classroom.
   const linked = deps.legacyPageLinkIds(html);
   const pagesHere =
     linked.length > 0
@@ -561,7 +576,7 @@ async function convertOne(
   if (seeded.guard) return skip(`the checkpoint render guard refused it: ${seeded.guard}`);
 
   // The document collab holds for this page: its snapshot (the live or
-  // stored doc, or what the DEPLOYED collab would seed), else the stored row.
+  // stored doc), else the stored row; none when collab refused the page.
   const realRow = row && !isReseedMarker(row) ? row : null;
   const ours =
     snapshot !== 'not-configured' && snapshot

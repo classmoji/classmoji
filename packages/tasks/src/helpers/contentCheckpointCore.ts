@@ -780,8 +780,9 @@ async function checkpointDocs(
           row,
           report: { ...base, paths: [prepared.path] },
           sourcePath: prepared.path,
-          // A legacy page was seeded from index.html: its source_sha is that
-          // file's until content.json exists.
+          // A legacy page's room seeded from index.html (collab did that
+          // before it refused legacy pages; such rows may remain): its
+          // source_sha is that file's until content.json exists.
           sourcePaths: [prepared.path, prepared.path.replace(/content\.json$/, 'index.html')],
           files: [{ path: prepared.path, content: prepared.content }],
           record: shas =>

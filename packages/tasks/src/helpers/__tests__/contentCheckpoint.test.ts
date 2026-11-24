@@ -1033,7 +1033,8 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
 
     it('the first checkpoint creates content.json beside index.html and records its blob', async () => {
       const htmlSha = legacyLab();
-      // What collab seeds a converted legacy page with: index.html's blob.
+      // What collab seeded a converted legacy page with (rows it seeded
+      // before it refused legacy pages): index.html's blob.
       const prisma = makePrisma([
         row('page', 'page-b', blocksToYDoc([para('b1', 'converted, then edited')]), 2, {
           source_sha: htmlSha,
