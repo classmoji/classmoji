@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => ({
   createPage: vi.fn(),
   freePageContentPath: vi.fn(),
   ensureContentRepo: vi.fn(),
-  processMarkdownImport: vi.fn(),
+  preflightCreatePage: vi.fn(),
+  convertMarkdown: vi.fn(),
+  isPageImportAvailable: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -38,14 +40,19 @@ vi.mock('@classmoji/services', () => ({
       createPage: (...a: unknown[]) => mocks.createPage(...a),
       freePageContentPath: (...a: unknown[]) => mocks.freePageContentPath(...a),
       ensureContentRepo: (...a: unknown[]) => mocks.ensureContentRepo(...a),
+      preflightCreatePage: (...a: unknown[]) => mocks.preflightCreatePage(...a),
+    },
+    pageImport: {
+      convertMarkdown: (...a: unknown[]) => mocks.convertMarkdown(...a),
+      isPageImportAvailable: () => mocks.isPageImportAvailable(),
+      assertImportTitle: (title?: string) => {
+        if (title && title.length > 1_000)
+          throw new Error('The page title is longer than 1,000 characters.');
+      },
+      PAGE_IMPORT_MESSAGES: { unavailable: 'Importing pages is not available right now.' },
     },
   },
 }));
-
-vi.mock('~/utils/markdownImporter.server', () => ({
-  processMarkdownImport: (...a: unknown[]) => mocks.processMarkdownImport(...a),
-}));
-vi.mock('~/utils/htmlWrapper', () => ({ wrapHtmlContent: (html: string) => html }));
 
 // The actions are what is under test; the view layer only needs to import.
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
@@ -106,10 +113,13 @@ beforeEach(() => {
   });
   mocks.createPage.mockResolvedValue({ id: 'page-new', title: 'Week 1' });
   mocks.freePageContentPath.mockResolvedValue('pages/week-1');
-  mocks.processMarkdownImport.mockResolvedValue({
-    html: '<p>hi</p>',
-    imageMap: new Map(),
-    unmatchedImages: [],
+  mocks.isPageImportAvailable.mockReturnValue(true);
+  mocks.preflightCreatePage.mockResolvedValue({ contentPath: 'pages/week-1' });
+  mocks.convertMarkdown.mockResolvedValue({
+    blocks: [{ type: 'paragraph' }],
+    images: [],
+    unmatched: [],
+    missing: [],
   });
 });
 

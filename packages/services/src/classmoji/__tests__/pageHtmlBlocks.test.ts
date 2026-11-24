@@ -1,49 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { convertPageHtml, storeCommittedAssetPaths } from '../pageHtmlBlocks.ts';
+import { storeCommittedAssetPaths } from '../pageHtmlBlocks.ts';
 
-/** Every text run in a block tree, in order. */
-function textOf(blocks: unknown): string {
-  const out: string[] = [];
-  const walk = (node: unknown): void => {
-    if (Array.isArray(node)) return node.forEach(walk);
-    if (!node || typeof node !== 'object') return;
-    const record = node as { text?: unknown; content?: unknown; children?: unknown };
-    if (typeof record.text === 'string') out.push(record.text);
-    walk(record.content);
-    walk(record.children);
-  };
-  walk(blocks);
-  return out.join('');
-}
-
-describe('convertPageHtml', () => {
-  it('converts with the shared legacy-page converter', async () => {
-    const blocks = (await convertPageHtml('<p>Hello <em>there</em></p>')) as Array<{
-      type: string;
-    }>;
-    expect(blocks.map(b => b.type)).toEqual(['paragraph']);
-    expect(textOf(blocks)).toBe('Hello there');
-  });
-
-  // Fired at once (a batch import beside an MCP create), each comes back with
-  // its own document and nothing else's. That the queue really runs them one
-  // at a time is pinned in pageHtmlBlocks.queue.test.ts.
-  it('keeps concurrent conversions apart', async () => {
-    const inputs = Array.from(
-      { length: 6 },
-      (_, i) => `<h2>Doc ${i}</h2><p>Body of document ${i}</p><ul><li>item ${i}</li></ul>`
-    );
-    const results = await Promise.all(inputs.map(html => convertPageHtml(html)));
-    results.forEach((blocks, i) => {
-      const text = textOf(blocks);
-      expect(text).toContain(`Body of document ${i}`);
-      expect(text).toContain(`item ${i}`);
-      for (let j = 0; j < inputs.length; j++) {
-        if (j !== i) expect(text).not.toContain(`document ${j}`);
-      }
-    });
-  });
-});
+// The conversion (`htmlToPageBlocks`) moved to the `page-import-convert`
+// Trigger task; its suite (packages/tasks) pins it, concurrency included.
 
 describe('storeCommittedAssetPaths', () => {
   const login = 'test-org';

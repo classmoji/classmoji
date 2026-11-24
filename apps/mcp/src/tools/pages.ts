@@ -57,6 +57,12 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return false;
 }
 
+/**
+ * How long page_create waits for its `html` conversion: inside the request's
+ * 60 s timeout (`MCP_REQUEST_TIMEOUT_MS`), with room left for the commit.
+ */
+const PAGE_HTML_CONVERT_WAIT_MS = 30_000;
+
 interface PageCreateArgs {
   classroom: string;
   title: string;
@@ -72,7 +78,8 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
     'block-based content.json), the database record (created as a draft), and a content-manifest ' +
     'refresh. Edit its content with page_content_apply (start from page_content_outline); ' +
     'publish it with page_update (is_draft: false). The optional html param seeds the page: it ' +
-    'is converted to blocks and committed as content.json (no index.html is written). It ' +
+    'is converted to blocks and committed as content.json (no index.html is written); where ' +
+    'conversion is unavailable the call errors and nothing is created. It ' +
     'uploads no files: its images may use external URLs or media:// refs (media_list). For an ' +
     'image file in the course repo, create the page, upload the file with page_asset_upload, ' +
     'then add the image with page_content_apply. Prefer a blank page and the block tools.',
@@ -90,13 +97,41 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
+    // `html` converts on Trigger.dev (the `page-import-convert` task), before
+    // anything is created: a conversion that is unavailable, fails or times
+    // out is a tool error, and no commit or row is made. Without `html` the
+    // page is blank and nothing waits.
+    if (args.html != null && !ClassmojiService.pageImport.isPageImportAvailable()) {
+      throw new ToolError(
+        'internal',
+        ClassmojiService.pageImport.PAGE_IMPORT_MESSAGES.unavailable +
+          ' Create the page without html and add its content with page_content_apply.',
+        'PAGE_IMPORT_UNAVAILABLE'
+      );
+    }
+
     try {
+      let blocks: unknown[] | undefined;
+      if (args.html != null) {
+        // The checks createPage would refuse it with (page limit, a title
+        // whose path is taken), before a run is spent; mapped below exactly
+        // as createPage's own.
+        await ClassmojiService.page.preflightCreatePage({
+          classroomId: classroom.classroomId,
+          title: args.title,
+        });
+        blocks = await ClassmojiService.pageImport.convertHtml(
+          { html: args.html, title: args.title },
+          { timeoutMs: PAGE_HTML_CONVERT_WAIT_MS }
+        );
+      }
+
       // Orchestrated create (shared with both webapp create-page paths):
       // ensure content repo → upload content.json → DB row → manifest refresh.
       const page = await ClassmojiService.page.createPage({
         classroomId: classroom.classroomId,
         title: args.title,
-        html: args.html,
+        blocks,
         createdBy: ctx.viewer.userId,
       });
 
@@ -119,6 +154,15 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
         },
       });
     } catch (error) {
+      if (ClassmojiService.pageImport.isPageImportError(error)) {
+        throw new ToolError(
+          error.reason === 'too_large' || error.reason === 'title_too_long'
+            ? 'invalid_params'
+            : 'internal',
+          error.message,
+          `PAGE_IMPORT_${error.reason.toUpperCase()}`
+        );
+      }
       // The free plan's page limit: the same sentence the web shows.
       if (hasErrorCode(error, 'PLAN_CONTENT_LIMIT')) {
         throw new ToolError('forbidden', (error as Error).message);

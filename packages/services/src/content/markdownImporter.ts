@@ -2,6 +2,14 @@ import { Marked, type Token } from 'marked';
 import * as prettier from 'prettier';
 
 /**
+ * Node only (marked, prettier's Node build). Loaded by the
+ * `page-import-convert` Trigger task through the
+ * `@classmoji/services/markdown-importer` subpath, and on purpose NOT through
+ * the services index: the web app and the MCP server must not carry it.
+ */
+export { wrapHtmlContent } from './htmlWrapper.ts';
+
+/**
  * Ends the line after every block of raw HTML that another block follows,
  * in `tokens` and in the blocks nested in them.
  */
@@ -732,9 +740,9 @@ export function rewriteImagePaths(html: string, imageMap: Map<string, any>): str
  * @param {Object} options - { org, repo, contentPath, assetsFolder }
  * @returns {Object} { html, imageMap, unmatchedImages, missingImages }
  */
-export async function processMarkdownImport(
+export async function processMarkdownImport<Upload extends { name: string }>(
   markdown: string,
-  uploadedImages: Array<{ name: string }>,
+  uploadedImages: Upload[],
   options: {
     org: string;
     repo: string;
@@ -742,11 +750,13 @@ export async function processMarkdownImport(
     assetsFolder: string;
     /** 'GITLAB' for a Gitlab content project, whose files have no public raw URL. */
     provider?: string | null;
+    /** The slides app's origin for a Gitlab project's image URLs (default `SLIDES_URL`). */
+    slidesUrl?: string;
   }
 ): Promise<{
   html: string;
   imageMap: Map<string, any>;
-  unmatchedImages: Array<{ name: string }>;
+  unmatchedImages: Upload[];
   missingImages: string[];
 }> {
   // 0. Normalize markdown from different sources (Obsidian, etc.)
@@ -792,7 +802,7 @@ export async function processMarkdownImport(
     // slides app's session-gated content proxy.
     const githubUrl =
       options.provider === 'GITLAB'
-        ? `${(process.env.SLIDES_URL || '').replace(/\/+$/, '')}/content/${options.org}/${options.repo}/${assetPath}`
+        ? `${(options.slidesUrl ?? process.env.SLIDES_URL ?? '').replace(/\/+$/, '')}/content/${options.org}/${options.repo}/${assetPath}`
         : `https://raw.githubusercontent.com/${options.org}/${options.repo}/main/${assetPath}`;
 
     imageMapWithUrls.set(originalPath, {

@@ -9,13 +9,14 @@ import {
 } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import {
+  PAGE_CREATE_FORM_TOO_LARGE_MESSAGE,
   PAGE_IMPORT_TOO_LARGE_MESSAGE,
   oversizedImportFileMessage,
+  readPageCreateForm,
   readPageImportForm,
 } from '~/utils/pageImportBody.server';
-import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import { markdownImportFiles, type PageImportFile } from '~/utils/pageImportFiles.server';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,
@@ -57,6 +58,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   return {
     limitMessage,
     canUpgrade: membership?.role === 'OWNER',
+    // Import and Batch Import convert on Trigger.dev; where it is not
+    // configured only Create Blank is offered.
+    importAvailable: ClassmojiService.pageImport.isPageImportAvailable(),
     classroom: {
       ...classroomForClient(classroom),
       slug: classroom.slug, // For navigation URLs
@@ -66,8 +70,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 /**
- * The import takes an upload slot partway through `createPage` — after the
+ * An import takes an upload slot partway through `createPage` — after the
  * gate, before the body is read — and this gives it back however that ends.
+ * A blank create takes none.
  */
 export const action = async (args: Route.ActionArgs) => {
   const slot = { held: false };
@@ -93,20 +98,35 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // One slot per import in flight: the body cap bounds one import, this bounds
-  // how many this process holds at once.
-  if (!acquireUploadSlot()) {
-    return data(
+  // how many this process holds at once. The drawer says it is an import in
+  // the query string (`?intent=import`), so that is known before the body is
+  // read; a blank create takes no slot and is read with a small cap instead,
+  // so it never waits behind imports.
+  const busy = () =>
+    data(
       { error: UPLOAD_BUSY_MESSAGE },
       { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
     );
-  }
-  slot.held = true;
+  const takeSlot = () => {
+    if (!acquireUploadSlot()) return false;
+    slot.held = true;
+    return true;
+  };
+  const importRequested = new URL(request.url).searchParams.get('intent') === 'import';
+  if (importRequested && !takeSlot()) return busy();
 
-  const formData = await readPageImportForm(request);
+  const formData = importRequested
+    ? await readPageImportForm(request)
+    : await readPageCreateForm(request);
   if (!formData) {
-    return { error: PAGE_IMPORT_TOO_LARGE_MESSAGE };
+    return {
+      error: importRequested ? PAGE_IMPORT_TOO_LARGE_MESSAGE : PAGE_CREATE_FORM_TOO_LARGE_MESSAGE,
+    };
   }
   const intent = formData.get('intent');
+  // A tab opened before the query string existed posts an import without it:
+  // still an import (its body fit the small cap), and it takes its slot now.
+  if (intent === 'import' && !slot.held && !takeSlot()) return busy();
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -127,13 +147,19 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   const contentPath = await ClassmojiService.page.freePageContentPath(classroom.id, title);
 
   try {
-    // Page HTML, converted to content.json by the service; undefined = blank page
-    let pageHtml: string | undefined;
+    // The page's blocks, converted from the markdown; undefined = blank page
+    let pageBlocks: unknown[] | undefined;
     // Extra files (import-flow images) committed alongside content.json
-    const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
+    const files: PageImportFile[] = [];
     const assetsFolder = `${contentPath}/assets`;
 
     if (intent === 'import') {
+      // The conversion runs on Trigger.dev; without it the drawer offers
+      // Create Blank only, and a post here anyway is refused.
+      if (!ClassmojiService.pageImport.isPageImportAvailable()) {
+        return { error: ClassmojiService.pageImport.PAGE_IMPORT_MESSAGES.unavailable };
+      }
+
       // Import flow: process markdown and images
       const markdownFile = formData.get('markdown');
       const imageFiles = formData.getAll('images');
@@ -152,68 +178,32 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
         return { error: 'The markdown file is empty. Please add content and try again' };
       }
 
-      // Process markdown and images
-      const { html, imageMap, unmatchedImages } = await processMarkdownImport(
-        markdownText,
-        imageFiles as File[],
-        {
+      // The checks createPage would refuse it with (page limit, a title whose
+      // path is taken), before a run is spent on the conversion. Thrown the
+      // same way createPage throws them, so the message shown is the same.
+      // A title the conversion would refuse is refused first, with a sentence.
+      ClassmojiService.pageImport.assertImportTitle(title);
+      await ClassmojiService.page.preflightCreatePage({ classroomId: classroom.id, title });
+
+      // Markdown -> blocks on Trigger.dev, which sees the images' names only
+      // and says where each goes. A conversion that fails or times out throws
+      // a PageImportError whose message is shown; nothing is created.
+      const uploads = imageFiles.filter((file): file is File => typeof file !== 'string');
+      const conversion = await ClassmojiService.pageImport.convertMarkdown({
+        markdown: markdownText,
+        title,
+        imageNames: uploads.map(file => file.name),
+        options: {
           org: gitOrgLogin,
           repo: repoName,
           contentPath,
           assetsFolder,
           provider: classroom.git_organization?.provider,
-        }
-      );
-
-      // Prepare files to upload
-      // Content is File at runtime but processMarkdownImport types unmatchedImages loosely
-      const filesToUpload: Array<{
-        path: string;
-        content: File | { name: string };
-        encoding: string;
-      }> = [];
-
-      // Add all matched images
-      imageMap.forEach(imageInfo => {
-        filesToUpload.push({
-          path: imageInfo.newPath,
-          content: imageInfo.file,
-          encoding: 'binary',
-        });
+        },
       });
 
-      // Add unmatched images
-      unmatchedImages.forEach(file => {
-        const timestamp = Date.now();
-        const sanitizedName = file.name
-          .toLowerCase()
-          .replace(/[^a-z0-9.-]/g, '-')
-          .replace(/-+/g, '-');
-        const newFilename = `${sanitizedName.split('.')[0]}-${timestamp}.${sanitizedName.split('.').pop()}`;
-        const newPath = `${contentPath}/assets/${newFilename}`;
-
-        filesToUpload.push({
-          path: newPath,
-          content: file,
-          encoding: 'binary',
-        });
-      });
-
-      // Convert File objects to buffers
-      const uploadFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> =
-        await Promise.all(
-          filesToUpload.map(async file => ({
-            path: file.path,
-            content: Buffer.from(await (file.content as unknown as Blob).arrayBuffer()).toString(
-              'base64'
-            ),
-            encoding: 'base64' as const,
-          }))
-        );
-      files.push(...uploadFiles);
-
-      // Wrap HTML content
-      pageHtml = wrapHtmlContent(html, 2); // Default width
+      files.push(...(await markdownImportFiles(conversion, uploads, contentPath)));
+      pageBlocks = conversion.blocks;
     }
 
     // Orchestrated create: content-repo ensure + upload (content.json + assets)
@@ -221,7 +211,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
     const page = await ClassmojiService.page.createPage({
       classroomId: classroom.id,
       title,
-      html: pageHtml,
+      blocks: pageBlocks,
       files,
       createdBy: userId,
       ...(intent === 'import' ? { commitMessage: `Import page: ${title}` } : {}),
@@ -320,7 +310,7 @@ function PageLimitReached({ message, canUpgrade }: { message: string; canUpgrade
 }
 
 function NewPageForm({ loaderData }: Route.ComponentProps) {
-  const { classroom } = loaderData;
+  const { classroom, importAvailable } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { opened, close } = useRouteDrawer({});
@@ -484,10 +474,12 @@ function NewPageForm({ loaderData }: Route.ComponentProps) {
       formData.append('title', values.title);
     }
 
+    // An import says so in the query string too, so the action knows before
+    // reading the body that it needs an upload slot (a blank create needs none).
     fetcher.submit(formData, {
       method: 'post',
       encType: 'multipart/form-data',
-      action: `/${rolePrefix}/${classroom.slug}/pages/new`,
+      action: `/${rolePrefix}/${classroom.slug}/pages/new${activeTab === 'import' ? '?intent=import' : ''}`,
     });
   };
 
@@ -497,16 +489,20 @@ function NewPageForm({ loaderData }: Route.ComponentProps) {
       label: 'Create Blank',
       children: <CreateBlankTab />,
     },
-    {
-      key: 'import',
-      label: 'Import',
-      children: <ImportTab form={form} onFilesChange={setImportFiles} />,
-    },
-    {
-      key: 'batch',
-      label: 'Batch Import',
-      children: <BatchImportTab onPagesChange={setBatchPages} />,
-    },
+    ...(importAvailable
+      ? [
+          {
+            key: 'import',
+            label: 'Import',
+            children: <ImportTab form={form} onFilesChange={setImportFiles} />,
+          },
+          {
+            key: 'batch',
+            label: 'Batch Import',
+            children: <BatchImportTab onPagesChange={setBatchPages} />,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -531,7 +527,9 @@ function NewPageForm({ loaderData }: Route.ComponentProps) {
         <div className="flex flex-col">
           <span className="text-sm font-semibold text-ink-0">New page</span>
           <span className="text-xs font-normal text-ink-3">
-            Create a blank page, import from markdown, or batch import.
+            {importAvailable
+              ? 'Create a blank page, import from markdown, or batch import.'
+              : 'Create a blank page.'}
           </span>
         </div>
         <button
