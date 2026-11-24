@@ -23,6 +23,7 @@
     "@classmoji/collab": "*",
     "@classmoji/content-signing": "*",
     "@classmoji/database": "*",
+    "@classmoji/page-html": "*",
     "@classmoji/page-schema": "*",
     "@classmoji/services": "*",
     "@trigger.dev/build": "4.8.3",

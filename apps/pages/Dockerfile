@@ -31,6 +31,7 @@ COPY packages/collab/package.json packages/collab/
 COPY packages/content/package.json packages/content/
 COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
+COPY packages/page-html/package.json packages/page-html/
 COPY packages/page-schema/package.json packages/page-schema/
 COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/
@@ -68,7 +69,7 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
 RUN node scripts/check-server-externals.mjs apps/pages/Dockerfile
 
 # The server renders no page HTML: jsdom and BlockNote's server editor
-# (`@blocknote/server-util`, `@classmoji/page-schema/html`) are for tests, Trigger
+# (`@blocknote/server-util`, `@classmoji/page-html`) are for tests, Trigger
 # tasks and scripts only. Reads the imports in the built server, so a transitive import
 # fails too (the source maps are gone here when SENTRY_AUTH_TOKEN was set).
 RUN node scripts/check-no-dom-runtime.mjs apps/pages

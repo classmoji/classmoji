@@ -1,13 +1,12 @@
 import type { BlockSchema, InlineContentSchema, StyleSchema } from '@blocknote/core';
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
-
-import { createPageSchema } from './schema.ts';
+import { createPageSchema } from '@classmoji/page-schema';
 
 /**
  * BlockNote's server editor for the page schema (Node only: pulls in
  * @blocknote/server-util and jsdom), for what needs a DOM: parsing HTML
  * (`htmlToPageBlocks`) and rendering it (`blocksToFullHTML`). Import it
- * through `@classmoji/page-schema/html`. The Y.Doc conversions do not need it:
+ * through `@classmoji/page-html`. The Y.Doc conversions do not need it:
  * they run on the plain editor in `@classmoji/page-schema/server`.
  */
 

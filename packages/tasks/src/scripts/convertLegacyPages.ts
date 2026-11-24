@@ -5,12 +5,13 @@
  * converts on read, so a page left with only `index.html` shows empty (with a
  * notice to its staff) until this has run for it.
  *
- * The rules, and why the blocks must be exactly what collab seeds a legacy
- * page with, are in `helpers/legacyPageConversion.ts`. In short: every page
- * is checked against the deployed collab server's own document for it and
- * against the merge collab will run when the file lands, and is written only
- * when that merge provably changes nothing. Pages with unsaved live edits, or
- * open in an editor, are skipped and reported.
+ * The rules, and why the blocks must be exactly what collab seeded a legacy
+ * page with (it refuses legacy pages now, but rows it seeded may remain), are
+ * in `helpers/legacyPageConversion.ts`. In short: every page is checked
+ * against the deployed collab server's own document for it, when it holds
+ * one, and against the merge of the file into that document, and is written
+ * only when that merge provably changes nothing. Pages with unsaved live
+ * edits, or open in an editor, are skipped and reported.
  *
  * DRY RUN by default. It writes nothing anywhere:
  *   - refuses to start without `CLASSMOJI_DRY_RUN_ACK=read-only`;
@@ -64,6 +65,7 @@ import {
   gitlabTokenFreshForDryRun,
   hasFailures,
   parseArgs,
+  readSnapshotResponse,
   runLegacyConversion,
   type CollabSnapshot,
   type LegacyDeps,
@@ -116,7 +118,7 @@ function pageWhere(selector: Selector) {
 }
 
 async function collabSnapshotFetcher(): Promise<
-  ((pageId: string) => Promise<CollabSnapshot>) | null
+  ((pageId: string) => Promise<CollabSnapshot | null>) | null
 > {
   // Only an explicit COLLAB_URL: the dev fallback (localhost) is never what
   // an operator run means.
@@ -131,8 +133,10 @@ async function collabSnapshotFetcher(): Promise<
       `${env.httpUrl}${COLLAB_INTERNAL_PREFIX}/page/${encodeURIComponent(pageId)}/snapshot`,
       { headers: { [COLLAB_SECRET_HEADER]: env.secret }, signal: AbortSignal.timeout(30_000) }
     );
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return (await response.json()) as CollabSnapshot;
+    // Collab refuses a legacy page it holds no document for (422
+    // `legacy-html`): null, "collab holds nothing", never a failure.
+    const body: unknown = await response.json().catch(() => null);
+    return readSnapshotResponse(response.status, body);
   };
 }
 
@@ -164,7 +168,7 @@ async function main(): Promise<void> {
     await Promise.all([
       import('@classmoji/services'),
       import('@classmoji/database'),
-      import('@classmoji/page-schema/html'),
+      import('@classmoji/page-html'),
     ]);
   const servicesDb = getPrisma();
   if (!write) {

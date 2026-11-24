@@ -19,7 +19,7 @@ const { parsePageImportPayload, PAGE_IMPORT_CONVERT_TASK_ID, PAGE_IMPORT_PAYLOAD
   await import('@classmoji/services/page-import-contract');
 const { processMarkdownImport, wrapHtmlContent } =
   await import('@classmoji/services/markdown-importer');
-const { htmlToPageBlocks } = await import('@classmoji/page-schema/html');
+const { htmlToPageBlocks } = await import('@classmoji/page-html');
 
 type Block = {
   id?: string;

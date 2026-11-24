@@ -2,7 +2,7 @@
  * The legacy page conversion (scripts/convertLegacyPages.ts): which pages it
  * picks, which it skips, and the exact file it writes — with fakes for the
  * database, git and collab, and the REAL conversion, page schema and page
- * service functions, since "the same blocks collab seeds with" is the point.
+ * service functions, since "the same blocks collab seeded with" is the point.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import * as Y from 'yjs';
 
 import { SCHEMA_VERSION } from '@classmoji/page-schema';
 import { pageContentToYDoc } from '@classmoji/page-schema/server';
-import { convertLegacyPageHtml, legacyPageLinkIds } from '@classmoji/page-schema/html';
+import { convertLegacyPageHtml, legacyPageLinkIds } from '@classmoji/page-html';
 import { ClassmojiService } from '@classmoji/services';
 
 import {
@@ -23,6 +23,7 @@ import {
   pageFileState,
   parseArgs,
   provesNoOpMerge,
+  readSnapshotResponse,
   runLegacyConversion,
   seededContent,
   summaryCounts,
@@ -72,7 +73,7 @@ function pageRow(id: string, slug: string, extra: Partial<LegacyPageRow> = {}): 
 const convertLegacy: LegacyDeps['convertLegacy'] = (html, inputs) =>
   convertLegacyPageHtml(html, { ...inputs, ensureBlockIds: pageContent.ensureBlockIds });
 
-/** What collab's adapter seeds this page with (adapters/page.ts `seed`), for the fake snapshot. */
+/** What collab's adapter seeded this page with (before it refused legacy pages), for the fake snapshot. */
 async function collabSeed(page: LegacyPageRow, html: string, pagesHere: Set<string>) {
   const blocks = await convertLegacy(html, {
     title: page.title,
@@ -96,7 +97,8 @@ interface Fixture {
   files: Map<string, string>;
   blobs: Map<string, string>;
   rows?: Map<string, CollabRowMeta>;
-  snapshots?: Map<string, CollabSnapshot> | null;
+  /** `null` (the value): collab refuses the page as legacy HTML (`readSnapshotResponse`). */
+  snapshots?: Map<string, CollabSnapshot | null> | null;
   write?: LegacyDeps['write'];
 }
 
@@ -127,7 +129,7 @@ function makeDeps(f: Fixture) {
         : async pageId => {
             calls.order.push(`snapshot:${pageId}`);
             const snapshot = f.snapshots?.get(pageId);
-            if (!snapshot) throw new Error('no snapshot fixture');
+            if (snapshot === undefined) throw new Error('no snapshot fixture');
             return snapshot;
           },
     legacyPageLinkIds,
@@ -208,6 +210,27 @@ describe('pageFileState', () => {
     expect(pageFileState(files, 'pages/c')).toEqual({ kind: 'none' });
     // A prefix is not the folder.
     expect(pageFileState(files, 'pages/b/assets')).toEqual({ kind: 'none' });
+  });
+});
+
+describe('readSnapshotResponse', () => {
+  it('the document on 2xx; null when collab refuses the page as legacy HTML; else throws', () => {
+    const doc = { live: false, version: 2, content: { blocks: [] } };
+    expect(readSnapshotResponse(200, doc)).toBe(doc);
+    expect(readSnapshotResponse(422, { error: 'legacy-html' })).toBeNull();
+    expect(() => readSnapshotResponse(422, { error: 'invalid-block' })).toThrow(
+      'HTTP 422 invalid-block'
+    );
+    expect(() => readSnapshotResponse(503, { error: 'unavailable' })).toThrow('HTTP 503');
+    expect(() => readSnapshotResponse(500, null)).toThrow('HTTP 500');
+  });
+
+  it('a 2xx whose body is not a snapshot throws: never "collab holds nothing"', () => {
+    // The script reads the body with `.json().catch(() => null)`: an
+    // unparseable 200 arrives here as null.
+    for (const body of [null, 'oops', [], { live: false }, { content: { blocks: 'x' } }]) {
+      expect(() => readSnapshotResponse(200, body), JSON.stringify(body)).toThrow(/not a snapshot/);
+    }
   });
 });
 
@@ -426,6 +449,25 @@ describe('runLegacyConversion', () => {
       action: 'converted',
       commit: 'c3',
       reason: expect.stringMatching(/audit row was not written/),
+    });
+  });
+
+  it('collab refusing the page (legacy-html: it holds nothing) is "no row": checked, then written', async () => {
+    const write = vi.fn(async () => ({ commit: 'c2' }));
+    const f = await fixture({ write, snapshots: new Map([[PAGE_A, null]]) });
+    const { deps, calls } = makeDeps(f);
+    const [report] = (await runLegacyConversion(deps, { kind: 'all' })).pages;
+    expect(report).toMatchObject({ action: 'converted', collab: 'no row', commit: 'c2' });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(calls.write[0].prepared.content).blocks).toEqual(f.seedA.blocks);
+    // No collab document to save beside the file.
+    expect(calls.saved.has(`${PAGE_A}.collab`)).toBe(false);
+
+    const dry = await fixture({ snapshots: new Map([[PAGE_A, null]]) });
+    const { deps: dryDeps } = makeDeps(dry);
+    expect((await runLegacyConversion(dryDeps, { kind: 'all' })).pages[0]).toMatchObject({
+      action: 'would convert',
+      collab: 'no row',
     });
   });
 

@@ -133,7 +133,7 @@ const { acceptDeckPreview } = await import('../../slides/deckPreview.service.ts'
 const { createPage } = await import('../page.service.ts');
 // The blocks a create from HTML is handed (converted by the caller, on
 // Trigger.dev), made here with the same converter.
-const { htmlToPageBlocks } = await import('@classmoji/page-schema/html');
+const { htmlToPageBlocks } = await import('@classmoji/page-html');
 const { saveDeck, previewBranchName: deckPreviewBranchName } =
   await import('../../slides/slideContent.service.ts');
 

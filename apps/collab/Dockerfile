@@ -31,6 +31,7 @@ COPY packages/collab/package.json packages/collab/
 COPY packages/content/package.json packages/content/
 COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
+COPY packages/page-html/package.json packages/page-html/
 COPY packages/page-schema/package.json packages/page-schema/
 COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/
@@ -50,6 +51,14 @@ COPY packages/database/schema.prisma packages/database/
 RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma --generator client
 
 COPY . .
+
+# Collab converts no legacy page: jsdom and BlockNote's server editor
+# (`@blocknote/server-util`, `@classmoji/page-html`) are for tests,
+# Trigger tasks and scripts only. Collab runs its TypeScript unbundled, so this
+# follows the runtime import graph from the entrypoint (static, lazy and
+# transitive imports, resolved as Node resolves them) through the files the
+# production stage copies.
+RUN node scripts/check-no-dom-runtime.mjs --entry apps/collab/src/index.ts
 
 
 # ======================

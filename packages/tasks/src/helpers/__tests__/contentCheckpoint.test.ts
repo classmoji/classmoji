@@ -1033,7 +1033,8 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
 
     it('the first checkpoint creates content.json beside index.html and records its blob', async () => {
       const htmlSha = legacyLab();
-      // What collab seeds a converted legacy page with: index.html's blob.
+      // What collab seeded a converted legacy page with (rows it seeded
+      // before it refused legacy pages): index.html's blob.
       const prisma = makePrisma([
         row('page', 'page-b', blocksToYDoc([para('b1', 'converted, then edited')]), 2, {
           source_sha: htmlSha,
@@ -1331,22 +1332,30 @@ describe('Save-version requests and the remaining gaps', () => {
     expect(prisma.rows[0].editors).toBeNull();
   });
 
-  it('does not re-notify collab of an outside commit it already could not merge', async () => {
-    const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
-    const prisma = makePrisma([
-      row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 3, {
-        source_sha: 'f'.repeat(40),
-        last_conflict: { at: 'x', sha: head, ids: [], reason: 'no-merge-base' },
-      }),
-    ]);
-    const { deps, notifyOutsideEdit } = makeDeps(prisma);
-    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
-    expect(notifyOutsideEdit).not.toHaveBeenCalled();
-    expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'outside-edit-pending' });
-    expect(report.docs[0].reason).toMatch(/could not merge it/);
-    // Still unsaved and recorded: the sweeper alerts on it.
-    expect(prisma.rows[0].last_checkpoint_error).toMatch(/^outside-edit-pending: /);
-  });
+  it.each([
+    ['no-merge-base', /no merge base/],
+    ['legacy-html', /legacy HTML/],
+    ['invalid-content', /not valid JSON/],
+  ])(
+    'does not re-notify collab of an outside commit it already could not merge (%s)',
+    async (reason, why) => {
+      const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
+      const prisma = makePrisma([
+        row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 3, {
+          source_sha: 'f'.repeat(40),
+          last_conflict: { at: 'x', sha: head, ids: [], reason },
+        }),
+      ]);
+      const { deps, notifyOutsideEdit } = makeDeps(prisma);
+      const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+      expect(notifyOutsideEdit).not.toHaveBeenCalled();
+      expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'outside-edit-pending' });
+      expect(report.docs[0].reason).toMatch(/could not merge it/);
+      expect(report.docs[0].reason).toMatch(why);
+      // Still unsaved and recorded: the sweeper alerts on it.
+      expect(prisma.rows[0].last_checkpoint_error).toMatch(/^outside-edit-pending: /);
+    }
+  );
 });
 
 describe("whole-run failures and other docs' refusals", () => {

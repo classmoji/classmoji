@@ -13,7 +13,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
-import { createServerEditor } from '@classmoji/page-schema/html';
+import { createServerEditor } from '@classmoji/page-html';
 
 import { schema as appSchema } from '~/components/editor/blocks/index.tsx';
 import { editingSchema } from '~/components/editor/blocks/editingSchema.ts';

@@ -21,11 +21,23 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
+import {
+  COVER_IMAGE_KEY,
+  FRAGMENT,
+  META_MAP,
+  parsePageContent,
+  serializePageContent,
+  type PageContent,
+} from '@classmoji/page-schema';
+import {
+  blocksToYDoc,
+  pageContentToYDoc,
+  yDocToBlocks,
+  yDocToPageContent,
+} from '@classmoji/page-schema/server';
+
 import { ALL_BLOCKS } from '../../../services/src/content/extract/__tests__/fixtures/allBlocks.ts';
-import { FRAGMENT, META_MAP, COVER_IMAGE_KEY } from '../constants.ts';
-import { parsePageContent, serializePageContent, type PageContent } from '../content.ts';
-import { getServerEditor } from '../html.ts';
-import { blocksToYDoc, pageContentToYDoc, yDocToBlocks, yDocToPageContent } from '../server.ts';
+import { getServerEditor } from '../index.ts';
 
 const SERVICES_FIXTURES = new URL(
   '../../../services/src/content/extract/__tests__/fixtures/',
@@ -83,7 +95,12 @@ function differingBlocks(a: unknown[], b: unknown[]): string[] {
 const fixtures: Array<{ name: string; text?: string; content: PageContent }> = [
   {
     name: 'kitchen-sink.content.json',
-    ...readFixture(new URL('./fixtures/kitchen-sink.content.json', import.meta.url)),
+    ...readFixture(
+      new URL(
+        '../../../page-schema/src/__tests__/fixtures/kitchen-sink.content.json',
+        import.meta.url
+      )
+    ),
   },
   {
     name: 'sample-page-home.content.json',

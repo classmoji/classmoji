@@ -153,8 +153,15 @@ export async function getFile(
   );
   if (status === 404) return null;
   if (!ok) throw statusError(status, `Gitlab file read ${path} failed (${status})`);
-  const file = body as { content: string; blob_id: string };
-  return { content: file.content, sha: file.blob_id };
+  const file = body as { content?: string; blob_id: string; size?: number };
+  // A non-empty file answered without its content (an instance's size cap on
+  // the files API): read the bytes through the blob, as GitHub's large files are.
+  if (!file.content && (file.size ?? 0) > 0) {
+    const bytes = await getBlob(org, repo, file.blob_id);
+    if (!bytes) throw statusError(502, `Gitlab blob ${file.blob_id} of ${path} is missing`);
+    return { content: bytes.toString('base64'), sha: file.blob_id };
+  }
+  return { content: file.content ?? '', sha: file.blob_id };
 }
 
 /** A blob's raw bytes by id, or null when the project has no such blob. */

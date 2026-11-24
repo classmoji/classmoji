@@ -6,11 +6,14 @@ import { createHeadingBlockSpec } from '@blocknote/core';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
-import { lockedSectionConfig } from '../configs.ts';
-import { serializePageContent } from '../content.ts';
-import { createPageSchema } from '../schema.ts';
-import { getServerEditor } from '../html.ts';
-import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import {
+  createPageSchema,
+  lockedSectionConfig,
+  serializePageContent,
+} from '@classmoji/page-schema';
+import { pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
+
+import { getServerEditor } from '../index.ts';
 
 const text = (value: string) => [{ type: 'text', text: value, styles: {} }];
 

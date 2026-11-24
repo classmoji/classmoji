@@ -1,25 +1,23 @@
-import { legacyNoticeText, type LegacyNotice } from '~/utils/legacyPage.ts';
+import { LEGACY_PAGE_NOTICE } from '~/utils/legacyPage.ts';
 
 /**
  * The staff notice on a page git still holds in the old format (see
- * `utils/legacyPage.ts`): `unshown` above the empty page, `live` above the
- * live editor. The amber notice bar the pages editor uses for its other
- * notices (`components/editor/collab/LiveNotices.tsx`); on the class site,
- * which has no sticky chrome, it sits in the article as a box. Plain markup,
- * no state: the class site renders it without a client bundle.
+ * `utils/legacyPage.ts`), above the empty page. The amber notice bar the pages
+ * editor uses for its other notices (`components/editor/collab/LiveNotices.tsx`);
+ * on the class site, which has no sticky chrome, it sits in the article as a
+ * box. Plain markup, no state: the class site renders it without a client
+ * bundle.
  */
 export function LegacyPageNotice({
   layout,
-  kind = 'unshown',
   isEmbedded = false,
 }: {
   layout: 'bar' | 'inline';
-  kind?: LegacyNotice;
   isEmbedded?: boolean;
 }) {
   const text = (
     <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">
-      {legacyNoticeText(kind)}
+      {LEGACY_PAGE_NOTICE}
     </span>
   );
   if (layout === 'inline') {

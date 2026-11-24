@@ -63,6 +63,37 @@ Constants in `@classmoji/collab`: 4403 (`COLLAB_CLOSE_FORBIDDEN`) when the
 or `stale-epoch`) when the room closed or moved. Refusals at connect:
 `stale-epoch`, `schema-mismatch`, `forbidden`, `legacy-html`, `unavailable`.
 
+## Legacy pages are refused, never converted
+
+A page git holds as legacy HTML (`pages/<slug>/index.html`, no
+`content.json`) is not converted here. Opening its room is refused with
+`legacy-html` before anything is seeded: no `collab_docs` row (a reseed
+marker stays a marker), no checkpoint, nothing left loaded. The internal API
+answers the same refusal as 422 `{ error: 'legacy-html' }` to a snapshot,
+ops, a cover and a preview merge. Legacy HTML at a push's `before` is not a
+merge base (the merge falls back to the room's own `source_sha`). An outside
+push collab cannot take (no readable merge base, or a page left as HTML
+only) reseeds a doc that holds nothing unpushed (`{ action: 'reseeded' }`,
+the room closes); over unpushed edits it keeps the live doc, records
+`last_conflict` (reason `no-merge-base` / `legacy-html`, which the
+checkpoint worker honours: it stops re-notifying that commit) and answers
+409 / 422. Closing,
+resetting and the title/width notice never seed, so they still work. Who
+does what with the refusal: the pages loader gives such a page no live room
+at all (staff see the "can't be shown" notice), MCP reads fall back to git and
+its writes say the page is in an old format, `collab-external` treats the 422
+as final, the sweeper leaves the doc alone, and the operator script
+(`packages/tasks/src/scripts/convertLegacyPages.ts`) reads it as "collab
+holds nothing" and converts the page. Rows an older collab seeded from
+`index.html` are still served as stored.
+
+Collab never loads jsdom, `@blocknote/server-util` or `@classmoji/page-html`
+(collab depends only on `@classmoji/page-schema`, which declares neither): `node scripts/check-no-dom-runtime.mjs --entry
+apps/collab/src/index.ts` follows the runtime import graph from the
+entrypoint (static, literal lazy and transitive imports, resolved as Node
+resolves them) and fails on any of them. The image build runs it
+(`Dockerfile`), and so does `tests/noDomRuntime.test.ts`.
+
 ## Deploy (Fly.io)
 
 `apps/collab/Dockerfile` + `apps/collab/fly.toml`, deployed by

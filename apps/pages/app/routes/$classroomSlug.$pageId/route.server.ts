@@ -34,7 +34,7 @@ import {
   LEGACY_PAGE_WRITE_REFUSAL,
   LegacyPageFormatError,
   emptyPageDocument,
-  legacyNoticeFor,
+  legacyPageRule,
 } from '~/utils/legacyPage.ts';
 import { pageIsLegacyInGit } from '~/utils/legacyPage.server.ts';
 import {
@@ -305,8 +305,15 @@ export const loader = async ({
   // from content.json. Only for someone who edits, not while a preview branch
   // is shown (a read-only render of git), and not while the classroom's
   // status makes this role read-only (`joinsLiveRoom`).
+  //
+  // Not for a page git holds as legacy HTML (utils/legacyPage.ts): collab
+  // refuses its room, so the editor would only show that refusal. Whether it
+  // is one is asked here first (the asset map, `pageIsLegacyInGit`) so such a
+  // page never asks the room for a snapshot; it is decided below by git's own
+  // read, which also catches a page the probe missed (the room refuses it, the
+  // snapshot fails, and git is read instead).
   const liveEnv = canEdit ? liveEditingEnv(page.classroom) : null;
-  const collab: CollabLoaderData | null =
+  const liveUserId =
     liveEnv &&
     authData?.userId &&
     joinsLiveRoom({
@@ -316,13 +323,20 @@ export const loader = async ({
       previewActive,
       mutationBlocked: Boolean(userRole && pageMutationBlocked(page.classroom, userRole)),
     })
-      ? await collabEditorData({
-          env: liveEnv,
-          pageId: page.id,
-          userId: authData.userId,
-          userLogin: authData.userLogin,
-        })
+      ? authData.userId
       : null;
+  const [liveCollab, legacyProbe]: [CollabLoaderData | null, boolean] =
+    liveEnv && liveUserId
+      ? await Promise.all([
+          collabEditorData({
+            env: liveEnv,
+            pageId: page.id,
+            userId: liveUserId,
+            userLogin: authData?.userLogin,
+          }),
+          pageIsLegacyInGit(page),
+        ])
+      : [null, false];
 
   // Live editing switched on but unreachable, with live edits not yet saved to
   // GitHub: the page opens read-only rather than in the git editor, whose
@@ -350,11 +364,12 @@ export const loader = async ({
   // URLs of the assets they reference and to render the page read-only until
   // the room has synced. If the collab server does not answer, git's copy
   // serves that purpose instead (the editor itself then shows it is offline).
+  // A page the probe above takes for legacy HTML is read from git only.
   // The last checkpoint covering the page, for the header's "saved to GitHub"
   // line until the room's own messages take over.
   let liveCheckpoint: LiveCheckpoint | null = null;
   const readContent = async () => {
-    if (collab && liveEnv) {
+    if (liveCollab && liveEnv && !legacyProbe) {
       try {
         // Short: a collab server that does not answer must not hold up the
         // page; git's copy is good enough for resolving assets.
@@ -406,23 +421,21 @@ export const loader = async ({
     viewerContent = emptyPageDocument();
   }
 
-  // Legacy in git, decided from git (or the asset map), never from the live
-  // room: a room answers with collab's converted blocks whether or not git
-  // has content.json, so its 'json' says nothing about what readers get.
-  // Asked only for staff, the only viewers it changes anything for.
+  // Legacy in git: decided by a read of git that returned the page as
+  // `index.html` only, never by the probe alone (a probe that says legacy
+  // while git has content.json keeps the live editor). Collab refuses such a
+  // page's room, so a live room's answer always means content.json.
   const staff = canEdit || sectionViewer.canViewDrafts;
-  const legacyInGit = !staff
-    ? false
-    : read.fromLiveRoom
-      ? await pageIsLegacyInGit(page)
-      : format === 'html';
-  // The notice: staff only; the live editor's copy when this viewer joins the
-  // room (their editor works as on any page), "can't be shown" otherwise.
-  const legacyNotice = legacyNoticeFor({ legacyInGit, staff, liveEditor: Boolean(collab) });
-  // No git editor for a legacy page: it would only offer to save the empty
-  // document over it. A live classroom's editor is never gated here, whether
-  // or not its snapshot answered: the room is seeded from the HTML.
-  const legacyReadOnly = legacyInGit && canEdit && !collab;
+  const legacyInGit = staff && !read.fromLiveRoom && format === 'html';
+  // One rule for the notice and the editor (utils/legacyPage.ts): staff get
+  // "can't be shown", and nobody gets an editor, live or git: the live room is
+  // refused and a git save would write the empty document over the page.
+  const { notice: legacyNotice, readOnly: legacyReadOnly } = legacyPageRule({
+    legacyInGit,
+    staff,
+    canEdit,
+  });
+  const collab: CollabLoaderData | null = legacyReadOnly ? null : liveCollab;
 
   // The shared reader (`PageReader`) or an editor: exactly the client's split
   // (route.tsx's `canEdit` is `canEdit && !preview && !liveUnavailable &&
@@ -707,9 +720,9 @@ export const loader = async ({
     // Assigned inside `readContent`, which TypeScript's narrowing does not follow.
     liveCheckpoint: liveCheckpoint as LiveCheckpoint | null,
     liveUnavailable,
-    // Staff only, on a page git still holds as legacy HTML: which notice
-    // ('live' | 'unshown'), and whether the git editor is withheld
-    // (utils/legacyPage.ts). Null / false for everyone else.
+    // On a page git still holds as legacy HTML (utils/legacyPage.ts): whether
+    // this viewer (staff) gets the "can't be shown" notice, and whether the
+    // editor (live or git) is withheld. False for everyone else.
     legacyNotice,
     legacyReadOnly,
     // The preview's added/edited block ids and removed count (preview only).

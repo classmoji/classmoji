@@ -9,7 +9,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { FRAGMENT } from '@classmoji/page-schema';
 import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 
-import type { CollabAdapter } from '../src/adapters/types.ts';
+import { CollabHttpError, type CollabAdapter } from '../src/adapters/types.ts';
 import {
   CLASSROOM_ID,
   connect,
@@ -302,14 +302,11 @@ describe('refusal reasons', () => {
     error.mockRestore();
   });
 
-  it("a legacy HTML page the converter cannot read is refused with 'legacy-html'", async () => {
+  it("a legacy HTML page is refused with 'legacy-html'", async () => {
     server.world.content.set(PAGE, 'html');
-    server.world.fail.convert = true;
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const a = open();
     await waitFor(() => a.authFailures.length > 0, 3000, 'refusal');
     expect(a.authFailures[0]).toBe('legacy-html');
-    error.mockRestore();
   });
 });
 
@@ -448,16 +445,33 @@ describe('outside pushes', () => {
     expect(typeof conflict!.at).toBe('string');
   });
 
-  it('keeps the live doc and answers 409 when no base is readable', async () => {
+  it('over unpushed edits: keeps the live doc and answers 409 when no base is readable', async () => {
     server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub wholesale')] });
     const a = open();
     await a.synced;
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(3, ', live'));
+    await waitFor(() => server.store.storeCalls > 0, 3000, 'edit stored');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
     error.mockRestore();
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('no-merge-base');
-    expect(plain(a.doc, 'p1')).toBe('One');
+    expect(plain(a.doc, 'p1')).toBe('One, live');
+  });
+
+  it('with nothing unpushed: no readable base reseeds from git (nothing to lose)', async () => {
+    server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub wholesale')] });
+    const a = open();
+    await a.synced;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, { sha: 'c2' });
+    error.mockRestore();
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'reseeded', reason: 'no-merge-base' });
+    await waitFor(() => a.closeCodes.includes(4409), 3000, 'room closed');
+    expect((await server.store.get('page', PAGE))!.last_conflict ?? null).toBeNull();
   });
 
   it('ignores our own push and a push whose file we already descend from', async () => {
@@ -615,6 +629,53 @@ describe('ephemeral changes (deck conflict notices)', () => {
     await new Promise(resolve => setTimeout(resolve, 150));
     expect(server.store.storeCalls).toBe(stores);
     expect(server.checkpoints.calls).toHaveLength(triggers);
+  });
+});
+
+describe('a deck outside push with no merge base', () => {
+  /** The deck adapter's refusal (`deck.ts` mergeExternal: no readable base). */
+  function noBaseDeck(): CollabAdapter<'deck'> {
+    const adapter = fakeDeckAdapter();
+    adapter.mergeExternal = async ctx => {
+      throw new CollabHttpError(409, {
+        error: 'no-merge-base',
+        message: `deck ${ctx.ref.docId}: no readable base for the outside push`,
+      });
+    };
+    return adapter;
+  }
+
+  it('a clean deck is reseeded and its room closed (4409)', async () => {
+    await server.close();
+    await setup({ deck: noBaseDeck() });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const a = open(roomName('deck', 'deck-1', 1), { schemaVersion: 1 });
+      await a.synced;
+      const res = await internal(server, 'POST', '/deck/deck-1/external', { sha: 'c7' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ action: 'reseeded', epoch: 2, reason: 'no-merge-base' });
+      await waitFor(() => a.closeCodes.includes(4409), 3000, '4409');
+      expect((await server.store.get('deck', 'deck-1'))?.last_conflict ?? null).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a deck with unpushed edits is kept: 409, recorded', async () => {
+    await server.close();
+    await setup({ deck: noBaseDeck() });
+    const a = open(roomName('deck', 'deck-1', 1), { schemaVersion: 1 });
+    await a.synced;
+    a.doc.transact(() => a.doc.getMap('slides').set('s1', 'edited'));
+    await waitFor(() => server.store.storeCalls === 1, 3000, 'edit stored');
+    const res = await internal(server, 'POST', '/deck/deck-1/external', { sha: 'c7' });
+    expect([res.status, res.body.error]).toEqual([409, 'no-merge-base']);
+    expect(a.closeCodes).not.toContain(4409);
+    expect((await server.store.get('deck', 'deck-1'))?.last_conflict).toMatchObject({
+      sha: 'c7',
+      reason: 'no-merge-base',
+    });
   });
 });
 

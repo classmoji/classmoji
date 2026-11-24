@@ -222,7 +222,8 @@ export default defineConfig({
     // jsdom cannot be bundled: it reads files beside its own modules at load
     // (`__dirname`-relative default stylesheet, `require.resolve` of the XHR
     // sync worker), so a bundled copy throws on import. It comes in through
-    // @blocknote/server-util (@classmoji/page-schema/html): the HTML -> blocks
+    // @blocknote/server-util (@classmoji/page-html, a workspace package the
+    // worker bundles like any other source): the HTML -> blocks
     // converter `page-import-convert` runs for a page create from markdown or
     // HTML (the web app and the MCP server no longer convert in process).
     // `content-checkpoint` no longer needs it (@classmoji/page-schema/server

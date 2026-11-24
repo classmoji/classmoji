@@ -9,8 +9,9 @@
 import * as Y from 'yjs';
 import { describe, expect, it, vi } from 'vitest';
 
-import { getServerEditor, htmlToPageBlocks, type PageBlock } from '../html.ts';
-import { blocksToYDoc, yDocToBlocks } from '../server.ts';
+import { blocksToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
+
+import { getServerEditor, htmlToPageBlocks, type PageBlock } from '../index.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

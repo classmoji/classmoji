@@ -8,11 +8,16 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
-import { parsePageContent, serializePageContent, type PageContent } from '../content.ts';
-import { FRAGMENT } from '../constants.ts';
-import { createPageSchema } from '../schema.ts';
-import { getServerEditor } from '../html.ts';
-import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import {
+  FRAGMENT,
+  createPageSchema,
+  parsePageContent,
+  serializePageContent,
+  type PageContent,
+} from '@classmoji/page-schema';
+import { pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
+
+import { getServerEditor } from '../index.ts';
 
 type AnyBlock = { type?: string; props?: Record<string, unknown>; children?: AnyBlock[] };
 
@@ -24,7 +29,13 @@ function walk(blocks: unknown[], visit: (block: AnyBlock) => void) {
 }
 
 const KITCHEN_SINK = parsePageContent(
-  readFileSync(new URL('./fixtures/kitchen-sink.content.json', import.meta.url), 'utf8')
+  readFileSync(
+    new URL(
+      '../../../page-schema/src/__tests__/fixtures/kitchen-sink.content.json',
+      import.meta.url
+    ),
+    'utf8'
+  )
 );
 
 describe('copyable', () => {

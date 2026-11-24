@@ -161,7 +161,9 @@ export async function loadSitePageContent(
 
   const jsonFile = await readFile(classroom, orgLogin, repo, `${page.content_path}/content.json`);
 
-  if (jsonFile?.content) {
+  // The file exists (null is a 404): it is the page. An empty or corrupt one
+  // is never read as legacy HTML.
+  if (jsonFile) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonFile.content);

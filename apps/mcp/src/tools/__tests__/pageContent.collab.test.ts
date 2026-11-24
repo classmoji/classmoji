@@ -401,6 +401,19 @@ describe('live reads', () => {
     ).rejects.toMatchObject({ code });
   });
 
+  it('an unreadable content.json reads from git, which names the problem', async () => {
+    route('GET', 'snapshot', () => ({ status: 422, body: { error: 'invalid-content' } }));
+    const { PageContentFormatError } = await vi.importActual<
+      typeof import('../../../../../packages/services/src/classmoji/pageContent.service.ts')
+    >('../../../../../packages/services/src/classmoji/pageContent.service.ts');
+    mocks.loadPageContent.mockRejectedValueOnce(
+      new PageContentFormatError('pages/p/content.json', 'sha-1')
+    );
+    await expect(
+      pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({ code: 'PAGE_CONTENT_UNREADABLE' });
+  });
+
   it('get returns selected live blocks with the version', async () => {
     const result = parse(
       await pageContentGetTool.handler(
@@ -812,7 +825,7 @@ describe('live write refusals', () => {
     expect((error as Error).message).toMatch(/mode: 'preview'/);
   });
 
-  it('422 legacy-html says the conversion failed, with no dead-end advice', async () => {
+  it('422 legacy-html says the page is in an old format, with no dead-end advice', async () => {
     route('POST', 'ops', () => ({ status: 422, body: { error: 'legacy-html' } }));
     const error = await pageContentApplyTool
       .handler(
@@ -822,8 +835,9 @@ describe('live write refusals', () => {
       .catch((e: unknown) => e);
     expect(error).toMatchObject({ code: 'LIVE_UNSUPPORTED' });
     const message = (error as Error).message;
-    expect(message).toMatch(/could not be converted/);
-    expect(message).not.toMatch(/mode: 'preview'|web editor/);
+    expect(message).toMatch(/old format/);
+    expect(message).toMatch(/nothing was changed/);
+    expect(message).not.toMatch(/mode: 'preview'|web editor|could not be converted/);
   });
 });
 
@@ -864,7 +878,7 @@ describe('preview mode with live editing', () => {
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 
-  it('refuses a NEW preview of a page git still holds as legacy HTML, pointing at live', async () => {
+  it('refuses a NEW preview of a page git still holds as legacy HTML (nothing edits it)', async () => {
     mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
     mocks.loadPageContent.mockResolvedValue(LEGACY_HTML);
     for (const ops of [[UPDATE_OP], [{ op: 'replace_all' as const, blocks: LIVE_BLOCKS() }]]) {
@@ -874,8 +888,9 @@ describe('preview mode with live editing', () => {
           CTX
         )
         .catch((e: unknown) => e);
-      expect(error).toMatchObject({ kind: 'invalid_params', code: 'LIVE_ONLY' });
-      expect((error as Error).message).toMatch(/mode: 'live'/);
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'LIVE_UNSUPPORTED' });
+      expect((error as Error).message).toMatch(/old format/);
+      expect((error as Error).message).not.toMatch(/mode: 'live'|already converted/);
     }
     expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
     expect(mocks.savePageContent).not.toHaveBeenCalled();
@@ -905,32 +920,33 @@ describe('legacy HTML read guidance', () => {
     mocks.loadPageContent.mockResolvedValue(LEGACY_HTML);
   });
 
-  it('live classroom, conversion failed: says editing is unavailable until fixed', async () => {
+  it('live classroom, collab refuses the page: not editable until it is converted', async () => {
     route('GET', 'snapshot', () => ({ status: 422, body: { error: 'legacy-html' } }));
     for (const tool of [pageContentOutlineTool, pageContentGetTool]) {
       const result = parse(await tool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX));
       expect(result.format).toBe('html');
-      expect(result.message).toMatch(/could not be converted for live editing/);
-      expect(result.message).not.toMatch(/mode: 'live'|replace_all/);
+      expect(result.message).toMatch(/old format/);
+      expect(result.message).toMatch(/until it is converted/);
+      expect(result.message).not.toMatch(/mode: 'live'|replace_all|could not be converted/);
     }
   });
 
-  it('live classroom, service down: says live editing converts it when the service is back', async () => {
+  it('live classroom, service down: the same guidance (live editing converts nothing)', async () => {
     route('GET', 'snapshot', () => 'network-error');
     const result = parse(
       await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
     );
     expect(result.live_unavailable).toBe(true);
-    expect(result.message).toMatch(/mode: 'live'/);
-    expect(result.message).not.toMatch(/could not be converted/);
+    expect(result.message).toMatch(/until it is converted/);
+    expect(result.message).not.toMatch(/mode: 'live'/);
   });
 
-  it('page_render of a page git holds as legacy HTML: nothing to render until edited or converted', async () => {
+  it('page_render of a page git holds as legacy HTML: nothing to render until converted', async () => {
     mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
     const { readPageForRender } = await import('../pageRender.ts');
     await expect(readPageForRender(PLAIN_DRAFT as never, 'main')).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: expect.stringContaining('has no content to render until it is edited'),
+      message: expect.stringContaining('has no content to render until it is converted'),
     });
     await expect(readPageForRender(PLAIN_DRAFT as never, 'main')).rejects.not.toMatchObject({
       message: expect.stringMatching(/open it once|does not convert/),

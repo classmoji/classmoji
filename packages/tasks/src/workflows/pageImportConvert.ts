@@ -1,5 +1,5 @@
 import { logger, schemaTask } from '@trigger.dev/sdk';
-import { htmlToPageBlocks } from '@classmoji/page-schema/html';
+import { htmlToPageBlocks } from '@classmoji/page-html';
 import { processMarkdownImport, wrapHtmlContent } from '@classmoji/services/markdown-importer';
 import {
   PAGE_IMPORT_CONVERT_TASK_ID,

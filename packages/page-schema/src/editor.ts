@@ -6,7 +6,7 @@ import { createPageSchema } from './schema.ts';
  * A plain BlockNote editor for the page schema, never mounted: what the Y.Doc
  * conversions in `@classmoji/page-schema/server` run on. It needs no DOM (no
  * `window`, no `document`), so it also runs in workerd. HTML parsing and
- * rendering need one and live in `@classmoji/page-schema/html`.
+ * rendering need one and live in `@classmoji/page-html`.
  * Import it through `@classmoji/page-schema/server`.
  */
 

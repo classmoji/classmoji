@@ -9,7 +9,7 @@ import { BlockNoteSchema, defaultBlockSpecs } from '@blocknote/core';
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { describe, expect, it } from 'vitest';
 
-import { getServerEditor } from '../html.ts';
+import { getServerEditor } from '../index.ts';
 
 const text = (value: string) => [{ type: 'text', text: value, styles: {} }];
 const item = (id: string, value: string, props: Record<string, unknown> = {}) => ({

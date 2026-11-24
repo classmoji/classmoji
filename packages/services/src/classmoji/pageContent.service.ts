@@ -165,9 +165,30 @@ async function readContentFile({
 }
 
 /**
+ * A `content.json` that exists but cannot be read as JSON. An error, never a
+ * legacy page: reading a converted page as legacy HTML would take its live
+ * editor away (collab refuses legacy pages) and show its readers an empty page.
+ * `code` is a caller error the MCP registry reports as `invalid_params`.
+ */
+export class PageContentFormatError extends Error {
+  readonly status = 500;
+  readonly code = 'PAGE_CONTENT_UNREADABLE';
+  readonly path: string;
+  readonly sha: string;
+  constructor(path: string, sha: string, options?: { cause?: unknown }) {
+    super(`This page's saved content (${path}) can't be read: it is not valid JSON.`, options);
+    this.name = 'PageContentFormatError';
+    this.path = path;
+    this.sha = sha;
+  }
+}
+
+/**
  * Load page content from the content repo.
  * Tries `content.json` first (BlockNote — `{ blocks, coverImage? }` wrapper or
- * legacy bare blocks array), falls back to `index.html` (legacy HTML).
+ * legacy bare blocks array), falls back to `index.html` (legacy HTML) ONLY when
+ * `content.json` does not exist. One that exists but does not parse throws
+ * `PageContentFormatError`.
  *
  * `format: 'none'` means BOTH files are absent — a 404 from each read — and
  * nothing else. Any other read failure REJECTS (see `readContentFile`). A
@@ -211,40 +232,47 @@ export async function loadPageContent(
     label: 'JSON',
   });
 
-  if (jsonResult?.content) {
+  // The file exists (null is a 404): it is the page, parsed or not.
+  if (jsonResult) {
+    const jsonPath = `${page.content_path}/content.json`;
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(jsonResult.content);
-
-      // New format: { blocks, coverImage? } wrapper
-      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.blocks)) {
-        return {
-          format: 'json',
-          blocks: parsed.blocks,
-          coverImage: parsed.coverImage || null,
-          sha: jsonResult.sha,
-        };
-      }
-
-      // Old format: bare blocks array
-      return {
-        format: 'json',
-        blocks: parsed,
-        coverImage: null,
-        sha: jsonResult.sha,
-      };
+      parsed = JSON.parse(jsonResult.content);
     } catch (err) {
-      // A file we READ but cannot parse still falls through to the HTML probe,
-      // exactly as the map-first path does — a corrupt content.json must not
-      // hide a legacy index.html. Unreadability is the other case, and it threw
-      // above rather than reaching here.
+      // Never the HTML probe: a page that has content.json is not legacy, and
+      // reading it as legacy would take its editor away. An error instead.
       console.error(
-        `[pageContent.loadPageContent] JSON parse failed for ${repo}/${page.content_path}/content.json:`,
+        `[pageContent.loadPageContent] JSON parse failed for ${repo}/${jsonPath}:`,
         err
       );
+      throw new PageContentFormatError(jsonPath, jsonResult.sha, { cause: err });
     }
+
+    // New format: { blocks, coverImage? } wrapper
+    if (
+      parsed &&
+      !Array.isArray(parsed) &&
+      Array.isArray((parsed as { blocks?: unknown }).blocks)
+    ) {
+      const wrapper = parsed as { blocks: unknown[]; coverImage?: unknown };
+      return {
+        format: 'json',
+        blocks: wrapper.blocks,
+        coverImage: (wrapper.coverImage as never) || null,
+        sha: jsonResult.sha,
+      };
+    }
+
+    // Old format: bare blocks array
+    return {
+      format: 'json',
+      blocks: parsed as never,
+      coverImage: null,
+      sha: jsonResult.sha,
+    };
   }
 
-  // Fallback: HTML (legacy format)
+  // Fallback: HTML (legacy format), only when content.json does not exist.
   const htmlResult = await readContentFile({
     gitOrganization,
     repo,
@@ -311,8 +339,9 @@ async function loadPageContentViaWorker(
       }
       return { format: 'json', blocks: parsed, coverImage: null, sha: json.sha };
     } catch {
-      // Malformed JSON falls through to the HTML probe, exactly as the GitHub
-      // path does — a corrupt content.json must not hide a legacy index.html.
+      // Unparsed: a miss, never the HTML probe (a page with content.json is
+      // not legacy). The caller's own read decides, and refuses a bad file.
+      return null;
     }
   }
 
@@ -500,13 +529,11 @@ export async function preparePageContent(
   // only a 404 counts as absence.
   //
   // A file we cannot PARSE is the deliberate exception: it has no cover we can
-  // preserve, and the save proceeds so the editor can repair it. That matters
-  // because a corrupt content.json loads as 'html' or 'none' (loadPageContent's
-  // parse failure falls through to the HTML probe), so the editor arrives here
-  // with no json sha and this save is the only way back short of git —
-  // refusing would leave the instructor unable to fix the page at all. The
-  // cover goes with the file it was stored in, and both the load and the line
-  // below record why.
+  // preserve, and the save proceeds, so a caller that rewrites the whole page
+  // (an agent's replace_all, a script) repairs it. The editors cannot get here
+  // for such a page: `loadPageContent` throws `PageContentFormatError` for it,
+  // so the page's loaders fail before an editor is handed one. The cover goes
+  // with the file it was stored in, and the line below records why.
   //
   // A caller that genuinely wants this file rewritten regardless passes
   // `coverImage` explicitly (`null` to remove it), which skips the re-read —
