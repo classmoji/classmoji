@@ -17,7 +17,6 @@ import * as crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
-import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import {
   DARK_MODE_SCRIPT_HASH,
   contentSecurityPolicy,
@@ -33,12 +32,6 @@ const request = (headers: Record<string, string> = {}): Request =>
   new Request('http://cs52.lvh.me/syllabus', { headers });
 
 const anonymous = () => request();
-
-/** The old static render's inline copy script, by hash: in NO site policy any more. */
-const SITE_COPY_SCRIPT_HASH = `'sha256-${crypto
-  .createHash('sha256')
-  .update(SITE_COPY_SCRIPT, 'utf8')
-  .digest('base64')}'`;
 
 const directive = (csp: string, name: string) =>
   csp.split('; ').find(part => part.startsWith(`${name} `));
@@ -218,9 +211,13 @@ test.describe('security headers', () => {
     expect(directive(csp, 'script-src')).toBe(`script-src 'self' ${DARK_MODE_SCRIPT_HASH}`);
   });
 
-  test('the old copy script is in no policy', () => {
-    for (const reader of [null, { assetsOrigin: 'https://x.test', connect: true }]) {
-      expect(contentSecurityPolicy(reader)).not.toContain(SITE_COPY_SCRIPT_HASH);
+  test('a document with no reader runs exactly the dark-mode script', () => {
+    // The class site's old static render also ran an inline copy script; its
+    // hash must not come back. Pinned exactly, so no other hash can either.
+    for (const reader of [null, undefined]) {
+      expect(directive(contentSecurityPolicy(reader), 'script-src')).toBe(
+        `script-src ${DARK_MODE_SCRIPT_HASH}`
+      );
     }
   });
 
@@ -304,7 +301,6 @@ test.describe('the CSP script hash tracks root.tsx', () => {
       'dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }}',
     ]);
     expect(siteDocument.match(/dangerouslySetInnerHTML/g)).toHaveLength(1);
-    expect(siteDocument).not.toContain('SITE_COPY_SCRIPT');
     // A script bundle on a site page would defeat the whole design.
     expect(siteDocument).not.toContain('<Scripts');
     expect(siteDocument).not.toContain('<ScrollRestoration');

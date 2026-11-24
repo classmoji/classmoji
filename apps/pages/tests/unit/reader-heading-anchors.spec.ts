@@ -1,10 +1,12 @@
 /**
  * The reader's `#fragment` ids (components/viewer/headingAnchors.ts) are the
- * class site's: the same slug and the same `-2` rule, for the same headings.
- * The oracle is the site's own render (`renderSitePage(...).headings`, ids
- * stamped on its HTML by `addHeadingAnchors`); the reader's ids come from the
- * ProseMirror document BlockNote builds from the same blocks (the page schema
- * without React, which the parity spec pins to the client's).
+ * ones the class site's old static render gave the same headings: the same
+ * slug and the same `-2` rule, so `#heading` links shared before the site
+ * moved to the reader island still land. The expected ids were taken from
+ * that render (`renderSitePage(...).headings`) before it was deleted; the
+ * reader's ids come from the ProseMirror document BlockNote builds from the
+ * same blocks (the page schema without React, which the parity spec pins to
+ * the client's).
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +15,6 @@ import { BlockNoteEditor } from '@blocknote/core';
 import { createPageSchema, normalizeCodeBlockContent } from '@classmoji/page-schema';
 
 import { headingAnchorTargets } from '~/components/viewer/headingAnchors.ts';
-import { renderSitePage, slugifyHeading as siteSlugify } from '~/site/render.server.ts';
 import { redactDocumentForViewer } from '~/utils/linkRedaction.server.ts';
 import { createHeadingIdAllocator, hashTarget, slugifyHeading } from '~/utils/headingAnchors.ts';
 
@@ -39,26 +40,49 @@ const KITCHEN_SINK = (
   ) as { blocks: unknown[] }
 ).blocks;
 
-const FIXTURES: Record<string, unknown[]> = {
-  'kitchen sink': KITCHEN_SINK,
-  'duplicates, empty, deep, toggle, checkable, nested, punctuation': [
-    heading(1, 'Grading'),
-    heading(2, 'Grading'),
-    heading(3, ''),
-    heading(2, 'Grading'),
-    heading(4, 'Too deep'),
-    heading(2, 'Week 1: Setup & Tools', { isToggleable: true }),
-    heading(2, 'Checkpoint', { checkable: true }),
-    {
-      type: 'bulletListItem',
-      props: {},
-      content: text('An item'),
-      children: [heading(3, 'Nested under a list')],
-    },
-    heading(1, '!!!'),
-    heading(1, '???'),
-    { type: 'paragraph', props: {}, content: text('Body text, not a heading.'), children: [] },
-  ],
+/** Each document, and the ids the class site's static render gave its headings. */
+const FIXTURES: Record<string, { blocks: unknown[]; siteIds: string[] }> = {
+  'kitchen sink': {
+    blocks: KITCHEN_SINK,
+    siteIds: [
+      'kitchen-sink',
+      'lists',
+      'toggle-heading',
+      'left-column',
+      'step-1-a-checkable-section',
+      'a-checkable-heading-inside-the-lock',
+    ],
+  },
+  'duplicates, empty, deep, toggle, checkable, nested, punctuation': {
+    blocks: [
+      heading(1, 'Grading'),
+      heading(2, 'Grading'),
+      heading(3, ''),
+      heading(2, 'Grading'),
+      heading(4, 'Too deep'),
+      heading(2, 'Week 1: Setup & Tools', { isToggleable: true }),
+      heading(2, 'Checkpoint', { checkable: true }),
+      {
+        type: 'bulletListItem',
+        props: {},
+        content: text('An item'),
+        children: [heading(3, 'Nested under a list')],
+      },
+      heading(1, '!!!'),
+      heading(1, '???'),
+      { type: 'paragraph', props: {}, content: text('Body text, not a heading.'), children: [] },
+    ],
+    siteIds: [
+      'grading',
+      'grading-2',
+      'grading-3',
+      'week-1-setup-tools',
+      'checkpoint',
+      'nested-under-a-list',
+      'section',
+      'section-2',
+    ],
+  },
 };
 
 /** The ids the reader's decoration gives the same document, in order. */
@@ -71,21 +95,21 @@ function readerIds(blocks: unknown[]): string[] {
 }
 
 test.describe('heading ids: the reader matches the class site', () => {
-  for (const [name, fixture] of Object.entries(FIXTURES)) {
-    test(name, async () => {
-      // The document both surfaces render: links redacted for a viewer who
-      // may open nothing, code blocks as plain text (the site render's own
-      // first steps).
+  for (const [name, { blocks: fixture, siteIds }] of Object.entries(FIXTURES)) {
+    test(name, () => {
+      // The document the reader is handed: links redacted for a viewer who
+      // may open nothing, code blocks as plain text (the payload's own steps).
       const blocks = normalizeCodeBlockContent(redactDocumentForViewer(fixture, () => null));
-      const site = await renderSitePage({ blocks, resolveLink: () => null });
       const ids = readerIds(blocks as unknown[]);
       expect(ids.length).toBeGreaterThan(0);
-      expect(ids).toEqual(site.headings.map(h => h.id));
+      expect(ids).toEqual(siteIds);
     });
   }
 
   test('the rule itself: one slug, the -2 numbering, empty headings use nothing up', () => {
-    expect(siteSlugify).toBe(slugifyHeading);
+    expect(slugifyHeading('!!!')).toBe('section');
+    expect(slugifyHeading('  Hello   World  ')).toBe('hello-world');
+    expect(slugifyHeading('Grading & Late Work')).toBe('grading-late-work');
     const next = createHeadingIdAllocator();
     expect(['Grading', 'Grading', '', '  ', 'Grading', '!!!', '???'].map(next)).toEqual([
       'grading',

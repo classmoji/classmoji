@@ -38,7 +38,6 @@ export {
   BLOCKNOTE_SHIKI_HIGHLIGHTER,
   codeBlockDisplayLanguage,
   codeBlockHighlightLanguage,
-  codeBlockLanguageName,
   createPageSchema,
   type PageSchema,
 } from './schema.ts';

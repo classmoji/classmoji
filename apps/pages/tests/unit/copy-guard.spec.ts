@@ -2,10 +2,8 @@
  * Copying turned off on a code or terminal block (`data-copyable="false"`):
  * a reader's copy that reaches such a block must not carry its text.
  *
- * Two implementations of one algorithm, both run here against the same
- * pages: `app/utils/copyGuard.ts` (the read-only editor view) and the class
- * site's inline script (`app/site/copyScript.ts`, ES5, no bundle). The site
- * script also owns the Copy buttons' clicks.
+ * `app/utils/copyGuard.ts`, which the reader (`BlockNoteViewer`) installs on
+ * every surface, the class site included.
  */
 
 import { test, expect } from '@playwright/test';
@@ -13,15 +11,11 @@ import { test, expect } from '@playwright/test';
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { copyableSelectionContent, fragmentText, installCopyGuard } from '~/utils/copyGuard.ts';
-import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 
-type Win = Window & typeof globalThis & { eval: (code: string) => unknown };
-const JSDOM = UntypedJSDOM as new (
-  html: string,
-  options?: { runScripts?: 'outside-only' }
-) => { window: Win };
+type Win = Window & typeof globalThis;
+const JSDOM = UntypedJSDOM as new (html: string) => { window: Win };
 
-/** A page as the site (or the read-only viewer, `editable` "false") draws it. */
+/** A page as the read-only viewer (`editable` "false") or an editor draws it. */
 function page(editable?: 'true' | 'false') {
   const attr = editable ? ` contenteditable="${editable}"` : '';
   return new JSDOM(
@@ -43,8 +37,7 @@ function page(editable?: 'true' | 'false') {
       '<div class="terminal-block"><div class="terminal-header"><span class="terminal-title">Terminal</span></div>' +
       '<div class="terminal-content"><pre><code id="term">rm -rf</code></pre></div></div></div>' +
       '<div class="bn-block-content" data-content-type="paragraph"><p id="after">After</p></div>' +
-      '</div></div></body>',
-    { runScripts: 'outside-only' }
+      '</div></div></body>'
   ).window;
 }
 
@@ -244,120 +237,5 @@ test.describe('installCopyGuard', () => {
     win.document.getElementById('before')!.dispatchEvent(drag);
     expect(drag.defaultPrevented).toBe(true);
     stop();
-  });
-});
-
-test.describe('the class site script', () => {
-  function sitePage() {
-    const win = page();
-    win.eval(SITE_COPY_SCRIPT);
-    return win;
-  }
-
-  test('rebuilds a copy across disabled blocks exactly as the viewer does', () => {
-    const win = sitePage();
-    for (const [from, to] of [
-      ['before', 'after'],
-      ['secret', 'after'],
-      ['before', 'term'],
-    ]) {
-      const expected = copyableSelectionContent(select(win, from, to))!;
-      const result = copy(win, win.document.body);
-      expect(result.prevented).toBe(true);
-      expect(result.reachedTarget).toBe(false);
-      expect(result.data).toEqual({ 'text/plain': expected.text, 'text/html': expected.html });
-    }
-    selectAll(win);
-    expect(copy(win, win.document.body).data['text/plain']).toBe(SPANNING_TEXT);
-  });
-
-  test('a selection wholly inside a disabled block copies nothing', () => {
-    const win = sitePage();
-    select(win, 'secret', 'secret');
-    const result = copy(win, win.document.body);
-    expect(result.prevented).toBe(true);
-    expect(result.data).toEqual({ 'text/plain': '', 'text/html': '' });
-  });
-
-  test('leaves an ordinary copy alone', () => {
-    const win = sitePage();
-    select(win, 'open', 'open');
-    expect(copy(win, win.document.body)).toEqual({
-      data: {},
-      prevented: false,
-      reachedTarget: true,
-    });
-  });
-
-  test('the Copy button copies its block, then shows the check for a moment', async () => {
-    const win = sitePage();
-    const written: string[] = [];
-    Object.defineProperty(win.navigator, 'clipboard', {
-      value: { writeText: async (text: string) => void written.push(text) },
-      configurable: true,
-    });
-    const button = win.document.querySelector('.bn-copy-button')!;
-    // The click lands on the icon, inside the button.
-    button.querySelector('svg')!.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    await expect.poll(() => button.hasAttribute('data-copied')).toBe(true);
-    expect(written).toEqual(['open()\n  next()']);
-    await expect.poll(() => button.hasAttribute('data-copied'), { timeout: 3000 }).toBe(false);
-  });
-
-  test('a refused Clipboard API falls back to execCommand (a framed site)', async () => {
-    const win = sitePage();
-    Object.defineProperty(win.navigator, 'clipboard', {
-      value: { writeText: async () => Promise.reject(new Error('NotAllowedError')) },
-      configurable: true,
-    });
-    let commanded = '';
-    Object.defineProperty(win.document, 'execCommand', {
-      value: (command: string) => {
-        commanded = command;
-        return true;
-      },
-      configurable: true,
-    });
-    const button = win.document.querySelector('.bn-copy-button')!;
-    (button as HTMLElement).click();
-    await expect.poll(() => button.hasAttribute('data-copied')).toBe(true);
-    expect(commanded).toBe('copy');
-    expect(win.document.querySelector('textarea')).toBeNull();
-  });
-
-  test('the collapse bar opens and closes its block; Copy still copies it all', async () => {
-    const win = sitePage();
-    const bar = win.document.querySelector('.bn-code-expand')!;
-    const pre = win.document.querySelector('pre[data-collapse]')!;
-    // The click lands on the label, inside the bar.
-    bar.querySelector('span')!.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    expect(pre.getAttribute('data-collapse')).toBe('expanded');
-    expect(bar.getAttribute('aria-expanded')).toBe('true');
-    (bar as HTMLElement).click();
-    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
-    expect(bar.getAttribute('aria-expanded')).toBe('false');
-
-    const written: string[] = [];
-    Object.defineProperty(win.navigator, 'clipboard', {
-      value: { writeText: async (text: string) => void written.push(text) },
-      configurable: true,
-    });
-    (win.document.querySelector('.bn-copy-button') as HTMLElement).click();
-    await expect.poll(() => written).toEqual(['open()\n  next()']);
-  });
-
-  test('a collapsed block the browser scrolls (find-in-page) opens', () => {
-    const win = sitePage();
-    const pre = win.document.querySelector('pre[data-collapse]') as HTMLElement;
-    // Scrolled sideways only: nothing to reveal.
-    pre.dispatchEvent(new win.Event('scroll'));
-    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
-    pre.scrollTop = 40;
-    pre.dispatchEvent(new win.Event('scroll'));
-    expect(pre.getAttribute('data-collapse')).toBe('expanded');
-    expect(win.document.querySelector('.bn-code-expand')!.getAttribute('aria-expanded')).toBe(
-      'true'
-    );
-    expect(pre.scrollTop).toBe(0);
   });
 });

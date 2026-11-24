@@ -1,5 +1,5 @@
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
-import { collectBlockAssetRefs } from '@classmoji/utils';
+import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 
 import type { ReaderComments } from '~/components/comments/types.ts';
 import { emptyPageDocument } from './legacyPage.ts';
@@ -284,18 +284,18 @@ export async function buildReaderPayload(
   };
 
   // 2. Links redacted: hidden ones (and unset file blocks) REMOVED, not blanked.
-  const linked = redactDocumentForViewer(sectioned, resolveLink, {
-    dropSchedule: !scheduleHref,
-    remove: true,
-  });
+  const linked = redactDocumentForViewer(sectioned, resolveLink, { dropSchedule: !scheduleHref });
 
   // 3. Code blocks as plain text (BlockNote 0.55 will not load a link inside one).
   const normalized = normalizeCodeBlockContent(linked);
 
   // 4. Media that could not be resolved goes: a `media:` reference with no
   //    display URL (unanswered, or too malformed to ask about), or one that
-  //    resolved only to the "missing" placeholder. A block left holding one
-  //    would draw BlockNote's "Add file" button or a broken element. A repo
+  //    resolved only to the "missing" placeholder. A media block left
+  //    holding one would draw BlockNote's "Add file" button or a broken
+  //    element, so it goes; any other block keeps its place with the
+  //    reference emptied, on every asset prop (`mapBlockAssetRefs`: `url`,
+  //    a profile's `imageUrl`), so no `media://` id ships to a reader. A repo
   //    path with no entry stays: the delivery layer is off and the path is
   //    the URL.
   const unresolved = (ref: unknown): boolean => {
@@ -304,12 +304,15 @@ export async function buildReaderPayload(
     const shown = resolved.assets[ref];
     return typeof shown === 'string' && hasMediaPlaceholderShape(shown);
   };
-  const finalBlocks = removeBlocks(
-    normalized,
-    block =>
-      typeof block.type === 'string' &&
-      MEDIA_BLOCK_TYPES.has(block.type) &&
-      unresolved(block.props?.url)
+  const finalBlocks = mapBlockAssetRefs(
+    removeBlocks(
+      normalized,
+      block =>
+        typeof block.type === 'string' &&
+        MEDIA_BLOCK_TYPES.has(block.type) &&
+        unresolved(block.props?.url)
+    ),
+    ref => (unresolved(ref) ? '' : ref)
   );
   const finalCover = cover && unresolved(cover.url) ? null : cover;
 

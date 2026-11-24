@@ -27,10 +27,8 @@ export const AssetSrcSetContext = createContext<AssetSrcSets>(NO_SRC_SETS);
 /**
  * The whole map, for a block to look itself up in.
  *
- * The lookup itself lives in `responsiveImageAttrs`, shared with the class
- * site's static renders — the two surfaces key the map differently (stored
- * reference here, signed URL there) and must not also drift on what a hit
- * means.
+ * The lookup itself lives in `responsiveImageAttrs`, shared by the image and
+ * profile blocks, so they cannot drift on what a hit means.
  */
 export function useAssetSrcSets(): AssetSrcSets {
   return useContext(AssetSrcSetContext);

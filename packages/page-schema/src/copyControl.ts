@@ -3,9 +3,9 @@
  *
  * Readers get a Copy button on a block whose `copyable` prop is on (and
  * nothing on one where it is off); editors get a toggle for the prop in the
- * same place. The vanilla code block (schema.ts), the React terminal block
- * (apps/pages) and the class site's static renders all draw it from the
- * markup here, so the three look and behave alike.
+ * same place. The vanilla code block (schema.ts) and the React terminal block
+ * (apps/pages) both draw it from the markup here, so the two look and behave
+ * alike.
  *
  * DOM is touched only in the builders and click paths, never at import: the
  * collab server and the git worker import this package without a DOM.

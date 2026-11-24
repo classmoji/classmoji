@@ -1,15 +1,14 @@
 /**
  * The `#fragment` ids a page's headings get, one rule for every surface.
  *
- * The class site's static render stamps them on its h1-h3 after serializing
- * (`addHeadingAnchors` in `site/render.server.ts`), and the shared reader puts
- * the same ids on its headings with a ProseMirror decoration
- * (`components/viewer/headingAnchors.ts`). A link someone copied from one
- * surface must land on the same heading on the other, so both read the slug
- * and the duplicate rule from here.
+ * The shared reader puts them on its h1-h3 with a ProseMirror decoration
+ * (`components/viewer/headingAnchors.ts`) on every surface (the app, the class
+ * site, the MCP's page render), so a link copied from one lands on the same
+ * heading on the others. The ids are the ones the class site's old static
+ * render stamped, so `#fragment` links shared before the reader island keep
+ * working.
  *
- * Pure and dependency-free: the server render, the browser and the unit suite
- * all import it.
+ * Pure and dependency-free: the browser and the unit suite both import it.
  */
 
 /** Slugify heading text into a stable, URL-safe fragment id. */

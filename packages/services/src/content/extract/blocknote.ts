@@ -1,16 +1,12 @@
 /**
  * BlockNote `content.json` → plain text, for the content index.
  *
- * A prop-aware depth-first walker, NOT a render-and-strip. The renderer
- * (`ServerBlockNoteEditor`, driven through `withServerBlockNoteLock`,
- * `apps/pages/app/site/render.server.ts:51`) swaps `globalThis.window` and
- * `globalThis.document` for a JSDOM pair while it serializes; an indexer that
- * runs on every save would contend for that lock with live page renders, and
- * two of the shims around it (`installStorageShim`, `drainReactWork`) exist
- * because failures there surface as uncaught exceptions rather than as failed
- * renders. Rendering to HTML and stripping tags is also lossy in exactly the
- * wrong place: BlockNote's HTML serializer writes every block prop onto the
- * wrapper as a `data-*` attribute (`apps/pages/app/site/redact.server.ts:11-13`),
+ * A prop-aware depth-first walker, NOT a render-and-strip. BlockNote's server
+ * renderer (`ServerBlockNoteEditor`) swaps `globalThis.window` and
+ * `globalThis.document` for a JSDOM pair while it serializes, which an indexer
+ * that runs on every save has no business doing. Rendering to HTML and
+ * stripping tags is also lossy in exactly the wrong place: BlockNote's HTML
+ * serializer writes every block prop onto the wrapper as a `data-*` attribute,
  * so a tag strip deletes the prop text this file exists to keep.
  *
  * What the walker fixes, relative to `collectText`
@@ -153,12 +149,10 @@ function parseNavGridReferences(value: unknown): ContentReference[] {
  * are NOT here, deliberately. They are denormalized copies of ANOTHER
  * document's title, and this document's draft state says nothing about that
  * one's: a published homepage that links to a draft would otherwise put "Exam 2
- * Solutions" into a student-visible snippet. The live site draws the same line
- * — `apps/pages/app/site/redact.server.ts:9` documents the leak, `:67` strips
- * unauthorized page links, `:76` filters nav-grid entries — and resolves each
- * title from the DB per viewer rather than trusting the stored copy
- * (`viewerSchema.server.ts:355-363`: "the denormalized title in the block props
- * is a stale copy we must not print on the visitor's behalf"). So the extractor
+ * Solutions" into a student-visible snippet. The reader draws the same line
+ * (`apps/pages/app/utils/linkRedaction.server.ts` documents the leak, strips
+ * unauthorized page links and filters nav-grid entries) and resolves each
+ * title from the DB per viewer rather than trusting the stored copy. So the extractor
  * returns the TARGETS in `references` and none of their labels in `text`; a
  * caller that has a viewer context can resolve and authorize them later.
  *

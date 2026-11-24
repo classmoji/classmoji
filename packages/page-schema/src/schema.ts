@@ -409,15 +409,6 @@ export function codeBlockHighlightLanguage(language: unknown): string {
 }
 
 /**
- * The name the language select shows for a stored `language` (`js` ->
- * `JavaScript`, anything unknown -> `Plain Text`). The class site prints it
- * as plain text where the editor has the select.
- */
-export function codeBlockLanguageName(language: unknown): string {
-  return CODE_LANGUAGES[codeBlockDisplayLanguage(language)].name;
-}
-
-/**
  * The code block every page schema uses: BlockNote's, with the language
  * select tolerant of any stored language, a `copyable` prop and a
  * `collapsible` prop.

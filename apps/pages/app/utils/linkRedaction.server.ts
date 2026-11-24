@@ -8,13 +8,11 @@ import {
  * Strip references to pages this viewer may not see, BEFORE the document
  * leaves the server.
  *
- * Shared by the class site's static render (`site/render.server.ts`, through
- * `site/redact.server.ts`) and the reader payload (`readerPayload.server.ts`),
- * which hands the same document to the client reader on every surface.
+ * Used by the reader payload (`readerPayload.server.ts`), which hands the same
+ * document to the client reader on every surface, the class site included.
  *
- * A render override is not enough on its own. BlockNote's HTML serializer
- * writes every block prop onto the block wrapper as a `data-*` attribute, and
- * the reader payload ships the props themselves as JSON — so a `pageLink`
+ * A render override is not enough on its own. The reader payload ships the
+ * block props themselves as JSON — so a `pageLink`
  * block whose render deliberately draws nothing still carries
  * `pageTitle: "Exam 2 Solutions"`, and a `navGrid` its entire authored
  * `entries` JSON including the hidden titles. That is precisely the leak the
@@ -51,18 +49,9 @@ export interface RedactionOptions {
   /**
    * Drop every page-directory schedule entry. The reader payload sets it when
    * there is no schedule to link to (no site, or its schedule is off), so a
-   * tile never points somewhere that 404s. The class site's static render
-   * does not pass it: its schema drops the tile itself (`showSchedule`).
+   * tile never points somewhere that 404s.
    */
   dropSchedule?: boolean;
-  /**
-   * REMOVE a redacted-away block instead of leaving an empty paragraph in its
-   * place (the reader payload: no blank line where a hidden link was). Its
-   * children, if any, take its place; a column left empty goes, and a column
-   * list left with fewer than two columns is unwrapped (`removeBlocks`).
-   * Without it (the class site's static render) the old replacement stands.
-   */
-  remove?: boolean;
 }
 
 /** A BlockNote block, loosely typed — this walks arbitrary stored documents. */
@@ -73,10 +62,11 @@ type LooseBlock = {
   [key: string]: unknown;
 };
 
-/** What a redacted-away block becomes: an empty paragraph, which renders as nothing. */
-const emptyParagraph = (): LooseBlock => ({ type: 'paragraph', content: [] });
-
-/** Marks a block to remove (its own children are lifted into its place). */
+/**
+ * Marks a redacted-away block to REMOVE, not blank (no empty line where a
+ * hidden link was): its own children are lifted into its place, a column left
+ * empty goes, and a column list left with fewer than two columns is unwrapped.
+ */
 const REMOVE = Symbol('remove');
 
 /**
@@ -98,11 +88,10 @@ function redactBlock(
     : block.children;
   const childrenChanged = children !== block.children;
   const same = (): LooseBlock => (childrenChanged ? { ...block, children } : block);
-  const drop = (): LooseBlock | typeof REMOVE => (options.remove ? REMOVE : emptyParagraph());
 
   if (typeof block.type === 'string' && FILE_BLOCK_TYPES.has(block.type)) {
     // Exactly the condition BlockNote's own wrapper branches on.
-    if (String(block.props?.url ?? '') === '') return drop();
+    if (String(block.props?.url ?? '') === '') return REMOVE;
     return same();
   }
 
@@ -110,7 +99,7 @@ function redactBlock(
     const pageId = String(block.props?.pageId ?? '');
     const link = pageId ? resolveLink(pageId) : null;
     // Drop the whole block: its props are the leak, not its markup.
-    if (!link) return drop();
+    if (!link) return REMOVE;
     // A visible link carries the page's live title, not the copy cached when
     // it was authored (which may name what the page used to be called), and
     // only the props the block defines (`pageLinkConfig`: pageId, pageTitle).
@@ -142,8 +131,8 @@ function redactBlock(
 }
 
 /**
- * A list of blocks redacted; a removed block's children take its place. In
- * remove mode a `columnList` is then repaired the way the editor (and the
+ * A list of blocks redacted; a removed block's children take its place. A
+ * `columnList` is then repaired the way the editor (and the
  * collab server's `unwrapBrokenColumnLists`) repairs one: a column with no
  * blocks left goes, and a list with fewer than two columns is unwrapped, its
  * remaining blocks in its place. BlockNote refuses a column list with fewer
@@ -172,7 +161,7 @@ function redactList(
       out.push(...lifted);
       continue;
     }
-    if (options.remove && next.type === 'columnList') {
+    if (next.type === 'columnList') {
       const repaired = repairColumnList(next);
       if (repaired !== next) {
         changed = true;
@@ -222,7 +211,7 @@ export function redactDocumentForViewer(
 
 /**
  * Remove every block `remove` names (its children take its place), with the
- * same column repair as the redaction's remove mode. Non-mutating. For the
+ * same column repair as the redaction. Non-mutating. For the
  * reader's last pass: media that could not be resolved.
  */
 export function removeBlocks(blocks: unknown, remove: (block: LooseBlock) => boolean): unknown[] {

@@ -8,8 +8,8 @@
  *  - `/api/media-download` and the loader — they need Postgres to run, so
  *    their gates are pinned in ORDER, read from source (the
  *    `media-editor-gates.spec.ts` approach);
- *  - the class site — rendered for real, with and without downloads, because
- *    an anonymous render must come out byte-for-byte as it did.
+ *  - the reader's lookup — a button only for a ref the map says yes to, on
+ *    every surface (the class site mounts the same reader).
  */
 
 import { readFileSync } from 'node:fs';
@@ -23,10 +23,9 @@ import {
   downloadableByRef,
   isDownloadable,
   mediaDownloadHref,
-  siteDownloadsFor,
   type DownloadableRecord,
 } from '~/utils/mediaDownloads.ts';
-import { renderSitePage } from '~/site/render.server.ts';
+import { mediaDownloadLookup, NO_MEDIA_DOWNLOADS } from '~/hooks/useMediaDownloads.ts';
 import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 
@@ -37,7 +36,6 @@ const ROUTE_SOURCE = source('../../app/routes/api.media-download/route.ts');
 const LOADER_SOURCE = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
 const SITE_RENDER_SOURCE = source('../../app/site/pageRender.server.ts');
 
-const CLASSROOM = '11111111-2222-4333-8444-555555555555';
 const VIDEO_ID = '0b6c1d3e-8f2a-4c5b-9d7e-1a2b3c4d5e6f';
 const LOCKED_VIDEO_ID = '1b6c1d3e-8f2a-4c5b-9d7e-1a2b3c4d5e6f';
 const PDF_ID = '2b6c1d3e-8f2a-4c5b-9d7e-1a2b3c4d5e6f';
@@ -147,24 +145,6 @@ test.describe('where the button points', () => {
     expect(mediaDownloadHref('page-1', ref(PDF_ID), 'https://pages.classmoji.io')).toBe(
       `https://pages.classmoji.io/api/media-download?pageId=page-1&ref=media%3A%2F%2F${PDF_ID}`
     );
-  });
-
-  test('the site map is keyed by the signed URL each allowed ref became', () => {
-    const signed = (id: string) => `https://content.test/c/x/media/${id}/orig.pdf?sig=1`;
-    const urls = new Map([
-      [ref(PDF_ID), signed(PDF_ID)],
-      [ref(LOCKED_VIDEO_ID), signed(LOCKED_VIDEO_ID)],
-    ]);
-    const map = siteDownloadsFor(
-      { [ref(PDF_ID)]: true, [ref(LOCKED_VIDEO_ID)]: false, [ref(AUDIO_ID)]: true },
-      r => urls.get(r),
-      'page-1',
-      'https://pages.test'
-    );
-    // Not allowed: no entry. Not rewritten (nothing to hang a button on): none.
-    expect(map).toEqual({
-      [signed(PDF_ID)]: mediaDownloadHref('page-1', ref(PDF_ID), 'https://pages.test'),
-    });
   });
 });
 
@@ -287,79 +267,39 @@ test.describe('the page loader', () => {
   });
 });
 
-test.describe('the class site', () => {
-  const ORIGIN = 'https://content.classmoji.io';
-  const signed = (id: string, variant: string) =>
-    `${ORIGIN}/c/${CLASSROOM}/media/${id}/${variant}?p=week&v=0&exp=1&sig=abc`;
-  const blocks = [
-    { type: 'video', props: { url: signed(VIDEO_ID, 'web-0123456789ab.mp4'), caption: '' } },
-    { type: 'file', props: { url: signed(PDF_ID, 'orig.pdf'), name: 'notes.pdf' } },
-    { type: 'audio', props: { url: signed(AUDIO_ID, 'orig.mp3'), name: 'talk.mp3' } },
-  ];
-  const resolveLink = () => null;
+test.describe("the reader's lookup", () => {
+  // The client half of the gate (hooks/useMediaDownloads.ts): the reader on
+  // every surface, the class site included, draws a Download link only for a
+  // ref the page's map says yes to. Replaces the class site's static-render
+  // cases ("a file not in the map gets no link, even in a member render").
+  const downloads = {
+    [ref(VIDEO_ID)]: true,
+    [ref(LOCKED_VIDEO_ID)]: false,
+    [ref(PDF_ID)]: true,
+  };
 
-  let previousOrigin: string | undefined;
-  test.beforeEach(() => {
-    previousOrigin = process.env.CONTENT_DELIVERY_ORIGIN;
-    process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
-  });
-  test.afterEach(() => {
-    if (previousOrigin === undefined) delete process.env.CONTENT_DELIVERY_ORIGIN;
-    else process.env.CONTENT_DELIVERY_ORIGIN = previousOrigin;
-  });
-
-  test('a member sees a plain Download link on each file they may download', async () => {
-    const href = (id: string) =>
-      mediaDownloadHref('page-1', ref(id), 'https://pages.test').replace(/&/g, '&amp;');
-    const { html } = await renderSitePage({
-      blocks,
-      resolveLink,
-      downloads: {
-        [signed(VIDEO_ID, 'web-0123456789ab.mp4')]: mediaDownloadHref(
-          'page-1',
-          ref(VIDEO_ID),
-          'https://pages.test'
-        ),
-        [signed(PDF_ID, 'orig.pdf')]: mediaDownloadHref(
-          'page-1',
-          ref(PDF_ID),
-          'https://pages.test'
-        ),
-        [signed(AUDIO_ID, 'orig.mp3')]: mediaDownloadHref(
-          'page-1',
-          ref(AUDIO_ID),
-          'https://pages.test'
-        ),
-      },
-    });
-    expect(html.match(/class="media-download-link"/g)).toHaveLength(3);
-    for (const id of [VIDEO_ID, PDF_ID, AUDIO_ID]) expect(html).toContain(href(id));
-    // The file and the player still render as they did.
-    expect(html).toContain('notes.pdf');
-    expect(html).toContain('<audio');
-    expect(html).toContain('<video');
+  test('a link only for a ref the map says yes to, on the origin it was given', () => {
+    const lookup = mediaDownloadLookup('page-1', downloads, 'https://pages.test');
+    expect(lookup(ref(VIDEO_ID))).toBe(
+      mediaDownloadHref('page-1', ref(VIDEO_ID), 'https://pages.test')
+    );
+    expect(lookup(ref(PDF_ID))).toBe(
+      mediaDownloadHref('page-1', ref(PDF_ID), 'https://pages.test')
+    );
+    // Refused, or not in the map at all: no link.
+    expect(lookup(ref(LOCKED_VIDEO_ID))).toBeNull();
+    expect(lookup(ref(AUDIO_ID))).toBeNull();
+    expect(lookup(ref(GONE_ID))).toBeNull();
+    // A signed URL is not a key: the map holds stored references only.
+    expect(lookup(`https://content.test/c/x/media/${PDF_ID}/orig.pdf?sig=1`)).toBeNull();
   });
 
-  test('a file not in the map gets no link, even in a member render', async () => {
-    const { html } = await renderSitePage({
-      blocks,
-      resolveLink,
-      downloads: {
-        [signed(PDF_ID, 'orig.pdf')]: mediaDownloadHref(
-          'page-1',
-          ref(PDF_ID),
-          'https://pages.test'
-        ),
-      },
-    });
-    expect(html.match(/class="media-download-link"/g)).toHaveLength(1);
-  });
-
-  test('a render with no downloads is exactly the render there was before', async () => {
-    const without = await renderSitePage({ blocks, resolveLink });
-    const empty = await renderSitePage({ blocks, resolveLink, downloads: {} });
-    expect(without.html).not.toContain('media-download-link');
-    expect(empty.html).toBe(without.html);
+  test('no map (a non-member, the editor): no links at all', () => {
+    for (const none of [null, undefined]) {
+      expect(mediaDownloadLookup('page-1', none)).toBe(NO_MEDIA_DOWNLOADS);
+    }
+    expect(mediaDownloadLookup('page-1', {})(ref(PDF_ID))).toBeNull();
+    expect(NO_MEDIA_DOWNLOADS(ref(PDF_ID))).toBeNull();
   });
 });
 

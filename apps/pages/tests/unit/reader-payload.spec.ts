@@ -4,8 +4,8 @@
  * exact: viewer A vs B, classroom X vs Y, a signed-out reader, staff, an
  * impersonated session; the URL, download and link maps only ever hold what
  * the shipped document references; nothing from a stripped locked body
- * appears anywhere in the payload (its description included); the redaction
- * the class site's render applies (site-render.spec.ts) applies here too.
+ * appears anywhere in the payload (its description included); the link
+ * redaction cases the class site's old static render was held to apply here.
  */
 import { test, expect } from '@playwright/test';
 import { collectBlockAssetRefs } from '@classmoji/utils';
@@ -23,7 +23,6 @@ import { linkedPageIds, redactDocumentForViewer } from '~/utils/linkRedaction.se
 import { NO_SECTION_VIEWER, type SectionViewerAccess } from '~/utils/pageSections.server.ts';
 import type { ReaderPayload } from '~/utils/readerPayload.ts';
 import { describeBlocks, navGridTiles, pageLinkRender } from '~/utils/readerPayload.ts';
-import { redactDocumentForViewer as siteRedact } from '~/site/redact.server.ts';
 import { inAppPageHref } from '~/components/reader/readerSurface.ts';
 
 // ── Fixture: classroom X's page, linking around ──────────────────────────────
@@ -792,11 +791,45 @@ test.describe('buildReaderPayload — hardening', () => {
             children: [],
           },
           { id: 'audio-ok', type: 'audio', props: { url: 'pages/x/a.mp3' }, children: [] },
+          // A profile's photo is an asset prop too (`imageUrl`): the card
+          // stays, its unresolved photo is emptied.
+          {
+            id: 'profile-placeholder',
+            type: 'profile',
+            props: { name: 'Ada', imageUrl: `media://${UUID_A}` },
+            children: [],
+          },
+          {
+            id: 'profile-unanswered',
+            type: 'profile',
+            props: { name: 'Grace', imageUrl: 'media://unresolvable' },
+            children: [],
+          },
+          {
+            id: 'profile-ok',
+            type: 'profile',
+            props: { name: 'Alan', imageUrl: 'pages/x/alan.png' },
+            children: [],
+          },
         ],
       }),
       deps
     );
-    expect(payload.content.map(b => (b as { id: string }).id)).toEqual(['audio-ok']);
+    expect(payload.content.map(b => (b as { id: string }).id)).toEqual([
+      'audio-ok',
+      'profile-placeholder',
+      'profile-unanswered',
+      'profile-ok',
+    ]);
+    const photos = payload.content
+      .filter(b => (b as { type: string }).type === 'profile')
+      .map(b => (b as { props: { name: string; imageUrl: string } }).props);
+    expect(photos).toEqual([
+      { name: 'Ada', imageUrl: '' },
+      { name: 'Grace', imageUrl: '' },
+      { name: 'Alan', imageUrl: 'pages/x/alan.png' },
+    ]);
+    expect(wire(payload)).not.toContain('media://');
     expect(payload.assets[`media://${UUID_A}`]).toBeUndefined();
     expect(Object.keys(payload.mediaDownloads)).toEqual([]);
   });
@@ -847,11 +880,7 @@ test.describe('no classroom slug: no link, no navigation', () => {
   });
 });
 
-test.describe('redaction parity with the class site (site-render.spec.ts cases, on JSON)', () => {
-  test('the site keeps importing the same redaction', () => {
-    expect(siteRedact).toBe(redactDocumentForViewer);
-  });
-
+test.describe('link redaction (the class site’s old static-render cases, on JSON)', () => {
   test('hidden pageLink and navGrid entries are dropped with their titles; nesting does not hide them', () => {
     const nested = [
       {
@@ -887,7 +916,7 @@ test.describe('redaction parity with the class site (site-render.spec.ts cases, 
     expect(out).toContain('Week 1');
   });
 
-  test('without dropSchedule (the site render) the schedule entry stays', () => {
+  test('without dropSchedule (a site that serves /schedule) the schedule entry stays', () => {
     const grid = [{ type: 'navGrid', props: { entries: navEntries([{ kind: 'schedule' }]) } }];
     expect(JSON.stringify(redactDocumentForViewer(grid, () => null))).toContain('schedule');
     expect(
