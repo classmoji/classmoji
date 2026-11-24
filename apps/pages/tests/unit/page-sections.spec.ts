@@ -1688,13 +1688,27 @@ test.describe('the page loader', () => {
     // …and before every consumer of it.
     for (const consumer of [
       'await resolveDocumentAssets(',
-      'await loadMediaDownloads(page.classroom.id, viewerContent',
       'previewBlockChanges(',
       'sectionStatsFor(viewerContent',
-      '    content: viewerContent,',
+      '    content: reader ? null : viewerContent,',
     ]) {
       const at = loaderBody.indexOf(consumer);
       expect(at, consumer).toBeGreaterThan(redact);
+    }
+    // The reader payload strips them itself, first, before anything else reads
+    // the document (leak cases: reader-payload.spec.ts).
+    const BUILDER = source('../../app/utils/readerPayload.server.ts');
+    const builderBody = BUILDER.slice(BUILDER.indexOf('export async function buildReaderPayload'));
+    const strip = builderBody.indexOf('const sectioned = documentForReader(stored');
+    expect(strip).toBeGreaterThan(0);
+    for (const consumer of [
+      'linkedPageIds(sectioned)',
+      'redactDocumentForViewer(sectioned',
+      'deps.resolveAssets(ctx, normalizeCodeBlockContent(sectioned)',
+      'await deps.loadMediaDownloads(classroom.id, finalBlocks',
+      'describeBlocks(finalBlocks)',
+    ]) {
+      expect(builderBody.indexOf(consumer), consumer).toBeGreaterThan(strip);
     }
     // Reveal-all and edit come from the one shared reader rule.
     expect(loaderBody).toContain('const canEdit = sectionViewer.canEditAnyState;');
@@ -1741,7 +1755,13 @@ test.describe('the page loader', () => {
   test('a sign-in link goes only to a signed-out reader', () => {
     // `url`, React Router's normalized one: `request.url` is the `.data` fetch
     // on a client-side navigation, not the page.
-    expect(loaderBody).toContain('signInUrl: authData?.userId ? null : signInUrlFor(url.href),');
+    // Built by the reader payload for a viewer the loader passes only when
+    // signed in.
+    expect(loaderBody).toContain('signInUrl: () => signInUrlFor(url.href),');
+    expect(loaderBody).toMatch(/const readerViewer: ReaderViewer \| null = authData\?\.userId/);
+    expect(source('../../app/utils/readerPayload.server.ts')).toContain(
+      'signInUrl: viewer ? null : input.signInUrl(),'
+    );
   });
 });
 

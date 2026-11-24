@@ -243,22 +243,35 @@ test.describe('the role a download map is drawn for', () => {
 });
 
 test.describe('the page loader', () => {
+  // The map is built by the reader payload (utils/readerPayload.server.ts) for
+  // the viewer the loader hands it; the leak cases run in reader-payload.spec.ts.
+  const BUILDER_SOURCE = source('../../app/utils/readerPayload.server.ts');
+
   test('ships the map only to a member looking at the viewer, where the class can sign', () => {
-    expect(LOADER_SOURCE).toContain('authData?.userId && userRole && viewerShown && assetCtx');
-    expect(LOADER_SOURCE).toContain(
-      'await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)'
+    // A signed-in viewer with a role here, where this view draws buttons, and
+    // the classroom can sign at all.
+    expect(BUILDER_SOURCE).toContain(
+      'viewer && viewer.access.role && options.offerDownloads !== false && ctx'
     );
-    expect(LOADER_SOURCE).toMatch(/\n {4}mediaDownloads,\n/);
+    expect(BUILDER_SOURCE).toContain(
+      'await deps.loadMediaDownloads(classroom.id, finalBlocks, downloadRole)'
+    );
+    expect(BUILDER_SOURCE).toMatch(/\n {4}mediaDownloads,\n/);
+    // "Looking at the viewer": the reader of a page, or staff on a preview.
+    expect(LOADER_SOURCE).toContain('const viewerShown = !canEdit || previewActive;');
+    expect(LOADER_SOURCE).toContain('offerDownloads: viewerShown,');
+    // The viewer is signed in, with the loader's one reader-rule read.
+    expect(LOADER_SOURCE).toMatch(/const readerViewer: ReaderViewer \| null = authData\?\.userId/);
+    expect(LOADER_SOURCE).toContain('access: sectionViewer,');
   });
 
   test('draws it for the accepted-only role the download route reads', () => {
-    const map = LOADER_SOURCE.slice(LOADER_SOURCE.indexOf('const downloadRole ='));
+    const map = BUILDER_SOURCE.slice(BUILDER_SOURCE.indexOf('const downloadRole ='));
     // The highest ACCEPTED role, from the loader's one shared reader-rule read.
-    expect(map).toMatch(/downloadMapRole\(sectionViewer\.acceptedRole, page\.is_draft\)/);
+    expect(map).toMatch(/downloadMapRole\(viewer\.access\.acceptedRole, page\.is_draft\)/);
     // Never the role that opened the page.
-    expect(LOADER_SOURCE).not.toContain(
-      'loadMediaDownloads(page.classroom.id, viewerContent, userRole)'
-    );
+    expect(BUILDER_SOURCE).not.toMatch(/loadMediaDownloads\([^)]*viewer\.access\.role\)/);
+    expect(LOADER_SOURCE).not.toContain('loadMediaDownloads(');
   });
 
   test('the class site asks only for a signed-in member', () => {

@@ -2,9 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { pageLinkConfig } from '@classmoji/page-schema';
 import { IconFileText } from '@tabler/icons-react';
-import { useNavigate } from 'react-router';
 
-import { buildEmbeddedPageHref } from '~/routes/$classroomSlug/embedBridge.ts';
+import {
+  classroomSlugFor,
+  inAppPageHref,
+  useReaderSurface,
+} from '~/components/reader/readerSurface.ts';
+import { isPlainPrimaryClick, pageLinkRender } from '~/utils/readerPayload.ts';
 import { fieldBlockView, pageLinkMayFetch } from './readOnlyGates.ts';
 
 /**
@@ -14,7 +18,58 @@ import { fieldBlockView, pageLinkMayFetch } from './readOnlyGates.ts';
  * 1. Empty state: Shows search input with dropdown of available pages
  * 2. Selected state: Shows clickable link with icon + page title
  * 3. Deleted state: Shows grayed-out link if referenced page no longer exists
+ *
+ * In the shared reader (`PageReader`, a read-only editor with a link map in
+ * `ReaderSurfaceContext`) it is a real `<a href>` to the page, with the page's
+ * live title, or nothing when the page is not one this viewer may open. No
+ * router here: in-app navigation comes from the surface (`navigatePage`).
  */
+
+/**
+ * The reader's link. In the pages app it keeps the row the block has always
+ * been — icon and title, the whole row clickable, the same colour and no
+ * underline — now as a real `<a href>`. On the class site (and the page
+ * render) it is the site's own markup, `div.page-link-display >
+ * a.page-link-title`, so the site's stylesheet keeps serving it.
+ * `data-kind`/`data-page-id` keep the embedded layout's click handler
+ * (`routes/$classroomSlug/route.tsx`) able to take it over too.
+ */
+function ReaderPageLink({ href, title, pageId }: { href: string; title: string; pageId: string }) {
+  const surface = useReaderSurface();
+  const onClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!surface.navigatePage || !isPlainPrimaryClick(event)) return;
+    event.preventDefault();
+    surface.navigatePage(pageId);
+  };
+  if (surface.surface === 'app') {
+    return (
+      <a
+        className="page-link-display"
+        contentEditable={false}
+        href={href}
+        data-kind="page"
+        data-page-id={pageId}
+        onClick={onClick}
+      >
+        <IconFileText size={18} className="page-link-display-icon" aria-hidden="true" />
+        <span className="page-link-title">{title}</span>
+      </a>
+    );
+  }
+  return (
+    <div className="page-link-display" contentEditable={false}>
+      <a
+        className="page-link-title"
+        href={href}
+        data-kind="page"
+        data-page-id={pageId}
+        onClick={onClick}
+      >
+        {title}
+      </a>
+    </div>
+  );
+}
 
 /**
  * Dropdown component showing filtered list of pages
@@ -197,7 +252,7 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
     const [currentPageId, setCurrentPageId] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
-    const navigate = useNavigate();
+    const surface = useReaderSurface();
     // The page picker is an author's: a reader never searches, and never asks
     // `/api/pages/…` for the classroom's pages.
     const editable = props.editor.isEditable;
@@ -222,7 +277,8 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
         }) &&
         typeof window !== 'undefined'
       ) {
-        const classroomSlug = window.location.pathname.split('/')[1];
+        const classroomSlug = classroomSlugFor(surface);
+        if (!classroomSlug) return;
 
         setIsLoading(true);
         fetch(`/api/pages/${classroomSlug}`)
@@ -236,6 +292,7 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
             setIsLoading(false);
           });
       }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- the slug is read once per open
     }, [editable, isOpen, availablePages.length, isLoading]);
 
     // Focus input when block is first inserted (empty state)
@@ -265,14 +322,29 @@ export const PageLink = createReactBlockSpec(pageLinkConfig, {
 
     const handleClickLink = (e: React.MouseEvent | React.KeyboardEvent) => {
       e.preventDefault();
+      if (surface.navigatePage) {
+        surface.navigatePage(pageId);
+        return;
+      }
       if (typeof window !== 'undefined') {
-        const classroomSlug = window.location.pathname.split('/')[1];
-        // Preserve the embed context (embed/parentOrigin/theme) when the block
-        // is clicked inside the webapp's reader, and stay bare in the canonical
-        // editor — buildEmbeddedPageHref forwards, never forces, `embed`.
-        navigate(buildEmbeddedPageHref(classroomSlug, pageId, window.location.search));
+        // No router on this surface: a plain navigation. Preserve the embed
+        // context (embed/parentOrigin/theme) when the block is clicked inside
+        // the webapp's reader, and stay bare in the canonical editor —
+        // buildEmbeddedPageHref forwards, never forces, `embed`. No classroom
+        // to build it from: no navigation at all.
+        const href = inAppPageHref(classroomSlugFor(surface), pageId, window.location.search);
+        if (href) window.location.assign(href);
       }
     };
+
+    // The shared reader: a real link from the viewer's map, or nothing.
+    if (!editable) {
+      const reader = pageLinkRender(surface.links, pageId, pageTitle);
+      if (reader.kind === 'nothing') return null;
+      if (reader.kind === 'link') {
+        return <ReaderPageLink href={reader.href} title={reader.title} pageId={reader.pageId} />;
+      }
+    }
 
     // Empty state - no page selected yet. A reader of an empty link gets
     // nothing: the search box is an author's.

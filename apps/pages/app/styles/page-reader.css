@@ -1,0 +1,77 @@
+/* ==========================================================================
+   The shared reader (components/reader/PageReader.tsx)
+
+   What the reader's own markup needs on every surface it is mounted on (the
+   pages app today, the class site and the MCP page render next). Scoped to
+   `.page-reader`, the reader's root, so the editor is untouched. The class
+   site's static render still carries its own copies in site/styles.ts until
+   it renders through the reader too.
+
+   The page directory's tile look (border, background, padding) and the grid's
+   gap and margin stay as the app draws them (blocknote-overrides.css);
+   site/styles.ts restates different ones for the site, to be reconciled when
+   the site moves onto the reader.
+   ========================================================================== */
+
+/* --- page link ---------------------------------------------------------- */
+
+/* In the pages app the link keeps the row the block always drew (icon and
+   title, inherited colour, the row's own bottom border, no link underline),
+   now as an <a>. `.bn-editor a` colours every link blue with !important; this
+   is more specific, so it wins in both themes and on hover. */
+.page-reader[data-reader-surface='app'] a.page-link-display,
+.page-reader[data-reader-surface='app'] a.page-link-display:hover {
+  color: inherit !important;
+  text-decoration: none;
+}
+
+/* On the class site the row wraps a real link (the site's markup), whose own
+   underline is the one that carries meaning: the row's border would make it a
+   double underline. */
+.page-reader:not([data-reader-surface='app']) .page-link-display {
+  border-bottom: none;
+}
+
+/* --- heading anchors ---------------------------------------------------- */
+
+/* A `#heading` link lands with the heading below the host's sticky header, not
+   under it. The host sets the offset (the app's header, the site's top bar);
+   the default clears a 3rem header with room to spare. */
+.page-reader [data-content-type='heading'][id] {
+  scroll-margin-top: var(--reader-anchor-offset, 4.5rem);
+}
+
+/* --- page directory (navGrid) ------------------------------------------- */
+
+/* A fixed slot, always rendered (NavGridReader): a tile with an emoji and one
+   without must start their labels in the same place, or a two-column grid
+   reads as misaligned. */
+.page-reader .bn-nav-grid-emoji {
+  width: 1.25em;
+  text-align: center;
+}
+
+/* Members-only entries -- shown only to the members who can already open
+   them, and only on the class site (the reader draws no badge in the app). */
+.page-reader .bn-nav-grid-badge {
+  margin-left: auto;
+  flex: none;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+  border: 1px solid var(--color-border-medium);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+/* Two columns is unreadable on a phone. The grid template is an INLINE style
+   (the block carries its author's column count), and only !important reaches
+   past one. */
+@media (max-width: 640px) {
+  .page-reader .bn-nav-grid,
+  .page-reader .nav-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

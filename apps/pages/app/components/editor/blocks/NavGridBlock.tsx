@@ -12,6 +12,8 @@ import {
   IconX,
 } from '@tabler/icons-react';
 import { IconCalendar } from '~/components/ui/tablerIcons.ts';
+import { useReaderSurface } from '~/components/reader/readerSurface.ts';
+import { isPlainPrimaryClick, navGridTiles, type ReaderLinks } from '~/utils/readerPayload.ts';
 
 import {
   NAV_GRID_SCHEDULE_PATH,
@@ -53,6 +55,88 @@ interface DirectoryPage {
   slug?: string;
   is_draft?: boolean;
   is_public?: boolean;
+}
+
+/* ------------------------------------------------------------------ *
+ * Reader render — the shared reader (`PageReader`), from the viewer's map
+ * ------------------------------------------------------------------ */
+
+/**
+ * The page directory as the shared reader draws it: real links from the
+ * viewer's link map (a page not in it is not drawn at all), the live title
+ * when the entry has no label of its own, a Members badge on members-only
+ * pages, the schedule tile only when there is a schedule to link to, and the
+ * emoji slot ALWAYS drawn (empty or not) so labels line up across tiles. The
+ * class site's markup and classes (`makeStaticNavGrid`), so one stylesheet
+ * serves both.
+ */
+export function NavGridReader({
+  entries,
+  columns,
+  links,
+  scheduleHref,
+  navigatePage,
+  showMembersBadge,
+}: {
+  entries: NavGridEntry[];
+  columns: NavGridColumns;
+  links: ReaderLinks;
+  scheduleHref: string | null;
+  navigatePage: ((pageId: string) => void) | null;
+  /**
+   * The Members badge, for the class site (where a signed-out visitor sees
+   * the public pages only). Not in the pages app, where nearly every page is
+   * members-only and the badge would sit on almost every tile.
+   */
+  showMembersBadge: boolean;
+}) {
+  const tiles = navGridTiles(entries, links, scheduleHref, {
+    label: entry => navGridEntryLabel(entry as NavGridEntry),
+    emoji: entry => navGridEntryEmoji(entry as NavGridEntry),
+  });
+  return (
+    <nav
+      className="bn-nav-grid nav-grid"
+      data-columns={columns}
+      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+    >
+      {tiles.map(tile => (
+        <a
+          key={tile.key}
+          className="bn-nav-grid-item"
+          data-kind={tile.kind}
+          href={tile.href}
+          {...(tile.pageId ? { 'data-page-id': tile.pageId } : {})}
+          {...(tile.kind === 'external' ? { rel: 'noopener noreferrer' } : {})}
+          {...(tile.kind === 'schedule' && tile.external
+            ? { target: '_blank', rel: 'noopener noreferrer' }
+            : {})}
+          onClick={
+            tile.kind === 'page' && tile.pageId
+              ? event => {
+                  if (!navigatePage || !isPlainPrimaryClick(event)) return;
+                  event.preventDefault();
+                  navigatePage(tile.pageId as string);
+                }
+              : undefined
+          }
+        >
+          <span className="bn-nav-grid-emoji" aria-hidden="true">
+            {tile.emoji}
+          </span>
+          <span className="bn-nav-grid-label">{tile.label}</span>
+          {showMembersBadge && tile.membersOnly ? (
+            <span className="bn-nav-grid-badge">Members</span>
+          ) : null}
+          {tile.external ? (
+            <span className="bn-nav-grid-ext" aria-hidden="true">
+              ↗
+            </span>
+          ) : null}
+        </a>
+      ))}
+    </nav>
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -571,6 +655,9 @@ const navGridImplementation = {
     const [mounted, setMounted] = useState(false);
     useEffect(() => setMounted(true), []);
     const interactive = mounted && props.editor.isEditable;
+    // The shared reader's link map (null in the editors and their read-only
+    // states, which keep the static render below).
+    const surface = useReaderSurface();
 
     const [pages, setPages] = useState<DirectoryPage[]>([]);
     const [pagesLoaded, setPagesLoaded] = useState(false);
@@ -728,6 +815,22 @@ const navGridImplementation = {
         })
       );
     };
+
+    /* ---------- the shared reader: real links from the viewer's map ---------- */
+    if (!props.editor.isEditable && surface.links) {
+      return (
+        <div className="nav-grid-block" contentEditable={false}>
+          <NavGridReader
+            entries={entries}
+            columns={columns}
+            links={surface.links}
+            scheduleHref={surface.scheduleHref}
+            navigatePage={surface.navigatePage}
+            showMembersBadge={surface.surface !== 'app'}
+          />
+        </div>
+      );
+    }
 
     /* ---------- static render (SSR, export, read-only editor) ---------- */
     if (!interactive) {

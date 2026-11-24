@@ -4,8 +4,9 @@ import { syntaxHighlighter } from '@blocknote/code-block';
 import { MantineProvider } from '@mantine/core';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { pageCommentsExtension } from '~/components/comments/commentsPlugin.ts';
+import { headingAnchorsExtension } from './headingAnchors.ts';
 import { CommentsHost } from '~/components/comments/CommentsHost.tsx';
 import type { CommentsBridge } from '~/components/comments/commentsBridge.ts';
 import type { PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
@@ -77,6 +78,18 @@ interface BlockNoteViewerProps {
    * comment UI at all (signed out, not a member, a preview).
    */
   comments?: CommentsBridge | null;
+  /**
+   * Prefix for the Download links ('' on the pages host itself; the pages
+   * origin where the reader is mounted on another host).
+   */
+  downloadOrigin?: string;
+  /**
+   * `#fragment` ids on h1-h3 (the class site's ids). The shared reader turns
+   * it on (and scrolls to `location.hash` once the view is in).
+   */
+  headingAnchors?: boolean;
+  /** Called once the view is mounted (the reader's ready signal). */
+  onMounted?: () => void;
 }
 
 const BlockNoteViewer = ({
@@ -89,6 +102,9 @@ const BlockNoteViewer = ({
   mediaDownloads,
   readerSections = NO_READER_SECTIONS,
   comments = null,
+  downloadOrigin = '',
+  headingAnchors = false,
+  onMounted,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
@@ -97,8 +113,11 @@ const BlockNoteViewer = ({
       : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
 
   const downloads = useMemo(
-    () => (pageId ? mediaDownloadLookup(pageId, mediaDownloads) : mediaDownloadLookup('', null)),
-    [pageId, mediaDownloads]
+    () =>
+      pageId
+        ? mediaDownloadLookup(pageId, mediaDownloads, downloadOrigin)
+        : mediaDownloadLookup('', null),
+    [pageId, mediaDownloads, downloadOrigin]
   );
 
   const editor = useCreateBlockNote({
@@ -106,13 +125,38 @@ const BlockNoteViewer = ({
     initialContent: initialContent as never,
     // Shiki highlighting for code blocks, as in the editor; comment
     // highlights (decorations only, drawing nothing without threads).
-    extensions: [syntaxHighlighter, pageCommentsExtension()],
+    extensions: [
+      syntaxHighlighter,
+      pageCommentsExtension(),
+      ...(headingAnchors ? [headingAnchorsExtension()] : []),
+    ],
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  // Once the view is in, tell the host (the reader then goes to the heading
+  // the address names: its id comes from a decoration, so only now does it
+  // exist). Two frames, so BlockNote's node views have painted.
+  const onMountedRef = useRef(onMounted);
+  onMountedRef.current = onMounted;
+  useEffect(() => {
+    if (!isMounted) return;
+    let second = 0;
+    const first = window.requestAnimationFrame(() => {
+      second = window.requestAnimationFrame(() => {
+        onMountedRef.current?.();
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(first);
+      window.cancelAnimationFrame(second);
+    };
+    // Once per mount: a later change of these is not a new arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMounted]);
 
   // Code and terminal blocks with copying off: CSS makes them unselectable,
   // this keeps a selection that spans one from copying it (copyGuard.ts).

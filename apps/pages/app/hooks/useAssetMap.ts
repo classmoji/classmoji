@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRevalidator } from 'react-router';
 
 import { isRetryableDeliveryUrl } from '~/utils/mediaRefs.ts';
 
@@ -133,39 +132,52 @@ export function failedAssetUrl(target: EventTarget | null): string | null {
  * An `edit` URL lives four hours. A tab left open past that has a document full
  * of references whose signatures have expired, and every image on it breaks at
  * once — with no user action that would refresh them, because the document
- * itself did not change. One revalidation re-runs the loader, which mints a
- * fresh set.
+ * itself did not change. One refresh (`refresh`, the host's: the app re-runs
+ * its loader) mints a fresh set.
  *
- * Strictly once per mount. A revalidation that does not fix the image (the file
+ * Strictly once per mount. A refresh that does not fix the image (the file
  * really is gone, the origin really is down) must not become a loop that
  * re-runs the loader on every failed retry. `error` does not bubble, so the
  * listener is registered in the CAPTURE phase to see it at all.
  *
- * Returns an epoch to feed a read-only viewer's `key`, since the refreshed map
- * only reaches BlockNote when the component that read it is rebuilt.
+ * `enabled` false listens for nothing (a host that mounts another retrying
+ * view, so one failure never refreshes twice). Returns an epoch to feed a
+ * read-only viewer's `key`, since the refreshed map only reaches BlockNote
+ * when the component that read it is rebuilt.
  */
-export function useAssetRetry(): number {
-  const revalidator = useRevalidator();
+export function useAssetRetry(refresh: () => unknown, enabled = true): number {
   const [epoch, setEpoch] = useState(0);
   const retried = useRef(false);
+  // Read through a ref: the host's function identity may change every render.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   useEffect(() => {
+    if (!enabled) return;
     const onError = (event: Event) => {
       if (retried.current) return;
       // A signed `blob`, `theme` or `media` URL, by shape — no need to ship the
       // origin to the client. A `/missing/` placeholder is the deterministic
       // 404 the resolver mints for a reference it cannot sign: it 404s again
-      // after any number of revalidations, so retrying one is guaranteed waste.
+      // after any number of refreshes, so retrying one is guaranteed waste.
       if (!isRetryableDeliveryUrl(failedAssetUrl(event.target))) return;
 
       retried.current = true;
       setEpoch(value => value + 1);
-      revalidator.revalidate();
+      try {
+        const pending = refreshRef.current();
+        // A refresh that fails leaves the images as they are; nothing to report.
+        if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
+          (pending as Promise<unknown>).catch(() => {});
+        }
+      } catch {
+        // As above.
+      }
     };
 
     document.addEventListener('error', onError, true);
     return () => document.removeEventListener('error', onError, true);
-  }, [revalidator]);
+  }, [enabled]);
 
   return epoch;
 }

@@ -6,6 +6,8 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 
+import { createHeadingIdAllocator, slugifyHeading } from '~/utils/headingAnchors.ts';
+
 import { prepareSiteCodeHighlighter, type SiteShikiSources } from './codeHighlight.server.ts';
 import { redactDocumentForViewer } from './redact.server.ts';
 import {
@@ -294,17 +296,12 @@ export async function renderSitePage({
  * Heading anchors
  * ------------------------------------------------------------------ */
 
-/** Slugify heading text into a stable, URL-safe fragment id. */
-export function slugifyHeading(text: string): string {
-  return (
-    text
-      .toLowerCase()
-      .replace(/&[a-z]+;/g, ' ')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'section'
-  );
-}
+/**
+ * Slugify heading text into a stable, URL-safe fragment id. The rule (and the
+ * duplicate numbering below) lives in `utils/headingAnchors.ts`, shared with
+ * the client reader so a `#fragment` lands on the same heading on both.
+ */
+export { slugifyHeading };
 
 /**
  * One reused JSDOM window, built on first use.
@@ -353,7 +350,7 @@ export function addHeadingAnchors(html: string): {
   headings: Array<{ id: string; level: number; text: string }>;
 } {
   const headings: Array<{ id: string; level: number; text: string }> = [];
-  const used = new Map<string, number>();
+  const nextId = createHeadingIdAllocator();
 
   const host = anchorHost();
   host.innerHTML = html;
@@ -363,12 +360,8 @@ export function addHeadingAnchors(html: string): {
     if (heading.hasAttribute('id')) continue;
 
     const text = (heading.textContent ?? '').trim();
-    if (!text) continue;
-
-    const base = slugifyHeading(text);
-    const seen = used.get(base) ?? 0;
-    used.set(base, seen + 1);
-    const id = seen === 0 ? base : `${base}-${seen + 1}`;
+    const id = nextId(text);
+    if (!id) continue;
 
     heading.setAttribute('id', id);
     headings.push({ id, level: Number(heading.tagName[1]), text });
