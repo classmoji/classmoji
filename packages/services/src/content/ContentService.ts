@@ -81,6 +81,11 @@ const KEPT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/;
 
 const responseCache = new Map<string, CacheEntry>();
 const CACHE_TTL = 60 * 1000; // 60 seconds
+/**
+ * Largest file `getContent` keeps in `responseCache`: what the Contents API
+ * serves inline. A larger one (read through the Blobs API) is never cached.
+ */
+const CACHE_MAX_BYTES = 1024 * 1024;
 
 /**
  * Generate cache key from org, repo, and path
@@ -841,8 +846,12 @@ export class ContentService {
         sha: data.sha,
       };
 
-      // Cache the result (unless it's an image or a ref-bearing read)
-      if (!ref && !isImagePath(path)) {
+      // Cache the result (unless it's an image, a ref-bearing read, or a large
+      // file: the cache is in-process and unbounded, and a 1-100 MB file read
+      // through the Blobs API (a deck's video or PDF, read raw) would stay
+      // resident in full for the cache's lifetime).
+      const bytes = Math.floor((data.content.replace(/\s/g, '').length * 3) / 4);
+      if (!ref && !isImagePath(path) && bytes <= CACHE_MAX_BYTES) {
         setCache(cacheKeyWithRaw, result, cacheTtl);
       }
 
