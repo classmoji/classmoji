@@ -32,12 +32,20 @@
 // them at runtime (`import.meta.resolve` with the importing file as parent;
 // the script re-runs itself with --experimental-import-meta-resolve for that),
 // through workspace packages and node_modules. TypeScript is read the way Node
-// runs it (`stripTypeScriptTypes`), so a type-only import is not a load. It
-// fails on a forbidden specifier, on a resolved file inside a forbidden package
-// or `packages/page-schema/src/{html,serverEditor}.ts`, on a relative import
-// that does not resolve, and on a walk that reached almost nothing. A dynamic
-// import with a computed specifier cannot be followed: those in first-party
-// code are listed.
+// runs it (`stripTypeScriptTypes`), so a type-only import is not a load. Imports
+// are read with a real lexer (es-module-lexer) and requires with a tokenizer
+// that skips comments, strings, template literals and regular expressions, so
+// text that only mentions an import is never one. It fails on a forbidden
+// specifier, on a resolved file inside a forbidden package or
+// `packages/page-schema/src/{html,serverEditor}.ts`, on a first-party relative
+// import that does not resolve, on a first-party `import()` with a computed
+// specifier (it cannot be followed; a dependency's is listed with --verbose),
+// on a file it cannot lex, and on a walk that reached almost nothing.
+//
+// Known gaps of the --entry walk: a require through an alias
+// (`const req = createRequire(import.meta.url); req('jsdom')`), `module.require`
+// with a computed name, and loads by other means (`process.dlopen`, a `vm`
+// module, a worker's file) are not followed.
 //
 // Prose that merely names a package (a comment) is not an import and passes.
 import { spawnSync } from 'node:child_process';
@@ -57,7 +65,8 @@ const FORBIDDEN_SOURCES = [
   /(^|\/)packages\/page-schema\/src\/(html|serverEditor)\.ts$/,
 ];
 
-// The import shapes a bundle holds: a static import or re-export at the start
+// The built-app mode reads bundles with regexes (comments are mostly gone from
+// a build). The import shapes a bundle holds: a static import or re-export at the start
 // of a line or right after a `;` or `}` (minified code puts several on one
 // line; prose in a comment rarely starts that way), a dynamic import with a
 // quoted or template-literal specifier, a require (Rolldown's CJS helper is
@@ -69,11 +78,6 @@ const STATIC_RES = [
 const DYNAMIC_RE = /\bimport\(\s*["'`]([^"'`$]+)["'`]\s*\)/g;
 const REQUIRE_RE = /(?:^|[^\w$]|__)require\(\s*["'`]([^"'`$]+)["'`]\s*\)/g;
 const SPECIFIER_RES = [...STATIC_RES, DYNAMIC_RE, REQUIRE_RE];
-/**
- * `import(` whose argument is not one plain string literal (not `obj.import(`,
- * and not the bare `import()` prose writes).
- */
-const NON_LITERAL_IMPORT_RE = /(?<![\w$.])import\(\s*(?!\)|["'][^"'`$]*["']\s*\)|`[^`$]*`\s*\))/g;
 
 const isForbidden = spec => FORBIDDEN.some(name => spec === name || spec.startsWith(`${name}/`));
 const isForbiddenFile = file => FORBIDDEN_SOURCES.some(re => re.test(file.replace(/\\/g, '/')));
@@ -141,31 +145,226 @@ const isSource = file => /\.(?:[cm]?js|[cm]?ts)$/.test(file) && !/\.d\.[cm]?ts$/
 const isTypeScript = file => /\.[cm]?ts$/.test(file);
 
 /**
- * What `src` loads at runtime: `imports` (static, re-exports, literal dynamic
- * imports), `requires`, and how many dynamic imports have a computed
- * specifier. TypeScript loses its types first, as Node's type stripping does,
- * so `import type` and `typeof import('x')` load nothing.
+ * es-module-lexer (a real JavaScript lexer: comments, strings, template
+ * literals and regular expressions are never read as imports). Loaded only by
+ * the --entry walk, so the built-app mode needs nothing beyond Node. It is in
+ * the root node_modules through the build tooling (Vite, Vitest), which every
+ * image build installs.
  */
-export function runtimeSpecifiers(src, file = 'x.js') {
+let lexerReady = null;
+async function esLexer() {
+  lexerReady ??= import('es-module-lexer').then(async mod => {
+    await mod.init;
+    return mod.parse;
+  });
+  return lexerReady;
+}
+
+const JS_KEYWORDS_BEFORE_EXPRESSION = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'throw',
+  'case',
+  'do',
+  'else',
+  'yield',
+  'await',
+]);
+
+/**
+ * The literal specifiers of `require('x')` calls (and bundlers' `__require`)
+ * in real code: a small JavaScript tokenizer skips comments, the contents of
+ * strings and template literals (their `${}` expressions are code) and regular
+ * expression literals. A `require` that is a property (`obj.require`) or part
+ * of a longer name (`myrequire`) is not counted.
+ */
+export function requireSpecifiers(code) {
+  const out = new Set();
+  const n = code.length;
+  const templateDepths = []; // brace depth at each open `${`
+  let depth = 0;
+  let prev = ''; // the last significant character outside comments/strings
+  let prevWord = '';
+  let i = 0;
+
+  const readString = quote => {
+    let value = '';
+    i++;
+    while (i < n && code[i] !== quote) {
+      if (code[i] === '\\') {
+        value += code[i + 1] ?? '';
+        i += 2;
+        continue;
+      }
+      if (code[i] === '\n') break; // unterminated: stop at the line end
+      value += code[i++];
+    }
+    i++;
+    return value;
+  };
+  const skipTemplate = () => {
+    // From just after a backtick or a `}` closing `${`: to the closing backtick
+    // or the next `${` (then code resumes).
+    while (i < n) {
+      if (code[i] === '\\') {
+        i += 2;
+        continue;
+      }
+      if (code[i] === '`') {
+        i++;
+        prev = '`';
+        return;
+      }
+      if (code[i] === '$' && code[i + 1] === '{') {
+        i += 2;
+        templateDepths.push(depth);
+        depth++;
+        prev = '{';
+        return;
+      }
+      i++;
+    }
+  };
+  const skipRegex = () => {
+    let inClass = false;
+    i++;
+    while (i < n && code[i] !== '\n') {
+      const c = code[i];
+      if (c === '\\') {
+        i += 2;
+        continue;
+      }
+      if (c === '[') inClass = true;
+      else if (c === ']') inClass = false;
+      else if (c === '/' && !inClass) {
+        i++;
+        while (i < n && /[a-z]/i.test(code[i])) i++;
+        prev = ')'; // a regex is a value
+        return;
+      }
+      i++;
+    }
+  };
+
+  while (i < n) {
+    const c = code[i];
+    if (c === '/' && code[i + 1] === '/') {
+      while (i < n && code[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && code[i + 1] === '*') {
+      const end = code.indexOf('*/', i + 2);
+      i = end === -1 ? n : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      readString(c);
+      prev = '"';
+      prevWord = '';
+      continue;
+    }
+    if (c === '`') {
+      i++;
+      skipTemplate();
+      prevWord = '';
+      continue;
+    }
+    if (c === '/') {
+      const regexAllowed =
+        prev === '' ||
+        '(,=:[!&|?{};+-*%<>~^'.includes(prev) ||
+        (prev === 'w' && JS_KEYWORDS_BEFORE_EXPRESSION.has(prevWord));
+      if (regexAllowed) {
+        skipRegex();
+        prevWord = '';
+        continue;
+      }
+      prev = '/';
+      i++;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(c)) {
+      const start = i;
+      while (i < n && /[\w$]/.test(code[i])) i++;
+      const word = code.slice(start, i);
+      const property = prev === '.' && word !== '__require';
+      if ((word === 'require' || word === '__require') && !property) {
+        let j = i;
+        while (j < n && /\s/.test(code[j])) j++;
+        if (code[j] === '(') {
+          j++;
+          while (j < n && /\s/.test(code[j])) j++;
+          const quote = code[j];
+          if (quote === '"' || quote === "'" || quote === '`') {
+            const save = i;
+            i = j;
+            const value = quote === '`' ? null : readString(quote);
+            let k = i;
+            while (k < n && /\s/.test(code[k])) k++;
+            if (value !== null && code[k] === ')') out.add(value);
+            i = save;
+          }
+        }
+      }
+      prev = 'w';
+      prevWord = word;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (c === '{') depth++;
+    if (c === '}') {
+      if (templateDepths.length && templateDepths.at(-1) === depth - 1) {
+        templateDepths.pop();
+        depth--;
+        i++;
+        skipTemplate();
+        continue;
+      }
+      depth--;
+    }
+    prev = c;
+    prevWord = '';
+    i++;
+  }
+  return [...out];
+}
+
+/**
+ * What `src` loads at runtime: `imports` (static imports, re-exports and
+ * literal dynamic imports, from es-module-lexer), `requires` (literal
+ * `require()` calls, `requireSpecifiers`), and how many dynamic imports have
+ * a computed specifier. TypeScript loses its types first, as Node's type
+ * stripping does, so `import type` and `typeof import('x')` load nothing.
+ * Throws when the source cannot be lexed.
+ */
+export async function runtimeSpecifiers(src, file = 'x.js') {
   let code = src;
   if (isTypeScript(file)) {
     if (!nodeModule.stripTypeScriptTypes) {
       throw new Error('reading TypeScript needs Node 22.13 or later (stripTypeScriptTypes)');
     }
-    try {
-      code = nodeModule.stripTypeScriptTypes(src);
-    } catch {
-      // Not strippable (Node refuses to run it that way either): read as is,
-      // which only ever finds more imports, never fewer.
-    }
+    // Not strippable means Node cannot run it that way either: the error says so.
+    code = nodeModule.stripTypeScriptTypes(src);
   }
+  const parse = await esLexer();
+  const [found] = parse(code);
   const imports = new Set();
-  for (const re of [...STATIC_RES, DYNAMIC_RE])
-    for (const m of code.matchAll(re)) imports.add(m[1]);
-  const requires = new Set();
-  for (const m of code.matchAll(REQUIRE_RE)) requires.add(m[1]);
-  const computed = [...code.matchAll(NON_LITERAL_IMPORT_RE)].length;
-  return { imports: [...imports], requires: [...requires], computed };
+  let computed = 0;
+  for (const entry of found) {
+    if (entry.d === -2) continue; // import.meta
+    if (entry.n !== undefined) imports.add(entry.n);
+    else if (entry.d >= 0) computed++;
+  }
+  return { imports: [...imports], requires: requireSpecifiers(code), computed };
 }
 
 /**
@@ -209,7 +408,7 @@ export const MIN_FILES = 10;
  * resolve, e.g. an optional dependency behind a try) and `computed`
  * (first-party files with a computed `import(...)`) are reported.
  */
-export function walkEntry(root, entry, { resolve = nodeResolve } = {}) {
+export async function walkEntry(root, entry, { resolve = nodeResolve } = {}) {
   const entryFile = path.resolve(root, entry);
   if (!fs.statSync(entryFile, { throwIfNoEntry: false })?.isFile()) {
     throw new Error(`${entry}: no such file`);
@@ -230,9 +429,24 @@ export function walkEntry(root, entry, { resolve = nodeResolve } = {}) {
   const queue = [entryFile];
   while (queue.length) {
     const file = queue.shift();
-    const found = runtimeSpecifiers(fs.readFileSync(file, 'utf8'), file);
+    let found;
+    try {
+      found = await runtimeSpecifiers(fs.readFileSync(file, 'utf8'), file);
+    } catch (error) {
+      // What cannot be read cannot be vouched for.
+      problems.push(`${chain(file)}: cannot be read as JavaScript (${error.message})`);
+      continue;
+    }
     const firstParty = !file.replace(/\\/g, '/').includes('/node_modules/');
-    if (found.computed && firstParty) computed.push(`${rel(file)} (${found.computed})`);
+    if (found.computed) {
+      // Our own code must name what it loads, or the check could not follow
+      // it; a dependency's computed import() is listed only.
+      if (firstParty) {
+        problems.push(`${chain(file)}: an import() with a computed specifier cannot be followed`);
+      } else {
+        computed.push(`${rel(file)} (${found.computed})`);
+      }
+    }
     const specs = [
       ...found.imports.map(spec => [spec, 'import']),
       ...found.requires.map(spec => [spec, 'require']),
@@ -283,7 +497,7 @@ export function walkEntry(root, entry, { resolve = nodeResolve } = {}) {
 
 const RESOLVE_FLAG = '--experimental-import-meta-resolve';
 
-function runEntry(entry, verbose) {
+async function runEntry(entry, verbose) {
   if (!parentResolveWorks()) {
     if (process.execArgv.includes(RESOLVE_FLAG)) {
       console.error(`check-no-dom-runtime: this node ignores ${RESOLVE_FLAG}; cannot resolve`);
@@ -305,14 +519,14 @@ function runEntry(entry, verbose) {
   }
   let result;
   try {
-    result = walkEntry(process.cwd(), entry);
+    result = await walkEntry(process.cwd(), entry);
   } catch (error) {
     console.error(`check-no-dom-runtime: ${error.message}`);
     process.exit(2);
   }
-  if (result.computed.length) {
+  if (verbose && result.computed.length) {
     console.error(
-      `check-no-dom-runtime: ${entry}: computed import() not followed in ${result.computed.join(', ')}`
+      `check-no-dom-runtime: ${entry}: computed import() in dependencies, not followed: ${result.computed.join(', ')}`
     );
   }
   if (verbose && result.unresolved.length) {
@@ -368,7 +582,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       console.error('usage: node scripts/check-no-dom-runtime.mjs --entry <file> [--verbose]');
       process.exit(2);
     }
-    runEntry(entry, args.includes('--verbose'));
+    await runEntry(entry, args.includes('--verbose'));
   } else if (args[0]) {
     runApp(args[0]);
   } else {

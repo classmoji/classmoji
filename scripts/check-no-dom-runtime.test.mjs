@@ -145,8 +145,8 @@ function fixtureResolve(root) {
   };
 }
 
-test('TypeScript is read as Node runs it: type-only imports load nothing', () => {
-  const found = runtimeSpecifiers(
+test('TypeScript is read as Node runs it: type-only imports load nothing', async () => {
+  const found = await runtimeSpecifiers(
     [
       "import type { JSDOM } from 'jsdom';",
       "export type Html = typeof import('@classmoji/page-schema/html');",
@@ -162,7 +162,46 @@ test('TypeScript is read as Node runs it: type-only imports load nothing', () =>
   assert.equal(found.computed, 1);
 });
 
-test('the walk follows static, re-exported and lazy imports into packages', () => {
+test('comments, strings and template literals load nothing; real loads still count', async () => {
+  const found = await runtimeSpecifiers(
+    [
+      "// later: import('@classmoji/page-schema/html') when needed",
+      "/* import('./x.ts') */",
+      'const doc = `',
+      'import App from "./App";',
+      'import { JSDOM } from "jsdom"',
+      "require('jsdom')",
+      '`;',
+      'const s = "require(\'jsdom\')";',
+      "const r = /require\\('jsdom'\\)/;",
+      "/* x */ import './real.ts';",
+      "const lit = () => import(/* @vite-ignore */ 'lit');",
+      'const dep = require(\'dep\'); const h = __require("helper");',
+      "obj.myrequire('nope');",
+    ].join('\n'),
+    'entry.js'
+  );
+  assert.deepEqual(found.imports.sort(), ['./real.ts', 'lit']);
+  assert.deepEqual(found.requires.sort(), ['dep', 'helper']);
+  assert.equal(found.computed, 0);
+});
+
+test('a computed import() in first-party code fails; in a dependency it is only listed', async () => {
+  const root = fixture({
+    'src/index.ts': "import 'dep';\nexport const load = (s: string) => import(s);\n",
+    'node_modules/dep/index.js':
+      "// optional: import('jsdom') if a DOM is wanted\nexport const f = n => import(n);\n",
+  });
+  const { problems, computed } = await walkEntry(root, 'src/index.ts', {
+    resolve: fixtureResolve(root),
+  });
+  assert.deepEqual(problems, [
+    'src/index.ts: an import() with a computed specifier cannot be followed',
+  ]);
+  assert.deepEqual(computed, ['node_modules/dep/index.js (1)']);
+});
+
+test('the walk follows static, re-exported and lazy imports into packages', async () => {
   const root = fixture({
     'src/index.ts': "import { a } from './a.ts';\nexport { a };\n",
     'src/a.ts': "export * from 'pkg';\nexport const a = () => import('./lazy.ts');\n",
@@ -170,30 +209,54 @@ test('the walk follows static, re-exported and lazy imports into packages', () =
     'node_modules/pkg/index.js': 'export const p = 1;\n',
     'node_modules/dep/index.js': "module.exports = require('jsdom');\n",
   });
-  const { problems, files } = walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) });
+  const { problems, files } = await walkEntry(root, 'src/index.ts', {
+    resolve: fixtureResolve(root),
+  });
   assert.deepEqual(problems, [
     'src/index.ts -> src/a.ts -> src/lazy.ts -> node_modules/dep/index.js imports jsdom',
   ]);
   assert.equal(files, 5);
 });
 
-test('a resolved file inside a forbidden module fails, whatever the specifier', () => {
+test('a resolved file inside a forbidden module fails, whatever the specifier', async () => {
   const root = fixture({
     'src/index.ts': "export * from '../packages/page-schema/src/server.ts';\n",
     'packages/page-schema/src/server.ts': "export const e = () => import('./serverEditor.ts');\n",
     'packages/page-schema/src/serverEditor.ts': 'export const s = 1;\n',
   });
-  assert.deepEqual(walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) }).problems, [
+  const { problems } = await walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) });
+  assert.deepEqual(problems, [
     'src/index.ts -> packages/page-schema/src/server.ts imports ./serverEditor.ts (packages/page-schema/src/serverEditor.ts)',
   ]);
 });
 
-test('a first-party relative import that does not resolve fails; a missing entry throws', () => {
+test('a first-party relative import that does not resolve fails; a missing entry throws', async () => {
   const root = fixture({ 'src/index.ts': "import './gone.ts';\n" });
-  assert.deepEqual(walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) }).problems, [
-    'src/index.ts: cannot resolve ./gone.ts',
-  ]);
-  assert.throws(() => walkEntry(root, 'src/nope.ts', { resolve: fixtureResolve(root) }), /no such/);
+  const { problems } = await walkEntry(root, 'src/index.ts', { resolve: fixtureResolve(root) });
+  assert.deepEqual(problems, ['src/index.ts: cannot resolve ./gone.ts']);
+  await assert.rejects(
+    walkEntry(root, 'src/nope.ts', { resolve: fixtureResolve(root) }),
+    /no such/
+  );
+});
+
+test('CLI: commented and string imports are not loads (nothing forbidden, nothing unresolved)', () => {
+  const root = fixture({
+    'src/index.ts': [
+      "// import('@classmoji/page-schema/html') was the lazy converter",
+      "/* import('./x.ts') */",
+      'export const tpl = `',
+      'import App from "./App";',
+      'import { JSDOM } from "jsdom"',
+      '`;',
+      "import './a.ts';",
+    ].join('\n'),
+    'src/a.ts': 'export {};\n',
+  });
+  const run = cli(root, 'src/index.ts');
+  // Two files: too few to pass, but nothing forbidden (exit 2, not 1).
+  assert.equal(run.status, 2, run.stderr);
+  assert.doesNotMatch(run.stderr, /loads a DOM/);
 });
 
 const SCRIPT = fileURLToPath(new URL('./check-no-dom-runtime.mjs', import.meta.url));
