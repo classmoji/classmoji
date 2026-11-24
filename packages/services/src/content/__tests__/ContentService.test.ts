@@ -900,6 +900,63 @@ describe('compareBranches', () => {
   });
 });
 
+describe('getContent of a file over 1 MB (Contents API: encoding "none", empty content)', () => {
+  // GitHub's Contents API serves files of 1-100 MB with `content: ""` and
+  // `encoding: "none"` in its JSON form; the Git Blobs API serves them whole.
+  const big = JSON.stringify({ blocks: [{ type: 'paragraph', text: 'x'.repeat(1_200_000) }] });
+
+  it('reads the file through the Git Blobs API by its sha, text and raw', async () => {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          data: {
+            type: 'file',
+            encoding: 'none',
+            content: '',
+            size: Buffer.byteLength(big),
+            sha: 'big-sha',
+          },
+        };
+      }
+      expect(route).toBe('GET /repos/{owner}/{repo}/git/blobs/{file_sha}');
+      expect(params).toMatchObject({ repo: 'repo-big', file_sha: 'big-sha' });
+      const base64 = Buffer.from(big).toString('base64');
+      return { data: { content: `${base64.slice(0, 60)}\n${base64.slice(60)}`, sha: 'big-sha' } };
+    });
+
+    const text = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-big',
+      path: 'pages/a/content.json',
+      skipCache: true,
+    });
+    expect(text).toEqual({ content: big, sha: 'big-sha' });
+
+    const raw = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-big',
+      path: 'pages/a/content.json',
+      raw: true,
+      skipCache: true,
+    });
+    expect(raw).toEqual({ content: Buffer.from(big).toString('base64'), sha: 'big-sha' });
+  });
+
+  it('an empty file stays empty (no blob read)', async () => {
+    requestMock.mockResolvedValue({
+      data: { type: 'file', encoding: 'base64', content: '', size: 0, sha: 'empty-sha' },
+    });
+    const read = await ContentService.getContent({
+      gitOrganization,
+      repo: 'repo-empty',
+      path: 'pages/a/content.json',
+      skipCache: true,
+    });
+    expect(read).toEqual({ content: '', sha: 'empty-sha' });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('getBlobContent', () => {
   it('fetches a blob by sha via the Git Blobs API and decodes utf-8', async () => {
     requestMock.mockImplementation(async (route: string, params: RequestParams) => {

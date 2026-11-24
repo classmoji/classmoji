@@ -277,6 +277,20 @@ test.describe('the class site', () => {
     expect(content).toEqual({ format: 'json', blocks: [{ type: 'paragraph' }], coverImage: null });
   });
 
+  test('a content.json that exists but is empty is an error, never a legacy page', async () => {
+    const { loadSitePageContent } = await siteContent();
+    const asked: string[] = [];
+    await expect(
+      loadSitePageContent({ content_path: 'pages/big' }, classroom, async (_c, _l, _r, path) => {
+        asked.push(path);
+        return path.endsWith('content.json')
+          ? { content: '', sha: 's' }
+          : { content: '<p>old</p>', sha: 'h' };
+      })
+    ).rejects.toThrow(/not valid JSON/);
+    expect(asked).toEqual(['pages/big/content.json']);
+  });
+
   test('the notice is staff-only on both site routes, from the render’s flag', () => {
     expect(SITE_RENDER_SOURCE).toContain("legacyFormat: content.format === 'html',");
     for (const route of [SITE_PAGE_SOURCE, SITE_HOME_SOURCE]) {

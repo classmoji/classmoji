@@ -808,12 +808,25 @@ export class ContentService {
         data = file;
       } else {
         const octokit = await getOctokit(resolvedOrg);
-        ({ data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        const { data: file } = (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
           owner: resolvedOrg.login,
           repo,
           path,
           ...(ref ? { ref } : {}),
-        }));
+        })) as { data: { content?: string; encoding?: string; size?: number; sha: string } };
+        // Files of 1-100 MB come back from the Contents API without their
+        // content (`encoding: 'none'`, `content: ''`): read them through the
+        // Git Blobs API by their sha, which serves up to 100 MB. Without this
+        // a large page reads as an empty file.
+        if (file.encoding === 'none' || (!file.content && (file.size ?? 0) > 0)) {
+          const { data: blob } = await octokit.request(
+            'GET /repos/{owner}/{repo}/git/blobs/{file_sha}',
+            { owner: resolvedOrg.login, repo, file_sha: file.sha }
+          );
+          data = { content: String(blob.content ?? ''), sha: file.sha };
+        } else {
+          data = { content: file.content ?? '', sha: file.sha };
+        }
       }
 
       // GitHub returns base64-encoded content for files
