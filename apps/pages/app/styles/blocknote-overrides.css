@@ -2224,3 +2224,23 @@
   padding: 6px 12px 8px;
 }
 
+
+/* ============================================================
+   Readers select nothing
+   A click on a block in a read-only editor still makes it
+   ProseMirror's selected node, and BlockNote then draws its
+   editor selection (a tinted overlay with a ring) over it.
+   That is an editing affordance: a reader gets none.
+   ============================================================ */
+.bn-editor[contenteditable='false'] .bn-block-content.ProseMirror-selectednode > ::after,
+.bn-editor[contenteditable='false'] .ProseMirror-selectednode > .bn-block-content > ::after,
+.bn-editor[contenteditable='false'] .bn-block-content .ProseMirror-selectednode::after,
+.bn-editor[contenteditable='false'] .bn-inline-content .ProseMirror-selectednode::after {
+  content: none;
+}
+
+.bn-editor[contenteditable='false']
+  .ProseMirror-selectednode
+  .bn-file-name-with-icon:not(:hover) {
+  background-color: transparent;
+}
