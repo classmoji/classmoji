@@ -154,11 +154,17 @@ export function revealThemeExtraStylesheets(name: string): readonly string[] {
 }
 
 /**
- * Is `href` one of the theme font stylesheets, at any version? (A stored
- * document's copy is regenerated from its theme, never kept as extra css.)
+ * Is `href` one of the theme font stylesheets this module writes (the same
+ * faces on jsDelivr, at any version)? A stored document's copy is
+ * regenerated from its theme, never kept as extra css; any other Source Sans
+ * Pro link is the author's own and stays theirs.
  */
+const THEME_FONT_STYLESHEET_RE = new RegExp(
+  `^https://cdn\\.jsdelivr\\.net/npm/@fontsource/source-sans-pro@[^/]+/(?:${SOURCE_SANS_PRO_FACES.join('|')})\\.css$`
+);
+
 export function isThemeFontStylesheet(href: string): boolean {
-  return /\/npm\/@fontsource\/source-sans-pro@[^/]+\/[\w-]+\.css$/.test(href);
+  return THEME_FONT_STYLESHEET_RE.test(href);
 }
 
 /** A highlight.js style (minified) on jsDelivr, for code in decks. */

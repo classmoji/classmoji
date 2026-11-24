@@ -795,7 +795,8 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
       }
       headExtras.push({
         css: { href, ...(media ? { media } : {}) },
-        themeFont: isThemeFontStylesheet(href),
+        // The generated links carry no media; one that does is the author's.
+        themeFont: !media && isThemeFontStylesheet(href),
       });
     });
 

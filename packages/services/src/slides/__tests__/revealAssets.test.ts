@@ -609,6 +609,25 @@ describe("beige's Source Sans Pro", () => {
     const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
     expect(parsed.deck.extraCss).toEqual([{ href }]);
   });
+
+  it('on a beige deck, an author’s own Source Sans Pro link stays extra css', () => {
+    const v = SOURCE_SANS_PRO_VERSION;
+    const own = [
+      { href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/700.css` },
+      { href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/index.css` },
+      { href: `https://example.com/npm/@fontsource/source-sans-pro@${v}/400.css` },
+      {
+        href: `https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro@${v}/400.css`,
+        media: 'print',
+      },
+    ];
+    const links = own
+      .map(c => `<link rel="stylesheet" href="${c.href}"${c.media ? ` media="${c.media}"` : ''}>`)
+      .join('\n');
+    const doc = generateDeckHtml(BEIGE, { title: 'T' }).replace('</head>', `${links}\n</head>`);
+    const parsed = parseDeckHtml(doc, { idGen: seededIdGen() });
+    expect(parsed.deck.extraCss).toEqual(own);
+  });
 });
 
 describe('both generations of stored documents parse the same', () => {
