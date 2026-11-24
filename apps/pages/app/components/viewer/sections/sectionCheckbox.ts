@@ -1,5 +1,6 @@
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
 import type { ReaderSectionsValue } from '~/hooks/useReaderSections.tsx';
+import { tickBurst } from './tickBurst.ts';
 
 /**
  * The tick box on a checkable heading, in the reader's view.
@@ -181,6 +182,19 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
   sync();
   const unsubscribe = store.subscribe(sync);
 
+  // While a burst plays, the box's tooltip hides (it sits where the rays fly).
+  let bursts = 0;
+  const burst = () => {
+    const done = tickBurst(button);
+    if (!done) return;
+    bursts += 1;
+    button.classList.add('pg-section-check--burst');
+    void done.then(() => {
+      bursts -= 1;
+      if (bursts === 0) button.classList.remove('pg-section-check--burst');
+    });
+  };
+
   // As BlockNote's toggle button does: no selection change on press.
   button.addEventListener('mousedown', event => event.preventDefault());
   button.addEventListener('click', event => {
@@ -188,7 +202,9 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
     event.stopPropagation();
     const state = store.get();
     if (!state.canCheck) return;
+    const turningOn = !state.checked.has(block.id);
     state.toggleCheck(block.id);
+    if (turningOn) burst();
   });
 
   view.dom.appendChild(button);
