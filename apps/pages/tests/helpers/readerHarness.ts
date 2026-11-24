@@ -96,6 +96,7 @@ export function siteIslandData(blocks: unknown[]): ReaderIslandData {
       readerSections: {
         staff: false,
         signedIn: false,
+        member: false,
         canCheck: false,
         canUnlock: false,
         checked: [],
@@ -105,6 +106,7 @@ export function siteIslandData(blocks: unknown[]): ReaderIslandData {
       links: {},
       scheduleHref: null,
       description: null,
+      frameHosts: null,
     },
   };
 }

@@ -190,3 +190,105 @@ test.describe('terminal code is text, as typed', () => {
     expect(shown.tokensKeepColor).toBe(true);
   });
 });
+
+// ─── Frames in the reader: the hosts and the display map reach the blocks ────
+
+test.describe('the frame rule in the reader reads the payload’s hosts and display map', () => {
+  const CLASSROOM = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const DELIVERY_URL = `https://content.classmoji.test/c/${CLASSROOM}/blob/abc123/handout.pdf?sig=x`;
+  const HOSTS = {
+    hosts: ['app.classmoji.test', 'content.classmoji.test', 'pages.classmoji.test'],
+    siteDomain: 'classmoji.test',
+    framed: ['slides.classmoji.test'],
+    delivery: 'content.classmoji.test',
+  };
+  const embed = (id: string, url: string) => ({ id, type: 'embed', props: { url }, children: [] });
+
+  test("the class's own PDF frames unsandboxed; the same URL typed, an outside PDF and our web app do not", async ({
+    page,
+  }) => {
+    const blocks = [
+      // A repo reference the server resolved (in the payload's display map).
+      embed('own', 'pages/lab/handout.pdf'),
+      // The very same delivery URL, typed by an author: not in the map.
+      embed('typed', DELIVERY_URL),
+      embed('outside', 'https://example.com/docs/notes.pdf'),
+      embed('webapp', 'https://app.classmoji.test/student/cs52'),
+    ];
+    const data = siteIslandData(blocks);
+    data.payload.assets = { 'pages/lab/handout.pdf': DELIVERY_URL };
+    data.payload.frameHosts = HOSTS;
+    await mountReader(page, blocks, { data });
+    const shown = await page.evaluate(() => {
+      const of = (id: string) => document.querySelector(`.bn-block[data-id="${id}"]`);
+      const frame = (id: string) => of(id)?.querySelector('iframe') ?? null;
+      return {
+        own: {
+          src: frame('own')?.getAttribute('src'),
+          sandbox: frame('own')?.hasAttribute('sandbox'),
+        },
+        typed: {
+          iframe: Boolean(frame('typed')),
+          link: of('typed')?.querySelector('a')?.getAttribute('href') ?? null,
+        },
+        outside: {
+          iframe: Boolean(frame('outside')),
+          card: of('outside')?.querySelector('a.bn-frame-file-open')?.getAttribute('href') ?? null,
+        },
+        webapp: {
+          iframe: Boolean(frame('webapp')),
+          link: of('webapp')?.querySelector('a')?.getAttribute('href') ?? null,
+        },
+      };
+    });
+    expect(shown.own).toEqual({ src: DELIVERY_URL, sandbox: false });
+    expect(shown.typed).toEqual({ iframe: false, link: DELIVERY_URL });
+    expect(shown.outside).toEqual({ iframe: false, card: 'https://example.com/docs/notes.pdf' });
+    expect(shown.webapp).toEqual({
+      iframe: false,
+      link: 'https://app.classmoji.test/student/cs52',
+    });
+  });
+});
+
+// ─── A locked section for a signed-in non-member ─────────────────────────────
+
+test.describe('a locked section as each reader sees it', () => {
+  const locked = [
+    {
+      id: 'lock',
+      type: 'lockedSection',
+      props: { title: 'Solution' },
+      content: [],
+      children: [],
+    },
+  ];
+  const sectionsFor = (signedIn: boolean, member: boolean) => {
+    const data = siteIslandData(locked);
+    data.payload.readerSections = { ...data.payload.readerSections, signedIn, member };
+    return data;
+  };
+  const lockOf = (page: Page) =>
+    page.$eval('.bn-block[data-id="lock"]', block => ({
+      mode: block.querySelector('.pg-locked')?.getAttribute('data-mode') ?? null,
+      text: (block as HTMLElement).innerText,
+      links: block.querySelectorAll('a').length,
+    }));
+
+  test('signed in, not a member: the one line, no link', async ({ page }) => {
+    await mountReader(page, locked, { data: sectionsFor(true, false) });
+    const shown = await lockOf(page);
+    expect(shown.mode).toBe('members');
+    expect(shown.text).toContain('Only class members can unlock this.');
+    expect(shown.text).not.toContain('Sign in');
+    expect(shown.links).toBe(0);
+  });
+
+  test('signed out: the sign-in link, not the members line', async ({ page }) => {
+    await mountReader(page, locked, { data: sectionsFor(false, false) });
+    const shown = await lockOf(page);
+    expect(shown.mode).toBe('signin');
+    expect(shown.text).not.toContain('Only class members');
+    expect(shown.links).toBe(1);
+  });
+});

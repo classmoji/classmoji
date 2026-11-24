@@ -51,14 +51,16 @@ export async function fetchSiteReaderPayload(
  * The host options for a surface.
  *   - `render` (the MCP's page render) has a view token and no session: no
  *     refresh, and the reader makes no API call.
- *   - `site`: a MEMBER's reader (their payload says signed in) loads the page
- *     again through `/api/page-reader`; a non-member's has nothing to refresh
- *     and makes no request at all (a custom domain's payload is always one).
+ *   - `site`: a MEMBER's reader (their payload says signed in and an
+ *     accepted member) loads the page again through `/api/page-reader`; a
+ *     non-member's, signed in or not (a pending member included), has nothing
+ *     to refresh and makes no request at all (a custom domain's payload is
+ *     always one).
  */
 export function hostOptionsFor(data: ReaderIslandData): ReaderIslandHost {
   switch (data.surface) {
     case 'site':
-      return data.payload.readerSections?.signedIn
+      return data.payload.readerSections?.signedIn && data.payload.readerSections.member
         ? { onRefresh: () => fetchSiteReaderPayload(data) }
         : {};
     case 'render':

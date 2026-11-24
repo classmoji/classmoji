@@ -7,6 +7,7 @@
  * the unit suite can all import it.
  */
 import type { ReaderComments } from '~/components/comments/types.ts';
+import type { FrameHosts } from '~/components/editor/blocks/safeFrame.ts';
 import type { MediaDownloads } from './mediaDownloads.ts';
 
 /** Where the reader is mounted. Decides nothing about access: the payload already did. */
@@ -33,6 +34,12 @@ export interface ReaderCover {
 export interface ReaderSectionsPayload {
   staff: boolean;
   signedIn: boolean;
+  /**
+   * Signed in AND an accepted member of the page's classroom. A signed-in
+   * reader who is not (a stranger, a pending invite) is told only members can
+   * unlock a locked section, instead of being sent to sign in.
+   */
+  member: boolean;
   canCheck: boolean;
   canUnlock: boolean;
   checked: string[];
@@ -60,6 +67,8 @@ export interface ReaderPayload {
   scheduleHref: string | null;
   /** Plain text from the shipped document, for a page description (≤ 180 chars). */
   description: string | null;
+  /** Our own hosts, for the frame rule (`decideFrame`); the same for every reader. */
+  frameHosts: FrameHosts | null;
 }
 
 // ── Link rendering decisions (pure, so the suite pins them without React) ──

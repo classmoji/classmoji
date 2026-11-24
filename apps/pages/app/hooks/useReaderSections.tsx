@@ -28,6 +28,11 @@ export interface ReaderSections {
    * `canCheck` (only a reader known to be signed out gets the sign-in link).
    */
   signedIn?: boolean;
+  /**
+   * Signed in and an accepted member. Optional: a loader that does not send
+   * it is read as a member (a signed-in reader then sees a closed card).
+   */
+  member?: boolean;
   /** Signed in, accepted member, not impersonated: may tick headings. */
   canCheck: boolean;
   /** `canCheck && !staff`: may unlock. */
@@ -67,6 +72,11 @@ export interface ReaderSectionsValue {
   signedIn: boolean;
   /** Where a signed-out reader signs in (`signInUrl` from the loader), else null. */
   signInUrl: string | null;
+  /**
+   * Signed in and an accepted member (a signed-in non-member, a pending
+   * member included, is told only members can unlock a locked section).
+   */
+  member: boolean;
   canCheck: boolean;
   canUnlock: boolean;
   /** Ticked headings, with ticks in flight applied. */
@@ -105,6 +115,7 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   staff: false,
   signedIn: false,
   signInUrl: null,
+  member: false,
   canCheck: false,
   canUnlock: false,
   checked: NOTHING,
@@ -183,6 +194,7 @@ export function useReaderSectionsState(
   const signedIn =
     typeof readerSections?.signedIn === 'boolean' ? readerSections.signedIn : canCheck;
   const canUnlock = readerSections?.canUnlock === true;
+  const member = typeof readerSections?.member === 'boolean' ? readerSections.member : signedIn;
 
   // Ticks: the loader's set, plus confirmed ticks it has not reloaded yet,
   // plus ticks in flight. A new loader payload is the server's word and
@@ -374,6 +386,7 @@ export function useReaderSectionsState(
       staff,
       signedIn,
       signInUrl,
+      member,
       canCheck,
       canUnlock,
       checked,
@@ -391,6 +404,7 @@ export function useReaderSectionsState(
       staff,
       signedIn,
       signInUrl,
+      member,
       canCheck,
       canUnlock,
       checked,

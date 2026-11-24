@@ -257,6 +257,7 @@ function viewer(
     readerSections: {
       staff: a.revealAll,
       signedIn: true,
+      member: a.acceptedRole !== null,
       canCheck,
       canUnlock: canCheck && a.canUnlock,
       checked: over.checked ?? [],
@@ -279,6 +280,7 @@ function input(
     page: { id: 'page-1', classroom_id: X, is_draft: false, is_public: true },
     classroom: { id: X, slug: 'cs-x' },
     viewer: who,
+    frameHosts: null,
     options: { tier: 'week', previewActive: false, surface: 'app' },
     signInUrl: () => 'https://webapp.test/?redirect=page-1',
     links: appLinkPolicy('cs-x'),

@@ -21,12 +21,16 @@ import {
   FRAME_REFERRER_POLICY,
   FRAME_SANDBOX,
   decideFrame,
+  fileNameFromUrl,
   isHttpsUrl,
+  isOwnFrameHost,
   safeLinkHref,
   toEmbedUrl,
   type FrameDecision,
+  type FrameHosts,
 } from '~/components/editor/blocks/safeFrame.ts';
-import { SafeFrame } from '~/components/editor/blocks/frameElement.ts';
+import { ownFrameHosts } from '~/utils/frameHosts.server.ts';
+import { SafeFrame, splitHostForCard } from '~/components/editor/blocks/frameElement.ts';
 import {
   CALLOUT_EMOJIS,
   fieldBlockView,
@@ -46,8 +50,34 @@ const SIGNED_BLOB = `${DELIVERY}/c/${CLASSROOM}/blob/abc123/handout.pdf?sig=x`;
 const PLACEHOLDER = `${DELIVERY}/c/${CLASSROOM}/missing/media%3A%2F%2F${MEDIA_ID}`;
 const YT_ID = 'dQw4w9WgXcQ';
 
+/** The production layout's environment: the apps are subdomains of the sites' base domain. */
+const PROD_ENV = {
+  WEBAPP_URL: 'https://app.classmoji.io',
+  PAGES_URL: 'https://pages.classmoji.io',
+  SLIDES_URL: 'https://slides.classmoji.io',
+  CONTENT_DELIVERY_ORIGIN: 'https://content.classmoji.io',
+  SITE_BASE_DOMAIN: 'classmoji.io',
+};
+/** The staging layout: the web app IS the base domain; the other apps sit under it. */
+const STAGING_ENV = {
+  WEBAPP_URL: 'https://staging.classmoji.io',
+  PAGES_URL: 'https://pages.staging.classmoji.io',
+  SLIDES_URL: 'https://slides.staging.classmoji.io',
+  CONTENT_DELIVERY_ORIGIN: 'https://content.staging.classmoji.io',
+  SITE_BASE_DOMAIN: 'staging.classmoji.io',
+};
+/** Our hosts as the server names them in production (`ownFrameHosts`). */
+const HOSTS: FrameHosts = {
+  hosts: ['app.classmoji.io', 'content.classmoji.io', 'pages.classmoji.io'],
+  siteDomain: 'classmoji.io',
+  framed: ['slides.classmoji.io'],
+  delivery: 'content.classmoji.io',
+};
+/** A reference the server's display map resolved. */
+const OWN = { hosts: HOSTS, serverResolved: true };
+
 test.describe('the frame attributes', () => {
-  test('the sandbox is exactly the decided one', () => {
+  test('the sandbox is exactly the decided one (dialogs allowed: code demos use alert/prompt)', () => {
     expect(FRAME_SANDBOX).toBe(
       'allow-scripts allow-same-origin allow-presentation allow-forms allow-popups ' +
         'allow-popups-to-escape-sandbox allow-modals allow-downloads'
@@ -160,28 +190,81 @@ test.describe('what is framed', () => {
   });
 });
 
-test.describe('PDFs are framed without a sandbox (Chrome blocks its PDF viewer in any sandbox)', () => {
-  test('an https URL whose path ends .pdf, any case', () => {
+test.describe("PDFs: framed unsandboxed only when they are the class's own file", () => {
+  test('an https URL whose path ends .pdf, any case: a card, never a frame', () => {
     for (const url of [
       'https://example.com/syllabus.pdf',
       'https://example.com/syllabus.PDF',
       'https://example.com/syllabus.pdf?download=0#page=2',
     ]) {
-      expect(decideFrame(url, url), url).toEqual({ kind: 'frame', src: url, sandboxed: false });
+      expect(decideFrame(url, url, null, { hosts: HOSTS }), url).toEqual({
+        kind: 'file',
+        href: url,
+        name: url.includes('PDF') ? 'syllabus.PDF' : 'syllabus.pdf',
+        host: 'example.com',
+      });
+      // With no hosts known, the same card: nothing is ever framed unsandboxed.
+      expect(decideFrame(url, url).kind, url).toBe('file');
     }
   });
 
-  test('a repo reference ending .pdf that resolved to https, whatever the signed URL ends in', () => {
-    expect(decideFrame('pages/lab/handout.pdf', SIGNED_BLOB)).toEqual({
+  test("the class's own PDF (a repo reference the server resolved, on the delivery host): no sandbox", () => {
+    expect(decideFrame('pages/lab/handout.pdf', SIGNED_BLOB, null, OWN)).toEqual({
       kind: 'frame',
       src: SIGNED_BLOB,
       sandboxed: false,
     });
+    // The signed URL need not say .pdf: the stored reference does.
     const opaque = `${DELIVERY}/c/${CLASSROOM}/blob/abc123?sig=x`;
-    expect(decideFrame('pages/lab/Handout.PDF', opaque)).toEqual({
+    expect(decideFrame('pages/lab/Handout.PDF', opaque, null, OWN)).toEqual({
       kind: 'frame',
       src: opaque,
       sandboxed: false,
+    });
+  });
+
+  test('the same URL the server did not resolve (pasted by an author) is our host: a link', () => {
+    expect(decideFrame(SIGNED_BLOB, SIGNED_BLOB, null, { hosts: HOSTS })).toEqual({
+      kind: 'link',
+      text: SIGNED_BLOB,
+      href: SIGNED_BLOB,
+    });
+    expect(
+      decideFrame(SIGNED_BLOB, SIGNED_BLOB, null, { hosts: HOSTS, serverResolved: false }).kind
+    ).toBe('link');
+  });
+
+  test('resolved, but not to the delivery host the server named: never unsandboxed', () => {
+    const elsewhere = 'https://elsewhere.test/c/x/blob/abc/handout.pdf?sig=x';
+    expect(decideFrame('pages/lab/handout.pdf', elsewhere, null, OWN)).toEqual({
+      kind: 'file',
+      href: elsewhere,
+      name: 'handout.pdf',
+      host: 'elsewhere.test',
+    });
+    // No delivery host named: our host is a link; with no hosts known at all, the card.
+    expect(
+      decideFrame('pages/lab/handout.pdf', SIGNED_BLOB, null, {
+        hosts: { ...HOSTS, delivery: null },
+        serverResolved: true,
+      }).kind
+    ).toBe('link');
+    expect(
+      decideFrame('pages/lab/handout.pdf', SIGNED_BLOB, null, { serverResolved: true }).kind
+    ).toBe('file');
+  });
+
+  test('a placeholder for a file the class does not have is not shown', () => {
+    const missing = `${DELIVERY}/c/${CLASSROOM}/missing/pages%2Flab%2Fgone.pdf`;
+    expect(decideFrame('pages/lab/gone.pdf', missing, null, OWN)).toEqual({ kind: 'none' });
+  });
+
+  test("the class's own file that is not a PDF keeps the sandbox", () => {
+    const html = SIGNED_BLOB.replace('handout.pdf', 'demo');
+    expect(decideFrame('pages/lab/demo.html', html, null, OWN)).toEqual({
+      kind: 'frame',
+      src: html,
+      sandboxed: true,
     });
   });
 
@@ -191,19 +274,172 @@ test.describe('PDFs are framed without a sandbox (Chrome blocks its PDF viewer i
       'https://example.com/a.pdf/view',
       'https://example.pdf/page',
     ]) {
-      expect(decideFrame(url, url), url).toEqual({ kind: 'frame', src: url, sandboxed: true });
+      expect(decideFrame(url, url, null, { hosts: HOSTS }), url).toEqual({
+        kind: 'frame',
+        src: url,
+        sandboxed: true,
+      });
     }
-    // A repo reference that is not a PDF keeps the sandbox.
-    expect(decideFrame('pages/lab/demo.html', SIGNED_BLOB.replace('handout.pdf', 'demo'))).toEqual({
-      kind: 'frame',
-      src: SIGNED_BLOB.replace('handout.pdf', 'demo'),
-      sandboxed: true,
-    });
   });
 
   test('an http PDF is still only a link', () => {
     const url = 'http://example.com/a.pdf';
     expect(decideFrame(url, url)).toEqual({ kind: 'link', text: url, href: url });
+  });
+});
+
+test.describe('our own hosts are never framed; the slides app and the base domain are', () => {
+  const kind = (url: string, hosts: FrameHosts) => decideFrame(url, url, null, { hosts }).kind;
+
+  test('the server reads the production layout from the environment', () => {
+    expect(ownFrameHosts(PROD_ENV)).toEqual(HOSTS);
+    expect(ownFrameHosts({ ...PROD_ENV, PAGES_URL: 'https://Pages.classmoji.io/' })).toEqual(HOSTS);
+  });
+
+  test('production: the web app, pages, delivery and every class site are links', () => {
+    for (const url of [
+      'https://app.classmoji.io/student/cs52/assignments',
+      'https://pages.classmoji.io/cs52/page-1',
+      'https://PAGES.classmoji.io./cs52/page-1',
+      'https://content.classmoji.io/c/x/blob/abc/notes.html',
+      'https://cs52.classmoji.io/week-1',
+      'https://a.b.classmoji.io/x',
+      // Other first-party hosts under the base domain are refused too.
+      'https://admin.classmoji.io/',
+      'https://mcp.classmoji.io/mcp',
+    ]) {
+      expect(decideFrame(url, url, null, { hosts: HOSTS }), url).toEqual({
+        kind: 'link',
+        text: url,
+        href: url,
+      });
+    }
+  });
+
+  test('production: a slides deck and the base domain (marketing, docs) are framed, sandboxed', () => {
+    for (const url of [
+      'https://slides.classmoji.io/cs52/deck-1',
+      'https://classmoji.io/docs/instructors',
+    ]) {
+      expect(decideFrame(url, url, null, { hosts: HOSTS }), url).toEqual({
+        kind: 'frame',
+        src: url,
+        sandboxed: true,
+      });
+    }
+  });
+
+  test('staging: the web app is the base domain (a link); pages, delivery, sites are links; slides frames', () => {
+    const staging = ownFrameHosts(STAGING_ENV);
+    expect(staging).toEqual({
+      hosts: ['content.staging.classmoji.io', 'pages.staging.classmoji.io', 'staging.classmoji.io'],
+      siteDomain: 'staging.classmoji.io',
+      framed: ['slides.staging.classmoji.io'],
+      delivery: 'content.staging.classmoji.io',
+    });
+    for (const url of [
+      'https://staging.classmoji.io/student/cs52',
+      'https://pages.staging.classmoji.io/cs52/p',
+      'https://content.staging.classmoji.io/c/x/blob/a/b.html',
+      'https://cs52.staging.classmoji.io/week-1',
+    ]) {
+      expect(kind(url, staging), url).toBe('link');
+    }
+    expect(kind('https://slides.staging.classmoji.io/cs52/deck', staging)).toBe('frame');
+    // Production's hosts are not staging's own.
+    expect(kind('https://classmoji.io/', staging)).toBe('frame');
+  });
+
+  test('a slides host that is also a refused app host stays refused', () => {
+    const same = ownFrameHosts({ ...PROD_ENV, SLIDES_URL: 'https://pages.classmoji.io' });
+    expect(same.framed).toEqual([]);
+    expect(kind('https://pages.classmoji.io/x', same)).toBe('link');
+  });
+
+  test('a PDF on one of our refused hosts is a link, not a card; on the slides host a card', () => {
+    const url = 'https://cs52.classmoji.io/files/a.pdf';
+    expect(decideFrame(url, url, null, { hosts: HOSTS })).toEqual({
+      kind: 'link',
+      text: url,
+      href: url,
+    });
+    expect(kind('https://slides.classmoji.io/files/a.pdf', HOSTS)).toBe('file');
+  });
+
+  test('look-alike hosts are not ours', () => {
+    for (const url of [
+      'https://classmoji.io.evil.test/x',
+      'https://evilclassmoji.io/x',
+      'https://pages.classmoji.io.example/x',
+    ]) {
+      expect(isOwnFrameHost(new URL(url).hostname, HOSTS), url).toBe(false);
+      expect(kind(url, HOSTS), url).toBe('frame');
+    }
+  });
+
+  test('a provider embed still frames, sandboxed, with our hosts known', () => {
+    expect(
+      decideFrame(`https://youtu.be/${YT_ID}`, `https://youtu.be/${YT_ID}`, null, OWN)
+    ).toEqual({ kind: 'frame', src: `https://www.youtube.com/embed/${YT_ID}`, sandboxed: true });
+  });
+
+  test('unset and malformed values name no host', () => {
+    expect(ownFrameHosts({ WEBAPP_URL: 'not a url' })).toEqual({
+      hosts: [],
+      siteDomain: null,
+      framed: [],
+      delivery: null,
+    });
+  });
+});
+
+test.describe('the PDF card names the file safely', () => {
+  const name = (path: string) => fileNameFromUrl(new URL(`https://example.com${path}`));
+
+  test('the last path segment, percent-decoded', () => {
+    expect(name('/docs/Week%201%20Notes.pdf')).toBe('Week 1 Notes.pdf');
+    expect(name('/a/b/syllabus.pdf')).toBe('syllabus.pdf');
+  });
+
+  test('malformed encoding is shown as it is', () => {
+    expect(name('/bad%E0%A4%A.pdf')).toBe('bad%E0%A4%A.pdf');
+  });
+
+  test('no control or bidirectional characters, however they were encoded', () => {
+    expect(name('/%E2%80%AEfdp.exe.pdf')).toBe('fdp.exe.pdf');
+    expect(name('/a%00b%0A.pdf')).toBe('ab.pdf');
+  });
+
+  test('no zero-width or format characters', () => {
+    for (const code of [
+      '200B',
+      '200C',
+      '200D',
+      '200E',
+      '200F',
+      '2028',
+      '202F',
+      '2060',
+      '2064',
+      'FEFF',
+    ]) {
+      const encoded = encodeURIComponent(String.fromCharCode(parseInt(code, 16)));
+      expect(name(`/se${encoded}cret.pdf`), code).toBe('secret.pdf');
+    }
+  });
+
+  test('a decoded slash adds no path to the name: only the last segment shows', () => {
+    expect(name('/docs/evil.example%2Fsyllabus.pdf')).toBe('syllabus.pdf');
+    expect(name('/x/a%5Cb%5Creal.pdf')).toBe('real.pdf');
+    expect(name('/x/trailing%2F')).toBe('trailing');
+    expect(name('/x/%2F%2F')).toBe('Document.pdf');
+  });
+
+  test('a long name is cut; an empty one has a default', () => {
+    const long = name(`/${'a'.repeat(300)}.pdf`);
+    expect(long.length).toBe(120);
+    expect(long.endsWith('…')).toBe(true);
+    expect(fileNameFromUrl(new URL('https://example.com/'))).toBe('Document.pdf');
   });
 });
 
@@ -342,13 +578,72 @@ test.describe('what SafeFrame renders', () => {
     expect(frame?.hasAttribute('allowfullscreen')).toBe(true);
   });
 
-  test('a PDF: an iframe with no sandbox attribute at all', () => {
-    const url = 'https://example.com/syllabus.pdf';
-    const frame = parse(render(decideFrame(url, url))).querySelector('iframe');
-    expect(frame?.getAttribute('src')).toBe(url);
+  test("the class's own PDF: an iframe with no sandbox attribute at all", () => {
+    const frame = parse(
+      render(decideFrame('pages/lab/handout.pdf', SIGNED_BLOB, null, OWN))
+    ).querySelector('iframe');
+    expect(frame?.getAttribute('src')).toBe(SIGNED_BLOB);
     expect(frame?.hasAttribute('sandbox')).toBe(false);
     expect(frame?.getAttribute('referrerpolicy')).toBe('strict-origin-when-cross-origin');
     expect(frame?.getAttribute('loading')).toBe('lazy');
+  });
+
+  test('any other PDF: a card whose "Open" link opens it in a new tab, no iframe', () => {
+    const url = 'https://example.com/docs/Week%201.pdf';
+    for (const editable of [false, true]) {
+      const doc = parse(render(decideFrame(url, url, null, { hosts: HOSTS }), editable, url));
+      expect(doc.querySelector('iframe')).toBeNull();
+      // One link, and it is the Open control: the card itself is not a link.
+      const links = doc.querySelectorAll('a');
+      expect(links).toHaveLength(1);
+      const open = doc.querySelector('.bn-frame-file > a.bn-frame-file-open');
+      expect(open?.getAttribute('href')).toBe(url);
+      expect(open?.getAttribute('target')).toBe('_blank');
+      expect(open?.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(open?.getAttribute('aria-label')).toBe('Open Week 1.pdf (example.com) in a new tab');
+      expect(doc.querySelector('.bn-frame-file')?.tagName).toBe('DIV');
+      expect(doc.querySelector('.bn-frame-file-name')?.textContent).toBe('Week 1.pdf');
+      expect(doc.querySelector('.bn-frame-file-host')?.textContent).toBe('example.com');
+      // The reader stretches the link over the card; the editor does not, so a
+      // click that selects the block opens nothing.
+      expect(doc.querySelector('.bn-frame-file')?.classList.contains('bn-frame-file-reader')).toBe(
+        !editable
+      );
+    }
+  });
+
+  test('a long host keeps its end: the head is cut first, the last two labels never', () => {
+    const host = `docs.google.com.${'a'.repeat(44)}.attacker.example`;
+    expect(splitHostForCard(host)).toEqual({
+      head: `docs.google.com.${'a'.repeat(44)}.`,
+      tail: 'attacker.example',
+    });
+    expect(splitHostForCard('example.com')).toEqual({ head: '', tail: 'example.com' });
+    expect(splitHostForCard('a.b.example.com:8443')).toEqual({
+      head: 'a.b.',
+      tail: 'example.com:8443',
+    });
+    const url = `https://${host}/x.pdf`;
+    const doc = parse(render(decideFrame(url, url)));
+    expect(doc.querySelector('.bn-frame-file-host-tail')?.textContent).toBe('attacker.example');
+    expect(doc.querySelector('.bn-frame-file-host')?.getAttribute('title')).toBe(host);
+  });
+
+  test('a file name is text, never markup', () => {
+    const url = 'https://example.com/%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E.pdf';
+    const doc = parse(render(decideFrame(url, url)));
+    expect(doc.querySelector('img')).toBeNull();
+    expect(doc.querySelector('.bn-frame-file-name')?.textContent).toBe(
+      '<img src=x onerror=alert(1)>.pdf'
+    );
+  });
+
+  test('our own host: a new-tab link, no iframe', () => {
+    const url = 'https://cs52.classmoji.io/week-1';
+    const doc = parse(render(decideFrame(url, url, null, { hosts: HOSTS })));
+    expect(doc.querySelector('iframe')).toBeNull();
+    expect(doc.querySelector('a')?.getAttribute('href')).toBe(url);
+    expect(doc.querySelector('a')?.getAttribute('target')).toBe('_blank');
   });
 
   test('http: a new-tab link, no iframe', () => {

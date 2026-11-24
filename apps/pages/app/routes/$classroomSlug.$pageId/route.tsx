@@ -209,6 +209,9 @@ const PageRoute = () => {
     // The shared reader's payload, on every path that shows the page
     // read-only (`PageReader` below); null for the editors.
     reader,
+    // Our own hosts, for the editors' embed and video blocks (the reader's
+    // come in its payload).
+    frameHosts,
     // The EDITORS' page comments: only for a signed-in member (the key is
     // absent otherwise, and then nothing comment-related is drawn). The
     // reader's are in its payload.
@@ -237,10 +240,17 @@ const PageRoute = () => {
     [navigate, classroomSlug]
   );
   // What the editors' blocks read: no link map (their own rendering), this
-  // app's navigation.
+  // app's navigation, and our hosts for the frame rule (an author's embed
+  // shows exactly what readers get).
   const editorSurface = useMemo<ReaderSurfaceValue>(
-    () => ({ ...DEFAULT_READER_SURFACE, surface: 'app', classroomSlug, navigatePage }),
-    [classroomSlug, navigatePage]
+    () => ({
+      ...DEFAULT_READER_SURFACE,
+      surface: 'app',
+      classroomSlug,
+      navigatePage,
+      frameHosts: frameHosts ?? null,
+    }),
+    [classroomSlug, navigatePage, frameHosts]
   );
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);

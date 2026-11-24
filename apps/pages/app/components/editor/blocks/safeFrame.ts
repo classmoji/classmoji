@@ -14,26 +14,70 @@ import { hasMediaPlaceholderShape, hasMediaScheme, hasMediaUrlShape } from '~/ut
  *    author expected content), and every other scheme (`javascript:`, `data:`,
  *    a malformed string) is refused outright; each becomes a link instead
  *    (`FrameDecision.link`);
- *  - a URL on the page's own origin is never framed (a link instead): a
- *    same-origin frame with `allow-scripts allow-same-origin` is the app;
+ *  - a URL on one of our own hosts is never framed (a link instead): the
+ *    page's own origin, the web app, the pages app, the content delivery
+ *    origin and every class site (`FrameHosts`). The one exception is a file
+ *    of the class's own, below. The slides app and the sites' base domain
+ *    itself (the marketing and docs site) are framed like any other site: a
+ *    deck embedded in a page is a real use;
  *  - media of our own (a `media:` reference, a signed media URL, the
  *    placeholder for one that could not be signed) is never framed: it plays
- *    in a `<video>` or not at all. Judged by path shape, because the browser is
- *    never told the delivery origin (`hasMediaUrlShape`); a signed REPO file (a
- *    PDF in the content repository) is not media and still frames;
+ *    in a `<video>` or not at all. Judged by path shape, because refusing
+ *    needs no origin (`hasMediaUrlShape`);
+ *  - a PDF is framed WITHOUT a sandbox only when it is a file of the class's
+ *    own: the stored reference has an entry in the display map the server
+ *    sent (it resolved it from the class's content repository) and that entry
+ *    is on the delivery host the server named. Every other `.pdf` URL is a
+ *    card that opens it in a new tab (`FrameDecision.file`), never a frame;
  *  - the frame may run scripts, submit forms, open pop-ups and dialogs and
- *    download, and can never navigate the whole tab (`FRAME_SANDBOX`). A PDF is
- *    the one exception: it is framed without a sandbox (`FrameDecision.frame`).
+ *    download, and can never navigate the whole tab (`FRAME_SANDBOX`).
  */
 
 /**
- * The sandbox every embedded frame gets (a PDF excepted, see `decideFrame`).
+ * Our own hosts, as the server knows them for this deployment
+ * (`utils/frameHosts.server.ts`), handed to the blocks through the reader
+ * payload and the editor's loader data. Hostnames only, lower case.
+ */
+export interface FrameHosts {
+  /** Exact hostnames never framed: the web app, the pages app, the delivery origin. */
+  hosts: string[];
+  /**
+   * The class sites' base domain: every STRICT subdomain of it is a class
+   * site (or another host of ours) and is never framed, except the hosts in
+   * `framed`. The base domain itself is not refused by this rule.
+   */
+  siteDomain: string | null;
+  /** Our hosts that ARE framed (sandboxed) even under `siteDomain`: the slides app. */
+  framed: string[];
+  /**
+   * The content delivery origin's hostname: the only host a file of the
+   * class's own is framed from. Null where nothing is delivered.
+   */
+  delivery: string | null;
+}
+
+/** What a block knows beyond the URLs: our hosts, and whether the server resolved the reference. */
+export interface FrameContext {
+  /** Our hosts (null: none known here, so only the page's own origin is refused). */
+  hosts?: FrameHosts | null;
+  /**
+   * The stored reference has a non-identity entry in the display map the
+   * server sent (`useAssetDisplayUrl`): the server resolved it to a file of
+   * the class's own. Never decided from the shape of the URL.
+   */
+  serverResolved?: boolean;
+}
+
+/**
+ * The sandbox every embedded frame gets (a PDF of the class's own excepted,
+ * see `decideFrame`).
  *
  * No `allow-top-navigation` of any kind: with it, anything an instructor
  * pasted, or whatever later appears at that URL, could send the reader's
  * whole tab somewhere else. Forms, pop-ups (outside the sandbox, so a page
  * opened from an embed works normally), dialogs and downloads are allowed: a
- * Google Form embed has to submit, and "open in a new tab" links have to open.
+ * Google Form embed has to submit, "open in a new tab" links have to open,
+ * and the `alert`/`prompt`/`confirm` in an embedded code demo has to work.
  */
 export const FRAME_SANDBOX =
   'allow-scripts allow-same-origin allow-presentation allow-forms allow-popups ' +
@@ -51,12 +95,15 @@ export const FRAME_REFERRER_POLICY = 'strict-origin-when-cross-origin';
 
 export type FrameDecision =
   /**
-   * `sandboxed` is false for a PDF only: Chrome's PDF viewer refuses to run in
-   * a sandboxed frame (any sandbox value), so a sandboxed PDF is a blank box.
+   * `sandboxed` is false only for a PDF of the class's own: Chrome's PDF
+   * viewer refuses to run in a sandboxed frame (any sandbox value), so a
+   * sandboxed PDF is a blank box.
    */
   | { kind: 'frame'; src: string; sandboxed: boolean }
   /** Shown as text; `href` only when it is an http(s) URL, never a script. */
   | { kind: 'link'; text: string; href: string | null }
+  /** A PDF that is not the class's own: a card naming the file and its host, opening it in a new tab. */
+  | { kind: 'file'; href: string; name: string; host: string }
   /** Nothing a reader can be shown (media that cannot play in a frame). */
   | { kind: 'none' };
 
@@ -177,18 +224,76 @@ export function toEmbedUrl(value: string): string {
   return embed ?? value;
 }
 
-/** A repository reference (no scheme, not `//host`), as an author stores one. */
-function isRepoRelative(value: string): boolean {
-  return !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('//');
+/** The path of what the author stored: a URL's path, else the reference up to any query. */
+function storedPath(storedUrl: string): string {
+  try {
+    return new URL(withDefaultScheme(storedUrl)).pathname;
+  } catch {
+    return storedUrl.split(/[?#]/)[0];
+  }
+}
+
+const PDF_PATH = /\.pdf$/i;
+
+/** The resolver's placeholder for a repository file it has no record of. */
+const MISSING_DELIVERY_PATH = /^\/c\/[0-9a-f-]{36}\/missing\//i;
+
+/** A hostname as compared here: lower case, no trailing dot. */
+function normalHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/\.$/, '');
 }
 
 /**
- * A PDF: the URL's path ends `.pdf`, or what the author stored is a repo
- * reference ending `.pdf` (its signed URL need not say so).
+ * Is this hostname one of ours that is never framed: one of `FrameHosts.hosts`,
+ * or a strict subdomain of `FrameHosts.siteDomain` (a class site) that is not
+ * one of `FrameHosts.framed`?
  */
-function isPdf(frameUrl: URL, storedUrl: string): boolean {
-  if (/\.pdf$/i.test(frameUrl.pathname)) return true;
-  return isRepoRelative(storedUrl) && /\.pdf$/i.test(storedUrl.split(/[?#]/)[0]);
+export function isOwnFrameHost(hostname: string, hosts: FrameHosts | null | undefined): boolean {
+  if (!hosts) return false;
+  const host = normalHost(hostname);
+  if (!host) return false;
+  if (hosts.hosts.some(own => normalHost(own) === host)) return true;
+  if (hosts.framed.some(own => normalHost(own) === host)) return false;
+  const site = hosts.siteDomain ? normalHost(hosts.siteDomain) : '';
+  return site !== '' && host.endsWith(`.${site}`);
+}
+
+/**
+ * Characters a file name on a card never carries: controls, zero-width and
+ * format characters, and bidirectional controls (U+200B-U+200F,
+ * U+2028-U+202F, U+2060-U+2069, U+061C, U+FEFF).
+ */
+const UNSAFE_NAME_CHARS =
+  // oxlint-disable-next-line no-control-regex -- matching control characters is the point: they are removed.
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202f\u2060-\u2069\ufeff]/g;
+
+/** The most of a file name a card shows. */
+const FILE_NAME_MAX = 120;
+
+/**
+ * The file name a card shows: the URL path's last segment, percent-decoded
+ * when it decodes (left as it is when it does not), and again only the part
+ * after the last `/` or `\` (a decoded slash adds no path to the name), with
+ * control, zero-width, format and bidirectional characters removed, and cut
+ * to `FILE_NAME_MAX`. Text only: the card renders it as a string.
+ */
+export function fileNameFromUrl(url: URL): string {
+  const segment = url.pathname.split('/').filter(Boolean).pop() ?? '';
+  let name = segment;
+  try {
+    name = decodeURIComponent(segment);
+  } catch {
+    // Not valid percent-encoding: shown as it is.
+  }
+  name = name.replace(UNSAFE_NAME_CHARS, '');
+  name = (
+    name
+      .split(/[\\/]/)
+      .filter(part => part.trim() !== '')
+      .pop() ?? ''
+  ).trim();
+  if (name.length > FILE_NAME_MAX) name = `${name.slice(0, FILE_NAME_MAX - 1)}…`;
+  return name || 'Document.pdf';
 }
 
 /**
@@ -199,17 +304,20 @@ function isPdf(frameUrl: URL, storedUrl: string): boolean {
  * resolved it to (`useResolvedFileUrl`), which is what a repo reference frames
  * from. A recognised provider is converted from the stored URL and never
  * resolved: it is external by construction. `pageOrigin` is the page's own
- * origin (`currentPageOrigin()`), never framed.
+ * origin (`currentPageOrigin()`), never framed. `context` carries our hosts
+ * and whether the server resolved the stored reference (`FrameContext`).
  */
 export function decideFrame(
   storedUrl: string,
   resolvedUrl: string,
-  pageOrigin: string | null = null
+  pageOrigin: string | null = null,
+  context: FrameContext = {}
 ): FrameDecision {
   if (!storedUrl) return NONE;
   const stored = withDefaultScheme(storedUrl);
   const converted = toEmbedUrl(stored);
-  const candidate = converted !== stored ? converted : withDefaultScheme(resolvedUrl || storedUrl);
+  const provider = converted !== stored;
+  const candidate = provider ? converted : withDefaultScheme(resolvedUrl || storedUrl);
 
   if (
     hasMediaScheme(storedUrl) ||
@@ -226,8 +334,30 @@ export function decideFrame(
   if (pageOrigin && url.origin === pageOrigin) {
     return { kind: 'link', text: storedUrl, href: candidate };
   }
-  // Chrome's PDF viewer is blocked by ANY sandbox, so a sandboxed PDF is a
-  // blank box. PDFs alone keep today's unsandboxed frame; everything else
-  // gets FRAME_SANDBOX.
-  return { kind: 'frame', src: candidate, sandboxed: !isPdf(url, storedUrl) };
+
+  // A file of the class's own: the server resolved the stored reference, and
+  // what it resolved to is on the delivery host it named. Decided from the
+  // display map and the server's host, never from the URL's shape.
+  const delivery = context.hosts?.delivery ? normalHost(context.hosts.delivery) : null;
+  const ownFile =
+    !provider &&
+    context.serverResolved === true &&
+    delivery !== null &&
+    normalHost(url.hostname) === delivery;
+  if (ownFile) {
+    // A placeholder for a file the class does not have is not a file.
+    if (MISSING_DELIVERY_PATH.test(url.pathname)) return NONE;
+    // Chrome's PDF viewer is blocked by ANY sandbox, so a sandboxed PDF is a
+    // blank box: the class's own PDF alone is framed without one.
+    const pdf = PDF_PATH.test(url.pathname) || PDF_PATH.test(storedPath(storedUrl));
+    return { kind: 'frame', src: candidate, sandboxed: !pdf };
+  }
+
+  if (isOwnFrameHost(url.hostname, context.hosts)) {
+    return { kind: 'link', text: storedUrl, href: candidate };
+  }
+  if (PDF_PATH.test(url.pathname)) {
+    return { kind: 'file', href: candidate, name: fileNameFromUrl(url), host: url.host };
+  }
+  return { kind: 'frame', src: candidate, sandboxed: true };
 }

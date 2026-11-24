@@ -48,6 +48,7 @@ function islandData(text = HOSTILE): ReaderIslandData {
       readerSections: {
         staff: true,
         signedIn: false,
+        member: false,
         canCheck: false,
         canUnlock: false,
         checked: [],
@@ -57,6 +58,7 @@ function islandData(text = HOSTILE): ReaderIslandData {
       links: {},
       scheduleHref: null,
       description: null,
+      frameHosts: null,
     },
   };
 }

@@ -40,6 +40,88 @@ export interface SafeFrameProps {
   boxStyle?: CSSProperties;
 }
 
+/** A document glyph for the file card (decorative). */
+function FileGlyph() {
+  return h(
+    'svg',
+    {
+      className: 'bn-frame-file-icon',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.75,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      'aria-hidden': 'true',
+    },
+    h('path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }),
+    h('path', { d: 'M14 3v5h5' }),
+    h('path', { d: 'M9 13h6M9 17h4' })
+  );
+}
+
+/**
+ * A host as the card shows it: the last two labels (and any port) in `tail`,
+ * which is never cut, and the rest in `head`, which is cut first when there
+ * is no room. So the end of a long host, where its registrable domain is,
+ * always shows: `docs.google.com.aaaa….attacker.example` keeps
+ * `attacker.example`.
+ */
+export function splitHostForCard(host: string): { head: string; tail: string } {
+  const [name, port] = host.split(/(?=:\d+$)/);
+  const labels = name.split('.');
+  if (labels.length <= 2) return { head: '', tail: host };
+  return {
+    head: `${labels.slice(0, -2).join('.')}.`,
+    tail: `${labels.slice(-2).join('.')}${port ?? ''}`,
+  };
+}
+
+/**
+ * A PDF that is not framed (`FrameDecision.file`): a card naming the file and
+ * the host it is on, with an "Open" link that opens it in a new tab. One
+ * markup in the editor and the reader, so an author sees what readers get. In
+ * the reader the whole card is that link's hit area (`bn-frame-file-reader`,
+ * a stretched `::after`); in the editor only "Open" is a link, so a click
+ * that selects the block opens nothing.
+ */
+function FileCard({
+  decision,
+  editable,
+}: {
+  decision: Extract<FrameDecision, { kind: 'file' }>;
+  editable: boolean;
+}) {
+  const host = splitHostForCard(decision.host);
+  return h(
+    'div',
+    { className: editable ? 'bn-frame-file' : 'bn-frame-file bn-frame-file-reader' },
+    h(FileGlyph),
+    h(
+      'span',
+      { className: 'bn-frame-file-text' },
+      h('span', { className: 'bn-frame-file-name' }, decision.name),
+      h(
+        'span',
+        { className: 'bn-frame-file-host', title: decision.host },
+        host.head ? h('span', { className: 'bn-frame-file-host-head' }, host.head) : null,
+        h('span', { className: 'bn-frame-file-host-tail' }, host.tail)
+      )
+    ),
+    h(
+      'a',
+      {
+        className: 'bn-frame-file-open',
+        href: decision.href,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        'aria-label': `Open ${decision.name} (${decision.host}) in a new tab`,
+      },
+      'Open'
+    )
+  );
+}
+
 /**
  * The one way a page block frames another site (`safeFrame.ts` decides what).
  *
@@ -67,13 +149,15 @@ export function SafeFrame({ decision, title, editable, storedUrl, boxStyle }: Sa
     );
   }
 
+  if (decision.kind === 'file') return h(FileCard, { decision, editable });
+
   return h(
     'div',
     { style: { ...BOX_STYLE, ...boxStyle } },
     h('iframe', {
       src: decision.src,
       style: FRAME_STYLE,
-      // A PDF is framed unsandboxed (see `decideFrame`); everything else is.
+      // Only a PDF of the class's own is framed unsandboxed (see `decideFrame`).
       sandbox: decision.sandboxed ? FRAME_SANDBOX : undefined,
       allow: FRAME_ALLOW,
       allowFullScreen: true,

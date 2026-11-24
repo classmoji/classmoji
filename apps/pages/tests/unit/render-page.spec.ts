@@ -26,6 +26,7 @@ import {
   renderPageHeaders,
 } from '../../app/render/headers.server.ts';
 import { DARK_MODE_SCRIPT_HASH } from '../../app/site/headers.server.ts';
+import { ownFrameHosts } from '../../app/utils/frameHosts.server.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -182,6 +183,7 @@ type IslandPayload = {
   links: Record<string, { href: string; title: string; membersOnly: boolean }>;
   scheduleHref: string | null;
   signInUrl: string | null;
+  frameHosts: unknown;
 };
 interface ViewData {
   island: { surface: string; page: Record<string, unknown>; payload: IslandPayload };
@@ -234,12 +236,15 @@ test.describe('the render page loader (reader island)', () => {
     expect(payload.readerSections).toEqual({
       staff: true,
       signedIn: false,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
       unlocked: {},
     });
     expect(payload.signInUrl).toBeNull();
+    // The frame rule's hosts, as the server names them (PDFs are cards here too).
+    expect(payload.frameHosts).toEqual(ownFrameHosts());
     expect('readerComments' in payload).toBe(false);
     expect(payload.mediaDownloads).toEqual({});
     expect(fakes.calls).not.toContain('comments');

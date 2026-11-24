@@ -32,6 +32,7 @@ import { verifyDocViewToken } from '@classmoji/services/render-token';
 import { CollabRequestError } from '~/utils/collabEnv.server.ts';
 import { fetchLiveSnapshot, liveEditingEnv } from '~/utils/collab.server.ts';
 import { readerPayloadDeps } from '~/utils/readerDeps.server.ts';
+import { ownFrameHosts } from '~/utils/frameHosts.server.ts';
 import {
   buildReaderPayload,
   type ReaderLinkPolicy,
@@ -74,6 +75,7 @@ function renderViewer(): ReaderViewer {
     readerSections: {
       staff: true,
       signedIn: false,
+      member: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -184,6 +186,8 @@ export async function pageViewLoader({
       page,
       classroom: page.classroom as unknown as { id: string },
       viewer: renderViewer(),
+      // The same frame rule as every reader: a PDF not of the class's own is a card.
+      frameHosts: ownFrameHosts(),
       options: {
         tier: ClassmojiService.contentDelivery.tierFor({
           canEdit: false,

@@ -3,7 +3,7 @@ import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-ro
 
 import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
-import { isMember, isStaff, publicPathOf, resolveSiteContext } from './tenant.server.ts';
+import { isStaff, publicPathOf, resolveSiteContext, siteReadRole } from './tenant.server.ts';
 import { loadSitePageView, siteReaderPolicy, type SitePageRow } from './pageRender.server.ts';
 import { siteArticleWidthClass } from './articleWidth.ts';
 import { imagePreloadMeta, imagePreloadsFor } from './imagePreloads.ts';
@@ -27,6 +27,8 @@ import { ReaderIsland } from '~/reader-island/ReaderIsland.tsx';
  *  - **members-only, and you are signed in but not enrolled** → 403 naming
  *    the account. Signing in again will not help, and silently bouncing such
  *    a visitor back through OAuth is the loop that makes people email us.
+ *    Someone enrolled whose invite is still pending reads the page, as in the
+ *    app (`siteReadRole`), with no member features.
  *
  * A draft is a 404 for everyone including its author — see
  * `isPageVisibleOnSite`; the public site is the published artifact, and staff
@@ -56,7 +58,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
     });
   }
 
-  if (!ClassmojiService.site.isPageVisibleOnSite(page, viewer.role)) {
+  if (!ClassmojiService.site.isPageVisibleOnSite(page, siteReadRole(viewer))) {
     if (!viewer.userId) {
       // On a custom domain every visitor is anonymous by construction, and
       // `memberLinkOrigin` sends them to the canonical subdomain's
@@ -111,13 +113,14 @@ export const loader = async (args: LoaderFunctionArgs) => {
       legacyNotice: isStaff(viewer) && view.legacyFormat,
     },
     {
-      // Only a public page read by a non-member is shared-cacheable, and
+      // Only a public page read with no session is shared-cacheable, and
       // siteHeaders downgrades this anyway when a session cookie is present:
-      // the island's data is part of this document, so a member's payload
-      // never reaches a shared cache.
+      // the island's data is part of this document and differs for anyone
+      // signed in (a member's own reader, a pending member's links, a
+      // non-member's "only members" line), so none of it reaches a shared cache.
       headers: siteHeaders({
         request,
-        cacheable: page.is_public && !isMember(viewer),
+        cacheable: page.is_public && !viewer.userId,
         noindex: !page.is_public,
         reader: siteReaderPolicy(request, context),
       }),

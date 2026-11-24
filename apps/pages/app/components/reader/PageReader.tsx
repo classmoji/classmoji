@@ -204,6 +204,7 @@ export function PageReader({
       apiBase,
       classroomSlug,
       navigatePage,
+      frameHosts: current.frameHosts ?? null,
     }),
     [
       surface,
@@ -213,6 +214,7 @@ export function PageReader({
       apiBase,
       classroomSlug,
       navigatePage,
+      current.frameHosts,
     ]
   );
 
