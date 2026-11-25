@@ -19,6 +19,46 @@ import {
 } from '@classmoji/utils/upload-limit';
 
 /**
+ * The authorization server's endpoints (oauth-provider, and the jwt plugin's
+ * `/token`) that no client or page uses; `disabledPaths` turns them off.
+ *   - client management (create, read, list, update, delete, rotate): clients
+ *     register themselves at /oauth2/register or by a Client ID Metadata
+ *     Document, and `clientPrivileges` refuses the rest anyway;
+ *   - consents (read, list, update, delete): a user's own connections are
+ *     shown and removed by Classmoji's own pages and tools;
+ *   - end-session (RP-initiated logout), userinfo and introspection: the MCP
+ *     server verifies access tokens itself, and nothing signs out through a
+ *     client;
+ *   - the public client lookups and /oauth2/continue: the consent page reads
+ *     the client on the server, and no account-selection, sign-up or
+ *     post-sign-in page is configured to continue from;
+ *   - `/token` (a session's JWT): nothing asks for one.
+ * Kept: /oauth2/authorize, /oauth2/consent, /oauth2/token, /oauth2/register,
+ * /oauth2/revoke, `/jwks` and the discovery documents.
+ */
+export const OAUTH_PATHS_NOT_USED = [
+  '/oauth2/create-client',
+  '/oauth2/get-client',
+  '/oauth2/get-clients',
+  '/oauth2/update-client',
+  '/oauth2/delete-client',
+  '/oauth2/client/rotate-secret',
+  '/oauth2/client/rotate-keys',
+  '/oauth2/get-consent',
+  '/oauth2/get-consents',
+  '/oauth2/update-consent',
+  '/oauth2/delete-consent',
+  '/oauth2/end-session',
+  '/oauth2/end-session/confirm',
+  '/oauth2/userinfo',
+  '/oauth2/introspect',
+  '/oauth2/public-client',
+  '/oauth2/public-client-prelogin',
+  '/oauth2/continue',
+  '/token',
+] as const;
+
+/**
  * The 1.4 mcp plugin's endpoints, and the oauth-provider endpoint each one is
  * now. An MCP client can keep the discovery document it read before the move
  * (the MCP SDK stores it) and refresh or register at the old address; the
@@ -174,17 +214,64 @@ export function withCorsHeaders(response: Response): Response {
   });
 }
 
-/**
- * Whether a discovery document key names something the server does not
- * offer, so the webapp's `/.well-known/*` routes leave it out: every `dpop_*`
- * key (DPoP-bound tokens are not issued; ./oauthRequestRules.ts). oauth-provider
- * always writes `dpop_signing_alg_values_supported`, and no option removes it.
- */
-export const isUnsupportedMetadataKey = (key: string): boolean => key.startsWith('dpop_');
+/** better-auth's basePath: every endpoint a discovery document names sits under it. */
+const AUTH_BASE_PATH = '/api/auth';
 
 /**
- * A discovery document's response without the keys isUnsupportedMetadataKey
- * names, keeping its status and headers (CORS, caching); `content-length` is
+ * The endpoints oauth-provider names in its discovery documents that the
+ * router turns off (OAUTH_PATHS_NOT_USED): userinfo, introspection and end
+ * session. Advertised, a client calling them gets a 404 (#919).
+ */
+const isUnservedEndpoint = (value: unknown): boolean => {
+  if (typeof value !== 'string') return false;
+  let pathname: string;
+  try {
+    pathname = new URL(value).pathname;
+  } catch {
+    return false;
+  }
+  if (!pathname.startsWith(`${AUTH_BASE_PATH}/`)) return false;
+  return (OAUTH_PATHS_NOT_USED as readonly string[]).includes(
+    pathname.slice(AUTH_BASE_PATH.length)
+  );
+};
+
+/**
+ * Whether a discovery document key names a capability the server does not
+ * offer, so the webapp's `/.well-known/*` routes leave it out: every `dpop_*`
+ * key (DPoP-bound tokens are not issued; ./oauthRequestRules.ts), which
+ * oauth-provider always writes, and back-channel logout, which it claims
+ * whenever the jwt plugin is on although no client is ever registered for it.
+ */
+export const isUnsupportedMetadataKey = (key: string): boolean =>
+  key.startsWith('dpop_') || key.startsWith('backchannel_logout_');
+
+/**
+ * The discovery document this server publishes, from the one oauth-provider
+ * writes (#919): without the unsupported capabilities (isUnsupportedMetadataKey),
+ * and without every endpoint it does not serve, taking that endpoint's
+ * `<name>_endpoint_*` details (auth methods, signing algorithms) with it. Every
+ * other key is kept as written, the issuer included: oauth-provider builds it
+ * from the same `baseURL` as AUTH_ISSUER (./mcpResource.ts).
+ */
+export function servedDiscoveryDocument(
+  document: Record<string, unknown>
+): Record<string, unknown> {
+  const unserved = Object.keys(document).filter(
+    key => key.endsWith('_endpoint') && isUnservedEndpoint(document[key])
+  );
+  return Object.fromEntries(
+    Object.entries(document).filter(
+      ([key]) =>
+        !isUnsupportedMetadataKey(key) &&
+        !unserved.some(endpoint => key === endpoint || key.startsWith(`${endpoint}_`))
+    )
+  );
+}
+
+/**
+ * A discovery document's response as servedDiscoveryDocument leaves it,
+ * keeping its status and headers (CORS, caching); `content-length` is
  * dropped, since the body changes. Anything but a 200 JSON object is returned
  * unchanged.
  */
@@ -198,9 +285,7 @@ export async function withoutUnsupportedMetadata(response: Response): Promise<Re
     return response;
   }
   if (!document || typeof document !== 'object' || Array.isArray(document)) return response;
-  const kept = Object.fromEntries(
-    Object.entries(document).filter(([key]) => !isUnsupportedMetadataKey(key))
-  );
+  const kept = servedDiscoveryDocument(document as Record<string, unknown>);
   const headers = new Headers(response.headers);
   headers.delete('content-length');
   return new Response(JSON.stringify(kept), {

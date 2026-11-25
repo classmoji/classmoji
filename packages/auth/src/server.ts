@@ -72,6 +72,7 @@ export {
   oauthProviderAuthServerMetadata,
   oauthProviderOpenIdConfigMetadata,
 } from '@better-auth/oauth-provider';
+import { OAUTH_PATHS_NOT_USED } from './oauthHttp.ts';
 
 // The resource server's check of the access tokens this server signs
 // (apps/mcp/src/auth/jwtAccessToken.ts), against the keys `auth.api.getJwks`
@@ -248,45 +249,9 @@ export const ADMIN_PATHS_NOT_USED = [
   '/admin/has-permission',
 ] as const;
 
-/**
- * The authorization server's endpoints (oauth-provider, and the jwt plugin's
- * `/token`) that no client or page uses; `disabledPaths` turns them off.
- *   - client management (create, read, list, update, delete, rotate): clients
- *     register themselves at /oauth2/register or by a Client ID Metadata
- *     Document, and `clientPrivileges` refuses the rest anyway;
- *   - consents (read, list, update, delete): a user's own connections are
- *     shown and removed by Classmoji's own pages and tools;
- *   - end-session (RP-initiated logout), userinfo and introspection: the MCP
- *     server verifies access tokens itself, and nothing signs out through a
- *     client;
- *   - the public client lookups and /oauth2/continue: the consent page reads
- *     the client on the server, and no account-selection, sign-up or
- *     post-sign-in page is configured to continue from;
- *   - `/token` (a session's JWT): nothing asks for one.
- * Kept: /oauth2/authorize, /oauth2/consent, /oauth2/token, /oauth2/register,
- * /oauth2/revoke, `/jwks` and the discovery documents.
- */
-export const OAUTH_PATHS_NOT_USED = [
-  '/oauth2/create-client',
-  '/oauth2/get-client',
-  '/oauth2/get-clients',
-  '/oauth2/update-client',
-  '/oauth2/delete-client',
-  '/oauth2/client/rotate-secret',
-  '/oauth2/client/rotate-keys',
-  '/oauth2/get-consent',
-  '/oauth2/get-consents',
-  '/oauth2/update-consent',
-  '/oauth2/delete-consent',
-  '/oauth2/end-session',
-  '/oauth2/end-session/confirm',
-  '/oauth2/userinfo',
-  '/oauth2/introspect',
-  '/oauth2/public-client',
-  '/oauth2/public-client-prelogin',
-  '/oauth2/continue',
-  '/token',
-] as const;
+// The list lives with the discovery documents' filter, which leaves these
+// paths out of what it advertises (./oauthHttp.ts).
+export { OAUTH_PATHS_NOT_USED };
 
 export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
   'Only platform admins can view as another user.';

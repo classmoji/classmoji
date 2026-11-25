@@ -399,6 +399,46 @@ describe("the authorization server's endpoints", () => {
     expect((await routed(path)).status).not.toBe(404);
   });
 
+  // #919: what the discovery documents advertise is what the router serves.
+  // The documents are oauth-provider's own, read in-process, then filtered as
+  // the webapp's four /.well-known routes filter them.
+  describe('the discovery documents', async () => {
+    const { servedDiscoveryDocument } = await import('../oauthHttp.ts');
+    const api = auth.api as unknown as Record<string, () => Promise<Record<string, unknown>>>;
+    const documents = [
+      ['oauth-authorization-server', await api.getOAuthServerConfig()],
+      ['openid-configuration', await api.getOpenIdConfig()],
+    ] as const;
+    /** Every URL a document names for a client to call, under the auth base path. */
+    const advertised = (document: Record<string, unknown>) =>
+      Object.entries(document)
+        .filter(([key, value]) => (key.endsWith('_endpoint') || key === 'jwks_uri') && value)
+        .map(([key, value]) => [key, new URL(String(value)).pathname.replace(/^\/api\/auth/, '')]);
+
+    it.each(documents)('%s as written names endpoints the router turns off', (_name, raw) => {
+      const paths = advertised(raw).map(([, path]) => path);
+      expect(paths.some(path => (OFF as string[]).includes(path))).toBe(true);
+      expect(raw.backchannel_logout_supported).toBe(true);
+    });
+
+    it.each(documents)('%s as served names only endpoints that answer', async (_name, raw) => {
+      const served = servedDiscoveryDocument(raw);
+      const endpoints = advertised(served);
+      expect(endpoints.length).toBeGreaterThan(0);
+      for (const [key, path] of endpoints) {
+        expect(KEPT, key).toContain(path);
+        const method = path === '/oauth2/authorize' || path === '/jwks' ? 'GET' : 'POST';
+        expect((await routed(path, method)).status, key).not.toBe(404);
+      }
+      // Gone with their endpoint, and the capabilities never offered.
+      for (const key of Object.keys(served)) {
+        expect(key).not.toMatch(/^(introspection_endpoint|userinfo_endpoint|end_session_endpoint)/);
+        expect(key).not.toMatch(/^(dpop_|backchannel_logout_)/);
+      }
+      expect(served.issuer).toBe(raw.issuer);
+    });
+  });
+
   it("serves nothing under the 1.4 mcp plugin's paths", async () => {
     for (const path of ['/mcp/authorize', '/mcp/token', '/mcp/register', '/mcp/get-session']) {
       expect(DECLARED.some(e => e.path === path)).toBe(false);

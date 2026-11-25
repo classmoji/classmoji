@@ -9,7 +9,8 @@
  *     (CORS, no credentials), errors included, and a preflight is answered
  *     without reaching better-auth; nothing else gets the headers;
  *   - the four discovery routes answer any origin too, preflight included,
- *     and leave out every DPoP key oauth-provider writes;
+ *     and leave out every DPoP key, back-channel logout claim and turned-off
+ *     endpoint oauth-provider writes (#919);
  *   - a registration over the size limits is refused before better-auth;
  *   - a form body over the size or field limit is refused before better-auth.
  * better-auth itself is stood in (auth.handler, and the two endpoints the
@@ -20,12 +21,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   handler: vi.fn<(request: Request) => Promise<Response>>(),
-  // What oauth-provider writes, DPoP keys included.
+  // What oauth-provider writes: DPoP keys, back-channel logout, and endpoints
+  // the router turns off (with their details), beside one it serves.
   serverConfig: vi.fn(async () => ({
     issuer: 'http://localhost:3000',
     token_endpoint: 'x',
     dpop_signing_alg_values_supported: ['EdDSA', 'ES256'],
     dpop_bound_access_tokens_required: false,
+    backchannel_logout_supported: true,
+    backchannel_logout_session_supported: true,
+    userinfo_endpoint: 'http://localhost:3000/api/auth/oauth2/userinfo',
+    end_session_endpoint: 'http://localhost:3000/api/auth/oauth2/end-session',
+    introspection_endpoint: 'http://localhost:3000/api/auth/oauth2/introspect',
+    introspection_endpoint_auth_methods_supported: ['client_secret_basic'],
   })),
 }));
 
