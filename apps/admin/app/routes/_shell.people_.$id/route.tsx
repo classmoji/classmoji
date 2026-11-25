@@ -229,9 +229,6 @@ const Person = () => {
                           </Link>
                         </>
                       ) : null}
-                      {h.count > 1 ? (
-                        <span className="text-xs text-ink-4 tabular-nums"> ×{h.count}</span>
-                      ) : null}
                       {h.tool ? <span className="text-xs text-ink-4"> · {h.tool}</span> : null}
                     </span>
                   </li>

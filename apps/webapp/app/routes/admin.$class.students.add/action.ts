@@ -40,7 +40,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       already_enrolled: result.alreadyEnrolled.length,
       invalid: result.invalid.length,
     },
-    // Two batches added a few seconds apart are two roster changes.
   });
 
   if (result.emails.length > 0) {

@@ -446,7 +446,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
     }
 
     const { reposToCreate, assignmentsToAdd } = result;
-    // Two syncs a few seconds apart are two actions: never folded into one row.
     await writeAudit(ctx, {
       resource_type: 'REPOSITORIES',
       resource_id: repository.id,

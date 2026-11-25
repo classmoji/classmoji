@@ -139,7 +139,6 @@ describe('repositories page audit rows', () => {
 
     expect(row()).toMatchObject({
       metadata: { tool: 'web:repos.sync', repos_to_create: 2, assignments_to_add: 3 },
-      // Two syncs a few seconds apart are two rows.
     });
     expect(row().metadata).not.toHaveProperty('partial');
   });
