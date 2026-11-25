@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   uploadFileTypes: vi.fn(),
   resolvePageAssetUrl: vi.fn(),
   canonicalizePageCoverRef: vi.fn(),
+  compareBranches: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -61,6 +62,9 @@ vi.mock('@classmoji/services', async () => {
   return {
     validateFile: files.validateFile,
     MAX_FILE_SIZE: files.MAX_FILE_SIZE,
+    ContentService: {
+      compareBranches: (...a: unknown[]) => mocks.compareBranches(...a),
+    },
     ClassmojiService: {
       media: { isMediaRoutingError: routing.isMediaRoutingError },
       contentDelivery: {
@@ -199,6 +203,7 @@ beforeEach(() => {
   // Default: the ref is already canonical and belongs to this classroom. The
   // service owns the real decision; these tests own the tool's reaction to it.
   mocks.canonicalizePageCoverRef.mockImplementation(async (_page, ref) => ref);
+  mocks.compareBranches.mockResolvedValue({ merge_base_sha: 'base-sha' });
 });
 
 // ─── S1: cross-classroom pages are invisible to every tool ──────────────────
@@ -1137,6 +1142,47 @@ describe('page_content_apply refuses content the page editor cannot open', () =>
 // ─── page_preview_accept ─────────────────────────────────────────────────────
 
 describe('page_preview_accept', () => {
+  const badPreview = () => [
+    ...DOC(),
+    {
+      id: 'agent',
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'docs', styles: { href: 'https://x.dev' } }],
+    },
+  ];
+
+  it('refuses a preview holding content the page editor cannot open, merging nothing', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.loadPageContent.mockImplementation(async (_page, options?: { ref?: string }) =>
+      options?.ref === PREVIEW_BRANCH ? jsonContent(badPreview(), 'p-sha') : jsonContent()
+    );
+    const error = (await pagePreviewAcceptTool
+      .handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+      .catch((e: unknown) => e)) as { code: string; message: string };
+    expect(error).toMatchObject({ code: 'INVALID_CONTENT' });
+    expect(error.message).toContain(`block 'agent' (paragraph, "docs"): unknown text style 'href'`);
+    expect(error.message).toContain("{ type: 'link', href, content: [text runs] }");
+    expect(error.message).not.toContain('Inline code');
+    expect(error.message).toMatch(/page_content_apply.*page_preview_discard/);
+    // Judged against the page the preview started from.
+    expect(mocks.loadPageContent.mock.calls.map(c => (c[1] as { ref?: string }).ref)).toEqual(
+      expect.arrayContaining([PREVIEW_BRANCH, 'base-sha'])
+    );
+    expect(mocks.acceptPreview).not.toHaveBeenCalled();
+    expect(mocks.resolvePreviewConflicts).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a bad block the preview did not touch does not stop the accept', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.loadPageContent.mockResolvedValue(jsonContent(badPreview()));
+    mocks.acceptPreview.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    const payload = parse(
+      await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(payload.merged).toBe(true);
+  });
+
   it('refuses when no preview exists (nothing to accept)', async () => {
     mocks.getPreviewStatus.mockResolvedValue({ exists: false });
 

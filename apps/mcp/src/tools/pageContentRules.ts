@@ -1,5 +1,6 @@
 /**
- * page_content_apply's content check: the document an apply would leave must
+ * The page content check (page_content_apply, page_preview_accept,
+ * page_create): the document a write would leave must
  * open in BlockNote under its STOCK rules (`validatePageBlocks`), or nothing
  * is written. A page that does not would show readers nothing at all.
  *
@@ -19,9 +20,28 @@ type Validate = (blocks: unknown) => PageContentProblem[];
 
 let loading: Promise<Validate> | null = null;
 
-function validator(): Promise<Validate> {
+/**
+ * The validator, loaded once. A failed load is not cached (the next call
+ * tries again) and is a coded error: content is never written unchecked.
+ */
+async function validator(): Promise<Validate> {
   loading ??= import('@classmoji/page-schema/server').then(module => module.validatePageBlocks);
-  return loading;
+  try {
+    return await loading;
+  } catch (error) {
+    loading = null;
+    console.error('[mcp] The page content check could not be loaded:', error);
+    throw new ToolError(
+      'internal',
+      'Nothing was written: the page content check is unavailable right now. Retry shortly.',
+      'CONTENT_CHECK_UNAVAILABLE'
+    );
+  }
+}
+
+/** Every problem `blocks` has under BlockNote's stock rules (`[]`: it opens). */
+export async function pageContentProblems(blocks: unknown[]): Promise<PageContentProblem[]> {
+  return (await validator())(blocks);
 }
 
 /** A block's own content: everything but its children, as stable text. */
@@ -90,21 +110,58 @@ export async function newContentProblems(
 }
 
 /**
+ * Converted blocks (page_create's `html`) made writable: an author cannot fix
+ * a converter's output, so what would not open is cleaned rather than
+ * refused. The conversion worker cleans already; this covers a worker that
+ * predates it.
+ */
+export async function writableConvertedBlocks(blocks: unknown[]): Promise<unknown[]> {
+  if ((await pageContentProblems(blocks)).length === 0) return blocks;
+  const { cleanPageBlocks } = await import('@classmoji/page-schema');
+  return cleanPageBlocks(blocks).blocks;
+}
+
+/** How to fix what the problems name: only the hints that apply. */
+function hints(problems: PageContentProblem[]): string[] {
+  const out: string[] = [];
+  if (problems.some(p => p.problem.startsWith('inline code'))) {
+    out.push(
+      'Inline code takes no other formatting (bold, italic, underline, strike, colours) and ' +
+        'cannot sit inside a link.'
+    );
+  }
+  if (problems.some(p => p.problem === "unknown text style 'href'")) {
+    out.push(
+      "A link is an inline item { type: 'link', href, content: [text runs] }, never an " +
+        'href text style.'
+    );
+  }
+  return out;
+}
+
+/** INVALID_CONTENT naming the problems; `fix` says what to do next. */
+export function invalidContentError(problems: PageContentProblem[], fix: string): ToolError {
+  const named = problems.slice(0, MESSAGE_PROBLEMS).map(describe);
+  const more = problems.length - named.length;
+  return new ToolError(
+    'invalid_params',
+    [
+      "Nothing was written: the page editor can't open this content. " +
+        `${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}.`,
+      ...hints(problems),
+      fix,
+    ].join(' '),
+    'INVALID_CONTENT',
+    { problems: problems.slice(0, DATA_PROBLEMS) }
+  );
+}
+
+/**
  * Refuse (INVALID_CONTENT, nothing written) when the ops would leave content
  * BlockNote cannot open; see `newContentProblems`.
  */
 export async function assertWritablePageContent(prior: unknown[], next: unknown[]): Promise<void> {
   const problems = await newContentProblems(prior, next);
   if (problems.length === 0) return;
-  const named = problems.slice(0, MESSAGE_PROBLEMS).map(describe);
-  const more = problems.length - named.length;
-  throw new ToolError(
-    'invalid_params',
-    "Nothing was written: the page editor can't open this content. " +
-      `${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}. Inline code takes no other ` +
-      'formatting (bold, italic, underline, strike, colours) and cannot sit inside a link; ' +
-      'fix the blocks named and retry.',
-    'INVALID_CONTENT',
-    { problems: problems.slice(0, DATA_PROBLEMS) }
-  );
+  throw invalidContentError(problems, 'Fix the blocks named and retry.');
 }

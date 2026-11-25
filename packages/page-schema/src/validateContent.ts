@@ -425,7 +425,17 @@ export function validatePageBlocks(blocks: unknown): PageContentProblem[] {
     nodes.push(node);
     problems.push(...builtProblems(node, sourceIds, types));
   }
-  if (problems.length > 0 || nodes.length === 0) return problems;
+  if (problems.length > 0 || nodes.length === 0) {
+    // In document order (blocks as they appear; a block's own problems in
+    // the order found).
+    const order = new Map([...sourceIds].map((id, i) => [id, i]));
+    const at = (p: PageContentProblem) =>
+      p.blockId !== null ? (order.get(p.blockId) ?? order.size) : order.size;
+    return problems
+      .map((problem, i) => ({ problem, i }))
+      .sort((a, b) => at(a.problem) - at(b.problem) || a.i - b.i)
+      .map(({ problem }) => problem);
+  }
 
   // The document as BlockNote assembles it: blocks in the root blockGroup.
   try {

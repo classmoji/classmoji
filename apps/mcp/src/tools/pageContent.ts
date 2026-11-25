@@ -58,7 +58,11 @@ import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { renderAfterPageApply } from './pageRender.ts';
-import { assertWritablePageContent } from './pageContentRules.ts';
+import {
+  assertWritablePageContent,
+  invalidContentError,
+  newContentProblems,
+} from './pageContentRules.ts';
 import {
   loadPageWithRepoInClassroom,
   mapSemanticMergeError,
@@ -640,7 +644,9 @@ async function applyLive(
   }
   const since = expectSinceFor('page', args.expected_sha, snapshot);
 
-  const priorBlocks = snapshot.content.blocks as BlockNode[];
+  const priorBlocks = ClassmojiService.pageContent.ensureBlockIds(
+    snapshot.content.blocks as BlockNode[]
+  ) as BlockNode[];
   const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
   const structureRepairs: Array<{ kind: string; id?: string }> = [];
   let newBlocks: unknown[];
@@ -1030,6 +1036,53 @@ interface PagePreviewAcceptArgs extends PagePreviewArgs {
   expected_theirs_sha?: string;
 }
 
+/** What a refused accept tells the agent to do. */
+const PREVIEW_CONTENT_FIX =
+  "Fix the preview with page_content_apply (mode: 'preview', reading it with " +
+  "at: 'preview'), or drop it with page_preview_discard.";
+
+/**
+ * Refuse (INVALID_CONTENT, nothing merged) a preview whose own edits — the
+ * blocks it changed or added since `base`, the page it started from — would
+ * leave content the page editor cannot open.
+ */
+async function assertPreviewContentOpens(base: unknown[], preview: unknown[]): Promise<void> {
+  const pageContent = ClassmojiService.pageContent;
+  const problems = await newContentProblems(
+    pageContent.ensureBlockIds(base),
+    pageContent.ensureBlockIds(preview)
+  );
+  if (problems.length > 0) throw invalidContentError(problems, PREVIEW_CONTENT_FIX);
+}
+
+/**
+ * The git accept's content check: the preview against the page it started
+ * from (its merge-base with main; main itself when that cannot be read).
+ */
+async function checkGitPreviewContent(page: PageWithRepoRecord): Promise<void> {
+  const pageContent = ClassmojiService.pageContent;
+  const branch = pageContent.previewBranchName(page.content_path);
+  const comparison = await ContentService.compareBranches({
+    gitOrganization: page.classroom.git_organization as never,
+    repo: page.classroom.content_repo,
+    base: 'main',
+    head: branch,
+  });
+  const [theirs, base] = await Promise.all([
+    pageContent.loadPageContent(page, { ref: branch, skipCache: true }),
+    pageContent.loadPageContent(page, {
+      skipCache: true,
+      ...(comparison?.merge_base_sha ? { ref: comparison.merge_base_sha } : {}),
+    }),
+  ]);
+  // A preview that is not blocks is the accept's own business.
+  if (theirs.format !== 'json') return;
+  await assertPreviewContentOpens(
+    base.format === 'json' ? (base.blocks as unknown[]) : [],
+    theirs.blocks as unknown[]
+  );
+}
+
 /**
  * page_preview_accept in live mode. The collab server runs the three-way
  * merge (base = the preview's merge-base with main, ours = the live page,
@@ -1088,6 +1141,12 @@ async function acceptPreviewLive(
       'CONTENT_CONFLICT'
     );
   }
+
+  // The preview's own edits must open before they reach the live page.
+  await assertPreviewContentOpens(
+    (base.blocks as unknown[] | null) ?? [],
+    theirs.blocks as unknown[]
+  );
 
   const actor = await actorFor(ctx);
   let outcome;
@@ -1208,7 +1267,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     'to the state you reviewed — or re-read ' +
     'fresh main with page_content_get, re-apply merged blocks with page_content_apply and ' +
     'accept again, or page_preview_discard. With live editing on, the preview merges into the ' +
-    'live page (ours = live) and a conflict applies nothing.',
+    'live page (ours = live) and a conflict applies nothing. A preview whose edits the page ' +
+    'editor cannot open is refused (INVALID_CONTENT, nothing merged).',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -1263,6 +1323,9 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     // Live editing: the preview merges into the live document, not main.
     const liveState = liveStateFor(page.classroom);
     if (liveState) return acceptPreviewLive(requireLiveEnv(liveState), page, args, ctx);
+
+    // Content the page editor cannot open is never merged into main.
+    await checkGitPreviewContent(page);
 
     // ── Resolutions path: apply chooser decisions to the conflicted merge ──
     if (args.resolutions?.length) {

@@ -1090,6 +1090,34 @@ describe('live preview accept', () => {
     expect(mocks.acceptPreview).not.toHaveBeenCalled();
   });
 
+  it('refuses a preview the page editor cannot open: nothing merged, branch kept', async () => {
+    route('POST', 'merge-preview', () => ({ status: 200, body: { applied: true, version: 11 } }));
+    const bad = [
+      ...PREVIEW_BLOCKS,
+      {
+        id: 'agent',
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'loader', styles: { code: true, bold: true } }],
+      },
+    ];
+    mocks.loadPageContent.mockImplementation(async (_page, options: { ref?: string }) =>
+      options?.ref === PREVIEW_BRANCH
+        ? { format: 'json', blocks: bad, coverImage: COVER, sha: 'preview-sha' }
+        : { format: 'json', blocks: BASE_BLOCKS, coverImage: null, sha: 'base-sha' }
+    );
+    await expect(
+      pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({
+      code: 'INVALID_CONTENT',
+      message: expect.stringMatching(
+        /block 'agent'.*inline code can't also be bold.*Inline code takes no other.*page_preview_discard/
+      ),
+    });
+    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    expect(mocks.discardPreview).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('keeps the preview when it gained commits during the accept', async () => {
     route('POST', 'merge-preview', () => ({ status: 200, body: { applied: true, version: 11 } }));
     mocks.compareBranches
