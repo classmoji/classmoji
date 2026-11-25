@@ -20,6 +20,7 @@ import {
   createPageCheckListItemBlockSpec,
   createPageHeadingBlockSpec,
   lockedSectionConfig,
+  pageStyleSpecs,
 } from '@classmoji/page-schema';
 
 import { pageBlockSpecs } from '~/components/editor/blocks/index.tsx';
@@ -219,6 +220,7 @@ const ReaderLockedSection = createReactBlockSpec(lockedSectionConfig, {
 type SchemaOptions = NonNullable<Parameters<typeof BlockNoteSchema.create>[0]>;
 
 export const viewerSchema = BlockNoteSchema.create({
+  styleSpecs: pageStyleSpecs,
   blockSpecs: {
     ...pageBlockSpecs,
     heading: createViewerHeadingSpec(),

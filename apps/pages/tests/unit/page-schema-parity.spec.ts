@@ -65,8 +65,18 @@ function nodeShapes(schema: AnySchema) {
   return out;
 }
 
+/**
+ * Each mark with the marks it excludes: a run of marks that one schema
+ * accepts must be accepted by all, or a page loads in one and throws in another.
+ */
 function markNames(schema: AnySchema) {
-  return Object.keys(pmSchemaOf(schema).marks).sort();
+  const marks = pmSchemaOf(schema).marks;
+  return Object.keys(marks)
+    .sort()
+    .map(name => {
+      const others = Object.keys(marks).filter(other => marks[name].excludes(marks[other]));
+      return `${name} excludes ${others.sort().join(',')}`;
+    });
 }
 
 /** BlockNote's own view of each block: type, content kind, props with defaults. */
