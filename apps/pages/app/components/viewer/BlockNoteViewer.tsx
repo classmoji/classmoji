@@ -2,7 +2,7 @@ import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { syntaxHighlighter } from '@blocknote/code-block';
 import { MantineProvider } from '@mantine/core';
-import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+import { drawableBlocks } from '~/utils/drawableBlocks.ts';
 import { MANTINE_8_THEME, mantine8CssVariables } from '~/utils/mantineTheme.ts';
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
@@ -116,9 +116,10 @@ const BlockNoteViewer = ({
   onMounted,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  // Stored blocks as the viewer schema can build them (drawableBlocks).
   const initialContent =
     Array.isArray(content) && content.length > 0
-      ? (normalizeCodeBlockContent(content) as PageBlockInsertions)
+      ? (drawableBlocks(content) as PageBlockInsertions)
       : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
 
   const downloads = useMemo(
@@ -224,7 +225,7 @@ const BlockNoteViewer = ({
       if (!current || current.children.length > 0) continue;
       try {
         editor.updateBlock(id, {
-          children: normalizeCodeBlockContent(children) as PageBlockInsertions,
+          children: drawableBlocks(children) as PageBlockInsertions,
         } as never);
       } catch (error) {
         console.error('[BlockNoteViewer] could not insert a locked section body:', error);
