@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "typecheck": {
+      // Also type-checks scripts/collab-dev (its round-trip harness runs the
+      // checkpoint helpers here against page-html and collab's adapters), so
+      // a change there, or in collab's sources it imports, re-runs it.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/scripts/collab-dev/**",
+        "$TURBO_ROOT$/apps/collab/src/**"
+      ]
+    }
+  }
+}
