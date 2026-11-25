@@ -40,6 +40,8 @@ const RECORDED_FINGERPRINTS: Record<number, string> = {
   // see); the code mark goes back to BlockNote's: it excludes every other
   // formatting mark and the link.
   6: '8295da221de0e30063f0fc83b5c8823828ab400a5d6d436fadf220e9a6729233',
+  // heading gains `step` (no default): numbered, connected steps on H1 and H2.
+  7: '65ae81d92626d71c4d21fa3d2a9570672b0e864a72c0634b8920f67bab28eaf4',
 };
 
 /** Sorted-key JSON; functions and undefined are left out (they are not shape). */

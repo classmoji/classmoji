@@ -24,6 +24,12 @@ import { useLayoutEffect, useState } from 'react';
  */
 export const SECTION_CHECK_GUTTER = 38;
 
+/**
+ * The same for a heading that is also a step (an H1 or H2 with a circle): the
+ * box sits 84px out, clear of the circle, with the same 4px ring.
+ */
+export const SECTION_CHECK_GUTTER_STEP = 88;
+
 export type SectionCheckLayout = 'gutter' | 'inline';
 
 /**
@@ -45,12 +51,14 @@ export function clipLeftOf(element: Element): number {
 
 /**
  * The layout for the tick boxes under `root`: inline when any shown
- * checkable heading has less than `SECTION_CHECK_GUTTER` px of room, null
+ * checkable heading has less room than its layout needs (`SECTION_CHECK_GUTTER`,
+ * or `SECTION_CHECK_GUTTER_STEP` for a step), null
  * when no tick box is shown (none on the page, the reader cannot tick, or
  * all inside collapsed blocks).
  */
 export function sectionCheckLayout(root: Element): SectionCheckLayout | null {
-  let room = Infinity;
+  // The least room left over, by heading: its room less what its layout needs.
+  let spare = Infinity;
   const headings = root.querySelectorAll(".bn-block-content[data-checkable='true']");
   for (const content of Array.from(headings)) {
     const button = content.querySelector(':scope > .pg-section-check');
@@ -58,10 +66,15 @@ export function sectionCheckLayout(root: Element): SectionCheckLayout | null {
     const rect = content.getBoundingClientRect();
     // Not laid out (inside a collapsed toggle or locked section).
     if (rect.width === 0 && rect.height === 0) continue;
-    room = Math.min(room, rect.left - clipLeftOf(content));
+    const needs = content.matches(
+      ":is([data-level='2'], [data-level='1'], :not([data-level]))[data-step='true']"
+    )
+      ? SECTION_CHECK_GUTTER_STEP
+      : SECTION_CHECK_GUTTER;
+    spare = Math.min(spare, rect.left - clipLeftOf(content) - needs);
   }
-  if (room === Infinity) return null;
-  return room < SECTION_CHECK_GUTTER ? 'inline' : 'gutter';
+  if (spare === Infinity) return null;
+  return spare < 0 ? 'inline' : 'gutter';
 }
 
 /**

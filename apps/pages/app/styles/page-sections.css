@@ -1110,3 +1110,92 @@
   margin-top: 2px;
   font-size: 12px;
 }
+
+/* =====================================================================
+   Steps: a numbered circle on an H1 or H2, and a line to the next step
+   ===================================================================== */
+
+/* The colours: a transparent circle with a thin ring, and a hairline. Both
+   themes are stated here; the generated rules (utils/stepStyles.ts) only place
+   things. */
+.page-editor {
+  --st-fg: #17181c;
+  --st-ring: #c1c3c8;
+  --st-line: #dcdee6;
+}
+
+.dark .page-editor {
+  --st-fg: #ffffff;
+  --st-ring: rgba(255, 255, 255, 0.28);
+  --st-line: rgba(255, 255, 255, 0.14);
+}
+
+/* The circle is the heading's `::before`, drawn 52px to the left of its text
+   (the step's indent). It is empty, so invisible, until a generated rule gives
+   it the step's number: a heading with the prop at another level, or a step
+   the generated rules do not know, shows nothing. Only H1 and H2 are steps. */
+.page-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  ) {
+  position: relative;
+}
+
+.page-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )::before {
+  content: '';
+  position: absolute;
+  left: -52px;
+  top: 0;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--st-ring);
+  color: var(--st-fg);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 36px;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: none;
+  pointer-events: none;
+}
+
+/* A heading that is both a step and checkable: the check moves out to the left
+   of the circle (the circle takes the 52px left of the text), 8px clear of it:
+   the reader's 24px tick box at -84px, the editor's 16px badge at -76px. The
+   inline layout (no room for the gutter) keeps the box inside the heading,
+   between the circle and the text. */
+.pg-reader-sections
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )[data-checkable='true']
+  .pg-section-check {
+  left: -84px;
+}
+
+.pg-reader-sections[data-section-checks='inline']
+  .bn-block-content[data-content-type='heading'][data-step='true'][data-checkable='true']
+  .pg-section-check {
+  left: calc(var(--heading-pad-left, 0px) - 2px);
+}
+
+.bn-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )[data-checkable='true']
+  .pg-checkable-badge {
+  left: -76px;
+}

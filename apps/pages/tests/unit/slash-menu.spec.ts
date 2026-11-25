@@ -35,11 +35,12 @@ const defaults = [
 const items = () =>
   arrangeSlashMenuItems([
     ...defaults,
-    ...customSlashMenuItems.map(({ title, aliases, group, placeAfter }) => ({
+    ...customSlashMenuItems.map(({ title, aliases, group, placeAfter, key }) => ({
       title,
       aliases,
       group,
       placeAfter,
+      key,
     })),
   ]);
 
@@ -57,17 +58,39 @@ test.describe('slash menu', () => {
     expect(titles(customSlashMenuItems)).not.toContain('Checkable heading');
   });
 
-  test('each checkable heading follows its plain counterpart', () => {
+  test('each checkable heading follows its plain counterpart, and each step heading its checkable one', () => {
     const headings = items().filter(item => item.group === 'Headings');
     expect(titles(headings)).toEqual([
       'Heading 1',
       'Checkable heading 1',
+      'Step heading 1',
       'Heading 2',
       'Checkable heading 2',
+      'Step heading 2',
       'Heading 3',
       'Checkable heading 3',
       'Heading 4',
     ]);
+  });
+
+  test('steps are offered for H1 and H2 only', () => {
+    const steps = customSlashMenuItems.filter(item => item.title.startsWith('Step heading'));
+    expect(titles(steps)).toEqual(['Step heading 1', 'Step heading 2']);
+    expect(steps.map(item => item.placeAfter)).toEqual([
+      'checkable_heading_1',
+      'checkable_heading_2',
+    ]);
+  });
+
+  test('/step lists both step headings, and /h1 lists the one for H1', () => {
+    const list = items();
+    expect(titles(filterSuggestionItems(list, 'step'))).toEqual(
+      expect.arrayContaining(['Step heading 1', 'Step heading 2'])
+    );
+    expect(titles(filterSuggestionItems(list, 'step'))).not.toContain('Checkable heading 1');
+    const h1 = titles(filterSuggestionItems(list, 'h1'));
+    expect(h1).toContain('Step heading 1');
+    expect(h1).not.toContain('Step heading 2');
   });
 
   test('groups stay together in the fixed order, unlisted groups last by name', () => {

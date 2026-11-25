@@ -342,6 +342,28 @@
   content: var(--prev-index) !important;
 }
 
+/* The guide line beside a nested block is the steps line: 1px, the same pale
+   colour (--st-line, page-sections.css) in both themes. BlockNote's own
+   colour rule is (0,7,1), so this one is `!important`. */
+.page-editor
+  .bn-block-group
+  .bn-block-group
+  > .bn-block-outer:not([data-prev-depth-changed])::before {
+  border-left: 1px solid var(--st-line, #dcdee6) !important;
+}
+
+/* Under a bullet or a number, the line runs down the middle of the dot or
+   circle above it: that marker is centred 10px in, the nested group starts
+   32px in, and the line is 1px wide, so its left edge is 22.5px back. */
+.page-editor
+  .bn-block:has(
+    > .bn-block-content:is([data-content-type="bulletListItem"], [data-content-type="numberedListItem"])
+  )
+  > .bn-block-group
+  > .bn-block-outer:not([data-prev-depth-changed])::before {
+  left: -22.5px !important;
+}
+
 .dark .bn-block-content[data-content-type="numberedListItem"]::before {
   background-color: rgba(255, 255, 255, 0.14);
   color: rgba(255, 255, 255, 0.7);

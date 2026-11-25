@@ -1,6 +1,7 @@
 /**
- * The page heading: BlockNote's heading plus `checkable` (no default), and the
- * `lockedSection` block, through every conversion the server does.
+ * The page heading: BlockNote's heading plus `checkable` and `step` (no
+ * defaults), and the `lockedSection` block, through every conversion the
+ * server does.
  */
 import { createHeadingBlockSpec } from '@blocknote/core';
 import { describe, expect, it } from 'vitest';
@@ -28,7 +29,7 @@ function yjsTrip(blocks: unknown[]) {
 }
 
 describe('heading.checkable', () => {
-  it('is BlockNote’s heading config plus an optional boolean with no default', () => {
+  it('is BlockNote’s heading config plus two optional booleans with no default', () => {
     const schema = createPageSchema();
     const heading = (schema.blockSchema as unknown as Record<string, { propSchema: object }>)
       .heading;
@@ -36,6 +37,7 @@ describe('heading.checkable', () => {
     expect(heading.propSchema).toEqual({
       ...base,
       checkable: { default: undefined, type: 'boolean' },
+      step: { default: undefined, type: 'boolean' },
     });
   });
 
@@ -49,6 +51,22 @@ describe('heading.checkable', () => {
     expect(off.props.checkable).toBe(false);
     expect('checkable' in absent.props).toBe(false);
     expect(serializePageContent({ blocks: [absent] })).not.toContain('checkable');
+  });
+
+  it('step survives the Yjs round trip as a boolean; absent stays absent', async () => {
+    const [on, absent] = yjsTrip([
+      { id: 'on', type: 'heading', props: { level: 1, step: true }, content: text('a') },
+      { id: 'absent', type: 'heading', props: { level: 1 }, content: text('b') },
+    ]);
+    expect(on.props.step).toBe(true);
+    expect('step' in absent.props).toBe(false);
+    expect(serializePageContent({ blocks: [absent] })).not.toContain('step');
+
+    const html = await getServerEditor().blocksToFullHTML([
+      { id: 'a', type: 'heading', props: { level: 2, step: true }, content: text('A') },
+      { id: 'b', type: 'heading', props: { level: 2 }, content: text('B') },
+    ] as never);
+    expect(html.match(/data-step="true"/g)).toHaveLength(1);
   });
 
   it('keeps level, toggle headings and their children', () => {

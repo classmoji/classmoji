@@ -60,6 +60,23 @@ export function isCheckableHeading(block: unknown): block is SectionBlock {
   );
 }
 
+/** The heading levels that can be steps. */
+export const STEP_MAX_LEVEL = 2;
+
+/**
+ * A heading the author made a step (`props.step === true`) at a level that can
+ * be one (H1 and H2). The prop on a deeper heading, from an older client or a
+ * level change, is ignored rather than drawn.
+ */
+export function isStepHeading(block: unknown): block is SectionBlock {
+  return (
+    isHeading(block) &&
+    isObject(block.props) &&
+    (block.props as Record<string, unknown>).step === true &&
+    headingLevel(block) <= STEP_MAX_LEVEL
+  );
+}
+
 export const CHECK_LIST_ITEM_TYPE = 'checkListItem';
 
 /** A `checkListItem` block, personal or not. */
@@ -394,4 +411,94 @@ export function countQuoteOccurrences(text: string, quote: string): number {
     count++;
   }
   return count;
+}
+
+// ── Steps ──────────────────────────────────────────────────────────────────
+
+/** One step: what the reader draws for it, read off the document alone. */
+export interface StepInfo {
+  /** The step heading's level (1 or 2). */
+  level: number;
+  /** Its number within its run (1 for the first). */
+  number: number;
+  /** The step heading's id, then the ids of the siblings in its section. */
+  ids: string[];
+  /** True when a step of the same level follows in the same run. */
+  hasNext: boolean;
+  /** True when a step of the same level came before it in the same run. */
+  hasPrev: boolean;
+  /** True when the heading is the first block of its sibling list. */
+  firstInList: boolean;
+  /** How many steps contain this heading, itself included (1 = top level). */
+  depth: number;
+}
+
+/**
+ * Every step heading: heading id -> `StepInfo`.
+ *
+ * A step's section is the heading plus the siblings after it up to (not
+ * including) the next heading of the same or a higher level, as for a
+ * checkable section. Steps are numbered in runs: consecutive step headings of
+ * one level in one sibling list. A heading of a higher level ends the runs
+ * below it, and a heading of the same level that is NOT a step ends its own
+ * run, so the numbers start again at 1 after it. Headings at any depth (columns,
+ * toggles, locked sections) are numbered within their own sibling list.
+ * Blocks without a string id are skipped.
+ */
+export function stepLayout(blocks: unknown): Map<string, StepInfo> {
+  const steps = new Map<string, StepInfo>();
+  const visitList = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    const counter: number[] = [];
+    const previous: Array<StepInfo | undefined> = [];
+    for (let i = 0; i < list.length; i++) {
+      const block = list[i];
+      if (!isObject(block)) continue;
+      if (isHeading(block)) {
+        const level = headingLevel(block);
+        // Deeper runs end at any heading; this level's run ends unless this is a step.
+        for (let l = level + 1; l <= 6; l++) {
+          counter[l] = 0;
+          previous[l] = undefined;
+        }
+        const id = blockId(block);
+        if (id && isStepHeading(block)) {
+          const before = previous[level];
+          counter[level] = (counter[level] ?? 0) + 1;
+          const info: StepInfo = {
+            level,
+            number: counter[level],
+            ids: [id],
+            hasNext: false,
+            hasPrev: Boolean(before),
+            firstInList: i === 0,
+            depth: 1,
+          };
+          if (before) before.hasNext = true;
+          previous[level] = info;
+          for (let j = i + 1; j < list.length; j++) {
+            const next = list[j];
+            if (isHeading(next) && headingLevel(next) <= level) break;
+            const nextId = isObject(next) ? blockId(next) : null;
+            if (nextId) info.ids.push(nextId);
+          }
+          steps.set(id, info);
+        } else {
+          counter[level] = 0;
+          previous[level] = undefined;
+        }
+      }
+      visitList(block.children);
+    }
+  };
+  visitList(blocks);
+
+  // An H2 step inside an H1 step sits one level in: depth counts the steps whose
+  // section holds the heading.
+  for (const [id, info] of steps) {
+    let depth = 0;
+    for (const other of steps.values()) if (other.ids.includes(id)) depth += 1;
+    info.depth = depth;
+  }
+  return steps;
 }
