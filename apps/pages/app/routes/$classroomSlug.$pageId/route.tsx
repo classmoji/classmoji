@@ -138,7 +138,8 @@ function CoverAdder({
   const cover = useCoverUpload(fetcher, capability, live);
 
   return (
-    <div className="flex items-center gap-2 mb-2">
+    // Editor chrome: no click burst.
+    <div className="flex items-center gap-2 mb-2" data-no-burst="">
       {cover.uploading ? (
         <div className="flex items-center gap-1.5 px-2 py-1 text-sm text-gray-500 dark:text-gray-400">
           <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />

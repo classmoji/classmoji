@@ -8,6 +8,7 @@
     "./sandpack": "./src/Sandpack/index.ts",
     "./upload": "./src/upload/index.ts",
     "./media-options": "./src/mediaOptions/index.ts",
+    "./click-burst": "./src/clickBurst/index.ts",
     "./styles/*": "./styles/*"
   },
   "scripts": {
