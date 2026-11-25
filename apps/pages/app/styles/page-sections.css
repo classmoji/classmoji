@@ -241,6 +241,14 @@
   accent-color: var(--pg-primary);
 }
 
+.bn-block-outer
+  .bn-block-content[data-content-type='checkListItem']
+  > div
+  > input.pg-personal-check.pg-personal-check:checked {
+  background-color: var(--pg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
 /* A student check list item that cannot be ticked here (signed out, not a
    member, "View as"): no pointer. BlockNote's own rule sets one on every
    item's box, hence the matching selector. */

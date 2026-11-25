@@ -125,3 +125,58 @@ test('every list type starts its text the same distance in', async ({ page }) =>
   // 32px: the marker (a dot, a numbered circle, a tick box, a chevron) and its gap.
   expect(lefts).toEqual([32, 32, 32, 32]);
 });
+
+for (const dark of [false, true]) {
+  test(`a check box is the numbered circle's gray, centered on the same line (${dark ? 'dark' : 'light'})`, async ({
+    page,
+  }) => {
+    await mountReader(
+      page,
+      [
+        li('numberedListItem', 'Numbered'),
+        li('checkListItem', 'Check', [], { checked: false }),
+        li('checkListItem', 'Ticked', [], { checked: true }),
+      ].map((block, i) => ({ ...block, id: 'k' + i })),
+      { width: 700 }
+    );
+    await page.evaluate(d => {
+      if (d) document.documentElement.classList.add('dark');
+    }, dark);
+    // The theme colors transition; wait them out.
+    await page.waitForTimeout(600);
+    const m = await page.evaluate(() => {
+      const outer = (i: number) => document.querySelector(`.bn-block-outer[data-id="k${i}"]`)!;
+      const circle = getComputedStyle(outer(0).querySelector('.bn-block-content')!, '::before');
+      const box = (i: number) => outer(i).querySelector('input') as HTMLInputElement;
+      const rect = (el: Element) => el.getBoundingClientRect();
+      const inline = (i: number) => outer(i).querySelector('.bn-inline-content')!;
+      // Each marker's centre, measured from the middle of its own first line of text.
+      const line = (i: number) =>
+        rect(inline(i)).top + parseFloat(getComputedStyle(inline(i)).lineHeight) / 2;
+      const boxCenter = rect(box(1)).top + rect(box(1)).height / 2 - line(1);
+      const content = outer(0).querySelector('.bn-block-content')!;
+      const circleCenter =
+        rect(content).top +
+        parseFloat(getComputedStyle(content).paddingTop) +
+        2.8 +
+        parseFloat(circle.height) / 2 -
+        line(0);
+      return {
+        circleBg: circle.backgroundColor,
+        circleSize: parseFloat(circle.width),
+        bg: [1, 2].map(i => getComputedStyle(box(i)).backgroundColor),
+        size: [1, 2].map(i => rect(box(i)).width),
+        centerGap: Math.abs(boxCenter - circleCenter),
+        tick: getComputedStyle(box(2)).backgroundImage.startsWith('url('),
+        none: getComputedStyle(box(1)).backgroundImage,
+      };
+    });
+    expect(m.bg).toEqual([m.circleBg, m.circleBg]);
+    // Rounded square at 18px reads as the 20px circle.
+    expect(m.size).toEqual([18, 18]);
+    expect(m.circleSize).toBe(20);
+    expect(m.centerGap).toBeLessThan(1);
+    expect(m.tick).toBe(true);
+    expect(m.none).toBe('none');
+  });
+}

@@ -314,6 +314,17 @@
   );
 }
 
+/* One gray for the numbered circle and the check box. */
+.bn-editor {
+  --list-marker-bg: #e3e8ee;
+  --list-marker-fg: #697386;
+}
+
+.dark .bn-editor {
+  --list-marker-bg: rgba(255, 255, 255, 0.14);
+  --list-marker-fg: rgba(255, 255, 255, 0.7);
+}
+
 .bn-block-content[data-content-type="numberedListItem"]::before {
   content: var(--index) !important;
   box-sizing: border-box;
@@ -327,8 +338,8 @@
   margin: 2.8px 12px 0 0;
   padding: 0;
   border-radius: 50%;
-  background-color: #e3e8ee;
-  color: #697386;
+  background-color: var(--list-marker-bg);
+  color: var(--list-marker-fg);
   font-size: 12px;
   font-weight: 500;
   line-height: 20px;
@@ -342,10 +353,6 @@
   content: var(--prev-index) !important;
 }
 
-.dark .bn-block-content[data-content-type="numberedListItem"]::before {
-  background-color: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.7);
-}
 
 .bn-block-content:is(
     [data-content-type="bulletListItem"],
@@ -358,10 +365,46 @@
 }
 
 /* A check list item and a toggle list item start their text 32px in, as a
-   bullet and a number do: their 24px marker (the tick box, the chevron) gets
-   the 8px the other two have after theirs. */
-.bn-block-content[data-content-type="checkListItem"] > div:has(> input) {
-  margin-right: 8px;
+   bullet and a number do. The toggle's 24px chevron gets an 8px gap after it.
+
+   The check box is the numbered list's circle, as a box: the same 20px, the
+   same gray (--list-marker-bg), the same place on the first line, with a gray
+   tick when it is ticked. BlockNote's box is the browser's 12px one. A student
+   check list item keeps the reader's check green when ticked (page-sections.css
+   sets its colour). */
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div:has(> input) {
+  display: flex;
+  align-items: center;
+  height: 25.6px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin: 0 13px 0 1px;
+  border: 0;
+  border-radius: 6px;
+  background-color: var(--list-marker-bg);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23697386' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.dark .bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23ffffffb3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 .bn-block-outer
