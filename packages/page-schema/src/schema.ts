@@ -635,3 +635,20 @@ export function createPageSchema() {
 }
 
 export type PageSchema = ReturnType<typeof createPageSchema>;
+
+/**
+ * The page schema with BlockNote's STOCK styles (`defaultStyleSpecs`, where
+ * inline code excludes every formatting mark and the link) instead of
+ * `pageStyleSpecs`. What page content is judged by (`validatePageBlocks`):
+ * the app schemas still load code beside other marks, but no new content may
+ * rely on it. Once stored pages are clean, `createPageSchema` takes these
+ * styles and this goes.
+ */
+export function createStrictPageSchema() {
+  const page = createPageSchema();
+  return BlockNoteSchema.create({
+    blockSpecs: page.blockSpecs,
+    inlineContentSpecs: page.inlineContentSpecs,
+    styleSpecs: defaultStyleSpecs,
+  });
+}

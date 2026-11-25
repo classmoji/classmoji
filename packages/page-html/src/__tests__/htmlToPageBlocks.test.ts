@@ -9,7 +9,7 @@
 import * as Y from 'yjs';
 import { describe, expect, it, vi } from 'vitest';
 
-import { blocksToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
+import { blocksToYDoc, validatePageBlocks, yDocToBlocks } from '@classmoji/page-schema/server';
 
 import { getServerEditor, htmlToPageBlocks, type PageBlock } from '../index.ts';
 
@@ -782,6 +782,25 @@ describe('htmlToPageBlocks: code', () => {
       '<pre><code class="language-js">go(<a href="https://example.com">here</a>)</code></pre>'
     );
     expect(code.content).toEqual([{ type: 'text', text: 'go(here)', styles: {} }]);
+  });
+
+  it('inline code keeps no formatting beside it and never sits inside a link', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p><b><code>useFetcher</code></b> and <em><code>x</code></em> and ' +
+        '<a href="https://react.dev/reference/react/StrictMode"><code>&lt;StrictMode&gt;</code></a></p>'
+    );
+    expect(blocks[0].content).toEqual([
+      { type: 'text', text: 'useFetcher', styles: { code: true } },
+      { type: 'text', text: ' and ', styles: {} },
+      { type: 'text', text: 'x', styles: { code: true } },
+      { type: 'text', text: ' and ', styles: {} },
+      {
+        type: 'link',
+        href: 'https://react.dev/reference/react/StrictMode',
+        content: [{ type: 'text', text: '<StrictMode>', styles: {} }],
+      },
+    ]);
+    expect(validatePageBlocks(blocks)).toEqual([]);
   });
 });
 

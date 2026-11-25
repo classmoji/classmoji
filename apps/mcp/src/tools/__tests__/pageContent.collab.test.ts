@@ -43,8 +43,11 @@ vi.mock('@classmoji/collab/env', async () => {
 });
 
 // The page schema's round trip, stood in for: fills BlockNote's default
-// props the way the live document does.
-vi.mock('@classmoji/page-schema/server', () => {
+// props the way the live document does. The content check is the real one.
+vi.mock('@classmoji/page-schema/server', async () => {
+  const actual = await vi.importActual<typeof import('@classmoji/page-schema/server')>(
+    '@classmoji/page-schema/server'
+  );
   const fill = (blocks: unknown[]): unknown[] =>
     blocks.map(block => {
       const b = block as { props?: Record<string, unknown>; children?: unknown[] };
@@ -57,6 +60,7 @@ vi.mock('@classmoji/page-schema/server', () => {
   return {
     blocksToYDoc: (blocks: unknown[]) => blocks,
     yDocToBlocks: (doc: unknown[]) => fill(doc),
+    validatePageBlocks: actual.validatePageBlocks,
   };
 });
 
@@ -540,6 +544,37 @@ describe('live apply', () => {
       )
     ).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(calls.some(call => call.method === 'POST')).toBe(false);
+  });
+
+  it('refuses content the page editor cannot open before sending anything', async () => {
+    await expect(
+      pageContentApplyTool.handler(
+        {
+          classroom: 'org/x',
+          page_id: PAGE_ID,
+          expected_sha: 'live:1.7',
+          ops: [
+            {
+              op: 'update',
+              id: 'p1',
+              block: {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'loader', styles: { code: true, italic: true } }],
+              },
+            },
+          ],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      code: 'INVALID_CONTENT',
+      message: expect.stringContaining(
+        `block 'p1' (paragraph, "loader"): inline code can't also be italic`
+      ),
+    });
+    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('says the live service is down rather than writing git', async () => {
@@ -1053,6 +1088,34 @@ describe('live preview accept', () => {
     );
     expect(mocks.discardPreview).toHaveBeenCalledTimes(1);
     expect(mocks.acceptPreview).not.toHaveBeenCalled();
+  });
+
+  it('refuses a preview the page editor cannot open: nothing merged, branch kept', async () => {
+    route('POST', 'merge-preview', () => ({ status: 200, body: { applied: true, version: 11 } }));
+    const bad = [
+      ...PREVIEW_BLOCKS,
+      {
+        id: 'agent',
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'loader', styles: { code: true, bold: true } }],
+      },
+    ];
+    mocks.loadPageContent.mockImplementation(async (_page, options: { ref?: string }) =>
+      options?.ref === PREVIEW_BRANCH
+        ? { format: 'json', blocks: bad, coverImage: COVER, sha: 'preview-sha' }
+        : { format: 'json', blocks: BASE_BLOCKS, coverImage: null, sha: 'base-sha' }
+    );
+    await expect(
+      pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({
+      code: 'INVALID_CONTENT',
+      message: expect.stringMatching(
+        /block 'agent'.*inline code can't also be bold.*Inline code takes no other.*page_preview_discard/
+      ),
+    });
+    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    expect(mocks.discardPreview).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('keeps the preview when it gained commits during the accept', async () => {
