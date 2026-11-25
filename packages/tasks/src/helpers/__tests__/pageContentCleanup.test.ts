@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  FatalCleanupError,
   LIVE_OPS_PER_REQUEST,
   LiveWriteConflict,
   formatPageLine,
@@ -69,8 +70,18 @@ function fakes(
     apply?: boolean;
   } = {}
 ) {
-  const writeLive = vi.fn(async () => {});
-  const writeGit = vi.fn(async () => {});
+  const order: string[] = [];
+  const writeLive = vi.fn(async (p: CleanupPage) => {
+    order.push(`live:${p.id}`);
+  });
+  const writeGit = vi.fn(async (p: CleanupPage) => {
+    order.push(`git:${p.id}`);
+    return { sha: 'new-sha', commit: 'c1' };
+  });
+  const savePreImage = vi.fn(async (p: CleanupPage) => {
+    order.push(`pre:${p.id}`);
+  });
+  const recordWrite = vi.fn(async (_page: CleanupPage, _record: unknown) => {});
   const readGit = vi.fn(async (p: CleanupPage) => git[p.id] ?? { kind: 'none' as const });
   const readLive = vi.fn(async (id: string) => live[id] ?? { kind: 'live' as const, blocks: [] });
   const lines: string[] = [];
@@ -83,24 +94,34 @@ function fakes(
     remainingProblems: () => [],
     writeLive: apply ? writeLive : null,
     writeGit: apply ? writeGit : null,
+    savePreImage: apply ? savePreImage : null,
+    recordWrite: apply ? recordWrite : null,
     log: line => lines.push(line),
   };
-  return { deps, writeLive, writeGit, readGit, readLive, lines };
+  return { deps, writeLive, writeGit, savePreImage, recordWrite, order, readGit, readLive, lines };
 }
 
 describe('parseArgs', () => {
-  it('takes slugs (spaces or commas) or --all, and --apply', () => {
+  it('takes slugs (spaces or commas) or --all, and --apply with --out', () => {
     expect(parseArgs(['cs1', 'cs2,cs3'])).toEqual({
       selector: { kind: 'slugs', slugs: ['cs1', 'cs2', 'cs3'] },
       apply: false,
+      outDir: null,
     });
-    expect(parseArgs(['--all', '--apply'])).toEqual({ selector: { kind: 'all' }, apply: true });
+    expect(parseArgs(['--all', '--apply', '--out', '/tmp/pre'])).toEqual({
+      selector: { kind: 'all' },
+      apply: true,
+      outDir: '/tmp/pre',
+    });
+    expect(parseArgs(['cs1', '--out=/tmp/pre']).outDir).toBe('/tmp/pre');
   });
 
-  it('refuses neither, both, and unknown flags', () => {
+  it('refuses neither, both, unknown flags, and --apply without --out', () => {
     expect(() => parseArgs([])).toThrow(/slugs or --all/);
     expect(() => parseArgs(['cs1', '--all'])).toThrow(/slugs or --all/);
     expect(() => parseArgs(['cs1', '--write'])).toThrow(/Unknown option --write/);
+    expect(() => parseArgs(['--all', '--apply'])).toThrow(/--apply needs --out/);
+    expect(() => parseArgs(['--all', '--out'])).toThrow(/--out needs a directory/);
   });
 });
 
@@ -173,6 +194,24 @@ describe('runPageCleanup', () => {
     ]);
     expect(guard).toEqual({ p2: f.deps.hash(blocks[1]) });
     expect(f.writeGit).not.toHaveBeenCalled();
+    // The page as read is saved first; one audit row for the page.
+    expect(f.order).toEqual(['pre:a', 'live:a']);
+    expect(f.savePreImage).toHaveBeenCalledWith(page('a'), { source: 'live', blocks });
+    expect(f.recordWrite).toHaveBeenCalledExactlyOnceWith(page('a'), {
+      committed_to: 'live',
+      blocks: ['p2'],
+    });
+  });
+
+  it('a pre-image that cannot be saved stops the page before any write', async () => {
+    const f = fakes([page('a')], {
+      live: { a: { kind: 'live', blocks: BOLD_CODE() } },
+      apply: true,
+    });
+    f.savePreImage.mockRejectedValueOnce(new Error('disk full'));
+    const summary = await runPageCleanup(f.deps, { kind: 'all' }, { apply: true });
+    expect(summary.pages[0]).toMatchObject({ status: 'failed', note: 'disk full' });
+    expect(f.writeLive).not.toHaveBeenCalled();
   });
 
   it('apply, live: many changed blocks go in batches, each with its own guards', async () => {
@@ -182,6 +221,7 @@ describe('runPageCleanup', () => {
     const f = fakes([page('a')], { live: { a: { kind: 'live', blocks } }, apply: true });
     await runPageCleanup(f.deps, { kind: 'all' }, { apply: true });
     expect(f.writeLive).toHaveBeenCalledTimes(2);
+    expect(f.recordWrite).toHaveBeenCalledTimes(1);
     const second = f.writeLive.mock.calls[1] as unknown as [unknown, unknown[], object];
     expect(second[1]).toHaveLength(5);
     expect(Object.keys(second[2])).toEqual(['b100', 'b101', 'b102', 'b103', 'b104']);
@@ -196,6 +236,33 @@ describe('runPageCleanup', () => {
     const summary = await runPageCleanup(f.deps, { kind: 'all' }, { apply: true });
     expect(summary.pages.map(p => p.status)).toEqual(['skipped', 'cleaned']);
     expect(summary.pages[0].note).toMatch(/edited it meanwhile.*p2.*run again/);
+    // Nothing of page a was written: no audit row for it.
+    expect(f.recordWrite.mock.calls.map(c => (c[0] as CleanupPage).id)).toEqual(['b']);
+  });
+
+  it('batches already applied before a conflict are recorded and reported', async () => {
+    const blocks = Array.from({ length: LIVE_OPS_PER_REQUEST + 1 }, (_, i) =>
+      para(`b${i}`, [run('x', { code: true, bold: true })])
+    );
+    const f = fakes([page('a')], { live: { a: { kind: 'live', blocks } }, apply: true });
+    f.writeLive.mockResolvedValueOnce().mockRejectedValueOnce(new LiveWriteConflict(['b100']));
+    const summary = await runPageCleanup(f.deps, { kind: 'all' }, { apply: true });
+    expect(summary.pages[0].note).toMatch(/100 of 101 blocks written; run again/);
+    const record = f.recordWrite.mock.calls[0][1] as { blocks: string[] };
+    expect(record.blocks).toHaveLength(LIVE_OPS_PER_REQUEST);
+  });
+
+  it('a fatal collab refusal stops the run: no later page is read or written', async () => {
+    const f = fakes([page('a'), page('b')], {
+      live: { b: { kind: 'live', blocks: BOLD_CODE() } },
+      apply: true,
+    });
+    f.readLive.mockRejectedValueOnce(new FatalCleanupError('HTTP 401'));
+    await expect(runPageCleanup(f.deps, { kind: 'all' }, { apply: true })).rejects.toThrow(
+      'HTTP 401'
+    );
+    expect(f.readLive).toHaveBeenCalledTimes(1);
+    expect(f.writeLive).not.toHaveBeenCalled();
   });
 
   it('a live page the service cannot load (href style) is read and written in git', async () => {
@@ -221,6 +288,16 @@ describe('runPageCleanup', () => {
       'git-sha'
     );
     expect(f.writeLive).not.toHaveBeenCalled();
+    expect(f.savePreImage).toHaveBeenCalledWith(page('k'), {
+      source: 'git (live service cannot load it)',
+      sha: 'git-sha',
+      blocks: HREF(),
+    });
+    expect(f.recordWrite).toHaveBeenCalledWith(page('k'), {
+      committed_to: 'git',
+      sha: 'new-sha',
+      commit: 'c1',
+    });
   });
 
   it('…unless a stored live row holds edits not yet in git', async () => {
@@ -285,13 +362,34 @@ describe('runPageCleanup', () => {
     });
   });
 
-  it('names problems the cleaner cannot fix', async () => {
-    const f = fakes([page('a')], { live: { a: { kind: 'live', blocks: BOLD_CODE() } } });
+  it('names and counts pages that still would not open, cleaned or not', async () => {
+    const f = fakes([page('a'), page('b'), page('c')], {
+      live: {
+        a: { kind: 'live', blocks: BOLD_CODE() },
+        b: { kind: 'live', blocks: [{ id: 'w', type: 'widget' }] },
+        c: { kind: 'live', blocks: [para('ok', [run('fine')])] },
+      },
+    });
     const summary = await runPageCleanup(
-      { ...f.deps, remainingProblems: () => ["w: unknown block type 'widget'"] },
+      {
+        ...f.deps,
+        remainingProblems: blocks =>
+          (blocks as Array<{ type: string }>).some(b => b.type === 'widget') ||
+          (blocks as Array<{ id: string }>)[0].id === 'p1'
+            ? ["w: unknown block type 'widget'"]
+            : [],
+      },
       { kind: 'all' },
       { apply: false }
     );
-    expect(summary.pages[0].note).toBe("the cleaner cannot fix: w: unknown block type 'widget'");
+    expect(summary.pages.map(p => [p.pageId, p.status, p.note ?? null])).toEqual([
+      ['a', 'would-clean', "still does not open: w: unknown block type 'widget'"],
+      ['b', 'unfixable', "still does not open: w: unknown block type 'widget'"],
+      ['c', 'clean', null],
+    ]);
+    expect(summary.stillInvalid).toBe(2);
+    expect(summary.counts.unfixable).toBe(1);
+    // The unfixable page is printed even though nothing in it changes.
+    expect(f.lines.map(line => line.split('\t')[1])).toEqual(['a', 'b']);
   });
 });
