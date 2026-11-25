@@ -62,6 +62,7 @@ import {
   actingRole,
   citesFromParts,
   isAskMojiRole,
+  mergeUsage,
   projectAskMojiTranscript,
   stubLookupOutputs,
   withRateable,
@@ -1322,8 +1323,9 @@ export const persistAssistantMessage = async (i: {
 };
 
 /**
- * Add usage to a stored assistant row's `metadata.usage` (summing every
- * count; `model` kept unless the row had none): the summarizer's usage, which
+ * Add usage to a stored assistant row's `metadata.usage` (`mergeUsage`: every
+ * count summed, `model` and `cacheTtl` kept unless the row had none, the
+ * steps appended up to `MAX_USAGE_STEPS`): the summarizer's usage, which
  * R6 records with the turn it ran after. Any status. False for anything but
  * an ASSISTANT row of an Ask Moji conversation with a grant, or a usage that
  * is not the usage shape.
@@ -1355,18 +1357,7 @@ export const addUsage = async (
     if (!row || row.role !== 'ASSISTANT') return false;
     const metadata = isObject(row.metadata) ? row.metadata : {};
     const before = AskMojiUsageSchema.safeParse(metadata.usage);
-    const a = parsed.data;
-    const usage: AskMojiUsage = before.success
-      ? {
-          input: before.data.input + a.input,
-          output: before.data.output + a.output,
-          cacheRead: before.data.cacheRead + a.cacheRead,
-          cacheWrite: before.data.cacheWrite + a.cacheWrite,
-          reasoning: before.data.reasoning + a.reasoning,
-          calls: before.data.calls + a.calls,
-          model: before.data.model ?? a.model,
-        }
-      : a;
+    const usage: AskMojiUsage = before.success ? mergeUsage(before.data, parsed.data) : parsed.data;
     await tx.aIConversationMessage.update({
       where,
       data: { metadata: toJson({ ...metadata, usage }) as Prisma.InputJsonObject },

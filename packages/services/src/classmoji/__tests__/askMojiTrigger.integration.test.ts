@@ -656,6 +656,76 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
       ]);
     });
 
+    it("adds the summarizer's step after the reply's steps, sums the totals, keeps the TTL", async () => {
+      const answer = (input: number, tools: string[]) => ({
+        kind: 'answer' as const,
+        input,
+        cacheRead: 0,
+        cacheWrite: input,
+        output: 10,
+        reasoning: 0,
+        tools,
+      });
+      const turn = {
+        ...usage,
+        calls: 2,
+        input: 300,
+        cacheRead: 0,
+        cacheWrite: 300,
+        output: 20,
+        cacheTtl: '5m' as const,
+        steps: [answer(100, ['content_search']), answer(200, [])],
+      };
+      const summary = {
+        input: 5000,
+        output: 300,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 40,
+        calls: 1,
+        model: 'claude-x',
+        steps: [
+          {
+            kind: 'summary' as const,
+            input: 5000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            output: 300,
+            reasoning: 40,
+            tools: [],
+          },
+        ],
+      };
+      const { conversationId: id } = await open(userA, classX);
+      await admit(id, userMessage('Late policy?'));
+      await askMoji.persistAssistantMessage({
+        conversationId: id,
+        message: reply('Ten percent.', 'a:s') as never,
+        usage: turn,
+      });
+      expect(await askMoji.addUsage(id, 'a:s', summary)).toBe(true);
+      const row = await prisma.aIConversationMessage.findFirstOrThrow({
+        where: { conversation_id: id, ui_message_id: 'a:s' },
+      });
+      expect((row.metadata as { usage: unknown }).usage).toEqual({
+        input: 5300,
+        output: 320,
+        cacheRead: 0,
+        cacheWrite: 300,
+        reasoning: 40,
+        calls: 3,
+        model: 'claude-x',
+        cacheTtl: '5m',
+        steps: [...turn.steps, ...summary.steps],
+      });
+      // A usage with an unknown key is refused whole, the row left as it was.
+      expect(await askMoji.addUsage(id, 'a:s', { ...summary, extra: 1 } as never)).toBe(false);
+      const after = await prisma.aIConversationMessage.findFirstOrThrow({
+        where: { conversation_id: id, ui_message_id: 'a:s' },
+      });
+      expect(after.metadata).toEqual(row.metadata);
+    });
+
     it('marks each assistant row rateable: final model answers only', async () => {
       const { conversationId: id } = await open(userA, classX);
       const q1 = userMessage('Q1');

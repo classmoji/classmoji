@@ -19,6 +19,7 @@ const classroomFindManyMock = vi.fn();
 // Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
 vi.mock('../../classmoji/planLimits.ts', () => ({
   assertCanCreateContent: vi.fn(async () => {}),
+  assertCanCreateSlide: vi.fn(async () => {}),
   contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
   contentLimitMessage: () => '',
 }));
@@ -215,6 +216,8 @@ describe('createSlide', () => {
         content_path: 'slides/intro-web',
         classroom_id: 'class-1',
         created_by: 'user-1',
+        // The kind the plan limit checked, written explicitly.
+        kind: 'DECK',
       },
     });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
@@ -266,8 +269,8 @@ describe('createSlide', () => {
 
   it("refuses at the classroom's slide limit BEFORE any GitHub write", async () => {
     const planLimits = await import('../../classmoji/planLimits.ts');
-    vi.mocked(planLimits.assertCanCreateContent).mockRejectedValueOnce(
-      Object.assign(new Error('Free classes can have up to 10 slides.'), {
+    vi.mocked(planLimits.assertCanCreateSlide).mockRejectedValueOnce(
+      Object.assign(new Error('Free classes can have up to 10 slide decks.'), {
         code: 'PLAN_CONTENT_LIMIT',
       })
     );
@@ -275,7 +278,8 @@ describe('createSlide', () => {
     await expect(
       createSlide({ classroomId: 'class-1', title: 'Week 11', createdBy: 'user-1' })
     ).rejects.toMatchObject({ code: 'PLAN_CONTENT_LIMIT' });
-    expect(planLimits.assertCanCreateContent).toHaveBeenCalledWith('class-1', 'slides');
+    // A deck: the one kind the limit counts.
+    expect(planLimits.assertCanCreateSlide).toHaveBeenCalledWith('class-1', 'DECK');
     expect(ensureContentRepoMock).not.toHaveBeenCalled();
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(slideCreateMock).not.toHaveBeenCalled();

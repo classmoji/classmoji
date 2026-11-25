@@ -36,19 +36,27 @@ vi.mock('@trigger.dev/sdk', () => ({
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 
-vi.mock('@classmoji/services', () => ({
-  ClassmojiService: {
-    page: { createWithUniquePageSlug: vi.fn(), isPageSlugConflict: () => false },
-    contentImport: { rewriteContentUrls: (value: unknown) => value },
-    contentManifest: { saveManifest: vi.fn() },
-    planLimits: {
-      contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
-      contentLimitMessage: (kind: string, limit: number) => `limit ${limit} ${kind}`,
+// The real plan-limit rule and wording (pinned in the services' planLimits.test.ts),
+// so this test cannot drift from them; only the per-classroom count is mocked.
+vi.mock('@classmoji/services', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../../services/src/classmoji/planLimits.ts')
+  >('../../../../services/src/classmoji/planLimits.ts');
+  return {
+    ClassmojiService: {
+      page: { createWithUniquePageSlug: vi.fn(), isPageSlugConflict: () => false },
+      contentImport: { rewriteContentUrls: (value: unknown) => value },
+      contentManifest: { saveManifest: vi.fn() },
+      planLimits: {
+        contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
+        countsTowardSlideLimit: actual.countsTowardSlideLimit,
+        skippedOverLimitText: actual.skippedOverLimitText,
+      },
     },
-  },
-  describeTokenMintError: vi.fn(),
-  getGitProvider: vi.fn(),
-}));
+    describeTokenMintError: vi.fn(),
+    getGitProvider: vi.fn(),
+  };
+});
 
 vi.mock('../../helpers/cloneContentRepo.ts', () => ({ cloneContentRepo: vi.fn() }));
 
@@ -241,6 +249,44 @@ describe('importSlideRows: the behaviour it already had', () => {
     await expect(run(writer, wholeRepo)).resolves.toBe(1);
     expect(mocks.slideCreate).toHaveBeenCalledTimes(1);
     expect(writer.warnings).toEqual([]);
+  });
+});
+
+describe("importSlideRows: a free target's slide limit counts decks only", () => {
+  const deck2 = sourceSlide({ id: 'src-2', title: 'Week 2', slug: 'week-2' });
+  const deck3 = sourceSlide({ id: 'src-3', title: 'Week 3', slug: 'week-3' });
+
+  it('caps the decks, oldest first, and brings every file and link regardless', async () => {
+    mocks.contentAllowance.mockResolvedValue({ limit: 10, used: 9, remaining: 1 });
+    mocks.slideFindMany.mockResolvedValue([deck, file, deck2, link, deck3]);
+    const writer = makeWriter();
+
+    await expect(run(writer, wholeRepo)).resolves.toBe(3);
+
+    expect(mocks.contentAllowance).toHaveBeenCalledWith('target-class', 'slides');
+    expect(createdRows().map(row => [row.kind, row.title])).toEqual([
+      ['DECK', 'Week 1'],
+      ['FILE', 'Lecture 1'],
+      ['LINK', 'Reading list'],
+    ]);
+    expect(writer.warnings).toEqual([
+      'slides: skipped 2 slide decks. Free classes can have up to 10 slide decks. ' +
+        "Uploaded files and links don't count. Upgrade to Pro for unlimited slide decks.",
+    ]);
+  });
+
+  it('brings files and links into a target already over the deck limit', async () => {
+    mocks.contentAllowance.mockResolvedValue({ limit: 10, used: 14, remaining: 0 });
+    mocks.slideFindMany.mockResolvedValue([deck, file, link]);
+    const writer = makeWriter();
+
+    await expect(run(writer, wholeRepo)).resolves.toBe(2);
+
+    expect(createdRows().map(row => row.kind)).toEqual(['FILE', 'LINK']);
+    expect(writer.warnings).toEqual([
+      'slides: skipped 1 slide deck. Free classes can have up to 10 slide decks. ' +
+        "Uploaded files and links don't count. Upgrade to Pro for unlimited slide decks.",
+    ]);
   });
 });
 

@@ -8,12 +8,13 @@
  */
 
 import getPrisma from '@classmoji/database';
+import type { SlideKind } from '@classmoji/database/client';
 import { uniqueViolationTarget } from '../classmoji/uniqueViolation.ts';
 import { ContentService } from '../content/ContentService.ts';
 import { removeContentAssetFolder } from '../classmoji/contentAssets.service.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
-import { assertCanCreateContent } from '../classmoji/planLimits.ts';
+import { assertCanCreateSlide } from '../classmoji/planLimits.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
 import { previewBranchName, saveDeck } from './slideContent.service.ts';
 import { isDeckSlide, isMediaBackedFileSlide, SlideKindError } from './slideSource.ts';
@@ -337,9 +338,9 @@ export function buildEditorDeck({
 
 /**
  * Everything a new slide of ANY kind has to settle before a byte is written:
- * the classroom is real and has a content repo, it is under its plan's slide
- * limit, the title yields a slug, and nothing already owns that slug or
- * content path.
+ * the classroom is real and has a content repo, a deck fits under its plan's
+ * slide limit (files and links are not counted, `assertCanCreateSlide`), the
+ * title yields a slug, and nothing already owns that slug or content path.
  *
  * Shared by `createSlide` (deck), `createFileSlide` and `createLinkSlide`,
  * because the collision refusal is the part that MUST NOT drift: slug carries a
@@ -347,12 +348,19 @@ export function buildEditorDeck({
  * kind that skipped this check could overwrite another slide's folder on GitHub
  * before the DB told it no.
  */
-export async function prepareSlideCreate({
+export async function prepareSlideCreate<Kind extends SlideKind>({
   classroomId,
   title,
+  kind,
 }: {
   classroomId: string;
   title: string;
+  /**
+   * What is being created. Required: the plan limit counts decks only. It comes
+   * back in the result, and the caller writes THAT as the row's `kind`, so the
+   * kind checked and the kind written are one value.
+   */
+  kind: Kind;
 }) {
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
@@ -368,7 +376,7 @@ export async function prepareSlideCreate({
     throw new Error('Classroom content repo not configured');
   }
 
-  await assertCanCreateContent(classroomId, 'slides');
+  await assertCanCreateSlide(classroomId, kind);
 
   const slug = slideSlug(title);
   if (!slug) {
@@ -398,6 +406,7 @@ export async function prepareSlideCreate({
     repo: classroom.content_repo,
     slug,
     contentPath,
+    kind,
   };
 }
 
@@ -418,9 +427,10 @@ export async function createSlide({
   /** Injectable for tests. */
   idGen?: IdGenerator;
 }) {
-  const { classroom, orgLogin, repo, slug, contentPath } = await prepareSlideCreate({
+  const { classroom, orgLogin, repo, slug, contentPath, kind } = await prepareSlideCreate({
     classroomId,
     title,
+    kind: 'DECK',
   });
 
   await ensureContentRepo(classroomId);
@@ -456,6 +466,7 @@ export async function createSlide({
         content_path: contentPath,
         classroom_id: classroomId,
         created_by: createdBy,
+        kind,
       },
     });
   } catch (error: unknown) {

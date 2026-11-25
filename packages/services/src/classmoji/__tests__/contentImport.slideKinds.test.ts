@@ -24,12 +24,19 @@ const classroomFindUnique = vi.fn();
 const slideFindMany = vi.fn();
 const slideCreate = vi.fn();
 
-// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
-vi.mock('../planLimits.ts', () => ({
-  assertCanCreateContent: vi.fn(async () => {}),
-  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
-  contentLimitMessage: () => '',
-}));
+// Plan limits have their own tests (planLimits.test.ts); here every classroom
+// has room unless a test says otherwise, and the pure helpers are the real ones
+// so the deck-only cap is the one the import applies.
+const contentAllowance = vi.fn();
+vi.mock('../planLimits.ts', async () => {
+  const actual = await vi.importActual<typeof import('../planLimits.ts')>('../planLimits.ts');
+  return {
+    assertCanCreateContent: vi.fn(async () => {}),
+    contentAllowance: (...args: unknown[]) => contentAllowance(...args),
+    skippedOverLimitText: actual.skippedOverLimitText,
+    slidesWithinAllowance: actual.slidesWithinAllowance,
+  };
+});
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -167,6 +174,7 @@ const createdRows = () =>
 beforeEach(() => {
   vi.clearAllMocks();
 
+  contentAllowance.mockResolvedValue({ limit: null, used: 0, remaining: null });
   classroomFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
     where.id === 'source-class'
       ? classroomRow('source-class', 'cs52-24')
@@ -295,6 +303,45 @@ describe('importing slides of every kind', () => {
  * failed, taking every deck with it — and it meant the whole course's documents
  * sat in memory at once before a single byte went out.
  */
+describe("a free target's slide limit", () => {
+  const deck = (n: number) => ({
+    ...deckSlide,
+    id: `src-deck-${n}`,
+    title: `Week ${n}`,
+    slug: `week-${n}`,
+    content_path: `slides/week-${n}`,
+  });
+
+  it('caps the decks, oldest first, and brings every file and link regardless', async () => {
+    contentAllowance.mockResolvedValue({ limit: 10, used: 9, remaining: 1 });
+    sourceRows([deck(1), fileSlide, deck(2), linkSlide, deck(3)]);
+
+    const summary = await run();
+
+    expect(contentAllowance).toHaveBeenCalledWith('target-class', 'slides');
+    expect(createdRows().map(row => [row.kind, row.title])).toEqual([
+      ['DECK', 'Week 1'],
+      ['FILE', 'Lecture 1'],
+      ['LINK', 'Reading list'],
+    ]);
+    expect(summary.slides).toBe(3);
+    expect(summary.warnings).toContain(
+      'slides: skipped 2 slide decks. Free classes can have up to 10 slide decks. ' +
+        "Uploaded files and links don't count. Upgrade to Pro for unlimited slide decks."
+    );
+  });
+
+  it('still brings files and links into a target with no room for decks', async () => {
+    contentAllowance.mockResolvedValue({ limit: 10, used: 12, remaining: 0 });
+    sourceRows([fileSlide, linkSlide]);
+
+    const summary = await run();
+
+    expect(createdRows().map(row => row.kind)).toEqual(['FILE', 'LINK']);
+    expect(summary.warnings).toEqual([]);
+  });
+});
+
 describe('a file slide’s document gets its own commit', () => {
   const secondFile = {
     ...fileSlide,

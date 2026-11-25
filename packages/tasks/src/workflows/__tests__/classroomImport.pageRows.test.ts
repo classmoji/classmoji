@@ -40,34 +40,41 @@ vi.mock('@trigger.dev/sdk', () => ({
 
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 
-vi.mock('@classmoji/services', () => ({
-  ClassmojiService: {
-    page: {
-      createWithUniquePageSlug: (...a: unknown[]) => mocks.createWithUniquePageSlug(...a),
-      // A minimal but FAITHFUL stand-in: the point of the guard is that it is
-      // not a bare `code === 'P2002'` test — `pages` carries a second composite
-      // unique, on [classroom_id, title] — so a stub that ignored meta.target
-      // would let the duplicate-title case below throw and the test would pass
-      // for the wrong reason. The real discriminator (and its three meta.target
-      // shapes) is pinned in services' page.service.test.ts.
-      isPageSlugConflict: (error: unknown) => {
-        if (!error || typeof error !== 'object') return false;
-        if ((error as { code?: unknown }).code !== 'P2002') return false;
-        const target = (error as { meta?: { target?: unknown } }).meta?.target;
-        const tokens = (Array.isArray(target) ? target : []).map(t => String(t).toLowerCase());
-        return [...tokens].sort().join(',') === 'classroom_id,slug';
+// The real plan-limit rule and wording (pinned in the services' planLimits.test.ts),
+// so this test cannot drift from them; only the per-classroom count is mocked.
+vi.mock('@classmoji/services', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../../services/src/classmoji/planLimits.ts')
+  >('../../../../services/src/classmoji/planLimits.ts');
+  return {
+    ClassmojiService: {
+      page: {
+        createWithUniquePageSlug: (...a: unknown[]) => mocks.createWithUniquePageSlug(...a),
+        // A minimal but FAITHFUL stand-in: the point of the guard is that it is
+        // not a bare `code === 'P2002'` test — `pages` carries a second composite
+        // unique, on [classroom_id, title] — so a stub that ignored meta.target
+        // would let the duplicate-title case below throw and the test would pass
+        // for the wrong reason. The real discriminator (and its three meta.target
+        // shapes) is pinned in services' page.service.test.ts.
+        isPageSlugConflict: (error: unknown) => {
+          if (!error || typeof error !== 'object') return false;
+          if ((error as { code?: unknown }).code !== 'P2002') return false;
+          const target = (error as { meta?: { target?: unknown } }).meta?.target;
+          const tokens = (Array.isArray(target) ? target : []).map(t => String(t).toLowerCase());
+          return [...tokens].sort().join(',') === 'classroom_id,slug';
+        },
+      },
+      contentImport: { rewriteContentUrls: (...a: unknown[]) => mocks.rewriteContentUrls(...a) },
+      contentManifest: { saveManifest: vi.fn() },
+      planLimits: {
+        contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
+        skippedOverLimitText: actual.skippedOverLimitText,
       },
     },
-    contentImport: { rewriteContentUrls: (...a: unknown[]) => mocks.rewriteContentUrls(...a) },
-    contentManifest: { saveManifest: vi.fn() },
-    planLimits: {
-      contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
-      contentLimitMessage: (kind: string, limit: number) => `limit ${limit} ${kind}`,
-    },
-  },
-  describeTokenMintError: vi.fn(),
-  getGitProvider: vi.fn(),
-}));
+    describeTokenMintError: vi.fn(),
+    getGitProvider: vi.fn(),
+  };
+});
 
 vi.mock('../../helpers/cloneContentRepo.ts', () => ({ cloneContentRepo: vi.fn() }));
 
@@ -165,7 +172,9 @@ describe('importPageRows', () => {
 
     expect(mocks.contentAllowance).toHaveBeenCalledWith('target-class', 'pages');
     expect(writer.idMaps).toEqual({ 'src-1': 'new-page' });
-    expect(writer.warnings).toEqual(['pages: skipped 1 page(s). limit 10 pages']);
+    expect(writer.warnings).toEqual([
+      'pages: skipped 1 page. Free classes can have up to 10 pages. Upgrade to Pro for unlimited pages.',
+    ]);
   });
 
   it('rethrows a slug P2002 rather than warning the page away', async () => {

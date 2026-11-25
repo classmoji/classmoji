@@ -111,7 +111,7 @@ export const planFeatures = (): PlanFeature[] => {
       pro: 'Unlimited',
     },
     {
-      label: 'Slides per class',
+      label: 'Slide decks per class',
       free: slides === null ? 'Unlimited' : `Up to ${slides}`,
       pro: 'Unlimited',
     },
