@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
  * The page and slide limits. What matters: Pro comes from the one resolver,
- * the count is scoped to the classroom asked about, and a free class at its
- * limit is refused with the shared code and sentence.
+ * the count is scoped to the classroom asked about, a free class at its limit
+ * is refused with the shared code and sentence, and only slide DECKS count
+ * toward the slide limit (uploaded files and links never do).
  */
 
 const getProStateForClassroomIdMock = vi.fn();
@@ -23,11 +24,16 @@ vi.mock('@classmoji/database', () => ({
 
 const {
   assertCanCreateContent,
+  assertCanCreateSlide,
   contentAllowance,
+  contentLimitMessage,
+  countsTowardSlideLimit,
   isContentLimitError,
   PLAN_ACTIVE_CLASSROOM_LIMITS,
   PLAN_CONTENT_LIMITS,
   PLAN_CONTENT_LIMIT,
+  skippedOverLimitText,
+  slidesWithinAllowance,
 } = await import('../planLimits.ts');
 
 const FREE = { isPro: false, tier: 'FREE', isActive: true };
@@ -52,12 +58,14 @@ describe('contentAllowance', () => {
     expect(slideCountMock).not.toHaveBeenCalled();
   });
 
-  it('counts slides in their own table', async () => {
+  it('counts slide decks in their own table, never files or links', async () => {
     getProStateForClassroomIdMock.mockResolvedValue(FREE);
     slideCountMock.mockResolvedValue(10);
 
     expect(await contentAllowance('class-y', 'slides')).toMatchObject({ used: 10, remaining: 0 });
-    expect(slideCountMock).toHaveBeenCalledWith({ where: { classroom_id: 'class-y' } });
+    expect(slideCountMock).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-y', kind: 'DECK' },
+    });
     expect(pageCountMock).not.toHaveBeenCalled();
   });
 
@@ -90,14 +98,14 @@ describe('assertCanCreateContent', () => {
 
   it('refuses at the limit with the shared code and sentence', async () => {
     getProStateForClassroomIdMock.mockResolvedValue(FREE);
-    slideCountMock.mockResolvedValue(10);
+    pageCountMock.mockResolvedValue(10);
 
-    const error = await assertCanCreateContent('class-x', 'slides').catch(e => e);
+    const error = await assertCanCreateContent('class-x', 'pages').catch(e => e);
 
     expect(isContentLimitError(error)).toBe(true);
-    expect(error).toMatchObject({ code: PLAN_CONTENT_LIMIT, kind: 'slides', limit: 10, used: 10 });
+    expect(error).toMatchObject({ code: PLAN_CONTENT_LIMIT, kind: 'pages', limit: 10, used: 10 });
     expect(error.message).toBe(
-      'Free classes can have up to 10 slides. Upgrade to Pro for unlimited slides.'
+      'Free classes can have up to 10 pages. Upgrade to Pro for unlimited pages.'
     );
   });
 
@@ -125,7 +133,102 @@ describe('assertCanCreateContent', () => {
   it('never refuses a Pro classroom', async () => {
     getProStateForClassroomIdMock.mockResolvedValue(PRO);
 
-    await expect(assertCanCreateContent('class-x', 'slides', 500)).resolves.toBeUndefined();
+    await expect(assertCanCreateContent('class-x', 'pages', 500)).resolves.toBeUndefined();
+  });
+});
+
+describe('assertCanCreateSlide', () => {
+  it('refuses a deck at the limit, with the deck sentence', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue(FREE);
+    slideCountMock.mockResolvedValue(10);
+
+    const error = await assertCanCreateSlide('class-x', 'DECK').catch(e => e);
+
+    expect(isContentLimitError(error)).toBe(true);
+    expect(error).toMatchObject({ code: PLAN_CONTENT_LIMIT, kind: 'slides', limit: 10, used: 10 });
+    expect(error.message).toBe(
+      "Free classes can have up to 10 slide decks. Uploaded files and links don't count. " +
+        'Upgrade to Pro for unlimited slide decks.'
+    );
+    expect(slideCountMock).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-x', kind: 'DECK' },
+    });
+  });
+
+  it('allows the last free deck', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue(FREE);
+    slideCountMock.mockResolvedValue(9);
+
+    await expect(assertCanCreateSlide('class-x', 'DECK')).resolves.toBeUndefined();
+  });
+
+  it.each(['FILE', 'LINK'] as const)(
+    'never refuses a %s slide, even in a free class far over the deck limit',
+    async kind => {
+      getProStateForClassroomIdMock.mockResolvedValue(FREE);
+      slideCountMock.mockResolvedValue(40);
+
+      await expect(assertCanCreateSlide('class-x', kind)).resolves.toBeUndefined();
+      // Not counted at all: the kind decides before any read.
+      expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
+      expect(slideCountMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('never refuses a deck in a Pro classroom', async () => {
+    getProStateForClassroomIdMock.mockResolvedValue(PRO);
+
+    await expect(assertCanCreateSlide('class-x', 'DECK', 500)).resolves.toBeUndefined();
+    expect(slideCountMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('countsTowardSlideLimit', () => {
+  it('counts decks only', () => {
+    expect(countsTowardSlideLimit('DECK')).toBe(true);
+    expect(countsTowardSlideLimit('FILE')).toBe(false);
+    expect(countsTowardSlideLimit('LINK')).toBe(false);
+  });
+});
+
+describe('slidesWithinAllowance', () => {
+  const rows = [
+    { id: 'd1', kind: 'DECK' as const },
+    { id: 'f1', kind: 'FILE' as const },
+    { id: 'd2', kind: 'DECK' as const },
+    { id: 'l1', kind: 'LINK' as const },
+    { id: 'd3', kind: 'DECK' as const },
+    { id: 'f2', kind: 'FILE' as const },
+  ];
+
+  it('keeps every file and link and the first decks that fit, in order', () => {
+    expect(slidesWithinAllowance(rows, 1)).toEqual({
+      kept: [rows[0], rows[1], rows[3], rows[5]],
+      skipped: 2,
+    });
+  });
+
+  it('keeps files and links when no deck fits', () => {
+    const { kept, skipped } = slidesWithinAllowance(rows, 0);
+    expect(kept.map(r => r.id)).toEqual(['f1', 'l1', 'f2']);
+    expect(skipped).toBe(3);
+  });
+
+  it('keeps everything with room for every deck, or no limit', () => {
+    expect(slidesWithinAllowance(rows, 3)).toEqual({ kept: rows, skipped: 0 });
+    expect(slidesWithinAllowance(rows, null)).toEqual({ kept: rows, skipped: 0 });
+  });
+});
+
+describe('contentLimitMessage', () => {
+  it('names decks for the slide limit and pages for the page limit', () => {
+    expect(contentLimitMessage('slides', 10)).toBe(
+      "Free classes can have up to 10 slide decks. Uploaded files and links don't count. " +
+        'Upgrade to Pro for unlimited slide decks.'
+    );
+    expect(contentLimitMessage('pages', 10)).toBe(
+      'Free classes can have up to 10 pages. Upgrade to Pro for unlimited pages.'
+    );
   });
 });
 
@@ -134,5 +237,19 @@ describe('PLAN_ACTIVE_CLASSROOM_LIMITS', () => {
     // Decided 2026-10-21: the rule exists, switched off. Changing this is a
     // product decision, not a refactor.
     expect(PLAN_ACTIVE_CLASSROOM_LIMITS).toEqual({ FREE: null, PRO: null });
+  });
+});
+
+describe('skippedOverLimitText', () => {
+  it('counts what an import left out, singular and plural, then the limit sentence', () => {
+    expect(skippedOverLimitText('slides', 1, 10)).toBe(
+      'skipped 1 slide deck. Free classes can have up to 10 slide decks. ' +
+        "Uploaded files and links don't count. Upgrade to Pro for unlimited slide decks."
+    );
+    expect(skippedOverLimitText('slides', 3, 10)).toMatch(/^skipped 3 slide decks\. /);
+    expect(skippedOverLimitText('pages', 1, 10)).toBe(
+      'skipped 1 page. Free classes can have up to 10 pages. Upgrade to Pro for unlimited pages.'
+    );
+    expect(skippedOverLimitText('pages', 3, 10)).toMatch(/^skipped 3 pages\. /);
   });
 });
