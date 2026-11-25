@@ -1254,6 +1254,83 @@ describe('assignment_update: title and is_published', () => {
   });
 });
 
+describe('assignment_update: description (the issue body) (#968)', () => {
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-1' };
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'asg-1',
+      title: 'Final Demos',
+      type: 'REPO',
+      is_published: true,
+      description: 'Assignment here: https://notion.so/old-term',
+      module_id: 'mod-1',
+      module: { id: 'mod-1', title: 'Week 10', classroom_id: 'class-1' },
+      repository: { classroom_id: 'class-1' },
+    });
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({
+        id,
+        title: 'Final Demos',
+        is_published: true,
+        student_deadline: null,
+        weight: 10,
+        grades_released: false,
+        grader_deadline: null,
+        release_at: null,
+        tokens_per_hour: null,
+        description: 'Assignment here: https://notion.so/old-term',
+        ...data,
+      })
+    );
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  });
+
+  it('OWNER replaces it, gets it back, and the audit row records only its length', async () => {
+    const text = 'Demo your project in class on Tuesday.';
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, description: text }, CTX));
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { description: text });
+    expect(payload.assignment.description).toBe(text);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({
+      tool: 'assignment_update',
+      fields: ['description'],
+      values: { description_length: text.length },
+    });
+    expect(JSON.stringify(audit)).not.toContain('Tuesday');
+  });
+
+  it('clears it with an empty string', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, description: '' }, CTX);
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { description: '' });
+  });
+
+  it('does not open issues again: an edit to a published assignment releases nothing', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, description: 'New text' }, CTX);
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+  });
+
+  it("refuses a TEACHER, as the web edit form is the owner's", async () => {
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, description: 'x' }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('caps it at 10,000 characters, as assignment_create does', () => {
+    const schema = assignmentUpdateTool.inputSchema.description as z.ZodTypeAny;
+    expect(schema.safeParse('a'.repeat(10000)).success).toBe(true);
+    expect(schema.safeParse('a'.repeat(10001)).success).toBe(false);
+  });
+
+  it('says that open issues keep their old body', () => {
+    const field = assignmentUpdateTool.inputSchema.description as z.ZodTypeAny;
+    expect(field.description).toMatch(/never ones already open/);
+    expect(assignmentUpdateTool.description).toMatch(/description: future issues only/);
+  });
+});
+
 describe('assignment_create and assignment_delete descriptions', () => {
   it('keep under the 1,500-byte connector limit', () => {
     for (const tool of [assignmentCreateTool, assignmentDeleteTool]) {
