@@ -1127,15 +1127,13 @@
    themes are stated here; the generated rules (utils/stepStyles.ts) only place
    things. */
 .page-editor {
-  /* The number and the ring: the colour of the left menu's section headings (--ink-4). */
-  --st-fg: #8a8d97;
+  /* The number and the ring: the colour of the left menu's section headings. */
+  --st-fg: var(--ink-4);
   --st-ring: var(--st-fg);
   --st-line: #dcdee6;
 }
 
 .dark .page-editor {
-  --st-fg: #767c8c;
-  --st-ring: var(--st-fg);
   --st-line: rgba(255, 255, 255, 0.14);
 }
 

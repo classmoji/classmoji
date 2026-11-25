@@ -1,5 +1,24 @@
 /* BlockNote theme customizations for Classmoji pages */
 
+/* The app's ink colours (packages/ui-components/styles/tokens.css), under the app's own names
+   and with its values. This app does not load that file (it would also redefine the fonts and
+   shadows set here), so the few that the pages' styles share are stated once, here: use these
+   rather than a hand-copied hex, and change them only together with tokens.css. */
+:root {
+  --ink-0: #14151a;
+  --ink-1: #2b2d35;
+  --ink-2: #5b5f69;
+  --ink-3: #6d707b;
+  --ink-4: #8a8d97;
+}
+.dark {
+  --ink-0: #f1f2f6;
+  --ink-1: #d9dbe3;
+  --ink-2: #a4a9b8;
+  --ink-3: #9398a6;
+  --ink-4: #767c8c;
+}
+
 /* Override default BlockNote font size. Body weight 400 and a 1.6 line height
    (Zensical's reading rhythm), with a touch of negative tracking; emphasis is
    700 (see `strong` below). The line height is on `.bn-block-outer`, the
