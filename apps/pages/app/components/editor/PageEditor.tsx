@@ -317,12 +317,16 @@ const PageEditor = forwardRef(function PageEditor(
     },
     [pageId, onAssetUploaded, classroomId]
   );
-  // Stored blocks as the editing schema can build them (drawableBlocks):
-  // nothing marked unsaved or saved by that alone.
-  const typedInitialContent =
-    Array.isArray(initialContent) && initialContent.length > 0
-      ? (drawableBlocks(initialContent) as PageBlockInsertions)
-      : undefined;
+  // Stored blocks as the editing schema can build them (drawableBlocks),
+  // once per content. The editor's save baseline is the document it opens
+  // with, so this alone marks nothing unsaved.
+  const typedInitialContent = useMemo(
+    () =>
+      Array.isArray(initialContent) && initialContent.length > 0
+        ? (drawableBlocks(initialContent) as PageBlockInsertions)
+        : undefined,
+    [initialContent]
+  );
 
   // The options both modes share.
   const baseOptions = {

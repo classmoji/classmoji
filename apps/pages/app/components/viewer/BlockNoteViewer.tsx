@@ -116,11 +116,15 @@ const BlockNoteViewer = ({
   onMounted,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
-  // Stored blocks as the viewer schema can build them (drawableBlocks).
-  const initialContent =
-    Array.isArray(content) && content.length > 0
-      ? (drawableBlocks(content) as PageBlockInsertions)
-      : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
+  // Stored blocks as the viewer schema can build them (drawableBlocks), once
+  // per content: the editor reads them only when it is created.
+  const initialContent = useMemo(
+    () =>
+      Array.isArray(content) && content.length > 0
+        ? (drawableBlocks(content) as PageBlockInsertions)
+        : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions),
+    [content]
+  );
 
   const downloads = useMemo(
     () =>

@@ -11,8 +11,10 @@ import { cleanPageBlocks, normalizeCodeBlockContent } from '@classmoji/page-sche
  * (`pageStyleSpecs`) still draw it. Once they take BlockNote's stock styles,
  * this cleans with the stock rules too.
  *
- * For drawing only: nothing here is saved (the editor's save baseline is the
- * document it opened with).
+ * Opening a page this way writes nothing: the editor's save baseline is the
+ * document it opened with, so the cleaning alone marks nothing unsaved. But
+ * once someone edits and saves, the blocks the save carries are the cleaned
+ * ones (the editor never held the originals).
  */
 export function drawableBlocks<T>(blocks: T): T {
   return cleanPageBlocks(normalizeCodeBlockContent(blocks), { keepCodeMarks: true }).blocks;
