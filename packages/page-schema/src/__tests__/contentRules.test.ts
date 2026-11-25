@@ -142,22 +142,58 @@ describe('validatePageBlocks', () => {
     ]);
   });
 
-  it('reports an unknown text style on the block holding it', () => {
+  it('reports an unknown text style per run, on the block holding it', () => {
     expect(validatePageBlocks(hrefStyle())).toEqual([
       {
         blockId: 'n1',
         blockType: 'numberedListItem',
         problem: "unknown text style 'href'",
+        text: 'the style guide',
       },
+      expect.objectContaining({ problem: "unknown text style 'href'", text: 'Android' }),
+      expect.objectContaining({ problem: "unknown text style 'href'", text: 'docs' }),
     ]);
     const nested = [para('p1', [text('fine')], [para('kid', [text('x', { glow: true })])])];
     expect(validatePageBlocks(nested)).toEqual([
-      {
-        blockId: 'kid',
-        blockType: 'paragraph',
-        problem: "unknown text style 'glow'",
-      },
+      { blockId: 'kid', blockType: 'paragraph', problem: "unknown text style 'glow'", text: 'x' },
     ]);
+  });
+
+  it('an unknown style hides no other problem in its block', () => {
+    const blocks = [
+      para('p1', [
+        text('both', { code: true, bold: true }),
+        text('link', { href: 'https://a.dev' }),
+        text('glowing', { glow: true }),
+        { type: 'link', href: 'https://b.dev', content: [text('linked code', { code: true })] },
+      ]),
+    ];
+    expect(validatePageBlocks(blocks).map(p => [p.blockId, p.problem, p.text])).toEqual([
+      ['p1', "unknown text style 'href'", 'link'],
+      ['p1', "unknown text style 'glow'", 'glowing'],
+      ['p1', "inline code can't also be bold", 'both'],
+      ['p1', "inline code can't be inside a link", 'linked code'],
+    ]);
+    expect(opensInStockEditor(blocks)).toBe(false);
+    expect(validatePageBlocks(cleanPageBlocks(blocks).blocks)).toEqual([]);
+  });
+
+  it('styles that are not an object, and unknown inline content, are named as such', () => {
+    const blocks = [
+      para('p1', [
+        { type: 'text', text: 'listed', styles: ['bold'] },
+        { type: 'mention', user: 'ada' },
+      ]),
+    ];
+    expect(validatePageBlocks(blocks).map(p => p.problem)).toEqual([
+      'text styles must be an object of style names',
+      "unknown inline content type 'mention'",
+    ]);
+    const { blocks: cleaned, changes } = cleanPageBlocks([
+      para('p1', [{ type: 'text', text: 'listed', styles: ['bold'] }]),
+    ]);
+    expect(changes.map(c => c.change)).toEqual(['dropped text styles that were not an object']);
+    expect(validatePageBlocks(cleaned)).toEqual([]);
   });
 
   it('a part that does not build hides nothing else in its tree', () => {

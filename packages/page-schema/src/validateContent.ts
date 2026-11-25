@@ -96,6 +96,111 @@ function buildProblem(error: unknown, block: unknown): string {
   return message;
 }
 
+type Report = (block: unknown, problem: string, text: unknown) => void;
+
+/**
+ * Inline content with what BlockNote cannot build at all taken out, each
+ * removal reported: an unknown text style key (the run keeps its other
+ * styles), styles that are not an object, an inline item of an unknown type.
+ * Building the rest still finds every other problem in the block (a style
+ * key BlockNote does not know throws before any mark is checked).
+ */
+function stripInline(
+  content: unknown[],
+  block: unknown,
+  known: { styles: ReadonlySet<string>; inline: ReadonlySet<string> },
+  report: Report
+): unknown[] {
+  let out: unknown[] | undefined;
+  content.forEach((item, i) => {
+    let next: unknown = item;
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const node = item as { type?: unknown; text?: unknown; styles?: unknown; content?: unknown };
+      if (node.type === 'text') {
+        const styles = node.styles;
+        if (styles != null && (typeof styles !== 'object' || Array.isArray(styles))) {
+          report(block, 'text styles must be an object of style names', node.text);
+          next = { ...node, styles: {} };
+        } else if (styles) {
+          const unknown = Object.keys(styles).filter(key => !known.styles.has(key));
+          if (unknown.length > 0) {
+            for (const key of unknown) report(block, `unknown text style '${key}'`, node.text);
+            const kept = { ...(styles as Record<string, unknown>) };
+            for (const key of unknown) delete kept[key];
+            next = { ...node, styles: kept };
+          }
+        }
+      } else if (node.type === 'link') {
+        if (Array.isArray(node.content)) {
+          const inner = stripInline(node.content, block, known, report);
+          if (inner !== node.content) next = { ...node, content: inner };
+        }
+      } else if (typeof node.type === 'string' && !known.inline.has(node.type)) {
+        report(block, `unknown inline content type '${node.type}'`, '');
+        next = undefined;
+      }
+    }
+    if (next !== item) {
+      out ??= content.slice(0, i);
+    }
+    if (out && next !== undefined) out.push(next);
+  });
+  return out ?? content;
+}
+
+/** `stripInline` over a block's content (inline or a table's cells) and its children. */
+function stripBlocks(
+  blocks: unknown[],
+  known: { styles: ReadonlySet<string>; inline: ReadonlySet<string> },
+  report: Report
+): unknown[] {
+  let out: unknown[] | undefined;
+  blocks.forEach((block, i) => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return;
+    const b = block as { content?: unknown; children?: unknown };
+    let next: Record<string, unknown> | undefined;
+    if (Array.isArray(b.content)) {
+      const content = stripInline(b.content, block, known, report);
+      if (content !== b.content) next = { ...(block as object), content };
+    } else if (
+      b.content &&
+      typeof b.content === 'object' &&
+      (b.content as { type?: unknown }).type === 'tableContent'
+    ) {
+      const table = b.content as { rows?: unknown };
+      if (Array.isArray(table.rows)) {
+        let changed = false;
+        const rows = table.rows.map(row => {
+          const cells = (row as { cells?: unknown } | null)?.cells;
+          if (!Array.isArray(cells)) return row;
+          const nextCells = cells.map(cell => {
+            if (Array.isArray(cell)) return stripInline(cell, block, known, report);
+            const inner = (cell as { content?: unknown } | null)?.content;
+            if (cell && typeof cell === 'object' && Array.isArray(inner)) {
+              const stripped = stripInline(inner, block, known, report);
+              return stripped === inner ? cell : { ...cell, content: stripped };
+            }
+            return cell;
+          });
+          if (nextCells.every((cell, c) => cell === cells[c])) return row;
+          changed = true;
+          return { ...(row as object), cells: nextCells };
+        });
+        if (changed) next = { ...(block as object), content: { ...table, rows } };
+      }
+    }
+    if (Array.isArray(b.children)) {
+      const children = stripBlocks(b.children, known, report);
+      if (children !== b.children) next = { ...(next ?? (block as object)), children };
+    }
+    if (next) {
+      out ??= blocks.slice();
+      out[i] = next;
+    }
+  });
+  return out ?? blocks;
+}
+
 function idOf(block: unknown): string | null {
   const id = (block as { id?: unknown } | null)?.id;
   return typeof id === 'string' ? id : null;
@@ -280,15 +385,34 @@ export function validatePageBlocks(blocks: unknown): PageContentProblem[] {
       },
     ];
   }
-  const normalized = normalizeCodeBlockContent(blocks) as unknown[];
   const { pmSchema, schema } = editor();
   const build = (block: unknown) => blockToNode(block as never, pmSchema, schema.styleSchema);
+
+  const problems: PageContentProblem[] = [];
+  const known = {
+    styles: new Set(Object.keys(schema.styleSchema)),
+    inline: new Set(Object.keys(schema.inlineContentSchema)),
+  };
+  // What cannot be built at all is reported here, run by run, and taken out,
+  // so building the rest still finds everything else.
+  const normalized = stripBlocks(
+    normalizeCodeBlockContent(blocks) as unknown[],
+    known,
+    (block, problem, text) => {
+      const snippet = runSnippet(text);
+      problems.push({
+        blockId: idOf(block),
+        blockType: typeOf(block),
+        problem,
+        ...(snippet ? { text: snippet } : {}),
+      });
+    }
+  );
 
   const sourceIds = new Set<string>();
   const types = new Map<string, string>();
   collectSource(normalized, sourceIds, types);
 
-  const problems: PageContentProblem[] = [];
   const nodes: PMNode[] = [];
   for (const block of normalized) {
     let node: PMNode;

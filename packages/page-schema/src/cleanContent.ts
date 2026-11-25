@@ -18,7 +18,8 @@ import { defaultStyleSpecs } from '@blocknote/core';
  * - a text style `href` (a string): the run becomes a real link to that href
  *   (adjacent runs with the same href share one link); then the link rule
  *   above applies to it;
- * - any other style key BlockNote does not know: dropped.
+ * - any other style key BlockNote does not know: dropped, and styles that
+ *   are not an object at all (an array) with it.
  *
  * A style whose value is falsy (`bold: false`) builds no mark, so it is no
  * conflict and is left as it is. Code blocks are not touched: their content
@@ -113,7 +114,17 @@ function isLink(node: unknown): node is Link {
  */
 function cleanRun(run: Run, inLink: boolean, ctx: Ctx): { run: Run; href?: string } {
   const styles = run.styles;
-  if (!styles || typeof styles !== 'object' || Array.isArray(styles)) return { run };
+  if (styles == null) return { run };
+  if (typeof styles !== 'object' || Array.isArray(styles)) {
+    // BlockNote reads any other value as a map of style names and throws.
+    ctx.changes.push({
+      blockId: ctx.blockId,
+      blockType: ctx.blockType,
+      change: 'dropped text styles that were not an object',
+      text: runSnippet(run.text),
+    });
+    return { run: { ...run, styles: {} } };
+  }
   let next: Record<string, unknown> | undefined;
   const drop = (key: string, change: string) => {
     next ??= { ...styles };
