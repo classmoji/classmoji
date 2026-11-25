@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   uploadFileTypes: vi.fn(),
   resolvePageAssetUrl: vi.fn(),
   canonicalizePageCoverRef: vi.fn(),
+  compareBranches: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -61,6 +62,9 @@ vi.mock('@classmoji/services', async () => {
   return {
     validateFile: files.validateFile,
     MAX_FILE_SIZE: files.MAX_FILE_SIZE,
+    ContentService: {
+      compareBranches: (...a: unknown[]) => mocks.compareBranches(...a),
+    },
     ClassmojiService: {
       media: { isMediaRoutingError: routing.isMediaRoutingError },
       contentDelivery: {
@@ -199,6 +203,7 @@ beforeEach(() => {
   // Default: the ref is already canonical and belongs to this classroom. The
   // service owns the real decision; these tests own the tool's reaction to it.
   mocks.canonicalizePageCoverRef.mockImplementation(async (_page, ref) => ref);
+  mocks.compareBranches.mockResolvedValue({ merge_base_sha: 'base-sha' });
 });
 
 // ─── S1: cross-classroom pages are invisible to every tool ──────────────────
@@ -1005,9 +1010,179 @@ describe('page_content_apply', () => {
   });
 });
 
+// ─── page_content_apply: content BlockNote cannot open ───────────────────────
+
+describe('page_content_apply refuses content the page editor cannot open', () => {
+  const run = (text: string, styles: Record<string, unknown> = {}) => ({
+    type: 'text',
+    text,
+    styles,
+  });
+  const boldCode = { type: 'paragraph', content: [run('useFetcher', { bold: true, code: true })] };
+
+  /** The refusal, with nothing written anywhere and no audit row. */
+  async function refused(args: Record<string, unknown>) {
+    const error = await pageContentApplyTool
+      .handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'sha-1', ...args } as never,
+        CTX
+      )
+      .then(
+        () => null,
+        (e: unknown) =>
+          e as { kind: string; code: string; message: string; data: { problems: unknown[] } }
+      );
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'INVALID_CONTENT' });
+    expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    return error!;
+  }
+
+  it('an update making a block code AND bold, naming the block and the problem', async () => {
+    const error = await refused({ ops: [{ op: 'update', id: 'h1', block: boldCode }] });
+    expect(error.message).toContain(
+      `block 'h1' (paragraph, "useFetcher"): inline code can't also be bold`
+    );
+    expect(error.message).toMatch(/^Nothing was written/);
+    expect(error.data.problems).toEqual([
+      {
+        blockId: 'h1',
+        blockType: 'paragraph',
+        problem: "inline code can't also be bold",
+        text: 'useFetcher',
+      },
+    ]);
+  });
+
+  it('inserted blocks: code inside a link, and a link stored as a text style', async () => {
+    const error = await refused({
+      mode: 'live',
+      ops: [
+        {
+          op: 'insert',
+          position: { at: 'end' },
+          blocks: [
+            {
+              id: 'new-a',
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'link',
+                  href: 'https://react.dev',
+                  content: [run('<StrictMode>', { code: true })],
+                },
+              ],
+            },
+            {
+              id: 'new-b',
+              type: 'numberedListItem',
+              content: [run('docs', { href: 'https://kotlinlang.org' })],
+            },
+          ],
+        },
+      ],
+    });
+    expect(error.data.problems).toEqual([
+      expect.objectContaining({ blockId: 'new-a', problem: "inline code can't be inside a link" }),
+      expect.objectContaining({ blockId: 'new-b', problem: "unknown text style 'href'" }),
+    ]);
+  });
+
+  it('a replace_all is judged as a whole', async () => {
+    const error = await refused({ ops: [{ op: 'replace_all', blocks: [boldCode] }] });
+    expect(error.data.problems).toHaveLength(1);
+  });
+
+  it('a bad run already on the page does not block an edit elsewhere', async () => {
+    mocks.loadPageContent.mockResolvedValue(jsonContent([...DOC(), { id: 'old', ...boldCode }]));
+    const payload = parse(await pageContentApplyTool.handler(APPLY_ARGS, CTX));
+    expect(payload.success).toBe(true);
+    expect(mocks.savePageContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('an untouched bad block hides no new problem beside it in the same tree', async () => {
+    const parent = {
+      id: 'parent',
+      type: 'bulletListItem',
+      content: [run('top')],
+      children: [
+        { id: 'old-href', type: 'paragraph', content: [run('x', { href: 'https://a.dev' })] },
+      ],
+    };
+    mocks.loadPageContent.mockResolvedValue(jsonContent([...DOC(), parent]));
+    const error = await refused({
+      ops: [
+        { op: 'insert', position: { after: 'old-href' }, blocks: [{ id: 'new', ...boldCode }] },
+      ],
+    });
+    expect(error.data.problems).toEqual([
+      expect.objectContaining({ blockId: 'new', problem: "inline code can't also be bold" }),
+    ]);
+  });
+
+  it('but the block itself, once touched, must be fixed: kept bad is refused, fixed is written', async () => {
+    mocks.loadPageContent.mockResolvedValue(jsonContent([...DOC(), { id: 'old', ...boldCode }]));
+    await refused({
+      ops: [
+        { op: 'update', id: 'old', block: { ...boldCode, props: { textAlignment: 'center' } } },
+      ],
+    });
+    const fixed = { type: 'paragraph', content: [run('useFetcher', { code: true })] };
+    const payload = parse(
+      await pageContentApplyTool.handler(
+        { ...APPLY_ARGS, ops: [{ op: 'update', id: 'old', block: fixed }] },
+        CTX
+      )
+    );
+    expect(payload.success).toBe(true);
+  });
+});
+
 // ─── page_preview_accept ─────────────────────────────────────────────────────
 
 describe('page_preview_accept', () => {
+  const badPreview = () => [
+    ...DOC(),
+    {
+      id: 'agent',
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'docs', styles: { href: 'https://x.dev' } }],
+    },
+  ];
+
+  it('refuses a preview holding content the page editor cannot open, merging nothing', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.loadPageContent.mockImplementation(async (_page, options?: { ref?: string }) =>
+      options?.ref === PREVIEW_BRANCH ? jsonContent(badPreview(), 'p-sha') : jsonContent()
+    );
+    const error = (await pagePreviewAcceptTool
+      .handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+      .catch((e: unknown) => e)) as { code: string; message: string };
+    expect(error).toMatchObject({ code: 'INVALID_CONTENT' });
+    expect(error.message).toContain(`block 'agent' (paragraph, "docs"): unknown text style 'href'`);
+    expect(error.message).toContain("{ type: 'link', href, content: [text runs] }");
+    expect(error.message).not.toContain('Inline code');
+    expect(error.message).toMatch(/page_content_apply.*page_preview_discard/);
+    // Judged against the page the preview started from.
+    expect(mocks.loadPageContent.mock.calls.map(c => (c[1] as { ref?: string }).ref)).toEqual(
+      expect.arrayContaining([PREVIEW_BRANCH, 'base-sha'])
+    );
+    expect(mocks.acceptPreview).not.toHaveBeenCalled();
+    expect(mocks.resolvePreviewConflicts).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a bad block the preview did not touch does not stop the accept', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.loadPageContent.mockResolvedValue(jsonContent(badPreview()));
+    mocks.acceptPreview.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    const payload = parse(
+      await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(payload.merged).toBe(true);
+  });
+
   it('refuses when no preview exists (nothing to accept)', async () => {
     mocks.getPreviewStatus.mockResolvedValue({ exists: false });
 

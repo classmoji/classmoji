@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { roomName } from '@classmoji/collab';
 import { itemHash } from '@classmoji/collab/hash';
-import { FRAGMENT } from '@classmoji/page-schema';
+import { FRAGMENT, cleanPageBlocks } from '@classmoji/page-schema';
+import { validatePageBlocks } from '@classmoji/page-schema/server';
+
+// The cleanup script's own op builder (packages/tasks), so the hashes it
+// sends are checked against the ones this server computes.
+import { updateOpsFor } from '../../../packages/tasks/src/helpers/pageContentCleanup.ts';
 
 import { loadConfig } from '../src/config.ts';
 import {
@@ -141,6 +146,49 @@ describe('guarded ops', () => {
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'block-changed', changedIds: ['p1', 'gone'] });
     expect(plain(a.doc, 'p2')).toBe('Two');
+  });
+});
+
+describe('the page-content cleanup script, against the live service', () => {
+  it('its guarded update ops take the runs out of the live document', async () => {
+    const run = (text: string, styles: Record<string, unknown> = {}) => ({
+      type: 'text',
+      text,
+      styles,
+    });
+    server.world.content.set(PAGE, {
+      blocks: [
+        { ...paragraph('p1', ''), content: [run('useFetcher', { bold: true, code: true })] },
+        {
+          ...paragraph('p2', 'Two'),
+          children: [
+            {
+              ...paragraph('p3', ''),
+              content: [
+                { type: 'link', href: 'https://x.dev', content: [run('x', { code: true })] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const a = open();
+    await a.synced;
+    const before = (await snapshot()).content.blocks;
+    expect(validatePageBlocks(before)).toHaveLength(2);
+
+    const { blocks: after } = cleanPageBlocks(before);
+    const { ops, expect: guard } = updateOpsFor(before, after, itemHash);
+    expect(ops.map(op => op.id)).toEqual(['p1', 'p3']);
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, { actor, expect: guard, ops });
+    expect(res.status).toBe(200);
+
+    const now = (await snapshot()).content.blocks;
+    expect(validatePageBlocks(now)).toEqual([]);
+    expect(now).toEqual(after);
+    await waitFor(() => !textOf(a.doc, 'p1').toDelta()[0].attributes?.bold, 3000, 'editor sees it');
+    // Run again: nothing left to do.
+    expect(cleanPageBlocks(now).changes).toEqual([]);
   });
 });
 

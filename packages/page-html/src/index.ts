@@ -1,5 +1,6 @@
 import { COLORS_DEFAULT } from '@blocknote/core';
 import {
+  cleanPageBlocks,
   codeBlockDisplayLanguage,
   normalizeCodeBlockContent,
   type PageBlock,
@@ -940,13 +941,18 @@ function escapedWidget(content: InlineItem[]): PageBlock | null {
  * The blocks as the editor would hold them: canonical code languages, code as
  * plain text, BlockNote colour names, then a ProseMirror round trip (every
  * prop filled, a fresh uuid on every block). At least one block.
+ *
+ * Last, the runs are made to fit BlockNote's stock style rules
+ * (`cleanPageBlocks`): HTML can hold `<code>` inside `<b>` or `<a>`, which
+ * the page schema still loads but no new page may store, and nobody can fix
+ * a converter's output by hand.
  */
 function normalizeBlocks(blocks: PageBlock[], editor: PageServerEditor): PageBlock[] {
   let clean = blocks.map(cleanBlock);
   clean = normalizeCodeBlockContent(clean);
   if (clean.length === 0) clean = [{ type: 'paragraph', content: [] }];
   const node = editor._blocksToProsemirrorNode(clean as never);
-  return editor._prosemirrorNodeToBlocks(node) as unknown as PageBlock[];
+  return cleanPageBlocks(editor._prosemirrorNodeToBlocks(node) as unknown as PageBlock[]).blocks;
 }
 
 /** A copy without ids, with canonical languages and colour names. */

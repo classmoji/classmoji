@@ -27,6 +27,7 @@ export {
   type PageEditor,
   type PagePmSchema,
 } from './editor.ts';
+export { validatePageBlocks, type PageContentProblem } from './validateContent.ts';
 
 /** A detached copy of `doc`: read from this, never from a live document. */
 export function cloneDoc(doc: Y.Doc): Y.Doc {
