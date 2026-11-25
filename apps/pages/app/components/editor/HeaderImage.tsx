@@ -149,9 +149,10 @@ const HeaderImage = ({
 
     const uploading = fetcher.state !== 'idle' || cover.uploading;
 
-    // Edit mode: "Add cover" button with upload spinner
+    // Edit mode: "Add cover" button with upload spinner (editor chrome: no
+    // click burst)
     return (
-      <div className="w-full flex justify-center py-1.5">
+      <div className="w-full flex justify-center py-1.5" data-no-burst="">
         {fileInput}
         {uploading ? (
           <div className="flex items-center gap-2 px-3 py-1 text-sm text-gray-500 dark:text-gray-400">
@@ -182,6 +183,8 @@ const HeaderImage = ({
     <div
       ref={containerRef}
       className="page-header-image relative w-full overflow-hidden"
+      // Its edit controls are editor chrome: no click burst.
+      data-no-burst={editMode ? '' : undefined}
       style={{
         backgroundImage: `url(${imageUrl})`,
         backgroundPosition: `center ${localPosition}%`,

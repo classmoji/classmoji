@@ -211,6 +211,8 @@ export default function QuizSandbox({
       className="mt-3 min-w-0"
       aria-live="off"
       data-testid="quiz-sandbox"
+      // A code editor with its own chrome: no click burst.
+      data-no-burst=""
       data-state={mode}
       data-sandbox-id={sandboxId}
       data-sandbox-live={mode === 'frozen' ? undefined : 'true'}

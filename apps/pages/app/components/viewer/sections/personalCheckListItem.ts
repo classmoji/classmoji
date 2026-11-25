@@ -79,6 +79,8 @@ export function withPersonalCheckbox<T extends CheckListItemNodeView>(
   const authorChecked = block.props.checked === true;
   input.setAttribute('aria-label', inlineText(block.content) || 'Check list item');
   input.classList.add('pg-personal-check');
+  // Its burst is tickBurst's (tick-on only), not the click burst every control gives.
+  input.setAttribute('data-no-burst', '');
 
   const sync = () => {
     const { showChecks, canCheck, checked } = store.get();

@@ -22,6 +22,10 @@
   --accent-soft-2: #c8e6d2;
   --accent-ink: #14532d;
 
+  /* The click burst's rays (src/clickBurst): the accent; 2px lines need a
+     lighter green on a dark page (see .dark). */
+  --burst-color: var(--accent);
+
   /* Legacy aliases — keep working */
   --violet: var(--accent);
   --violet-hover: var(--accent-hover);
@@ -125,6 +129,7 @@
 html.dark,
 html[data-theme='dark'] {
   --cm-logo-ink: #ffffff;
+  --burst-color: #3fb950;
   --paper: #0e1016;
   --paper-2: #151824;
   --panel: #171a25;
@@ -172,4 +177,18 @@ html[data-theme='dark'] {
   --rose-ink: #ff9bb8;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* A filled accent button would hide accent rays: its click burst is drawn in
+   the dark accent ink instead (a light green in dark mode). Antd's danger
+   primary is red, so it keeps the default. */
+.btn-primary,
+.ant-btn-primary:not(.ant-btn-dangerous) {
+  --burst-color: #14532d;
+}
+html.dark .btn-primary,
+html.dark .ant-btn-primary:not(.ant-btn-dangerous),
+html[data-theme='dark'] .btn-primary,
+html[data-theme='dark'] .ant-btn-primary:not(.ant-btn-dangerous) {
+  --burst-color: #bbf7d0;
 }

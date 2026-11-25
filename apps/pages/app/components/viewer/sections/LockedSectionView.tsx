@@ -489,6 +489,8 @@ function HoldStage({
                   ref={buttonRef}
                   type="button"
                   className="pg-hold-btn"
+                  // The hold has its own effect (the glass cracks and shatters).
+                  data-no-burst=""
                   aria-label={canUnlock ? `Hold to unlock '${title}'` : `'${title}' is locked`}
                   aria-describedby={`pg-locked-note-${blockId}`}
                   disabled={broken || !canUnlock}

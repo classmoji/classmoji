@@ -127,7 +127,8 @@ const EmojiGradeOptions = ({
   const scaleKeys = Object.keys(emojiMappings);
 
   return (
-    <div data-testid={testId} className={className}>
+    // The picker has its own effect (the picked emoji pops): no click burst.
+    <div data-testid={testId} className={className} data-no-burst="">
       {scaleKeys.map(key => {
         const isSelected = counted.some(grade => grade.emoji === key);
         const isPopped = poppedKey === key && !reducedMotion;

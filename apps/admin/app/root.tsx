@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Links,
   Meta,
@@ -10,6 +10,7 @@ import {
   useRouteLoaderData,
 } from 'react-router';
 import { signOut } from '@classmoji/auth/client';
+import { installClickBurst } from '@classmoji/ui-components/click-burst';
 import { THEME_SCRIPT, useSystemTheme } from '~/hooks/useSystemTheme';
 
 import '@fontsource-variable/mona-sans';
@@ -34,6 +35,9 @@ const Document = ({ children }: { children: React.ReactNode }) => {
   // Follows the OS color scheme; see ~/hooks/useSystemTheme for why the
   // pre-paint script needs this companion.
   useSystemTheme();
+  // The burst every click of a control gives (one document listener; this
+  // app has no client entry of its own, so the document installs it).
+  useEffect(() => installClickBurst(), []);
   return (
     <html lang="en" suppressHydrationWarning>
       <head>

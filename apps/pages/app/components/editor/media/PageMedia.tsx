@@ -237,7 +237,8 @@ function MediaPickerDialog({
   useDialogKeys(panelRef, onClose);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    // Editor chrome: no click burst.
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" data-no-burst="">
       <div
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
@@ -307,7 +308,8 @@ function VideoOptionsDialog({
   const size = formatBytes(file.size);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    // Editor chrome: no click burst.
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" data-no-burst="">
       <div
         className="absolute inset-0 bg-black/40"
         onClick={cancel}

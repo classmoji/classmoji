@@ -186,9 +186,10 @@ const ChatEditor = ({
 
   return (
     <div className={`border rounded-lg overflow-hidden ${isDarkMode ? 'border-gray-700' : ''}`}>
-      {/* Minimal toolbar */}
+      {/* Minimal toolbar: editing chrome, so no click burst (Send keeps its own). */}
       <div
         className={`border-b px-2 py-1 flex gap-2 items-center ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}
+        data-no-burst=""
       >
         <Select
           size="small"

@@ -246,6 +246,8 @@ function SectionActivityPopover({
     <div
       ref={popRef}
       className="pg-activity-pop"
+      // Editor chrome portalled out of .page-editor: no click burst either.
+      data-no-burst=""
       role="dialog"
       aria-label={copy.label}
       style={{ top: position.top, left: position.left, width: position.width }}
