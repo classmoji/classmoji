@@ -236,7 +236,6 @@ async function auditWrite(
       resource_id: row.resource_id,
       action: row.action,
       data: row.data,
-      dedupe: false,
     });
   } catch (error) {
     console.warn(`[mcp] page comments audit (${String(row.data.tool)}) failed:`, error);

@@ -155,24 +155,21 @@ describe('writeHtmlBlockFile', () => {
       rootTreeSha: 'tree-1',
       folders: ['slides/deck-x', 'slides/deck-x/blocks'],
     });
-    expect(auditCreate).toHaveBeenCalledWith(
-      {
-        classroom_id: 'class-x',
-        user_id: 'teacher-x',
-        role: 'TEACHER',
-        resource_type: 'SLIDES',
-        resource_id: 'deck-x',
-        action: 'UPDATE',
-        data: {
-          tool: 'slides:html_block.save',
-          slide_id: 'deck-x',
-          path: `slides/deck-x/${ref.src}`,
-          rev: NEW_REV,
-          block_id: 'b1',
-        },
+    expect(auditCreate).toHaveBeenCalledWith({
+      classroom_id: 'class-x',
+      user_id: 'teacher-x',
+      role: 'TEACHER',
+      resource_type: 'SLIDES',
+      resource_id: 'deck-x',
+      action: 'UPDATE',
+      data: {
+        tool: 'slides:html_block.save',
+        slide_id: 'deck-x',
+        path: `slides/deck-x/${ref.src}`,
+        rev: NEW_REV,
+        block_id: 'b1',
       },
-      { dedupe: false }
-    );
+    });
   });
 
   it('overwrites the block file with a compare-and-swap on expectedRev', async () => {
@@ -499,7 +496,6 @@ describe('deleteHtmlBlockFile', () => {
         block_id: 'b1',
       },
     });
-    expect(auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it('a file already gone is not an error', async () => {

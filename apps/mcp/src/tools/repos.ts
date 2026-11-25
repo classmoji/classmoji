@@ -378,7 +378,7 @@ interface RepoSyncArgs {
  * still writes the row, `partial: true` with the counts queued so far, and asks
  * for another run, which adds only what is still missing once the student
  * repositories exist. Not idempotent: a second call while repos are still being
- * created queues them again. Every call is its own row (`dedupe: false`).
+ * created queues them again. Every call is its own row.
  */
 export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
   name: 'repo_sync',
@@ -432,7 +432,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
             repos_to_create: error.reposToCreate,
             assignments_to_add: error.assignmentsToAdd,
           },
-          dedupe: false,
         });
         throw new ToolError(
           'internal',
@@ -457,7 +456,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
         repos_to_create: reposToCreate,
         assignments_to_add: assignmentsToAdd,
       },
-      dedupe: false,
     });
 
     const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;

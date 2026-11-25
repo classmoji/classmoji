@@ -11,8 +11,7 @@
  * unique key.
  *
  * Nothing here writes audit rows. The caller audits each change with what
- * these return: `resource_id` = the feedback row id, `dedupe: false`,
- * `data.value` = the rating (null on a clear), plus `impersonated_by`
+ * these return: `resource_id` = the feedback row id, `data.value` = the rating (null on a clear), plus `impersonated_by`
  * (`askMojiSession.feedback` does exactly that). The staff review list and
  * the single exchange read are in askMojiInsights.
  */

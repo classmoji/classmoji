@@ -279,7 +279,7 @@ export interface PageCommentsDeps<P extends SectionsPage = SectionsPage> {
   loadCommentBlocks(page: P, viewer: CommentViewer): Promise<unknown[]>;
   /** `ClassmojiService.pageComments`. */
   rules: PageCommentsRules;
-  /** One audit row, written with `{ dedupe: false }`. */
+  /** One audit row per event. */
   audit(row: CommentAuditRow): Promise<unknown>;
   /** The per-user rate limit (`createCommentRateLimiter`). */
   rateLimit: CommentRateLimiter;

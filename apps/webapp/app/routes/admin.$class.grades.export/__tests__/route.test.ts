@@ -93,7 +93,6 @@ describe('admin.$class.grades.export', () => {
       action: 'VIEW',
       resourceType: 'GRADES',
       metadata: { tool: 'web:grades.export_csv', students: 1, assignments: 0 },
-      dedupe: false,
     });
   });
 });

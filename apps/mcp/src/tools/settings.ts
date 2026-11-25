@@ -277,7 +277,6 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       resource_id: classroom.classroomId,
       action: 'UPDATE',
       data: { tool: 'classroom_settings_update', fields: changed },
-      dedupe: false,
     });
 
     // Echo the validated values we just wrote — never the service return, which

@@ -41,7 +41,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       invalid: result.invalid.length,
     },
     // Two batches added a few seconds apart are two roster changes.
-    dedupe: false,
   });
 
   if (result.emails.length > 0) {

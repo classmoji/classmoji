@@ -36,8 +36,6 @@ export interface AuditEntry {
    * sections tool acts as). Defaults to the enforcing membership's role.
    */
   role?: Role;
-  /** Ignored: every write is its own row (kept until the callers drop it). */
-  dedupe?: boolean;
 }
 
 /**
@@ -70,18 +68,15 @@ export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<v
   if (!classroom) {
     throw new ToolError('internal', 'Classroom context missing (tool misregistered?)');
   }
-  await ClassmojiService.audit.create(
-    {
-      user_id: ctx.viewer.userId,
-      classroom_id: classroom.classroomId,
-      role: entry.role ?? classroom.role,
-      resource_type: entry.resource_type,
-      resource_id: entry.resource_id ?? null,
-      action: entry.action,
-      ...withImpersonation(entry.data, ctx.viewer.impersonatedBy),
-    },
-    ...(entry.dedupe === false ? [{ dedupe: false }] : [])
-  );
+  await ClassmojiService.audit.create({
+    user_id: ctx.viewer.userId,
+    classroom_id: classroom.classroomId,
+    role: entry.role ?? classroom.role,
+    resource_type: entry.resource_type,
+    resource_id: entry.resource_id ?? null,
+    action: entry.action,
+    ...withImpersonation(entry.data, ctx.viewer.impersonatedBy),
+  });
 }
 
 /**

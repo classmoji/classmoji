@@ -310,8 +310,7 @@ describe('auditPlanOwnerChange', () => {
         action: 'UPDATE',
         resource_type: 'CLASSROOM',
         data: { tool: 'plan_owner.change', reason: 'owner_left', from: 'alice', to: 'bob' },
-      }),
-      { dedupe: false }
+      })
     );
   });
 

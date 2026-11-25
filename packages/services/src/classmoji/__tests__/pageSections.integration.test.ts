@@ -189,24 +189,21 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
     const blockId = `audit-toggle-${suite}`;
     try {
       for (const checked of [true, false, true]) {
-        await audit.create(
-          {
-            user_id: X.studentA,
-            classroom_id: X.classroomId,
-            role: 'STUDENT',
-            resource_type: 'PAGES',
-            resource_id: X.pageId,
-            action: checked ? 'CREATE' : 'DELETE',
-            data: {
-              tool: 'page_section_check',
-              via: 'web',
-              page_id: X.pageId,
-              block_id: blockId,
-              checked,
-            },
+        await audit.create({
+          user_id: X.studentA,
+          classroom_id: X.classroomId,
+          role: 'STUDENT',
+          resource_type: 'PAGES',
+          resource_id: X.pageId,
+          action: checked ? 'CREATE' : 'DELETE',
+          data: {
+            tool: 'page_section_check',
+            via: 'web',
+            page_id: X.pageId,
+            block_id: blockId,
+            checked,
           },
-          { dedupe: false }
-        );
+        });
       }
       const rows = await prisma.auditLog.findMany({
         where: { user_id: X.studentA, data: { path: ['block_id'], equals: blockId } },

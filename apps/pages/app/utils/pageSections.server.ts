@@ -480,8 +480,8 @@ export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
  *     `{ tool: 'page_section_unlock', via: 'web', page_id, block_id }`;
  *   - check → CREATE, uncheck → DELETE
  *     `{ tool: 'page_section_check', via: 'web', page_id, block_id, checked }`
- *     (only when the state actually changed, and with `dedupe: false`: each
- *     row is a distinct event, so check → uncheck → check in 5 s is 3 rows);
+ *     (only when the state actually changed; check → uncheck → check is
+ *     3 rows);
  *   - the staff lists → VIEW
  *     `{ tool: 'page_section_unlocks' | 'page_section_checks', via: 'web',
  *     page_id, block_id }`, plus `impersonated_by` when an admin is viewing as
@@ -503,8 +503,6 @@ export interface SectionAuditEntry {
     block_id: string;
     [key: string]: string | boolean;
   };
-  /** false: skip the audit service's 5-second dedup window. */
-  dedupe?: boolean;
 }
 
 /**
@@ -681,7 +679,6 @@ async function sectionsPost<P extends SectionsPage>(
           block_id: body.blockId,
           checked,
         },
-        dedupe: false,
       });
     }
     return json({ ok: true, checked });

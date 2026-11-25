@@ -11,7 +11,7 @@
  *     refused save writes none.
  *   - The switch follows askMojiAvailable.
  *   - Without Trigger neither AI feature runs: one banner, no section line.
- *   - Every save is its own row (`dedupe: false`).
+ *   - Every save is its own row.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -197,7 +197,6 @@ describe('saveAskMojiInstructions', () => {
       action: 'UPDATE',
       resourceType: 'SETTINGS',
       resourceId: 'c1',
-      dedupe: false,
     });
     expect(row.metadata).toEqual({
       tool: AI_SETTINGS_AUDIT_TOOL,
@@ -245,9 +244,8 @@ describe('every AI settings save is audited', () => {
     '%s writes one row naming its fields, never folded into the last',
     async (_label, body, fields) => {
       await post(body);
-      const row = auditRow() as ReturnType<typeof auditRow> & { dedupe?: boolean };
+      const row = auditRow();
       expect(row.metadata).toEqual({ tool: AI_SETTINGS_AUDIT_TOOL, fields });
-      expect(row.dedupe).toBe(false);
       expect(row.action).toBe('UPDATE');
       expect(JSON.stringify(row)).not.toContain('sk-ant-new-secret');
     }

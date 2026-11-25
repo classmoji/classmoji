@@ -1214,7 +1214,7 @@ export interface CommentAuditRow {
  * (`page_comment`, `page_comment_reaction`, `page_comment_thread`); ids, the
  * body's LENGTH and the emoji only, never the body or quote text. Null when
  * the event is null (nothing changed) or the actor has no accepted role.
- * Callers write it with `{ dedupe: false }`: every row is a distinct event.
+ * Every row is a distinct event.
  */
 export function commentAuditRow({
   ctx,

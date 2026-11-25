@@ -101,7 +101,6 @@ describe('remapOrphanedEmojis', () => {
         regrade_snapshots: 1,
         regrade_previous_grades: 2,
       },
-      dedupe: false,
     });
   });
 

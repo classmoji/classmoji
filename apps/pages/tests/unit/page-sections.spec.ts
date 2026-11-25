@@ -1220,7 +1220,6 @@ test.describe('POST /api/page-sections', () => {
         pageId: 'page-a',
         action: 'CREATE',
         data: checkRow(true),
-        dedupe: false,
       },
       {
         userId: 'ta-1',
@@ -1229,7 +1228,6 @@ test.describe('POST /api/page-sections', () => {
         pageId: 'page-a',
         action: 'CREATE',
         data: checkRow(true),
-        dedupe: false,
       },
       {
         userId: 'ta-1',
@@ -1238,7 +1236,6 @@ test.describe('POST /api/page-sections', () => {
         pageId: 'page-a',
         action: 'DELETE',
         data: checkRow(false),
-        dedupe: false,
       },
     ]);
   });
@@ -1269,7 +1266,6 @@ test.describe('POST /api/page-sections', () => {
       'DELETE',
       'CREATE',
     ]);
-    expect(calls.audit.every(row => (row as { dedupe?: boolean }).dedupe === false)).toBe(true);
   });
 
   test('audit: a repeat check or a repeat uncheck writes no audit row', async () => {
@@ -2335,9 +2331,8 @@ test.describe('student check lists: POST /api/page-sections', () => {
           block_id: 'item-1',
           checked: true,
         },
-        dedupe: false,
       }),
-      expect.objectContaining({ action: 'DELETE', dedupe: false }),
+      expect.objectContaining({ action: 'DELETE' }),
     ]);
   });
 

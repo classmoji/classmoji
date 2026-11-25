@@ -297,7 +297,7 @@ describe('slides action — audit rows', () => {
     }
   );
 
-  it('gives the two toggles distinct tool names so neither is deduped away', async () => {
+  it('gives the two toggles distinct tool names', async () => {
     await route.action(actionArgs({ slideId: OWN_SLIDE, field: 'allow_team_edit', value: 'true' }));
     await route.action(
       actionArgs({ slideId: OWN_SLIDE, field: 'show_speaker_notes', value: 'true' })

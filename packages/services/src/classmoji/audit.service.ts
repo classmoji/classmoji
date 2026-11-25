@@ -46,11 +46,6 @@ interface AuditLogData {
   data?: Prisma.InputJsonValue | null;
 }
 
-export interface AuditCreateOptions {
-  /** Ignored: every change is recorded and repeated reads are counted. */
-  dedupe?: boolean;
-}
-
 /**
  * The one line a row that could not be written leaves in the logs, so a
  * missing row can be found and explained: `audit_miss {"reason":…,"row":…}`.
@@ -124,7 +119,7 @@ function jsonEqual(a: unknown, b: unknown): boolean {
  * role on anything but ACCESS_DENIED) throws outside production and, in
  * production, logs one `audit_miss` line and returns null.
  */
-export const create = async (data: AuditLogData, _options: AuditCreateOptions = {}) => {
+export const create = async (data: AuditLogData) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
 
   if (!classroom_id) return refuse('missing classroom_id', data);

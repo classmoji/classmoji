@@ -1043,10 +1043,7 @@ describe('calendar_event_links_set', () => {
       CTX
     );
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    const [row, options] = mocks.auditCreate.mock.calls[0];
-    // One row per call: setting several dates of a series in quick succession
-    // must not collapse into the first.
-    expect(options).toEqual({ dedupe: false });
+    const [row] = mocks.auditCreate.mock.calls[0];
     expect(row).toMatchObject({
       user_id: 'owner-1',
       classroom_id: 'class-1',

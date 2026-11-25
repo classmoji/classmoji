@@ -411,22 +411,19 @@ const auditRegrade = async (
   }
 ) => {
   try {
-    await audit.create(
-      {
-        user_id: actor.actorUserId,
-        classroom_id: row.classroomId,
-        role: row.role,
-        resource_type: 'REGRADE_REQUEST',
-        resource_id: row.requestId,
-        action: row.action,
-        data: {
-          tool: actor.tool,
-          ...row.data,
-          ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
-        } as Prisma.InputJsonValue,
-      },
-      { dedupe: false }
-    );
+    await audit.create({
+      user_id: actor.actorUserId,
+      classroom_id: row.classroomId,
+      role: row.role,
+      resource_type: 'REGRADE_REQUEST',
+      resource_id: row.requestId,
+      action: row.action,
+      data: {
+        tool: actor.tool,
+        ...row.data,
+        ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
+      } as Prisma.InputJsonValue,
+    });
   } catch (error) {
     console.error('[regradeRequest] audit write failed', { requestId: row.requestId, error });
   }

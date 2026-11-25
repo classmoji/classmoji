@@ -270,18 +270,15 @@ export const action = async ({
     detail: Record<string, unknown> = {}
   ) => {
     try {
-      await ClassmojiService.audit.create(
-        {
-          user_id: authData.userId,
-          classroom_id: classroom.id,
-          role,
-          action,
-          resource_type: 'PAGES',
-          resource_id: pageId,
-          data: { tool, ...detail },
-        },
-        { dedupe: false }
-      );
+      await ClassmojiService.audit.create({
+        user_id: authData.userId,
+        classroom_id: classroom.id,
+        role,
+        action,
+        resource_type: 'PAGES',
+        resource_id: pageId,
+        data: { tool, ...detail },
+      });
     } catch (error: unknown) {
       console.error('[pages] audit row not written:', error);
     }

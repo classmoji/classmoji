@@ -313,18 +313,15 @@ describe('select-organization with an invite link for another address', () => {
       'user-1',
       TOKEN
     );
-    expect(ClassmojiService.audit.create).toHaveBeenCalledWith(
-      {
-        user_id: 'user-1',
-        classroom_id: 'class-x',
-        role: 'STUDENT',
-        action: 'CREATE',
-        resource_type: 'CLASSROOM_MEMBERSHIP',
-        resource_id: 'mem-x',
-        data: { tool: 'web:roster.invite_token' },
-      },
-      { dedupe: false }
-    );
+    expect(ClassmojiService.audit.create).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      classroom_id: 'class-x',
+      role: 'STUDENT',
+      action: 'CREATE',
+      resource_type: 'CLASSROOM_MEMBERSHIP',
+      resource_id: 'mem-x',
+      data: { tool: 'web:roster.invite_token' },
+    });
     // No address in the audit row.
     expect(JSON.stringify(vi.mocked(ClassmojiService.audit.create).mock.calls)).not.toContain(
       'ada@school.edu'

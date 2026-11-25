@@ -662,12 +662,12 @@ describe.skipIf(!RUN)('pageComments.service (integration)', () => {
     }
   });
 
-  it('writes the audit row without body text, one per event (dedupe off)', async () => {
+  it('writes the audit row without body text, one per event', async () => {
     const studentCtx = await ctx(X.studentA, X.page);
     const result = await comments.createThread(studentCtx, { body: 'secret words here' });
     for (let i = 0; i < 2; i++) {
       const row = comments.commentAuditRow({ ctx: studentCtx, event: result.event, via: 'web' })!;
-      await audit.create(row, { dedupe: false });
+      await audit.create(row);
     }
     const rows = await prisma.auditLog.findMany({
       where: { classroom_id: X.classroomId, resource_id: X.page.id, user_id: X.studentA },

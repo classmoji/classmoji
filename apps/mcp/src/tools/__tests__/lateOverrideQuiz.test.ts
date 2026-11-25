@@ -276,7 +276,7 @@ describe('submission_late_override (quiz) — set and clear', () => {
     });
   });
 
-  it('writes one audit row per change, in the web shield shape, never deduped', async () => {
+  it('writes one audit row per change, in the web shield shape', async () => {
     await handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A });
 
     expect(auditRows()).toEqual([
@@ -298,7 +298,6 @@ describe('submission_late_override (quiz) — set and clear', () => {
         },
       }),
     ]);
-    expect(mocks.auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it('clears the waiver (false) and records the value', async () => {

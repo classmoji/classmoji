@@ -105,8 +105,7 @@ describe('setLifecycle', () => {
           from: { status: 'LOCKED', is_archived: true },
           to: { status: 'ACTIVE', is_archived: false },
         },
-      }),
-      { dedupe: false }
+      })
     );
   });
 

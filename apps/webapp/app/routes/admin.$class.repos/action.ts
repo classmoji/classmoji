@@ -43,8 +43,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const auditRepository = (
     action: 'UPDATE' | 'DELETE',
     tool: string,
-    metadata: Record<string, unknown> = {},
-    options: { dedupe?: boolean } = {}
+    metadata: Record<string, unknown> = {}
   ) =>
     addClassroomAuditLog({
       classroomId: classroom.id,
@@ -54,7 +53,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       resourceType: 'REPOSITORIES',
       resourceId: assignmentId,
       metadata: { tool, ...metadata },
-      ...options,
     });
 
   return namedAction(request, {
@@ -130,8 +128,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async sync() {
-      // Two syncs a few seconds apart are two actions: never folded into one row.
-      const once = { dedupe: false };
       let res: Awaited<ReturnType<typeof syncAssignment>>;
       try {
         res = await syncAssignment(classSlug, classroom.id, assignmentId, userId);
@@ -141,16 +137,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.error('[admin.repos] Sync failed:', error);
         // Part of the work was queued before the failure: record what was.
         if (error instanceof RepositorySyncPartialError) {
-          await auditRepository(
-            'UPDATE',
-            'web:repos.sync',
-            {
-              partial: true,
-              repos_to_create: error.reposToCreate,
-              assignments_to_add: error.assignmentsToAdd,
-            },
-            once
-          );
+          await auditRepository('UPDATE', 'web:repos.sync', {
+            partial: true,
+            repos_to_create: error.reposToCreate,
+            assignments_to_add: error.assignmentsToAdd,
+          });
         }
         return { error: 'Sync could not finish. Try again in a minute.' };
       }
@@ -158,15 +149,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         triggerSession: { numReposToCreate, numIssuesToCreate },
       } = res;
       // The session counts two runs per repo and per issue (Github + database).
-      await auditRepository(
-        'UPDATE',
-        'web:repos.sync',
-        {
-          repos_to_create: numReposToCreate / 2,
-          assignments_to_add: numIssuesToCreate / 2,
-        },
-        once
-      );
+      await auditRepository('UPDATE', 'web:repos.sync', {
+        repos_to_create: numReposToCreate / 2,
+        assignments_to_add: numIssuesToCreate / 2,
+      });
 
       if (numReposToCreate + numIssuesToCreate == 0)
         return {

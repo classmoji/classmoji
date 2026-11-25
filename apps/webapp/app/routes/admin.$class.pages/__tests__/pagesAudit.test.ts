@@ -179,7 +179,7 @@ describe('pages action — audit rows', () => {
     );
   });
 
-  it('gives the two update intents distinct tool names so neither is deduped away', async () => {
+  it('gives the two update intents distinct tool names', async () => {
     await route.action(actionArgs({ pageId: OWN_PAGE, field: 'status', value: 'draft' }));
     await route.action(
       actionArgs({ pageId: OWN_PAGE, field: 'show_in_student_menu', value: 'true' })

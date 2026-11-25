@@ -57,7 +57,7 @@
  * QUIZ of this classroom and the student as an accepted STUDENT of it, so a
  * foreign or unknown id is not_found), and the same audit row: resource
  * QUIZ_LATE_WAIVER/<assignment id>, `data.kind: 'quiz'`, the student, the
- * quiz and the value, never deduped, written only when the call changed
+ * quiz and the value, written only when the call changed
  * something. The waiver is per (quiz, student), so:
  *   - `student_id` is required; an assignment_id of a QUIZ without one is
  *     refused, never read as "the whole class" (a class-wide waiver is not a
@@ -210,7 +210,6 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
           quiz_id: result.quizId,
           student_id: args.student_id,
         },
-        dedupe: false,
       });
     } catch (error) {
       auditFailed = true;
