@@ -294,6 +294,18 @@ async function prepareDocument(
     img.closest('figure')?.setAttribute('data-text-alignment', align);
   }
 
+  // Inline code and a link cannot share a run (BlockNote's code mark excludes
+  // the link, so the parser would keep the code and drop the link, URL and
+  // all): the link is kept and the inline <code> around or inside it
+  // unwrapped, as cleanPageBlocks does. Code blocks are flattened to plain
+  // text later anyway.
+  for (const code of body.querySelectorAll('code')) {
+    if (code.closest('pre')) continue;
+    if (code.closest('a[href]') || code.querySelector('a[href]')) {
+      code.replaceWith(...code.childNodes);
+    }
+  }
+
   await resolvePageLinks(body, options.resolvePageLink);
 
   return body.innerHTML.trim();
@@ -942,10 +954,10 @@ function escapedWidget(content: InlineItem[]): PageBlock | null {
  * plain text, BlockNote colour names, then a ProseMirror round trip (every
  * prop filled, a fresh uuid on every block). At least one block.
  *
- * Last, the runs are made to fit BlockNote's stock style rules
- * (`cleanPageBlocks`): HTML can hold `<code>` inside `<b>` or `<a>`, which
- * the page schema still loads but no new page may store, and nobody can fix
- * a converter's output by hand.
+ * Last, the runs are made to fit BlockNote's style rules (`cleanPageBlocks`):
+ * HTML can hold `<code>` inside `<b>` or `<a>`, which no page may store (the
+ * editor would refuse to open it), and nobody can fix a converter's output by
+ * hand.
  */
 function normalizeBlocks(blocks: PageBlock[], editor: PageServerEditor): PageBlock[] {
   let clean = blocks.map(cleanBlock);
