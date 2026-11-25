@@ -194,17 +194,19 @@ interface Context {
   inColumn: boolean;
 }
 
-const windows = new WeakMap<PageServerEditor, typeof globalThis>();
+const windows = new WeakMap<PageServerEditor, Window & typeof globalThis>();
 
 /**
  * A DOMParser from the server editor's own JSDOM window, so this package needs
- * no DOM of its own. Only the constructor is taken from the swapped globals;
- * the documents it makes work outside `_withJSDOM`.
+ * no DOM of its own. Only the constructor is taken from the editor's document;
+ * the documents it makes work outside `_withDOM`.
  */
 async function domParser(editor: PageServerEditor): Promise<DOMParser> {
   let win = windows.get(editor);
   if (!win) {
-    win = await editor._withJSDOM(async () => globalThis.window as unknown as typeof globalThis);
+    const view = await editor._withDOM(async document => document.defaultView);
+    if (!view) throw new Error('The server editor has a document without a window.');
+    win = view;
     windows.set(editor, win);
   }
   return new win.DOMParser();

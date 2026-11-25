@@ -8,7 +8,7 @@
     "collab:start": "NODE_ENV=production node --experimental-strip-types src/index.ts"
   },
   "dependencies": {
-    "@blocknote/core": "^0.55.0",
+    "@blocknote/core": "^0.57.0",
     "@classmoji/auth": "*",
     "@classmoji/collab": "*",
     "@classmoji/database": "*",

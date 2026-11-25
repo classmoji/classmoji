@@ -1,5 +1,11 @@
-import type { BlockSchema, InlineContentSchema, StyleSchema } from '@blocknote/core';
+import type {
+  BlockNoteEditorOptions,
+  BlockSchema,
+  InlineContentSchema,
+  StyleSchema,
+} from '@blocknote/core';
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
+import { getDocument } from '@blocknote/server-util/dom';
 import { createPageSchema } from '@classmoji/page-schema';
 
 /**
@@ -10,8 +16,58 @@ import { createPageSchema } from '@classmoji/page-schema';
  * they run on the plain editor in `@classmoji/page-schema/server`.
  */
 
+let sharedDocument: Document | undefined;
+
+/** One JSDOM document per process (BlockNote's `getDocument`), for every server editor. */
+function serverDocument(): Document {
+  sharedDocument ??= getDocument();
+  return sharedDocument;
+}
+
+/**
+ * BlockNote's server editor with the DOM globals set only while one of its
+ * calls runs. BlockNote's own (since 0.57) installs `window` and `document`
+ * for good on its first call; the Trigger worker that converts pages runs
+ * other code too, which keeps seeing a process without a DOM. So each call
+ * sets the globals to the editor's document and puts back what was there
+ * before, as BlockNote's `_withJSDOM` did up to 0.56.
+ */
+class ScopedDomServerEditor<
+  BSchema extends BlockSchema,
+  ISchema extends InlineContentSchema,
+  SSchema extends StyleSchema,
+> extends ServerBlockNoteEditor<BSchema, ISchema, SSchema> {
+  private readonly dom: Document;
+
+  static createScoped<
+    BSchema extends BlockSchema,
+    ISchema extends InlineContentSchema,
+    SSchema extends StyleSchema,
+  >(options: Partial<BlockNoteEditorOptions<BSchema, ISchema, SSchema>>, dom: Document) {
+    return new ScopedDomServerEditor<BSchema, ISchema, SSchema>(options, dom);
+  }
+
+  protected constructor(
+    options: Partial<BlockNoteEditorOptions<BSchema, ISchema, SSchema>>,
+    dom: Document
+  ) {
+    super(options, dom);
+    this.dom = dom;
+  }
+
+  override async _withDOM<T>(fn: (document: Document) => Promise<T>): Promise<T> {
+    const previous = { window: globalThis.window, document: globalThis.document };
+    Object.assign(globalThis, { window: this.dom.defaultView, document: this.dom });
+    try {
+      return await super._withDOM(fn);
+    } finally {
+      Object.assign(globalThis, previous);
+    }
+  }
+}
+
 function buildServerEditor() {
-  return ServerBlockNoteEditor.create({ schema: createPageSchema() });
+  return ScopedDomServerEditor.createScoped({ schema: createPageSchema() }, serverDocument());
 }
 
 export type PageServerEditor = ReturnType<typeof buildServerEditor>;
@@ -28,7 +84,10 @@ export function createServerEditor(schema: object): AnySchemaServerEditor;
 export function createServerEditor(schema?: object): PageServerEditor | AnySchemaServerEditor {
   return schema === undefined
     ? buildServerEditor()
-    : ServerBlockNoteEditor.create({ schema: schema as never });
+    : ScopedDomServerEditor.createScoped<BlockSchema, InlineContentSchema, StyleSchema>(
+        { schema: schema as never },
+        serverDocument()
+      );
 }
 
 let shared: PageServerEditor | undefined;

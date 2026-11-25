@@ -282,14 +282,18 @@ describe('Enter at the start of a checkable heading', () => {
     expect(caret(editor).id).toBe(second.id);
   });
 
-  it('a heading that is not checkable keeps BlockNote’s split at the start', () => {
+  it('a heading that is not checkable gets BlockNote’s empty paragraph above, and keeps its id', () => {
+    // BlockNote 0.56+: Enter at the start of non-empty content inserts an
+    // empty block above (a paragraph: the heading's `splitKeepsType` is off),
+    // so the heading keeps its id, type and props. Up to 0.55 it split, and
+    // the id stayed on an empty heading above.
     const editor = mount([heading('h', 'Setup')]);
     cursorIn(editor, 'h', 0);
     pressEnter(editor);
     const [first, second] = blocks(editor);
-    expect([first.id, first.type, textOf(first)]).toEqual(['h', 'heading', '']);
-    expect([second.type, textOf(second)]).toEqual(['heading', 'Setup']);
-    expect(second.id).not.toBe('h');
+    expect([first.type, textOf(first)]).toEqual(['paragraph', '']);
+    expect(first.id).not.toBe('h');
+    expect([second.id, second.type, textOf(second)]).toEqual(['h', 'heading', 'Setup']);
   });
 });
 
