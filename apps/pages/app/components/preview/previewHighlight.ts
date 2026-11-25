@@ -134,31 +134,73 @@ export const MARK_OFFSET = 'padding-left: 0.75rem; margin-left: -0.75rem;';
  * nested change marks the nested block only. Light and dark variants.
  */
 export function previewHighlightCss(changes: PreviewChanges, scope: string): string {
-  // A toggle block's content sits in its frame (BlockNote's toggle frame).
-  const selector = (ids: string[]) =>
-    ids.flatMap(id => {
-      const block = `.${scope} .bn-block[data-id=${cssAttrValue(id)}]`;
-      return [
-        `${block} > .bn-block-content`,
-        `${block} > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content`,
-      ];
-    });
-  const rules: string[] = [];
-  const changed = selector(changes.changed);
-  const added = selector(changes.added);
-  if (changed.length > 0) {
-    rules.push(
-      `${changed.join(',\n')} { background-color: rgba(245, 158, 11, 0.14); box-shadow: inset 3px 0 0 rgb(245, 158, 11); border-radius: 4px; ${MARK_OFFSET} }`,
-      `${changed.map(s => `.dark ${s}`).join(',\n')} { background-color: rgba(245, 158, 11, 0.16); box-shadow: inset 3px 0 0 rgb(251, 191, 36); }`
+  // A toggle block's content sits in its frame (BlockNote's toggle frame),
+  // beside the chevron, which used to sit inside the content. The mark
+  // reaches back over the chevron (24px) as it did then, with the chevron
+  // drawn on top; a toggle heading's content already spans the chevron
+  // (blocknote-overrides.css) and keeps that padding, plus the mark's.
+  const plain = (ids: string[]) =>
+    ids.map(id => `.${scope} .bn-block[data-id=${cssAttrValue(id)}] > .bn-block-content`);
+  const frame = (id: string) =>
+    `.${scope} .bn-block-outer > .bn-block[data-id=${cssAttrValue(id)}] > .bn-toggle-frame`;
+  const HEADING = '.bn-block-content[data-content-type="heading"]';
+  const framedList = (ids: string[]) =>
+    ids.map(
+      id =>
+        `${frame(id)}:not(:has(> .bn-toggle-slot > ${HEADING})) > .bn-toggle-slot > .bn-block-content`
     );
-  }
-  if (added.length > 0) {
-    rules.push(
-      `${added.join(',\n')} { background-color: rgba(16, 185, 129, 0.12); box-shadow: inset 3px 0 0 rgb(16, 185, 129); border-radius: 4px; ${MARK_OFFSET} }`,
-      `${added.map(s => `.dark ${s}`).join(',\n')} { background-color: rgba(16, 185, 129, 0.15); box-shadow: inset 3px 0 0 rgb(52, 211, 153); }`
+  const framedHeading = (ids: string[]) =>
+    ids.map(
+      id => `${frame(id)}:has(> .bn-toggle-slot > ${HEADING}) > .bn-toggle-slot > ${HEADING}`
     );
-  }
-  return rules.join('\n');
+  const chevrons = (ids: string[]) => ids.map(id => `${frame(id)} > .bn-toggle-button`);
+  // A colored heading's bar padding is `!important` and always beat the
+  // mark's own padding, so a marked colored heading (chevron and text)
+  // sat 0.75rem further left; a toggle heading keeps that.
+  const COLORED = `${HEADING}:is(${[
+    'blue',
+    'red',
+    'yellow',
+    'orange',
+    'green',
+    'purple',
+    'pink',
+    'brown',
+    'gray',
+  ]
+    .map(color => `[data-background-color="${color}"]`)
+    .join(', ')})`;
+  const coloredFrame = (id: string) => `${frame(id)}:has(> .bn-toggle-slot > ${COLORED})`;
+  const coloredHeading = (ids: string[]) =>
+    ids.map(id => `${coloredFrame(id)} > .bn-toggle-slot > ${COLORED}`);
+  const coloredChevrons = (ids: string[]) =>
+    ids.map(id => `${coloredFrame(id)} > .bn-toggle-button`);
+
+  const mark = (ids: string[], look: string, dark: string) => {
+    if (ids.length === 0) return [];
+    const all = [...plain(ids), ...framedList(ids), ...framedHeading(ids)];
+    return [
+      `${plain(ids).join(',\n')} { ${look} ${MARK_OFFSET} }`,
+      `${framedList(ids).join(',\n')} { ${look} padding-left: calc(24px + 0.75rem); margin-left: calc(-24px - 0.75rem); width: calc(100% + 24px); box-sizing: border-box; }`,
+      `${framedHeading(ids).join(',\n')} { ${look} padding-left: calc(var(--heading-pad-left, 0px) + var(--toggle-check-room, 0px) + 24px + 0.75rem) !important; margin-left: -0.75rem; }`,
+      `${coloredHeading(ids).join(',\n')} { padding-left: calc(var(--heading-pad-left, 0px) + var(--toggle-check-room, 0px) + 24px) !important; }`,
+      `${chevrons(ids).join(',\n')} { position: relative; z-index: 1; }`,
+      `${coloredChevrons(ids).join(',\n')} { margin-left: calc(var(--toggle-pad-left, 0px) + var(--toggle-check-room, 0px) - 0.75rem); }`,
+      `${all.map(s => `.dark ${s}`).join(',\n')} { ${dark} }`,
+    ];
+  };
+  return [
+    ...mark(
+      changes.changed,
+      'background-color: rgba(245, 158, 11, 0.14); box-shadow: inset 3px 0 0 rgb(245, 158, 11); border-radius: 4px;',
+      'background-color: rgba(245, 158, 11, 0.16); box-shadow: inset 3px 0 0 rgb(251, 191, 36);'
+    ),
+    ...mark(
+      changes.added,
+      'background-color: rgba(16, 185, 129, 0.12); box-shadow: inset 3px 0 0 rgb(16, 185, 129); border-radius: 4px;',
+      'background-color: rgba(16, 185, 129, 0.15); box-shadow: inset 3px 0 0 rgb(52, 211, 153);'
+    ),
+  ].join('\n');
 }
 
 /** The preview bar's one-line summary, from the data alone. */
