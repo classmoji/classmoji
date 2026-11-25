@@ -332,8 +332,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
       value: expect.any(String),
       opened_in_repos: 0,
     });
-    // The dedup key: a digest of what was written, so two different edits
-    // inside audit's 5s window stay two rows.
+    // `value`: a digest of what was written.
     const data = audit.data as { values: unknown; value: string };
     expect(data.value).toBe(JSON.stringify(data.values));
   });
@@ -531,8 +530,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
         fields: ['module_id'],
         values: { module_id: 'mod-2' },
         from_module_id: 'mod-1',
-        // Both ends are in the dedup key: a move here from somewhere else
-        // inside audit's 5s window is a different row.
+        // Both ends of the move.
         value: JSON.stringify({ module_id: 'mod-2', from_module_id: 'mod-1' }),
       },
     });

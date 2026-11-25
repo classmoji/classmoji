@@ -255,10 +255,8 @@ describe('slides action — inputs it will not act on', () => {
  * The rows are shaped to match theirs — resource_type 'SLIDES', the deck id,
  * action UPDATE — so both surfaces can be queried together.
  *
- * `tool` is not decoration. The audit service dedups within a 5-second window
- * on (user, classroom, role, resource_type, resource_id, action) plus
- * `data.tool`; without a distinct tool per toggle, flipping two switches on one
- * deck in quick succession would record only the first.
+ * `tool` names the toggle, so flipping two switches on one deck reads as two
+ * different changes.
  */
 describe('slides action — audit rows', () => {
   it('audits a status change with the flags it wrote', async () => {

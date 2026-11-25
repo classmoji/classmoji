@@ -41,11 +41,9 @@
  *
  * Audit (the web action writes none): ONE row per submission actually changed,
  * resource GIT_REPO_ASSIGNMENT/<id>, with the value under `data.value`. A
- * single row per call would need a resource_id, and list mode has none — so two
- * different lists set to the same value within the audit service's 5-second
- * dedup window would collapse and the second call would go unrecorded.
- * Per-submission rows have distinct resource ids, so they cannot collide with
- * each other and can be written in parallel chunks. The rows are written AFTER
+ * single row per call would need a resource_id, and list mode has none, so it
+ * would not say which submissions changed. Per-submission rows name each one
+ * and can be written in parallel chunks. The rows are written AFTER
  * the committed update, so an audit failure cannot undo it: the call still
  * reports what it changed, flags `audit_incomplete` with the ids whose row
  * failed, and logs the error server-side (never to the client).

@@ -348,10 +348,9 @@ export function toResponseRow(
  * Every read, export, triage edit and delete on this surface goes through here.
  * The AuditLog action enum is closed (CREATE/UPDATE/DELETE/ACCESS_DENIED/VIEW),
  * so the specific act is carried in `data.tool` — the same discriminator the
- * phase-2 list actions use, and the same one `audit.service`'s 5-second dedup
- * window keys on. That window is also the answer to "how often should a view be
- * logged": once per loader hit, coalesced by the service, with no session
- * bookkeeping of our own to get wrong.
+ * phase-2 list actions use. A view is logged once per loader hit; the audit
+ * service counts an identical repeat within seconds on the same row, with no
+ * session bookkeeping of our own to get wrong.
  */
 export async function auditResponses({
   context,
@@ -392,8 +391,8 @@ export function responsesGateAction(
 /**
  * An export's audit `value`: the sheet and what it covered — `wide:all`, or
  * the sheet and a short fingerprint of the chosen response ids — so two
- * different exports inside the audit dedup window are two rows, and the same
- * export twice is one.
+ * different exports are two rows, and the same export twice within seconds
+ * is one row counted twice.
  */
 export function exportAuditValue(
   kind: 'wide' | 'long',

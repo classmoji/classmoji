@@ -1211,7 +1211,7 @@ test.describe('POST /api/page-sections', () => {
       block_id: 'h-top',
       checked,
     });
-    // Check rows skip the dedup window: each one is a real change.
+    // Each check row is a real change.
     expect(calls.audit).toEqual([
       {
         userId: 'student-1',

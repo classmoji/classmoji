@@ -323,10 +323,7 @@ export const staffUpdateTool: ToolDefinition<StaffUpdateArgs> = {
       throw mapStaffError(error);
     }
 
-    // resource_id identifies WHICH staff member was updated. It is also what
-    // keeps back-to-back updates to different people as separate audit rows:
-    // the audit dedup key includes it, so without it two flips inside the dedup
-    // window would collapse into one record.
+    // resource_id identifies WHICH staff member was updated.
     await writeAudit(ctx, {
       resource_type: 'STAFF',
       resource_id: membership.user_id,
@@ -544,8 +541,7 @@ export const staffRemoveTool: StaffRemoveTool = {
       action: 'DELETE',
       data: {
         tool: 'staff_remove',
-        // `value` joins the audit service's 5s dedup key: removing two roles
-        // of the same person back to back must leave two rows.
+        // `value`: the role removed and what became of it.
         value: `${started.role}:${started.choice ?? 'none'}`,
         user_id: started.userId,
         login: started.login,

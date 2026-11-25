@@ -8,11 +8,8 @@
  *    match: resource_type 'QUIZ', the quiz id, and the AuditLogAction enum.
  *
  *    That enum has no PUBLISH, so publishing and re-weighting are both UPDATE
- *    with the intent carried in `data.tool`. `tool` is load-bearing beyond
- *    naming: the audit service dedups inside a 5-second window on (user,
- *    classroom, role, resource_type, resource_id, action) plus `data.tool`, so a
- *    publish followed immediately by a weight change would otherwise collapse to
- *    one row.
+ *    with the intent carried in `data.tool`, which tells a publish from a
+ *    weight change on the same quiz.
  *
  * 2. Each write is bound to a quiz IN THE AUTHORIZED CLASSROOM. Authorization
  *    binds to `params.class`, but the quiz id arrives in the JSON body and
@@ -478,7 +475,7 @@ describe('admin quizzes action — audit rows', () => {
     });
   });
 
-  it('keeps publish and weight distinguishable so the dedup window cannot merge them', async () => {
+  it('keeps publish and weight distinguishable', async () => {
     // Same user, classroom, role, resource and action — `tool` is the only
     // thing keeping these two rows apart.
     await submit({ _action: 'publishQuiz', id: 'quiz-1' });

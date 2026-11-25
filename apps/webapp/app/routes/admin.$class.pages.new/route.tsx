@@ -219,8 +219,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
 
     // Audited after the page exists, with the same 'PAGES'/'CREATE' shape the
     // MCP page_create tool writes. The two creation flows this action serves
-    // differ in what they put on disk, so `tool` distinguishes them — and,
-    // because the audit service dedups on it, keeps two quick creates apart.
+    // differ in what they put on disk, so `tool` distinguishes them.
     await addClassroomAuditLog({
       classroomId: classroom.id,
       userId,

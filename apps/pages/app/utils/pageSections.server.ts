@@ -486,8 +486,8 @@ export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
  *     `{ tool: 'page_section_unlocks' | 'page_section_checks', via: 'web',
  *     page_id, block_id }`, plus `impersonated_by` when an admin is viewing as
  *     the staff member.
- * `role` is the actor's highest ACCEPTED role (the audit service skips rows
- * without a valid one).
+ * `role` is the actor's highest ACCEPTED role (the audit service refuses a
+ * row without a valid one).
  */
 export interface SectionAuditEntry {
   userId: string;

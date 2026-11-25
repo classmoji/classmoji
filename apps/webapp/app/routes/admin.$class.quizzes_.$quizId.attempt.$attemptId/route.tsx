@@ -131,8 +131,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // the same way the quiz results page audits its VIEW. The attempt is bound to
   // this classroom by steps 2 and 3, so the row names the classroom the gate
   // authorized and the role it enforced. Reading one's own attempt is not
-  // logged. Repeated loads within the audit service's dedup window fold into
-  // one row.
+  // logged. Repeated loads within seconds are counted on one row.
   if (!viewerOwnsAttempt) {
     await addClassroomAuditLog({
       classroomId: classroom.id,

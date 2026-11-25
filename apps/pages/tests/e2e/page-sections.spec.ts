@@ -834,9 +834,8 @@ test.describe('page sections: the staff unlock list', () => {
       },
       select: { data: true, role: true },
     });
-    // One row per section read: block_id is part of the audit service's
-    // 5-second dedup key, so the second read (solo, inside the window) is its
-    // own row rather than coalesced into the first.
+    // One row per section read: block_id is in the row's data, so the second
+    // read is its own row rather than counted on the first.
     const view = (blockId: string) => ({
       role: 'TEACHER',
       data: { tool: 'page_section_unlocks', via: 'web', page_id: pageA.pageId, block_id: blockId },

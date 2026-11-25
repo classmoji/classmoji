@@ -225,8 +225,7 @@ async function revealIdentity(
     tool: 'forms.responses.view',
     action: 'VIEW',
     responseId: id,
-    // The response id as the value keeps reveals of different responses apart
-    // in the audit service's dedup window.
+    // The response id as the value: which response was revealed.
     data: { value: id, response_id: id, ...identityAudit(context, true) },
   });
 

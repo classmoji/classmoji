@@ -354,8 +354,7 @@ describe('staff_update', () => {
     expect(audit.action).toBe('UPDATE');
     expect(audit.classroom_id).toBe('class-1');
     expect(audit.resource_type).toBe('STAFF');
-    // resource_id names the updated staff member; it is also part of the audit
-    // dedup key, so two updates to DIFFERENT people stay two rows.
+    // resource_id names the updated staff member.
     expect(audit.resource_id).toBe('ta-1');
     expect(audit.data).toMatchObject({
       tool: 'staff_update',
