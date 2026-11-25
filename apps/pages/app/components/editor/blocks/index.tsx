@@ -2,7 +2,11 @@ import type { JSX } from 'react';
 import { BlockNoteSchema, type BlockNoteEditor } from '@blocknote/core';
 import { insertOrUpdateBlockForSlashMenu } from '@blocknote/core/extensions';
 import { ColumnBlock, ColumnListBlock } from '@blocknote/xl-multi-column';
-import { createPageCodeBlockSpec, pageDefaultBlockSpecs } from '@classmoji/page-schema';
+import {
+  createPageCodeBlockSpec,
+  pageDefaultBlockSpecs,
+  pageStyleSpecs,
+} from '@classmoji/page-schema';
 import {
   IconBulb,
   IconTerminal,
@@ -88,7 +92,10 @@ export const pageBlockSpecs = {
   lockedSection: LockedSection(), // Body hidden from a student until they unlock it
 };
 
-export const schema = BlockNoteSchema.create({ blockSpecs: pageBlockSpecs });
+export const schema = BlockNoteSchema.create({
+  blockSpecs: pageBlockSpecs,
+  styleSpecs: pageStyleSpecs,
+});
 
 export type PageBlockEditor =
   typeof schema extends BlockNoteSchema<infer BSchema, infer ISchema, infer SSchema>

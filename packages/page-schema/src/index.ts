@@ -39,6 +39,7 @@ export {
   codeBlockDisplayLanguage,
   codeBlockHighlightLanguage,
   createPageSchema,
+  pageStyleSpecs,
   type PageHeadingOptions,
   type PageSchema,
   type ToggledState,
