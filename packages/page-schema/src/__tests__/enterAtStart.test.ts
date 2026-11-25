@@ -186,14 +186,18 @@ describe('Enter at the start of a student check list item', () => {
     expect([second.id, second.type]).toEqual(['b', 'paragraph']);
   });
 
-  it('a plain item keeps BlockNote’s split at the start (its id stays on the empty line)', () => {
-    const editor = mount([item('a', 'first')]);
+  it('a plain item gets an empty, unticked plain item above; it keeps its id, text and tick', () => {
+    const editor = mount([item('a', 'first', { checked: true })]);
     cursorIn(editor, 'a', 0);
     pressEnter(editor);
-    const [first, second] = blocks(editor);
-    expect([first.id, textOf(first)]).toEqual(['a', '']);
-    expect(second.id).not.toBe('a');
-    expect(textOf(second)).toBe('first');
+    const [added, original] = blocks(editor);
+    expect(added.type).toBe('checkListItem');
+    expect(added.id).not.toBe('a');
+    expect(textOf(added)).toBe('');
+    expect(added.props.checked).toBe(false);
+    expect('personal' in added.props).toBe(false);
+    expect([original.id, textOf(original), original.props.checked]).toEqual(['a', 'first', true]);
+    expect(caret(editor)).toEqual({ id: 'a', offset: 0, empty: true });
   });
 });
 

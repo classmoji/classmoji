@@ -247,14 +247,15 @@ const checkableHeadingEnterExtension = createExtension({
 });
 
 /**
- * Enter at the start of a non-empty student check list item: an empty,
- * unticked student item above (`enterAtStartAddsLineAbove`), the item keeps
- * its id, text and `checked`.
+ * Enter at the start of a non-empty check list item: an empty, unticked item
+ * above (`enterAtStartAddsLineAbove`; a student item's is a student item too),
+ * the item keeps its id, text and `checked` — as BlockNote 0.56+ does for
+ * every other block, so readers' ticks and comments stay with the text.
  */
-function personalCheckListItemEnterAtStart(editor: AnyEditor): boolean {
+function checkListItemEnterAtStart(editor: AnyEditor): boolean {
   return enterAtStartAddsLineAbove(editor, content =>
-    content.type.name === 'checkListItem' && content.attrs.personal === true
-      ? { type: 'checkListItem', attrs: { personal: true } }
+    content.type.name === 'checkListItem'
+      ? { type: 'checkListItem', attrs: content.attrs.personal === true ? { personal: true } : {} }
       : null
   );
 }
@@ -264,10 +265,9 @@ function personalCheckListItemEnterAtStart(editor: AnyEditor): boolean {
  * item becomes a paragraph; otherwise the item is split and the text after
  * the cursor moves to a new item below. Two differences: the new item keeps
  * `personal` (a student check list stays one when the author adds a line),
- * and at the very start of a student item the new line goes above instead
- * (`personalCheckListItemEnterAtStart`, so readers' ticks stay with the
- * text). Every other prop starts fresh, as in BlockNote (`checked` is not
- * carried).
+ * and at the very start of an item the new line goes above instead
+ * (`checkListItemEnterAtStart`, so the item keeps its id). Every other prop
+ * starts fresh, as in BlockNote (`checked` is not carried).
  */
 function checkListItemEnter(editor: AnyEditor): boolean {
   const { blockInfo, selectionEmpty } = editor.transact(tr => ({
@@ -344,7 +344,7 @@ export function createPageCheckListItemBlockSpec() {
     keyboardShortcuts: {
       ...(shortcuts?.keyboardShortcuts ?? {}),
       Enter: ({ editor }: { editor: AnyEditor }) =>
-        personalCheckListItemEnterAtStart(editor) || checkListItemEnter(editor),
+        checkListItemEnterAtStart(editor) || checkListItemEnter(editor),
     },
     ...(shortcuts?.inputRules ? { inputRules: shortcuts.inputRules as never } : {}),
   });
