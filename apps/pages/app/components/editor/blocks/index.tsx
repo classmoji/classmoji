@@ -245,7 +245,15 @@ export const customSlashMenuItems: Array<{
     title: `Step heading ${level}`,
     subtext: 'Numbered step, joined to the next',
     // `step`/`steps` list both; `h1`/`heading1` list it next to "Heading 1".
-    aliases: ['step', 'steps', 'numbered', 'number', `h${level}`, `heading${level}`, `step${level}`],
+    aliases: [
+      'step',
+      'steps',
+      'numbered',
+      'number',
+      `h${level}`,
+      `heading${level}`,
+      `step${level}`,
+    ],
     group: 'Headings',
     // Directly after the Checkable heading of the same level (slashMenuOrder.ts).
     placeAfter: `checkable_heading_${level}`,
