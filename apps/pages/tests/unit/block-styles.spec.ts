@@ -358,18 +358,19 @@ test.describe('heading spacing', () => {
       paragraph('d'),
     ]);
 
-    // 28 / 20 / 16 / 32px above (1.75 / 1.25 / 1 / 2em of the 16px body), and
-    // 6px between every heading and the text under it.
+    // Padding above each heading is its gap less the 8px a paragraph pads
+    // under itself: H2 and H3 22 - 8 = 14px, H4 16 - 8 = 8px, H1 56 - 8 = 48px.
+    // Under the heading: 8px (H2, H3), 4px (H4), 10px (H1).
     expect(await gaps(page)).toEqual([
       ['intro', 0],
-      ['H2', 28],
-      ['a', 6],
-      ['H3', 20],
-      ['b', 6],
-      ['H4', 16],
-      ['c', 6],
-      ['H1', 32],
-      ['d', 6],
+      ['H2', 14],
+      ['a', 8],
+      ['H3', 14],
+      ['b', 8],
+      ['H4', 8],
+      ['c', 4],
+      ['H1', 48],
+      ['d', 10],
     ]);
   });
 
@@ -378,10 +379,11 @@ test.describe('heading spacing', () => {
   }) => {
     await load(page, [heading(2, 'first', 'blue'), heading(3, 'under it', 'gray'), paragraph('x')]);
 
+    // The H2's 8px under it plus the H3's 8px step: 16px, then 8px under the H3.
     expect(await gaps(page)).toEqual([
       ['first', 0],
-      ['under it', 6],
-      ['x', 6],
+      ['under it', 16],
+      ['x', 8],
     ]);
   });
 
@@ -395,8 +397,8 @@ test.describe('heading spacing', () => {
 
     expect(await gaps(page)).toEqual([
       ['Week 1', 0],
-      ['notes', 6],
-      ['Week 2', 28],
+      ['notes', 8],
+      ['Week 2', 14],
     ]);
   });
 
@@ -482,14 +484,15 @@ test.describe('heading spacing', () => {
     await load(page, [code('one'), terminal('two'), heading(2, 'next', 'blue'), paragraph('x')]);
 
     // No gap on the first block, one 16px gap between the cards (padding does
-    // not collapse, so this is not 32), and the H2's 28px after a card.
-    expect(await spacing(page)).toEqual([0, 16, 28, 6]);
+    // not collapse, so this is not 32), and the H2's full 22px after a card
+    // (a card pads nothing under itself).
+    expect(await spacing(page)).toEqual([0, 16, 22, 8]);
   });
 
   test('a card under a heading stays with it', async ({ page }) => {
     await load(page, [paragraph('p'), heading(3, 'Example', 'gray'), code('const a = 1;')]);
 
-    expect(await spacing(page)).toEqual([0, 20, 6]);
+    expect(await spacing(page)).toEqual([0, 14, 8]);
   });
 
   test("a card in a list item's children gets the gap on both sides", async ({ page }) => {
@@ -506,7 +509,7 @@ test.describe('heading spacing', () => {
   test("a card opening a toggle heading's body stays with the heading", async ({ page }) => {
     await load(page, [{ ...heading(2, 'Week 1', 'blue'), children: [code('const a = 1;')] }]);
 
-    expect(await spacing(page)).toEqual([0, 6]);
+    expect(await spacing(page)).toEqual([0, 8]);
   });
 
   test('a terminal, inside its .react-renderer, gets the gap too', async ({ page }) => {
@@ -526,7 +529,7 @@ test.describe('heading spacing', () => {
       'the reader wraps the terminal in a .react-renderer'
     ).toBe(true);
 
-    expect(await spacing(page)).toEqual([0, 16, 16, 20, 6]);
+    expect(await spacing(page)).toEqual([0, 16, 16, 14, 8]);
   });
 
   test('the space around a card belongs to the card', async ({ page }) => {
