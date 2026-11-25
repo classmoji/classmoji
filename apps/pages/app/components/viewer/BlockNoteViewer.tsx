@@ -3,6 +3,7 @@ import { BlockNoteView } from '@blocknote/mantine';
 import { syntaxHighlighter } from '@blocknote/code-block';
 import { MantineProvider } from '@mantine/core';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+import { MANTINE_8_THEME, mantine8CssVariables } from '~/utils/mantineTheme.ts';
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { pageCommentsExtension } from '~/components/comments/commentsPlugin.ts';
@@ -263,10 +264,12 @@ const BlockNoteViewer = ({
   return (
     <MantineProvider
       theme={{
+        ...MANTINE_8_THEME,
         fontFamily: 'Noto Sans, -apple-system, BlinkMacSystemFont, sans-serif',
         fontFamilyMonospace:
           'JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace',
       }}
+      cssVariablesResolver={mantine8CssVariables}
     >
       <div className="page-editor pg-reader-sections" ref={containerRef}>
         {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}

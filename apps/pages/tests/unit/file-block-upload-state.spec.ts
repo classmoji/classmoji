@@ -9,9 +9,13 @@
  * whose `file` and `audio` blocks are BlockNote's React ones, which follow the
  * upload's start AND end.
  *
+ * BlockNote 0.57 fixed its DOM blocks (they now listen for the end too, #3247),
+ * so the override is no longer needed for this; it is kept so the editor's
+ * file and audio blocks look and behave exactly as before. Dropping it is a
+ * separate change.
+ *
  * Pinned here:
- *   - the cause, in BlockNote's own render — when an upgrade fixes it, the
- *     first test fails and says the override can go;
+ *   - BlockNote's own render, which now leaves the loader when an upload ends;
  *   - the editor's schema replaces exactly those two renders and keeps
  *     BlockNote's configs and `fileBlockAccept`;
  *   - the reset that clears a dropped file's name off a block whose upload
@@ -123,7 +127,7 @@ test.describe('file block upload state', () => {
     return viaReact;
   }
 
-  test("BlockNote's DOM file block never leaves its loader after an upload ends", async () => {
+  test("BlockNote's DOM file block (0.57+) leaves its loader when an upload ends", async () => {
     const { defaultBlockSpecs } = await import('@blocknote/core');
     const { editor, starts, ends } = fakeEditor();
     const spec = defaultBlockSpecs.file as unknown as Spec;
@@ -139,10 +143,12 @@ test.describe('file block upload state', () => {
     expect(dom.querySelector('.bn-file-loading-preview')?.textContent).toBe('Loading...');
     expect(dom.querySelector('.bn-add-file-button')).toBeNull();
 
-    // The upload fails. Nothing listens for its end, so nothing undoes that.
-    expect(ends).toHaveLength(0);
-    expect(dom.querySelector('.bn-file-loading-preview')).not.toBeNull();
-    expect(dom.querySelector('.bn-add-file-button')).toBeNull();
+    // The upload fails. BlockNote 0.57 listens for its end (#3247) and puts
+    // the button back; up to 0.56 nothing did, and the block stayed stuck.
+    expect(ends).toHaveLength(1);
+    for (const cb of [...ends]) cb('b1');
+    expect(dom.querySelector('.bn-file-loading-preview')).toBeNull();
+    expect(dom.querySelector('.bn-add-file-button')).not.toBeNull();
   });
 
   test("the editor's file and audio blocks are BlockNote's React ones, same config", async () => {

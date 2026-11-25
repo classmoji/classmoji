@@ -47,9 +47,15 @@ export function useSectionFade(
     for (const [heading, ids] of ranges) {
       const active = `${root}[data-active-sections~="${CSS.escape(heading)}"]`;
       const headingOuter = `.bn-block-outer[data-id="${CSS.escape(heading)}"]`;
+      // A toggle heading's content and children sit in its frame, beside
+      // its chevron (BlockNote's toggle frame).
+      const frame = `${headingOuter} > .bn-block > .bn-toggle-frame`;
       const own = [
         `${headingOuter} > .bn-block > .bn-block-content > :not(.pg-section-check)`,
         `${headingOuter} > .bn-block > .bn-block-group`,
+        `${frame} > .bn-toggle-button`,
+        `${frame} > .bn-toggle-slot > .bn-block-content > :not(.pg-section-check)`,
+        `${frame} > .bn-toggle-slot > .bn-block-group`,
       ];
       const rest = ids
         .filter(id => id !== heading)

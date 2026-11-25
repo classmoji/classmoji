@@ -582,19 +582,17 @@ function blockNoteOnly(blocks: unknown[]): unknown[] {
 /**
  * `blocksToFullHTML` the way the class site's old static renderer called it
  * (since removed; pages are drawn by the reader in the browser): inside the
- * editor's JSDOM scope,
- * with a working localStorage (BlockNote's toggle wrapper reads it, and the
+ * editor's DOM scope (`_withDOM`, page-html's server editor),
+ * with a working localStorage (BlockNote's toggle frame reads it, and the
  * bare JSDOM's opaque origin throws on it), then React's deferred work
  * drained before the scope closes.
  */
+const storageInstalled = new WeakSet<object>();
+
 async function renderFullHtml(blocks: unknown[]): Promise<string> {
-  const ed = editor as unknown as {
-    _withJSDOM<T>(fn: () => Promise<T>): Promise<T>;
-    blocksToFullHTML(b: unknown): Promise<string>;
-  };
-  return ed._withJSDOM(async () => {
-    const win = globalThis.window as unknown as Record<string, unknown> | undefined;
-    if (win && !win.__roundtripStorage) {
+  return editor._withDOM(async document => {
+    const win = document.defaultView;
+    if (win && !storageInstalled.has(win)) {
       const store = new Map<string, string>();
       const storage = {
         getItem: (k: string) => store.get(k) ?? null,
@@ -609,9 +607,9 @@ async function renderFullHtml(blocks: unknown[]): Promise<string> {
       for (const name of ['localStorage', 'sessionStorage']) {
         Object.defineProperty(win, name, { value: storage, configurable: true, writable: true });
       }
-      win.__roundtripStorage = true;
+      storageInstalled.add(win);
     }
-    const html = await ed.blocksToFullHTML(blocks);
+    const html = await editor.blocksToFullHTML(blocks as never);
     await new Promise(resolve => setImmediate(resolve));
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setImmediate(resolve));

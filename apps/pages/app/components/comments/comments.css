@@ -86,7 +86,13 @@
 }
 
 /* In the corner, the block's own content keeps clear of it. */
-[data-comment-bubbles='inside'] .pg-comment-block > .bn-block > .bn-block-content {
+[data-comment-bubbles='inside'] .pg-comment-block > .bn-block > .bn-block-content,
+[data-comment-bubbles='inside']
+  .pg-comment-block
+  > .bn-block
+  > .bn-toggle-frame
+  > .bn-toggle-slot
+  > .bn-block-content {
   padding-right: 40px;
 }
 

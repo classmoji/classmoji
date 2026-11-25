@@ -9,16 +9,16 @@ import {
   createHeadingBlockSpec,
   createImageBlockSpec,
   createPreCode,
-  createToggleWrapper,
+  createToggleFrame,
   defaultBlockSpecs,
   getBlockInfoFromSelection,
   getNearestBlockPos,
-  getBlockInfo,
+  getBlockInfoFromNode,
   updateBlockTr,
   type BlockNoteEditor,
 } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';
-import { multiColumnSchema } from '@blocknote/xl-multi-column';
+import { ColumnBlock, ColumnListBlock } from '@blocknote/xl-multi-column';
 import type { EditorState } from 'prosemirror-state';
 
 import { customBlockConfigs, type CustomBlockType } from './configs.ts';
@@ -61,6 +61,14 @@ export function pageDefaultBlockSpecs() {
   };
 }
 
+/** Where a toggle block keeps whether it is open (BlockNote's `createToggleFrame` store). */
+export type ToggledState = NonNullable<Parameters<typeof createToggleFrame>[2]>;
+
+export interface PageHeadingOptions {
+  /** The store for `editor`'s toggle headings; `undefined` for BlockNote's own. */
+  toggledState?: (editor: object) => ToggledState | undefined;
+}
+
 /**
  * The heading every page schema uses: BlockNote's, plus a `checkable` prop
  * (a "checkable section": readers tick the heading and its section fades).
@@ -75,21 +83,27 @@ export function pageDefaultBlockSpecs() {
  *
  * Config, parse rules (incl. toggle headings from `<details>`), meta,
  * `runsBefore`, the input rules and keyboard shortcuts are BlockNote's,
- * unchanged. `render` and `toExternalHTML` are rebuilt only because a built
- * spec's are already wrapped in the block structure (see
- * `createPageCodeBlockSpec`); they are copies of BlockNote 0.55's
- * (`blocks/Heading/block.ts`, toggle headings on).
+ * unchanged. `render`, `renderFrame` and `toExternalHTML` are rebuilt only
+ * because a built spec's are already wrapped in the block structure (see
+ * `createPageCodeBlockSpec`) or typed for BlockNote's own props; they are
+ * copies of BlockNote 0.57's (`blocks/Heading/block.ts`, toggle headings on).
  *
  * Enter is BlockNote's (the text after the cursor moves to a new paragraph
  * below), except at the very start of a non-empty checkable heading
- * (`checkableHeadingEnter`): BlockNote would leave the heading's id on an
- * empty copy above and move the text to a new block, and readers' ticks are
- * keyed by that id.
+ * (`checkableHeadingEnter`): the heading keeps its id (readers' ticks are
+ * keyed by it) and the blank line above is a heading. BlockNote up to 0.55
+ * left the id on an empty copy above and moved the text to a new block;
+ * since 0.56 it keeps the id too, with an empty paragraph above.
+ *
+ * `toggledState` picks, per editor, where a toggle heading keeps whether it
+ * is open (BlockNote's `createToggleFrame` store); `undefined` (and the
+ * default) is BlockNote's own, the reader's browser.
  */
-export function createPageHeadingBlockSpec() {
+export function createPageHeadingBlockSpec({ toggledState }: PageHeadingOptions = {}) {
   const base = createHeadingBlockSpec();
   const {
     render: _render,
+    renderFrame: _renderFrame,
     toExternalHTML: _toExternalHTML,
     ...implementation
   } = base.implementation;
@@ -105,10 +119,20 @@ export function createPageHeadingBlockSpec() {
     config,
     {
       ...implementation,
-      render: (block, editor) => {
+      render: block => {
         const dom = document.createElement(`h${block.props.level}`);
-        const toggleWrapper = createToggleWrapper(block as never, editor as never, dom);
-        return { ...toggleWrapper, contentDOM: dom };
+        return { dom, contentDOM: dom };
+      },
+      // A toggle heading's chevron (and "Add block" while it is open and
+      // empty), around its text and children; a plain heading has no frame.
+      renderFrame: (block, editor) => {
+        if (!block.props.isToggleable) return undefined;
+        const frame = createToggleFrame(block, editor, toggledState?.(editor));
+        return {
+          ...frame,
+          // A heading that is no longer toggleable gets no frame.
+          update: updated => !!updated.props.isToggleable && frame.update(updated),
+        };
       },
       toExternalHTML: block => {
         const dom = document.createElement(`h${block.props.level}`);
@@ -179,8 +203,8 @@ function enterAtStartAddsLineAbove(
     const { selection } = tr;
     if (!selection.empty || selection.$from.parentOffset !== 0) return false;
     const info = getBlockInfoFromSelection(tr);
-    if (!info.isBlockContainer) return false;
-    const { bnBlock, blockContent } = info;
+    if (!info.hasContent) return false;
+    const { block: bnBlock, content: blockContent } = info;
     if (selection.$from.parent !== blockContent.node || blockContent.node.childCount === 0) {
       return false;
     }
@@ -223,14 +247,15 @@ const checkableHeadingEnterExtension = createExtension({
 });
 
 /**
- * Enter at the start of a non-empty student check list item: an empty,
- * unticked student item above (`enterAtStartAddsLineAbove`), the item keeps
- * its id, text and `checked`.
+ * Enter at the start of a non-empty check list item: an empty, unticked item
+ * above (`enterAtStartAddsLineAbove`; a student item's is a student item too),
+ * the item keeps its id, text and `checked` — as BlockNote 0.56+ does for
+ * every other block, so readers' ticks and comments stay with the text.
  */
-function personalCheckListItemEnterAtStart(editor: AnyEditor): boolean {
+function checkListItemEnterAtStart(editor: AnyEditor): boolean {
   return enterAtStartAddsLineAbove(editor, content =>
-    content.type.name === 'checkListItem' && content.attrs.personal === true
-      ? { type: 'checkListItem', attrs: { personal: true } }
+    content.type.name === 'checkListItem'
+      ? { type: 'checkListItem', attrs: content.attrs.personal === true ? { personal: true } : {} }
       : null
   );
 }
@@ -240,18 +265,17 @@ function personalCheckListItemEnterAtStart(editor: AnyEditor): boolean {
  * item becomes a paragraph; otherwise the item is split and the text after
  * the cursor moves to a new item below. Two differences: the new item keeps
  * `personal` (a student check list stays one when the author adds a line),
- * and at the very start of a student item the new line goes above instead
- * (`personalCheckListItemEnterAtStart`, so readers' ticks stay with the
- * text). Every other prop starts fresh, as in BlockNote (`checked` is not
- * carried).
+ * and at the very start of an item the new line goes above instead
+ * (`checkListItemEnterAtStart`, so the item keeps its id). Every other prop
+ * starts fresh, as in BlockNote (`checked` is not carried).
  */
 function checkListItemEnter(editor: AnyEditor): boolean {
   const { blockInfo, selectionEmpty } = editor.transact(tr => ({
     blockInfo: getBlockInfoFromSelection(tr),
     selectionEmpty: tr.selection.anchor === tr.selection.head,
   }));
-  if (!blockInfo.isBlockContainer) return false;
-  const { bnBlock: blockContainer, blockContent } = blockInfo;
+  if (!blockInfo.hasContent) return false;
+  const { block: blockContainer, content: blockContent } = blockInfo;
   if (blockContent.node.type.name !== 'checkListItem' || !selectionEmpty) return false;
 
   if (blockContent.node.childCount === 0) {
@@ -267,11 +291,12 @@ function checkListItemEnter(editor: AnyEditor): boolean {
     tr.scrollIntoView();
     // BlockNote's `splitBlockTr(tr, pos, keepType)`, with `personal` kept.
     const at = tr.selection.from;
-    const info = getBlockInfo(getNearestBlockPos(tr.doc, at));
-    if (!info.isBlockContainer) return false;
+    const near = getNearestBlockPos(tr.doc, at);
+    const info = getBlockInfoFromNode(near.node, near.posBeforeNode);
+    if (!info.hasContent) return false;
     tr.split(at, 2, [
-      { type: info.bnBlock.node.type, attrs: {} },
-      { type: info.blockContent.node.type, attrs: personal ? { personal: true } : {} },
+      { type: info.block.node.type, attrs: {} },
+      { type: info.content.node.type, attrs: personal ? { personal: true } : {} },
     ]);
     return true;
   });
@@ -290,7 +315,7 @@ function checkListItemEnter(editor: AnyEditor): boolean {
  *
  * Config (apart from the prop), parse rules, `parseContent`, meta,
  * `runsBefore`, the `[ ]`/`[x]` input rules and Mod-Shift-9 are BlockNote's,
- * unchanged. `render` and `toExternalHTML` are copies of BlockNote 0.55's
+ * unchanged. `render` and `toExternalHTML` are copies of BlockNote 0.57's
  * (`blocks/ListItem/CheckListItem/block.ts`), rebuilt only because a built
  * spec's are already wrapped in the block structure. Enter is BlockNote's,
  * except that the new item keeps `personal` and, at the start of a student
@@ -298,8 +323,10 @@ function checkListItemEnter(editor: AnyEditor): boolean {
  */
 export function createPageCheckListItemBlockSpec() {
   const base = createCheckListItemBlockSpec();
+  // BlockNote's check list item has no frame; the type is dropped with it.
   const {
     render: _render,
+    renderFrame: _renderFrame,
     toExternalHTML: _toExternalHTML,
     ...implementation
   } = base.implementation;
@@ -317,7 +344,7 @@ export function createPageCheckListItemBlockSpec() {
     keyboardShortcuts: {
       ...(shortcuts?.keyboardShortcuts ?? {}),
       Enter: ({ editor }: { editor: AnyEditor }) =>
-        personalCheckListItemEnterAtStart(editor) || checkListItemEnter(editor),
+        checkListItemEnterAtStart(editor) || checkListItemEnter(editor),
     },
     ...(shortcuts?.inputRules ? { inputRules: shortcuts.inputRules as never } : {}),
   });
@@ -435,9 +462,11 @@ export function codeBlockHighlightLanguage(language: unknown): string {
 export function createPageCodeBlockSpec() {
   const base = createCodeBlockSpec(codeBlockOptions);
   // `render`/`toExternalHTML` on a built spec are already wrapped in the
-  // block structure; the rebuilt spec wraps its own, so take only the rest.
+  // block structure; the rebuilt spec wraps its own, so take only the rest
+  // (BlockNote's code block has no `renderFrame`).
   const {
     render: _render,
+    renderFrame: _renderFrame,
     toExternalHTML: _toExternalHTML,
     ...implementation
   } = base.implementation;
@@ -562,7 +591,10 @@ export function createPageSchema() {
       ...pageDefaultBlockSpecs(),
       codeBlock: createPageCodeBlockSpec(),
       image: createImageBlockSpec(),
-      ...multiColumnSchema.blockSpecs,
+      // The column specs as written, not `multiColumnSchema.blockSpecs`: a
+      // built spec has lost its keyboard settings (see apps/pages' blocks).
+      column: ColumnBlock,
+      columnList: ColumnListBlock,
       callout: serverSpec('callout'),
       terminal: serverSpec('terminal'),
       profile: serverSpec('profile'),

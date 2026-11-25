@@ -6,10 +6,9 @@
  * schema, the round trips and Enter in a mounted editor).
  */
 import { BlockNoteSchema, defaultBlockSpecs } from '@blocknote/core';
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { describe, expect, it } from 'vitest';
 
-import { getServerEditor } from '../index.ts';
+import { createServerEditor, getServerEditor } from '../index.ts';
 
 const text = (value: string) => [{ type: 'text', text: value, styles: {} }];
 const item = (id: string, value: string, props: Record<string, unknown> = {}) => ({
@@ -31,9 +30,7 @@ describe('checkListItem.personal', () => {
     expect(html).not.toContain('data-personal="false"');
 
     // A document without the prop renders exactly as BlockNote's own block.
-    const plain = ServerBlockNoteEditor.create({
-      schema: BlockNoteSchema.create({ blockSpecs: defaultBlockSpecs }),
-    });
+    const plain = createServerEditor(BlockNoteSchema.create({ blockSpecs: defaultBlockSpecs }));
     const doc = [item('b', 'B', { checked: true }), item('c', 'C')];
     expect(await page.blocksToFullHTML(doc as never)).toBe(
       await plain.blocksToFullHTML(doc as never)

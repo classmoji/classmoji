@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
+import { WebSocketStatus } from '@hocuspocus/provider';
 import { roomName } from '@classmoji/collab';
 import { FRAGMENT, SCHEMA_VERSION } from '@classmoji/page-schema';
 import { yDocToBlocks } from '@classmoji/page-schema/server';
@@ -334,6 +335,9 @@ describe('internal API', () => {
 
     // Take the client offline, type at the start of p1 …
     a.socket.disconnect();
+    // Wait for the close: `connect()` below returns early while the socket
+    // still reads as connected, and then nothing ever reconnects it.
+    await waitFor(() => a.socket.status === WebSocketStatus.Disconnected, 3000, 'socket closed');
     a.doc.transact(() => textOf(a.doc, 'p1').insert(0, 'XYZ '));
 
     // … while the agent updates the same block and inserts one after it.

@@ -258,7 +258,10 @@ export function CommentsHost({ editor, bridge, container }: CommentsHostProps) {
       if (!outer || !container.contains(outer)) return;
       const blockId = outer.dataset.id;
       const block = outer.querySelector(':scope > .bn-block') as HTMLElement | null;
-      const content = block?.querySelector(':scope > .bn-block-content') as HTMLElement | null;
+      // A toggle block's content sits in its frame (BlockNote's toggle frame).
+      const content = block?.querySelector(
+        ':scope > .bn-block-content, :scope > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content'
+      ) as HTMLElement | null;
       if (!blockId || !block || !content) return;
       // A block with a bubble already has its button (the bubble).
       if (outer.classList.contains('pg-comment-block')) {
