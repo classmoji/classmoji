@@ -13,6 +13,7 @@ export * from './limits.ts';
 export * from './reserved.ts';
 export * from './sandbox.ts';
 export * from './sandboxState.ts';
+export * from './metadata.ts';
 export {
   createChunkProjector,
   projectMessage,

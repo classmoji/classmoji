@@ -1914,6 +1914,71 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await events(attemptId)).toHaveLength(0);
   });
 
+  it("stores the turn's usage on the reply, server-only: never in the student's or the staff transcript", async () => {
+    const usage = {
+      input: 81234,
+      output: 512,
+      cacheRead: 52000,
+      cacheWrite: 29000,
+      reasoning: 80,
+      calls: 1,
+      model: 'claude-sonnet-5-5',
+      cacheTtl: '1h' as const,
+      steps: [
+        {
+          kind: 'answer' as const,
+          input: 81234,
+          cacheRead: 52000,
+          cacheWrite: 29000,
+          output: 512,
+          reasoning: 80,
+          tools: ['present_question'],
+        },
+      ],
+    };
+    const attemptId = await newAttempt();
+    await say(attemptId, 'hello');
+    const id = `reply-${randomUUID()}`;
+    await chat.persistAssistantMessage(
+      attemptId,
+      { id, role: 'assistant', parts: [{ type: 'text', text: 'First question.' }] } as never,
+      { final: true, usage }
+    );
+    const row = await prisma.aIConversationMessage.findFirstOrThrow({
+      where: { ui_message_id: id },
+      select: { metadata: true },
+    });
+    expect(row.metadata).toEqual({ usage });
+
+    for (const viewer of ['student', 'staff'] as const) {
+      const transcript = await chat.loadTranscriptForViewer(attemptId, viewer);
+      const reply = transcript.find(m => m.id === id);
+      expect(reply?.parts).toEqual([{ type: 'text', text: 'First question.' }]);
+      expect(reply?.metadata).toBeUndefined();
+      const json = JSON.stringify(transcript);
+      expect(json).not.toContain('usage');
+      expect(json).not.toContain('cacheTtl');
+      expect(json).not.toContain('present_question');
+    }
+    // The model's history keeps it (server side only).
+    const canonical = await chat.loadCanonicalMessages(attemptId);
+    expect(canonical.find(m => m.id === id)?.metadata).toEqual({ usage });
+
+    // A usage that is not the usage shape is dropped; the reply is still saved.
+    const bad = `reply-${randomUUID()}`;
+    await chat.persistAssistantMessage(
+      attemptId,
+      { id: bad, role: 'assistant', parts: [{ type: 'text', text: 'Next.' }] } as never,
+      { final: true, usage: { ...usage, steps: [{ ...usage.steps[0], tools: ['x'.repeat(65)] }] } }
+    );
+    const badRow = await prisma.aIConversationMessage.findFirstOrThrow({
+      where: { ui_message_id: bad },
+      select: { metadata: true, content: true },
+    });
+    expect(badRow.content).toBe('Next.');
+    expect(badRow.metadata).toBeNull();
+  });
+
   it('admits 200 student messages, clicks included; the next completes the attempt from the recorded results and is refused for good', async () => {
     expect(chat.MAX_STUDENT_TURNS).toBe(200);
     const attemptId = await newAttempt();

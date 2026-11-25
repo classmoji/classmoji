@@ -17,6 +17,9 @@ import {
   IN_FLIGHT_STALE_MS,
   INSTRUCTIONS_MAX_CHARS,
   MAX_SLIDE_INDEX,
+  MAX_USAGE_STEPS,
+  MAX_USAGE_STEP_TOOLS,
+  MAX_USAGE_TOOL_NAME_CHARS,
   TOOL_OUTPUT_STUB,
   TURN_DEADLINE_MS,
   citesFromParts,
@@ -24,11 +27,13 @@ import {
   filterAskMojiChunkMetadata,
   isLookupPart,
   isRateableRow,
+  mergeUsage,
   projectAskMojiMetadata,
   projectAskMojiTranscript,
   stubLookupOutputs,
   withRateable,
   type AskMojiUIMessage,
+  type AskMojiUsageStep,
 } from '../index.ts';
 
 const serverOnlyUser = {
@@ -319,5 +324,126 @@ describe('contract additions', () => {
     expect(AskMojiUsageSchema.safeParse({ ...serverOnlyAssistant.usage, extra: 1 }).success).toBe(
       false
     );
+  });
+});
+
+describe('usage: cache TTL and per-call steps', () => {
+  const OLD_ROW = {
+    input: 4500,
+    output: 60,
+    cacheRead: 90,
+    cacheWrite: 30,
+    reasoning: 15,
+    calls: 3,
+    model: 'claude-sonnet-5-5',
+  };
+  const step = (over: Partial<AskMojiUsageStep> = {}): AskMojiUsageStep => ({
+    kind: 'answer',
+    input: 30960,
+    cacheRead: 0,
+    cacheWrite: 30840,
+    output: 140,
+    reasoning: 40,
+    tools: ['content_search'],
+    ...over,
+  });
+
+  it('a row written before cacheTtl and steps still parses, unchanged', () => {
+    const parsed = AskMojiUsageSchema.safeParse(OLD_ROW);
+    expect(parsed.success && parsed.data).toEqual(OLD_ROW);
+  });
+
+  it('parses cacheTtl and steps', () => {
+    const usage = {
+      ...OLD_ROW,
+      cacheTtl: '5m',
+      steps: [step(), step({ kind: 'summary', tools: [] })],
+    };
+    expect(AskMojiUsageSchema.safeParse(usage).success).toBe(true);
+    expect(AskMojiUsageSchema.safeParse({ ...OLD_ROW, cacheTtl: '1h' }).success).toBe(true);
+  });
+
+  it('refuses a bad TTL, too many steps, a long or empty tool name, too many tools, an extra key', () => {
+    const bad = [
+      { ...OLD_ROW, cacheTtl: '24h' },
+      { ...OLD_ROW, steps: Array.from({ length: MAX_USAGE_STEPS + 1 }, () => step()) },
+      { ...OLD_ROW, steps: [step({ tools: ['x'.repeat(MAX_USAGE_TOOL_NAME_CHARS + 1)] })] },
+      { ...OLD_ROW, steps: [step({ tools: [''] })] },
+      {
+        ...OLD_ROW,
+        steps: [step({ tools: Array.from({ length: MAX_USAGE_STEP_TOOLS + 1 }, () => 't') })],
+      },
+      { ...OLD_ROW, steps: [{ ...step(), input_text: 'what the student asked' }] },
+      { ...OLD_ROW, steps: [step({ kind: 'other' as never })] },
+      { ...OLD_ROW, steps: [step({ input: -1 })] },
+    ];
+    for (const usage of bad) expect(AskMojiUsageSchema.safeParse(usage).success).toBe(false);
+    expect(
+      AskMojiUsageSchema.safeParse({
+        ...OLD_ROW,
+        steps: Array.from({ length: MAX_USAGE_STEPS }, () => step()),
+      }).success
+    ).toBe(true);
+  });
+
+  it('mergeUsage sums every count, keeps the first model and TTL, appends steps up to the cap', () => {
+    const reply = { ...OLD_ROW, cacheTtl: '5m' as const, steps: [step(), step()] };
+    const summary = {
+      input: 5000,
+      output: 300,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 20,
+      calls: 1,
+      model: 'other-model',
+      steps: [
+        step({
+          kind: 'summary',
+          input: 5000,
+          cacheWrite: 0,
+          output: 300,
+          reasoning: 20,
+          tools: [],
+        }),
+      ],
+    };
+    const merged = mergeUsage(reply, summary);
+    expect(merged).toEqual({
+      input: 9500,
+      output: 360,
+      cacheRead: 90,
+      cacheWrite: 30,
+      reasoning: 35,
+      calls: 4,
+      model: 'claude-sonnet-5-5',
+      cacheTtl: '5m',
+      steps: [...reply.steps, ...summary.steps],
+    });
+    expect(AskMojiUsageSchema.safeParse(merged).success).toBe(true);
+
+    const full = { ...reply, steps: Array.from({ length: MAX_USAGE_STEPS }, () => step()) };
+    const capped = mergeUsage(full, summary);
+    expect(capped.steps).toHaveLength(MAX_USAGE_STEPS);
+    expect(capped.calls).toBe(4);
+    expect(AskMojiUsageSchema.safeParse(capped).success).toBe(true);
+  });
+
+  it('mergeUsage of two old rows keeps the old shape (no steps, no TTL keys)', () => {
+    const merged = mergeUsage(OLD_ROW, { ...OLD_ROW, model: null });
+    expect(Object.keys(merged).sort()).toEqual(Object.keys(OLD_ROW).sort());
+    expect(merged.calls).toBe(6);
+  });
+
+  it('usage stays a server-only key', () => {
+    const projected = projectAskMojiTranscript([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'hi' }],
+        metadata: { usage: { ...OLD_ROW, cacheTtl: '5m', steps: [step()] } },
+      },
+    ] as never);
+    expect(JSON.stringify(projected)).not.toContain('content_search');
+    expect(JSON.stringify(projected)).not.toContain('cacheTtl');
   });
 });

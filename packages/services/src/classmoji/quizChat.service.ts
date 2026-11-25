@@ -38,6 +38,7 @@ import {
   replyShowsHint,
   reservedCheckText,
   sandboxProgressOf,
+  withoutServerMetadata,
   type AttemptProgress,
   type CodeSubmissionInput,
   type CodeSubmissionPart,
@@ -47,6 +48,7 @@ import {
   type SandboxMessage,
   type SandboxProgress,
 } from '@classmoji/utils/quiz-agent';
+import { AskMojiUsageSchema, type AskMojiUsage } from '@classmoji/utils/ask-moji';
 import { quizzesEntitled } from './entitlement.service.ts';
 import {
   CLIENT_MESSAGE_ID_PATTERN,
@@ -1018,15 +1020,22 @@ export const storeHiddenOpening = (attemptId: string): Promise<QuizUIMessage> =>
  * Upsert an assistant message by `(conversation_id, ui_message_id)`. A partial
  * save (`final: false`) never overwrites a final one, and an id that belongs
  * to a non-assistant row is refused.
+ *
+ * `o.usage` (the turn's model usage, `AskMojiUsageSchema`) is stored as
+ * `metadata.usage`, server-only (`QUIZ_SERVER_METADATA_KEYS`): one that is
+ * not the usage shape is dropped with a warning, and the reply is saved
+ * without it.
  */
 export const persistAssistantMessage = async (
   attemptId: string,
   m: QuizUIMessage,
-  o: { final: boolean; provenance?: 'model' | 'server_completion' }
+  o: { final: boolean; provenance?: 'model' | 'server_completion'; usage?: AskMojiUsage }
 ): Promise<void> => {
   if (!m || m.role !== 'assistant' || typeof m.id !== 'string' || !m.id || m.id.length > 200) {
     throw new Error('persistAssistantMessage: expected an assistant message with an id');
   }
+  const usage = o.usage === undefined ? undefined : AskMojiUsageSchema.safeParse(o.usage);
+  if (usage && !usage.success) console.warn('[quizChat] usage dropped: not the usage shape');
   await getPrisma().$transaction(async tx => {
     const attempt = await lockAttempt(tx, attemptId);
     if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
@@ -1043,7 +1052,11 @@ export const persistAssistantMessage = async (
     });
     const parts = toJson(m.parts ?? []);
     const content = textOf(m.parts);
-    const metadata = isObject(m.metadata) ? toJson(m.metadata) : undefined;
+    const stored = {
+      ...(isObject(m.metadata) ? m.metadata : {}),
+      ...(usage?.success ? { usage: usage.data } : {}),
+    };
+    const metadata = isObject(m.metadata) || usage?.success ? toJson(stored) : undefined;
 
     if (existing) {
       if (existing.role !== 'ASSISTANT') {
@@ -1201,13 +1214,17 @@ export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMe
  */
 export type TranscriptViewer = 'student' | 'staff';
 
-/** The transcript a viewer gets: the canonical messages, projected for them. */
+/**
+ * The transcript a viewer gets: the canonical messages, projected for them,
+ * without the server-only metadata (`QUIZ_SERVER_METADATA_KEYS`: the stored
+ * usage) for either viewer.
+ */
 export const loadTranscriptForViewer = async (
   attemptId: string,
   viewer: TranscriptViewer = 'student'
 ): Promise<QuizUIMessage[]> =>
   projectTranscript(
-    await loadCanonicalMessages(attemptId),
+    (await loadCanonicalMessages(attemptId)).map(withoutServerMetadata),
     viewer === 'staff' ? quizStaffVisibility : quizVisibility
   ) as QuizUIMessage[];
 
