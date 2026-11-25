@@ -12,7 +12,6 @@ import {
   SuggestionMenuController,
   getDefaultReactSlashMenuItems,
   FormattingToolbarController,
-  FormattingToolbar,
   SideMenu,
   FilePanelController,
   DragHandleButton,
@@ -534,7 +533,12 @@ const PageEditor = forwardRef(function PageEditor(
                   </SideMenu>
                 )}
               />
-              <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+              {/* The default toolbar, by reference: a component written inline here
+                  (`formattingToolbar={() => <FormattingToolbar />}`) is a new type on
+                  every render of this editor, and in a live classroom the editor
+                  re-renders as the click on a toolbar control blurs it, so React
+                  rebuilt the toolbar between pointer down and up and it closed. */}
+              <FormattingToolbarController />
               {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
               <FilePanelController filePanel={MediaFilePanel} />
               <SuggestionMenuController
