@@ -29,12 +29,17 @@ import type { StepInfo } from '@classmoji/page-schema/sections';
  * wrap their content in.
  */
 
-/** Circle diameter, the indent of a step's content, and the line's gap, px. */
-export const STEP_CIRCLE = 36;
-export const STEP_INDENT = 52;
+/**
+ * Circle diameter, the indent of a step's content, the line's gap and the line's width, px.
+ * The 1.5px line is the weight of the icons elsewhere in the app (the circle's ring is 2px,
+ * page-sections.css); the indent is the circle plus a 16px gap to the text.
+ */
+export const STEP_CIRCLE = 30;
+export const STEP_INDENT = 46;
+export const STEP_STROKE = 1.5;
 const LINE_GAP = 10;
 /** The line's x inside one indent level: the circle's centre, less half its width. */
-const LINE_X = STEP_CIRCLE / 2 - 0.5;
+const LINE_X = STEP_CIRCLE / 2 - STEP_STROKE / 2;
 
 /** A step heading's line height (`--level` x `--heading-lh`, blocknote-overrides.css), px. */
 const LINE_HEIGHT: Record<number, number> = { 1: 30 * 1.3, 2: 24 * 1.4 };
@@ -116,7 +121,7 @@ export function stepStylesheet(layout: ReadonlyMap<string, StepInfo>): string {
       declarations.push(
         `background-image: ${own.map(() => 'linear-gradient(var(--st-line), var(--st-line))').join(', ')}`,
         'background-repeat: no-repeat',
-        `background-size: ${own.map(l => `1px ${l.height}`).join(', ')}`,
+        `background-size: ${own.map(l => `${STEP_STROKE}px ${l.height}`).join(', ')}`,
         `background-position: ${own.map(l => `${px(l.x)} ${px(l.y)}`).join(', ')}`
       );
     }

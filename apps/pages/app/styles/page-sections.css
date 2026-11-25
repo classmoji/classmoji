@@ -1127,18 +1127,19 @@
    themes are stated here; the generated rules (utils/stepStyles.ts) only place
    things. */
 .page-editor {
-  --st-fg: #17181c;
-  --st-ring: #c1c3c8;
+  /* The number and the ring: the colour of the left menu's section headings (--ink-4). */
+  --st-fg: #8a8d97;
+  --st-ring: var(--st-fg);
   --st-line: #dcdee6;
 }
 
 .dark .page-editor {
-  --st-fg: #ffffff;
-  --st-ring: rgba(255, 255, 255, 0.28);
+  --st-fg: #767c8c;
+  --st-ring: var(--st-fg);
   --st-line: rgba(255, 255, 255, 0.14);
 }
 
-/* The circle is the heading's `::before`, drawn 52px to the left of its text
+/* The circle is the heading's `::before`, drawn 46px to the left of its text
    (the step's indent). It is empty, so invisible, until a generated rule gives
    it the step's number: a heading with the prop at another level, or a step
    the generated rules do not know, shows nothing. Only H1 and H2 are steps. */
@@ -1159,18 +1160,18 @@
   )::before {
   content: '';
   position: absolute;
-  left: -52px;
+  left: -46px;
   top: 0;
   box-sizing: border-box;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px var(--st-ring);
+  box-shadow: inset 0 0 0 2px var(--st-ring);
   color: var(--st-fg);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  line-height: 36px;
+  line-height: 30px;
   letter-spacing: 0;
   text-align: center;
   text-transform: none;
@@ -1178,8 +1179,8 @@
 }
 
 /* A heading that is both a step and checkable: the check moves out to the left
-   of the circle (the circle takes the 52px left of the text), 8px clear of it:
-   the reader's 24px tick box at -84px, the editor's 16px badge at -76px. The
+   of the circle (the circle takes the 46px left of the text), 8px clear of it:
+   the reader's 24px tick box at -78px, the editor's 16px badge at -70px. The
    inline layout (no room for the gutter) keeps the box inside the heading,
    between the circle and the text. */
 .pg-reader-sections
@@ -1189,7 +1190,7 @@
     [data-level='2']
   )[data-checkable='true']
   .pg-section-check {
-  left: -84px;
+  left: -78px;
 }
 
 .pg-reader-sections[data-section-checks='inline']
@@ -1205,5 +1206,5 @@
     [data-level='2']
   )[data-checkable='true']
   .pg-checkable-badge {
-  left: -76px;
+  left: -70px;
 }

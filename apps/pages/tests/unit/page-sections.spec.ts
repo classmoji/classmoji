@@ -2253,7 +2253,7 @@ test.describe('the tick box gutter', () => {
       page(
         `<div>${heading(left, '').replace('data-checkable="true"', 'data-checkable="true" data-step="true" data-level="2"')}</div>`
       ).body;
-    // 38px is enough for a plain heading and not for a step: its box sits 84px out.
+    // 38px is enough for a plain heading and not for a step: its box sits 78px out.
     expect(sectionCheckLayout(step(SECTION_CHECK_GUTTER))).toBe('inline');
     expect(sectionCheckLayout(step(SECTION_CHECK_GUTTER_STEP))).toBe('gutter');
     // A step prop on an H3 is not a step: the plain gutter will do.

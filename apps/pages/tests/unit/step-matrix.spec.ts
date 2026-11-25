@@ -49,7 +49,7 @@ for (const dark of [false, true]) {
       expect(read.numbers[headingId], `circle of step ${headingId}`).toBe(`"${step.number}"`);
       for (const id of step.ids) {
         const pad = parseFloat(read.indents[id] ?? '0');
-        expect(pad, `block ${id} in step ${headingId} is indented`).toBeGreaterThanOrEqual(52);
+        expect(pad, `block ${id} in step ${headingId} is indented`).toBeGreaterThanOrEqual(46);
       }
     }
     // The matrix has twelve top-level steps and four inner ones.

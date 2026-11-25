@@ -26,9 +26,9 @@ export const SECTION_CHECK_GUTTER = 38;
 
 /**
  * The same for a heading that is also a step (an H1 or H2 with a circle): the
- * box sits 84px out, clear of the circle, with the same 4px ring.
+ * box sits 78px out, clear of the circle, with the same 4px ring.
  */
-export const SECTION_CHECK_GUTTER_STEP = 88;
+export const SECTION_CHECK_GUTTER_STEP = 82;
 
 export type SectionCheckLayout = 'gutter' | 'inline';
 

@@ -83,7 +83,7 @@ function firstLineOffset(editor: Editor, block: SideMenuBlock | undefined): Midd
 
 /**
  * How far left, in px, the menu moves for `block`: a step heading draws its
- * numbered circle in the 52px left of its text, exactly where the menu sits,
+ * numbered circle in the 46px left of its text, exactly where the menu sits,
  * so the menu moves out past the circle. Every other block keeps its place.
  */
 export function stepSideMenuShift(block: unknown): number {

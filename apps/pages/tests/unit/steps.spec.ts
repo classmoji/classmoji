@@ -54,24 +54,24 @@ test.describe('stepStylesheet', () => {
         `[data-id="${id}"] > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]::before { content: "${number}";`
       );
     }
-    // Every block in a section is indented 52px.
+    // Every block in a section is indented 46px.
     for (const id of ['s1', 'a', 's2', 'b']) {
-      expect(out).toMatch(new RegExp(`\\[data-id="${id}"\\] \\{ padding-left: 52px`));
+      expect(out).toMatch(new RegExp(`\\[data-id="${id}"\\] \\{ padding-left: 46px`));
     }
     // The first step has a line below it (a section block carries a full-height slice);
     // the last has none.
-    expect(out).toMatch(/\[data-id="a"\] \{[^}]*background-size: 1px 100%/);
+    expect(out).toMatch(/\[data-id="a"\] \{[^}]*background-size: 1.5px 100%/);
     expect(out).not.toMatch(/\[data-id="b"\] \{[^}]*background-image/);
     // The second step has a slice above its circle.
-    expect(out).toMatch(/\[data-id="s2"\] \{[^}]*background-position: 17.5px 0px/);
+    expect(out).toMatch(/\[data-id="s2"\] \{[^}]*background-position: 14.25px 0px/);
   });
 
   test('an H2 step inside an H1 step is indented twice and draws its own line one level in', () => {
     const out = css([heading('a', 1, true), heading('a1', 2, true), heading('a2', 2, true)]);
-    expect(out).toMatch(/\[data-id="a1"\] \{ padding-left: 104px/);
-    expect(out).toMatch(/\[data-id="a2"\] \{ padding-left: 104px/);
-    // a1's line sits one indent in (52 + 17.5).
-    expect(out).toMatch(/\[data-id="a1"\] \{[^}]*69.5px/);
+    expect(out).toMatch(/\[data-id="a1"\] \{ padding-left: 92px/);
+    expect(out).toMatch(/\[data-id="a2"\] \{ padding-left: 92px/);
+    // a1's line sits one indent in (46 + 14.25).
+    expect(out).toMatch(/\[data-id="a1"\] \{[^}]*60.25px/);
   });
 
   test('a step at the top of a list takes no extra padding; one below it takes a fixed gap', () => {
@@ -133,11 +133,11 @@ test.describe('steps in the reader', () => {
         const cs = getComputedStyle(outer);
         return { pad: cs.paddingLeft, image: cs.backgroundImage !== 'none' };
       }, label);
-    expect(await read('one')).toEqual({ pad: '52px', image: true });
-    expect(await read('a')).toEqual({ pad: '52px', image: true });
-    expect(await read('two')).toEqual({ pad: '52px', image: true });
+    expect(await read('one')).toEqual({ pad: '46px', image: true });
+    expect(await read('a')).toEqual({ pad: '46px', image: true });
+    expect(await read('two')).toEqual({ pad: '46px', image: true });
     // The last step's section draws no line below it.
-    expect((await read('b')).pad).toBe('52px');
+    expect((await read('b')).pad).toBe('46px');
     expect((await read('b')).image).toBe(false);
   });
 
@@ -161,8 +161,8 @@ test.describe('steps in the reader', () => {
       };
     });
     expect(Math.abs(circleCentre - textCentre)).toBeLessThan(1);
-    // 52px left of the text: the circle starts where the page's text column starts.
-    expect(textLeft - circleLeft).toBe(52);
+    // 46px left of the text: the circle starts where the page's text column starts.
+    expect(textLeft - circleLeft).toBe(46);
   });
 
   test('a page with no steps gets no step stylesheet', async ({ page }) => {
@@ -201,13 +201,27 @@ test.describe('the guide line beside a nested list', () => {
             childOuter.getBoundingClientRect().left +
             parseFloat(guide.left) +
             parseFloat(guide.borderLeftWidth) / 2,
-          width: guide.borderLeftWidth,
+          // The declared width (a 1.5px border is snapped to a device pixel when computed at 1x).
+          width: (() => {
+            for (const sheet of [...document.styleSheets]) {
+              for (const rule of [...sheet.cssRules]) {
+                if (
+                  rule instanceof CSSStyleRule &&
+                  rule.selectorText.includes('.bn-block-group .bn-block-group') &&
+                  rule.selectorText.includes('[data-prev-depth-changed])::before') &&
+                  rule.style.borderLeft.includes('var(--st-line')
+                )
+                  return /^[\d.]+px/.exec(rule.style.borderLeft)?.[0] ?? null;
+              }
+            }
+            return null;
+          })(),
           colour: guide.borderLeftColor,
           steps: getComputedStyle(root).getPropertyValue('--st-line').trim(),
         };
       });
       expect(Math.abs(read.line - read.marker)).toBeLessThan(0.5);
-      expect(read.width).toBe('1px');
+      expect(read.width).toBe('1.5px');
       // `--st-line` is #dcdee6 in the light theme.
       expect(read.steps.toLowerCase()).toBe('#dcdee6');
       expect(read.colour).toBe('rgb(220, 222, 230)');
@@ -319,9 +333,9 @@ test.describe('steps around every kind of block', () => {
         })
     );
     expect(numbers).toEqual([
-      ['a', '"1"', '52px'],
-      ['t', '"2"', '52px'],
-      ['c', '"3"', '52px'],
+      ['a', '"1"', '46px'],
+      ['t', '"2"', '46px'],
+      ['c', '"3"', '46px'],
     ]);
   });
 
@@ -342,14 +356,14 @@ test.describe('steps around every kind of block', () => {
       return { pad: cs.paddingLeft, display: cs.display, line: cs.backgroundImage !== 'none' };
     });
     // Indented with the step, still a flex row of columns, and the line runs through it.
-    expect(read).toEqual({ pad: '52px', display: 'flex', line: true });
+    expect(read).toEqual({ pad: '46px', display: 'flex', line: true });
   });
 });
 
 test.describe('the editor side menu beside a step', () => {
   test('moves out past the circle for an H1 or H2 step, and for nothing else', () => {
-    expect(stepSideMenuShift(heading('a', 1, true))).toBe(52);
-    expect(stepSideMenuShift(heading('a', 2, true))).toBe(52);
+    expect(stepSideMenuShift(heading('a', 1, true))).toBe(46);
+    expect(stepSideMenuShift(heading('a', 2, true))).toBe(46);
     expect(stepSideMenuShift(heading('a', 1))).toBe(0);
     expect(stepSideMenuShift(heading('a', 3, true))).toBe(0);
     expect(stepSideMenuShift(paragraph('p'))).toBe(0);
