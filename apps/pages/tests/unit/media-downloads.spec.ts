@@ -27,7 +27,7 @@ import {
 } from '~/utils/mediaDownloads.ts';
 import { mediaDownloadLookup, NO_MEDIA_DOWNLOADS } from '~/hooks/useMediaDownloads.ts';
 import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
-import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
+import { pageBlockSpecs, schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -326,7 +326,8 @@ test.describe('the viewer schema', () => {
     // override must keep what makes it a file block: `data-file-block` styling,
     // the upload tab's accept, and drop/paste matching an image to it.
     type Spec = { implementation?: { meta?: unknown; runsBefore?: unknown } };
-    const ours = editorSchema.blockSpecs.image as unknown as Spec;
+    // The specs as written: a built spec's `meta` has every flag resolved.
+    const ours: Spec = pageBlockSpecs.image;
     const blocknote = createImageBlockSpec() as unknown as Spec;
     expect(ours.implementation?.meta).toEqual(blocknote.implementation?.meta);
     expect(ours.implementation?.meta).toEqual({ fileBlockAccept: ['image/*'] });

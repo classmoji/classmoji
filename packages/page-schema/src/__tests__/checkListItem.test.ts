@@ -71,7 +71,7 @@ describe('checkListItem.personal', () => {
     expect(on.props).toMatchObject({ checked: true, personal: true });
   });
 
-  it('keeps BlockNote’s shortcuts: one extension, its input rules and Mod-Shift-9', () => {
+  it('keeps BlockNote’s shortcuts: one extension, its input rules and Mod-Shift-9, plus our Enter', () => {
     type Ext = { key: string; keyboardShortcuts?: Record<string, unknown>; inputRules?: unknown[] };
     const build = (spec: { extensions?: unknown[] }) =>
       (spec.extensions ?? []).map(factory =>
@@ -81,12 +81,15 @@ describe('checkListItem.personal', () => {
     const [theirs] = build(createCheckListItemBlockSpec() as never);
     expect(more).toHaveLength(0);
     expect(ours.key).toBe(theirs.key);
+    // Since 0.56 BlockNote's Enter is the block's keyboard setting, not a
+    // shortcut of this extension; ours (`personal` kept) is added to it.
+    expect(theirs.keyboardShortcuts?.Enter).toBeUndefined();
     expect(Object.keys(ours.keyboardShortcuts ?? {}).sort()).toEqual(
-      Object.keys(theirs.keyboardShortcuts ?? {}).sort()
+      [...Object.keys(theirs.keyboardShortcuts ?? {}), 'Enter'].sort()
     );
     expect(ours.keyboardShortcuts?.['Mod-Shift-9']).toBe(theirs.keyboardShortcuts?.['Mod-Shift-9']);
     expect(ours.inputRules).toBe(theirs.inputRules);
-    expect(ours.keyboardShortcuts?.Enter).not.toBe(theirs.keyboardShortcuts?.Enter);
+    expect(typeof ours.keyboardShortcuts?.Enter).toBe('function');
   });
 });
 

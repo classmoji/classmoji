@@ -129,9 +129,19 @@ test('an id cannot close the style element', () => {
 test('the mark sits in the gutter, so the first letter is not covered', () => {
   const css = previewHighlightCss({ changed: ['b'], added: ['d'], removed: 0 }, 'scope');
   const rules = css.split('\n').filter(line => line.includes('box-shadow: inset 3px'));
-  expect(rules.length).toBe(4);
+  // Per kind: a plain block, a toggle list item and a toggle heading (light),
+  // and one dark rule.
+  expect(rules.length).toBe(8);
   // Light rules carry the offset; dark rules only recolour (they inherit it).
   expect(css.match(/padding-left: 0\.75rem; margin-left: -0\.75rem;/g)).toHaveLength(2);
+  // A toggle's mark reaches back over its chevron (in the frame since
+  // BlockNote 0.56), which is drawn above it; a toggle heading keeps its own
+  // room for the chevron.
+  expect(css.match(/margin-left: calc\(-24px - 0\.75rem\);/g)).toHaveLength(2);
+  expect(css.match(/\+ 24px \+ 0\.75rem\) !important; margin-left: -0\.75rem;/g)).toHaveLength(2);
+  expect(css).toContain(
+    '.scope .bn-block-outer > .bn-block[data-id="b"] > .bn-toggle-frame > .bn-toggle-button { position: relative; z-index: 1; }'
+  );
 });
 
 test.describe('a cover change is part of the preview', () => {

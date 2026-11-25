@@ -632,10 +632,10 @@ describe('htmlToPageBlocks: a document that opens with a heading', () => {
 describe('htmlToPageBlocks: one conversion at a time', () => {
   it('never overlaps, whoever calls: results in call order, globals restored', async () => {
     const editor = getServerEditor();
-    const original = editor._withJSDOM.bind(editor);
+    const original = editor._withDOM.bind(editor);
     let inJsdom = 0;
     let maxInJsdom = 0;
-    const spy = vi.spyOn(editor, '_withJSDOM').mockImplementation(async work => {
+    const spy = vi.spyOn(editor, '_withDOM').mockImplementation(async work => {
       inJsdom++;
       maxInJsdom = Math.max(maxInJsdom, inJsdom);
       try {
@@ -677,6 +677,24 @@ describe('htmlToPageBlocks: one conversion at a time', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('overlapping direct server-editor calls leave no DOM globals behind', async () => {
+    const editor = getServerEditor();
+    expect('window' in globalThis).toBe(false);
+    expect('document' in globalThis).toBe(false);
+    const para = (text: string) => [
+      { type: 'paragraph', content: [{ type: 'text', text, styles: {} }] },
+    ];
+    // Not queued: both start before either ends.
+    const [one, two] = await Promise.all([
+      editor.blocksToHTMLLossy(para('one') as never),
+      editor.blocksToHTMLLossy(para('two') as never),
+    ]);
+    expect(one).toContain('one');
+    expect(two).toContain('two');
+    expect('window' in globalThis).toBe(false);
+    expect('document' in globalThis).toBe(false);
   });
 
   it('a failed conversion does not fail the ones queued behind it', async () => {

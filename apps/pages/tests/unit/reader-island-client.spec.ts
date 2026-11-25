@@ -14,10 +14,11 @@ import {
   codeBlockLanguages,
   highlightSettled,
 } from '../../app/reader-island/readiness.ts';
+import { createToggleFrame } from '@blocknote/core';
 import {
   openAllToggles,
+  toggledStateFor,
   togglesOpenIn,
-  withOpenToggle,
 } from '../../app/components/viewer/toggles.ts';
 
 const HIGHLIGHTER = Symbol.for('blocknote.shikiHighlighterPromise');
@@ -164,37 +165,46 @@ test.describe('highlight readiness', () => {
 });
 
 test.describe('open toggles (the render surface)', () => {
-  function toggleView() {
-    const { document } = new JSDOM('<!DOCTYPE html><body></body>').window;
-    const content = document.createElement('div');
-    content.className = 'bn-block-content';
-    content.innerHTML =
-      '<div><div class="bn-toggle-wrapper" data-show-children="false"><button class="bn-toggle-button"></button><p></p></div></div>';
-    return { dom: content, wrapper: content.querySelector('.bn-toggle-wrapper')! };
-  }
-
-  test('a marked editor draws its toggles open; any other keeps BlockNote’s state', () => {
+  test('a marked editor’s toggles read open and store nothing; any other keeps BlockNote’s store', () => {
     const marked = {};
     const other = {};
     openAllToggles(marked);
     expect(togglesOpenIn(marked)).toBe(true);
     expect(togglesOpenIn(other)).toBe(false);
 
-    const open = toggleView();
-    expect(withOpenToggle(open, marked)).toBe(open);
-    expect(open.wrapper.getAttribute('data-show-children')).toBe('true');
+    const store = toggledStateFor(marked);
+    expect(store?.get({ id: 'any' })).toBe(true);
+    // Closing it is not remembered: the next frame is open again.
+    store?.set({ id: 'any' }, false);
+    expect(store?.get({ id: 'any' })).toBe(true);
 
-    const closed = toggleView();
-    withOpenToggle(closed, other);
-    expect(closed.wrapper.getAttribute('data-show-children')).toBe('false');
+    // `undefined` is BlockNote's own store (the reader's browser).
+    expect(toggledStateFor(other)).toBeUndefined();
   });
 
-  test('a block with no toggle (a plain heading) is left as it is', () => {
+  test('BlockNote’s toggle frame with the marked store is drawn open', () => {
     const marked = {};
     openAllToggles(marked);
-    const { document } = new JSDOM('<!DOCTYPE html><body></body>').window;
-    const heading = document.createElement('h2');
-    expect(() => withOpenToggle({ dom: heading }, marked)).not.toThrow();
-    expect(heading.outerHTML).toBe('<h2></h2>');
+    const { window } = new JSDOM('<!DOCTYPE html><body></body>');
+    const g = globalThis as { document?: unknown };
+    const previous = g.document;
+    g.document = window.document;
+    try {
+      const editor = {
+        isEditable: false,
+        dictionary: { toggle_blocks: { toggle_button: 'Toggle', add_block_button: 'Add block' } },
+      };
+      // Only the fields the frame reads.
+      const frame = createToggleFrame(
+        { id: 't', children: [] } as never,
+        editor as never,
+        toggledStateFor(marked)
+      );
+      expect(frame.dom.querySelector('.bn-toggle-button')?.getAttribute('aria-expanded')).toBe(
+        'true'
+      );
+    } finally {
+      g.document = previous;
+    }
   });
 });

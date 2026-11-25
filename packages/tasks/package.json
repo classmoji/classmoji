@@ -10,7 +10,7 @@
     "./safe-url": "./src/helpers/safeUrlFetch.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ../../scripts/collab-dev",
     "test": "vitest run",
     "trigger:dev": "npx trigger.dev@4.8.3 dev",
     "trigger:login": "npx trigger.dev@4.8.3 login",

@@ -1,8 +1,8 @@
 /**
  * Server-side reads and writes of a live page Y.Doc. Pure Yjs: no I/O.
  *
- * Layout BlockNote 0.55 gives the FRAGMENT (checked against the kitchen-sink
- * fixture):
+ * Layout BlockNote gives the FRAGMENT (0.55 and 0.57 alike; checked against
+ * the kitchen-sink fixture):
  *
  *   fragment
  *     blockGroup

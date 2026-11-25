@@ -186,14 +186,18 @@ describe('Enter at the start of a student check list item', () => {
     expect([second.id, second.type]).toEqual(['b', 'paragraph']);
   });
 
-  it('a plain item keeps BlockNote’s split at the start (its id stays on the empty line)', () => {
-    const editor = mount([item('a', 'first')]);
+  it('a plain item gets an empty, unticked plain item above; it keeps its id, text and tick', () => {
+    const editor = mount([item('a', 'first', { checked: true })]);
     cursorIn(editor, 'a', 0);
     pressEnter(editor);
-    const [first, second] = blocks(editor);
-    expect([first.id, textOf(first)]).toEqual(['a', '']);
-    expect(second.id).not.toBe('a');
-    expect(textOf(second)).toBe('first');
+    const [added, original] = blocks(editor);
+    expect(added.type).toBe('checkListItem');
+    expect(added.id).not.toBe('a');
+    expect(textOf(added)).toBe('');
+    expect(added.props.checked).toBe(false);
+    expect('personal' in added.props).toBe(false);
+    expect([original.id, textOf(original), original.props.checked]).toEqual(['a', 'first', true]);
+    expect(caret(editor)).toEqual({ id: 'a', offset: 0, empty: true });
   });
 });
 
@@ -282,14 +286,18 @@ describe('Enter at the start of a checkable heading', () => {
     expect(caret(editor).id).toBe(second.id);
   });
 
-  it('a heading that is not checkable keeps BlockNote’s split at the start', () => {
+  it('a heading that is not checkable gets BlockNote’s empty paragraph above, and keeps its id', () => {
+    // BlockNote 0.56+: Enter at the start of non-empty content inserts an
+    // empty block above (a paragraph: the heading's `splitKeepsType` is off),
+    // so the heading keeps its id, type and props. Up to 0.55 it split, and
+    // the id stayed on an empty heading above.
     const editor = mount([heading('h', 'Setup')]);
     cursorIn(editor, 'h', 0);
     pressEnter(editor);
     const [first, second] = blocks(editor);
-    expect([first.id, first.type, textOf(first)]).toEqual(['h', 'heading', '']);
-    expect([second.type, textOf(second)]).toEqual(['heading', 'Setup']);
-    expect(second.id).not.toBe('h');
+    expect([first.type, textOf(first)]).toEqual(['paragraph', '']);
+    expect(first.id).not.toBe('h');
+    expect([second.id, second.type, textOf(second)]).toEqual(['h', 'heading', 'Setup']);
   });
 });
 

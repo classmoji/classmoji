@@ -39,7 +39,9 @@ export {
   codeBlockDisplayLanguage,
   codeBlockHighlightLanguage,
   createPageSchema,
+  type PageHeadingOptions,
   type PageSchema,
+  type ToggledState,
 } from './schema.ts';
 export { normalizeCodeBlockContent } from './codeContent.ts';
 export {

@@ -14,7 +14,7 @@ import {
   createReactBlockSpec,
 } from '@blocknote/react';
 
-import { schema } from './index.tsx';
+import { pageBlockSpecs, type schema } from './index.tsx';
 import { createEditorCheckListItemSpec, createEditorHeadingSpec } from './checkableBadge.ts';
 import { EditorLockedSection } from './LockedSectionBlock.tsx';
 
@@ -36,6 +36,8 @@ import { EditorLockedSection } from './LockedSectionBlock.tsx';
  * makes ProseMirror build the node view again. A refused or failed upload
  * changes nothing, so the block stays on "Loading..." with no button to open
  * the upload panel again until the page is reloaded.
+ * (BlockNote 0.57 fixed this in its DOM blocks too; the React ones are kept
+ * so the editor's file and audio blocks look and behave as before.)
  *
  * The React wrapper (`FileBlockWrapper`) keeps the same state in
  * `useUploadLoading`, which listens for both the start and the end, so a
@@ -96,7 +98,7 @@ type SchemaOptions = NonNullable<Parameters<typeof BlockNoteSchema.create>[0]>;
  */
 export const editingSchema = BlockNoteSchema.create({
   blockSpecs: {
-    ...schema.blockSpecs,
+    ...pageBlockSpecs,
     file: EditorFileBlock(),
     audio: EditorAudioBlock(),
     heading: createEditorHeadingSpec(),

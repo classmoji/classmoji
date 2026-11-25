@@ -111,6 +111,27 @@ test.describe('the server page schema matches every app schema', () => {
     }
   });
 
+  // BlockNote 0.56+ keeps a block's keyboard settings (Enter continues a
+  // list, an empty column child stays in its column) on the spec it builds,
+  // resolved from `experimental_keyboard`, which a built spec no longer
+  // carries: a schema made from another schema's `blockSpecs` falls back to
+  // the defaults. Every schema here must keep BlockNote's.
+  test('every schema keeps BlockNote’s keyboard settings', () => {
+    type Keyboard = { splitKeepsType: boolean; emptyEnterResets: boolean; emptyChildEnter: string };
+    type Spec = { implementation: { keyboard: (block: unknown) => Keyboard } };
+    const block = { id: 'b', type: 'x', props: {}, content: [], children: [] };
+    const all: Array<[string, AnySchema]> = [['server schema', server], ...appSchemas];
+    for (const [name, schema] of all) {
+      const specs: Record<string, unknown> = schema.blockSpecs;
+      const keyboard = (type: string) => (specs[type] as Spec).implementation.keyboard(block);
+      for (const type of ['bulletListItem', 'numberedListItem', 'checkListItem']) {
+        expect(keyboard(type).splitKeepsType, `${name}: ${type}`).toBe(true);
+        expect(keyboard(type).emptyEnterResets, `${name}: ${type}`).toBe(true);
+      }
+      expect(keyboard('column').emptyChildEnter, `${name}: column`).toBe('stay');
+    }
+  });
+
   test('the schema version is a positive integer', () => {
     expect(Number.isInteger(SCHEMA_VERSION) && SCHEMA_VERSION > 0).toBe(true);
   });
