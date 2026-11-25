@@ -70,7 +70,15 @@ export function stepStylesheet(layout: ReadonlyMap<string, StepInfo>): string {
   }
 
   const rules: string[] = [];
+  // An ordinary block is a `.bn-block-outer`; a column list is not (it sits in
+  // the block group beside them, and is a flex row), so the indent and the line
+  // go on whatever carries the id, and `display: flow-root` only on the former.
   const outer = (id: string) => `.page-editor .bn-block-outer[data-id="${attr(id)}"]`;
+  // `data-id` is also on the inner `.bn-block`, so name the two that carry a
+  // block's place in its list.
+  const block = (id: string) =>
+    `.page-editor :is(.bn-block-outer, .bn-block-column-list)[data-id="${attr(id)}"]`;
+  const content = '.bn-block-content[data-content-type="heading"]::before';
 
   for (const [headingId, step] of layout) {
     const x = STEP_INDENT * (step.depth - 1) + LINE_X;
@@ -92,15 +100,18 @@ export function stepStylesheet(layout: ReadonlyMap<string, StepInfo>): string {
     if (!step.firstInList) {
       rules.push(`${outer(headingId)} > .bn-block { padding-top: ${px(pad)} !important; }`);
     }
+    // A toggle heading keeps its content in BlockNote's frame (0.56+), one
+    // level further in than a plain heading.
     rules.push(
-      `${outer(headingId)} > .bn-block > .bn-block-content[data-content-type="heading"]::before ` +
+      `${outer(headingId)} > .bn-block > ${content}, ` +
+        `${outer(headingId)} > .bn-block > .bn-toggle-frame > .bn-toggle-slot > ${content} ` +
         `{ content: "${step.number}"; top: ${px(offset)}; }`
     );
   }
 
   for (const [id, count] of depth) {
     const own = layers.get(id) ?? [];
-    const declarations = [`padding-left: ${STEP_INDENT * count}px`, 'display: flow-root'];
+    const declarations = [`padding-left: ${STEP_INDENT * count}px`];
     if (own.length > 0) {
       declarations.push(
         `background-image: ${own.map(() => 'linear-gradient(var(--st-line), var(--st-line))').join(', ')}`,
@@ -109,7 +120,8 @@ export function stepStylesheet(layout: ReadonlyMap<string, StepInfo>): string {
         `background-position: ${own.map(l => `${px(l.x)} ${px(l.y)}`).join(', ')}`
       );
     }
-    rules.push(`${outer(id)} { ${declarations.join('; ')}; }`);
+    rules.push(`${block(id)} { ${declarations.join('; ')}; }`);
+    rules.push(`${outer(id)} { display: flow-root; }`);
   }
   return rules.join('\n');
 }

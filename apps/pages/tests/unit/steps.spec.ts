@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { stepLayout } from '@classmoji/page-schema/sections';
 
+import { stepSideMenuShift } from '~/components/editor/AlignedSideMenuController.tsx';
 import { stepStylesheet } from '~/utils/stepStyles.ts';
 import { mountReader } from '../helpers/readerHarness.ts';
 
@@ -40,12 +41,19 @@ test.describe('stepStylesheet', () => {
       heading('s2', 1, true),
       paragraph('b'),
     ]);
-    expect(out).toContain(
-      '[data-id="s1"] > .bn-block > .bn-block-content[data-content-type="heading"]::before { content: "1";'
-    );
-    expect(out).toContain(
-      '[data-id="s2"] > .bn-block > .bn-block-content[data-content-type="heading"]::before { content: "2";'
-    );
+    // The number is drawn on a plain heading and on a toggle heading, whose
+    // content sits in BlockNote's frame.
+    for (const [id, number] of [
+      ['s1', 1],
+      ['s2', 2],
+    ] as const) {
+      expect(out).toContain(
+        `[data-id="${id}"] > .bn-block > .bn-block-content[data-content-type="heading"]::before, `
+      );
+      expect(out).toContain(
+        `[data-id="${id}"] > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]::before { content: "${number}";`
+      );
+    }
     // Every block in a section is indented 52px.
     for (const id of ['s1', 'a', 's2', 'b']) {
       expect(out).toMatch(new RegExp(`\\[data-id="${id}"\\] \\{ padding-left: 52px`));
@@ -270,4 +278,81 @@ test.describe('a heading that is both a step and checkable', () => {
       expect(Math.abs(r.boxCentre - r.circleCentre)).toBeLessThan(1);
     });
   }
+});
+
+test.describe('steps around every kind of block', () => {
+  const load = (page: Page, blocks: unknown[]) => mountReader(page, blocks, { width: 760 });
+  const list = (
+    id: string,
+    type: string,
+    t: string,
+    props: object = {},
+    children: unknown[] = []
+  ) => ({
+    id,
+    type,
+    props,
+    content: text(t),
+    children,
+  });
+
+  test('a toggle heading that is a step gets its number and its indent', async ({ page }) => {
+    await load(page, [
+      heading('a', 1, true),
+      {
+        ...heading('t', 1, true),
+        props: { level: 1, step: true, isToggleable: true },
+        children: [paragraph('kid')],
+      },
+      heading('c', 1, true),
+    ]);
+    const numbers = await page.evaluate(() =>
+      [...document.querySelectorAll('.bn-block-outer[data-id]')]
+        .filter(o => o.querySelector(':scope > .bn-block [data-content-type="heading"]'))
+        .map(o => {
+          const content = o.querySelector('[data-content-type="heading"]') as HTMLElement;
+          return [
+            o.getAttribute('data-id'),
+            getComputedStyle(content, '::before').content,
+            getComputedStyle(o).paddingLeft,
+          ];
+        })
+    );
+    expect(numbers).toEqual([
+      ['a', '"1"', '52px'],
+      ['t', '"2"', '52px'],
+      ['c', '"3"', '52px'],
+    ]);
+  });
+
+  test('a column list inside a step takes the indent and carries the line', async ({ page }) => {
+    const columns = {
+      id: 'cols',
+      type: 'columnList',
+      props: {},
+      children: [
+        { id: 'c1', type: 'column', props: { width: 1 }, children: [paragraph('left')] },
+        { id: 'c2', type: 'column', props: { width: 1 }, children: [paragraph('right')] },
+      ],
+    };
+    await load(page, [heading('a', 1, true), columns, heading('b', 1, true)]);
+    const read = await page.evaluate(() => {
+      const el = document.querySelector('[data-id="cols"]') as HTMLElement;
+      const cs = getComputedStyle(el);
+      return { pad: cs.paddingLeft, display: cs.display, line: cs.backgroundImage !== 'none' };
+    });
+    // Indented with the step, still a flex row of columns, and the line runs through it.
+    expect(read).toEqual({ pad: '52px', display: 'flex', line: true });
+  });
+});
+
+test.describe('the editor side menu beside a step', () => {
+  test('moves out past the circle for an H1 or H2 step, and for nothing else', () => {
+    expect(stepSideMenuShift(heading('a', 1, true))).toBe(52);
+    expect(stepSideMenuShift(heading('a', 2, true))).toBe(52);
+    expect(stepSideMenuShift(heading('a', 1))).toBe(0);
+    expect(stepSideMenuShift(heading('a', 3, true))).toBe(0);
+    expect(stepSideMenuShift(paragraph('p'))).toBe(0);
+    expect(stepSideMenuShift(undefined)).toBe(0);
+  });
 });
