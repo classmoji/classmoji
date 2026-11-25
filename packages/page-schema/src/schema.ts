@@ -9,8 +9,10 @@ import {
   createHeadingBlockSpec,
   createImageBlockSpec,
   createPreCode,
+  createStyleSpecFromTipTapMark,
   createToggleFrame,
   defaultBlockSpecs,
+  defaultStyleSpecs,
   getBlockInfoFromSelection,
   getNearestBlockPos,
   getBlockInfoFromNode,
@@ -37,6 +39,29 @@ import { createCopyButton, createCopyToggle, isCopyable } from './copyControl.ts
  * `image` (same config, responsive render).
  */
 export const REPLACED_DEFAULT_BLOCKS = ['video', 'codeBlock', 'image'] as const;
+
+/**
+ * BlockNote's default styles, except that inline code may sit beside other
+ * marks. BlockNote's `code` mark excludes every formatting mark (bold, italic,
+ * colours, link), so a stored run that is both code and bold, or code inside a
+ * link, was never schema-valid; up to 0.55 BlockNote loaded it anyway. 0.57
+ * `check()`s the document built from `initialContent` (and from inserted or
+ * replaced blocks), so such a run threw "Invalid collection of marks" and the
+ * whole page could not be drawn. Pages hold such runs. With `code` excluding
+ * only itself they are valid: they load and draw as they did on 0.55. In the
+ * editor, toggling code no longer strips a selection's other marks. Every page
+ * schema (editor, in-app viewer, class site, server) uses these, so they stay
+ * one schema.
+ */
+export const pageStyleSpecs = {
+  ...defaultStyleSpecs,
+  // How BlockNote builds its own `code` style, from its mark (input rule
+  // included), with only the exclusion changed.
+  code: createStyleSpecFromTipTapMark(
+    defaultStyleSpecs.code.implementation.mark.extend({ excludes: 'code' }),
+    'boolean'
+  ),
+};
 
 /**
  * BlockNote's default block specs minus the ones the app replaces, with the
@@ -587,6 +612,7 @@ function serverSpec<T extends CustomBlockType>(type: T) {
  */
 export function createPageSchema() {
   return BlockNoteSchema.create({
+    styleSpecs: pageStyleSpecs,
     blockSpecs: {
       ...pageDefaultBlockSpecs(),
       codeBlock: createPageCodeBlockSpec(),
