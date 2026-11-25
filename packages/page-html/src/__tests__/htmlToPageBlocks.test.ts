@@ -679,6 +679,24 @@ describe('htmlToPageBlocks: one conversion at a time', () => {
     }
   });
 
+  it('overlapping direct server-editor calls leave no DOM globals behind', async () => {
+    const editor = getServerEditor();
+    expect('window' in globalThis).toBe(false);
+    expect('document' in globalThis).toBe(false);
+    const para = (text: string) => [
+      { type: 'paragraph', content: [{ type: 'text', text, styles: {} }] },
+    ];
+    // Not queued: both start before either ends.
+    const [one, two] = await Promise.all([
+      editor.blocksToHTMLLossy(para('one') as never),
+      editor.blocksToHTMLLossy(para('two') as never),
+    ]);
+    expect(one).toContain('one');
+    expect(two).toContain('two');
+    expect('window' in globalThis).toBe(false);
+    expect('document' in globalThis).toBe(false);
+  });
+
   it('a failed conversion does not fail the ones queued behind it', async () => {
     const editor = getServerEditor();
     const spy = vi
