@@ -333,6 +333,9 @@ interface GraderInfo {
  * a submission with no match in the template is skipped, and a template
  * submission with several graders yields several assignments.
  *
+ * Only submissions of students still on the roster get a grader (and team
+ * repos): a removed student's rows stay in the database (#927).
+ *
  * Fans out one `add_grader_to_git_repo_assignment` run per (submission, grader).
  * `sessionId` is optional: the web route passes one so the run tags can drive
  * its progress stream; MCP omits it and the runs go out untagged.
@@ -372,7 +375,8 @@ export const assignGradersToAssignment = async ({
   const repoAssignments = await gitRepoAssignmentService.findByAssignmentId(
     assignmentId,
     classroomSlug,
-    classroom.id
+    classroom.id,
+    { onRosterOnly: true }
   );
 
   let graderLoginList: GraderInfo[] = [];
@@ -405,7 +409,8 @@ export const assignGradersToAssignment = async ({
     const templateRepoAssignments = await gitRepoAssignmentService.findByAssignmentId(
       templateAssignmentId!,
       classroomSlug,
-      classroom.id
+      classroom.id,
+      { onRosterOnly: true }
     );
 
     graderLoginList = templateRepoAssignments.map(repoAssignment => ({

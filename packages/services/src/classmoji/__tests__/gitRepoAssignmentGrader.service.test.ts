@@ -223,8 +223,13 @@ describe('assignGradersToAssignment — EXISTING', () => {
       templateAssignmentId: 'a-template',
     });
 
-    expect(findByAssignmentId).toHaveBeenCalledWith('a-target', 'cs1-25f', 'class-1');
-    expect(findByAssignmentId).toHaveBeenCalledWith('a-template', 'cs1-25f', 'class-1');
+    // Removed students are left out of both sides (#927).
+    expect(findByAssignmentId).toHaveBeenCalledWith('a-target', 'cs1-25f', 'class-1', {
+      onRosterOnly: true,
+    });
+    expect(findByAssignmentId).toHaveBeenCalledWith('a-template', 'cs1-25f', 'class-1', {
+      onRosterOnly: true,
+    });
   });
 
   it('requires a templateAssignmentId', async () => {

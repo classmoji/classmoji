@@ -15,6 +15,10 @@ const gitRepoFindUniqueMock = vi.fn(async () => ({ classroom_id: 'cls-1' }));
 const assignmentFindUniqueMock = vi.fn(async () => ({ module: { classroom_id: 'cls-1' } }));
 
 vi.mock('@classmoji/database', () => ({
+  // Select shapes the read functions pass through; their content is not under test.
+  GIT_IDENTITY: {},
+  USER_PUBLIC_SELECT: {},
+  USER_STAFF_VIEW_SELECT: {},
   default: () => ({
     gitRepoAssignment: {
       count: countMock,
@@ -36,6 +40,9 @@ vi.mock('../../git/index.ts', () => ({
 }));
 
 const {
+  findByAssignmentId,
+  findByClassroomId,
+  onRosterRepoWhere,
   create,
   getLateCount,
   getLatePercentage,
@@ -664,5 +671,47 @@ describe('recordPushAfterExtension', () => {
     findUniqueMock.mockResolvedValueOnce(null);
     expect(await recordPushAfterExtension('missing')).toBeNull();
     expect(updateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('submissions of removed students (#927)', () => {
+  beforeEach(() => {
+    findManyMock.mockReset();
+    findManyMock.mockResolvedValue([]);
+  });
+
+  it('counts a team repo, or an individual repo whose student is still a STUDENT here', () => {
+    expect(onRosterRepoWhere('cls-1')).toEqual({
+      classroom_id: 'cls-1',
+      OR: [
+        { student_id: null },
+        {
+          student: {
+            classroom_memberships: { some: { classroom_id: 'cls-1', role: 'STUDENT' } },
+          },
+        },
+      ],
+    });
+  });
+
+  it("lists a classroom's submissions for students on the roster only", async () => {
+    await findByClassroomId('cls-1');
+    expect(findManyMock.mock.calls[0][0].where).toEqual({ git_repo: onRosterRepoWhere('cls-1') });
+  });
+
+  it('leaves out removed students for an assignment when asked to', async () => {
+    await findByAssignmentId('a-1', 'cs1', 'cls-1', { onRosterOnly: true });
+    expect(findManyMock.mock.calls[0][0].where).toEqual({
+      assignment_id: 'a-1',
+      git_repo: { classroom: { slug: 'cs1' }, ...onRosterRepoWhere('cls-1') },
+    });
+  });
+
+  it('keeps every row for an assignment by default, as the other readers expect', async () => {
+    await findByAssignmentId('a-1', null, 'cls-1');
+    expect(findManyMock.mock.calls[0][0].where).toEqual({
+      assignment_id: 'a-1',
+      git_repo: { classroom_id: 'cls-1' },
+    });
   });
 });
