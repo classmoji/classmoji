@@ -39,7 +39,11 @@ export type { PageBlock } from '@classmoji/page-schema';
  *    language class `language-bash`, writes each heading's colour as a
  *    BlockNote colour name and each aligned image's alignment onto the
  *    element (BlockNote's parser reads `data-background-color` and
- *    `data-text-alignment`), and rewrites old `/<slug>/pages/<id>` links.
+ *    `data-text-alignment`), unwraps inline code from links (BlockNote's
+ *    code mark excludes the link, so its parser would keep the code and
+ *    drop the link: inline `<code>` inside a link is unwrapped, and one that
+ *    holds a link is split so the link sits bare between code runs), and
+ *    rewrites old `/<slug>/pages/<id>` links.
  * 2. Per fragment: the old editor's widgets (callout, alert, check list item,
  *    file tree, `<details>`, columns, page link, terminal) are lifted out
  *    into marker paragraphs, paragraphs are split around images inside their
@@ -296,13 +300,24 @@ async function prepareDocument(
 
   // Inline code and a link cannot share a run (BlockNote's code mark excludes
   // the link, so the parser would keep the code and drop the link, URL and
-  // all): the link is kept and the inline <code> around or inside it
-  // unwrapped, as cleanPageBlocks does. Code blocks are flattened to plain
-  // text later anyway.
+  // all): per run, the link is kept and the code dropped, as cleanPageBlocks
+  // does. Inline <code> inside a link is unwrapped; one that holds a link is
+  // split, each stretch without a link keeping its own <code> and the links
+  // left bare between them. Code blocks are flattened to plain text later.
   for (const code of body.querySelectorAll('code')) {
     if (code.closest('pre')) continue;
-    if (code.closest('a[href]') || code.querySelector('a[href]')) {
+    if (code.closest('a[href]')) {
       code.replaceWith(...code.childNodes);
+    } else if (code.querySelector('a[href]')) {
+      const parts = [...code.childNodes].map(child => {
+        const element = child.nodeType === 1 ? (child as Element) : null;
+        const holdsLink = element?.matches('a[href]') || element?.querySelector('a[href]');
+        if (holdsLink) return child;
+        const wrapper = code.cloneNode(false) as Element;
+        wrapper.append(child);
+        return wrapper;
+      });
+      code.replaceWith(...parts);
     }
   }
 
