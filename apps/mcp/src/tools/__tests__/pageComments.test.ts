@@ -676,6 +676,18 @@ describe('tool definitions', () => {
     }
   });
 
+  it('takes the comment limit from the service, with room for line endings to normalize (#917)', async () => {
+    const { COMMENT_BODY_MAX_LENGTH } =
+      await import('../../../../../packages/services/src/classmoji/pageComments.service.ts');
+    for (const tool of [pageCommentCreateTool, pageCommentUpdateTool]) {
+      const body = (tool.inputSchema as Record<string, import('zod').ZodTypeAny>).body;
+      expect(body.description, tool.name).toContain(`up to ${COMMENT_BODY_MAX_LENGTH} characters`);
+      // Every line break sent as \r\n: twice the length, still within the limit once normalized.
+      expect(body.safeParse('a\r\n'.repeat(COMMENT_BODY_MAX_LENGTH / 2)).success).toBe(true);
+      expect(body.safeParse('a'.repeat(COMMENT_BODY_MAX_LENGTH * 2 + 1)).success).toBe(false);
+    }
+  });
+
   it('keeps every description under the 1,500 bytes a client will keep', () => {
     for (const tool of [...pageCommentTools, contentGetTool]) {
       expect(Buffer.byteLength(tool.description, 'utf8'), tool.name).toBeLessThan(1500);

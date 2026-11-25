@@ -32,7 +32,6 @@ type Node = { _zod: { def: Def } };
 
 /** The exceptions, by where the walk finds them. */
 const ALLOWED = new Set([
-  'tool calendar_event_create.recurrence_rule (record)',
   'tool form_response_create.responses[].answers (record)',
   'tool form_teams_run.patch (record)',
   'form definition|0 (array)',

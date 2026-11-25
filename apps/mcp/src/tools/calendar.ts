@@ -76,8 +76,50 @@ interface CalendarEventCreateArgs {
   location?: string;
   meeting_link?: string;
   is_recurring?: boolean;
-  recurrence_rule?: Record<string, unknown>;
+  recurrence_rule?: RecurrenceRuleArg;
 }
+
+/** The weekday names the calendar expands a series on (calendar.service DAY_NAMES). */
+const RECURRENCE_DAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const;
+
+/** A calendar date, `YYYY-MM-DD`, that exists. */
+const dateOnly = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(value => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
+  }, 'Not a calendar date');
+
+/**
+ * What the calendar reads from a stored rule, and nothing else (#917): the
+ * weekdays it repeats on, and when it stops. A date-only `until` is inclusive,
+ * read in the classroom's time zone; the web form stores a full timestamp.
+ */
+const recurrenceRuleSchema = z
+  .object({
+    days: z
+      .array(z.enum(RECURRENCE_DAYS))
+      .min(1)
+      .max(7)
+      .describe('Weekdays it repeats on, lowercase (e.g. ["monday", "wednesday"])'),
+    until: z
+      .union([dateOnly, isoDateTime()])
+      .nullable()
+      .optional()
+      .describe('Last day (YYYY-MM-DD, inclusive) or instant (ISO 8601); omit or null: no end'),
+  })
+  .strict();
+
+type RecurrenceRuleArg = z.infer<typeof recurrenceRuleSchema>;
 
 /**
  * A meeting link is one http(s) URL. The refinement checks what `.url()` does
@@ -183,10 +225,9 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
     location: z.string().max(200).optional(),
     meeting_link: meetingLinkSchema.optional(),
     is_recurring: z.boolean().optional().describe('Whether the event repeats'),
-    recurrence_rule: z
-      .record(z.string(), z.unknown())
+    recurrence_rule: recurrenceRuleSchema
       .optional()
-      .describe('Recurrence rule JSON (required when is_recurring)'),
+      .describe('When it repeats: {days, until?} (required when is_recurring)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -459,7 +500,7 @@ interface OccurrenceRow {
  * recurring AND a rule object carrying a `days` array. The service's own test
  * (expandRecurringEvent / getRecurrenceRule, not exported), restated here. An
  * event flagged recurring whose rule names no days — calendar_event_create
- * accepts `{"until": "…"}` — is shown as ONE undated occurrence reading the
+ * accepted `{"until": "…"}` until #917, and such rows remain — is shown as ONE undated occurrence reading the
  * undated bucket, exactly like a single event, so it is treated as one. The
  * web decides the same thing from the expanded row (`isExpandedOccurrence`).
  */

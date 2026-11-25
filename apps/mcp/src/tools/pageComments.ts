@@ -427,12 +427,17 @@ const classroomArg = z.string().describe("Classroom reference as 'org/slug'");
 const pageIdArg = uuidString().describe('Page id (from list_pages or content_list)');
 const threadIdArg = uuidString().describe('Thread id, from page_comments_list');
 const commentIdArg = uuidString().describe('Comment id, from page_comments_list');
-// The service trims, normalizes line endings and enforces 1–4000 characters.
+// The service is the length check: it trims, turns every \r\n into \n and
+// then allows 1–COMMENT_BODY_MAX_LENGTH characters. A body that fits once
+// normalized can be up to twice as long as sent (every line break a \r\n), so
+// the input allows double, only to refuse an absurd payload before the
+// service sees it (#917).
+const { COMMENT_BODY_MAX_LENGTH } = ClassmojiService.pageComments;
 const bodyArg = z
   .string()
   .min(1)
-  .max(8000)
-  .describe('Comment text (plain text, up to 4000 characters)');
+  .max(COMMENT_BODY_MAX_LENGTH * 2)
+  .describe(`Comment text (plain text, up to ${COMMENT_BODY_MAX_LENGTH} characters)`);
 
 /** The pages app's budgets (COMMENT_RATE_LIMITS): posting 20 and reacting 60 per 10 minutes. */
 const CREATE_RATE_LIMIT = { capacity: 20, refillPerSecond: 20 / 600 };
