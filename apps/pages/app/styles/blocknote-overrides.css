@@ -335,7 +335,7 @@
   min-width: 20px;
   width: 20px;
   height: 20px;
-  margin: 2.8px 12px 0 0;
+  margin: 2.8px 0 0;
   padding: 0;
   border-radius: 50%;
   background-color: var(--list-marker-bg);
@@ -345,6 +345,28 @@
   line-height: 20px;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* The markers are out of the row's flow. A marker that is a flex item beside the text is
+   the row's first child, and a click to the right of the text then resolves to it: the
+   cursor lands at the START of the row instead of the end (a heading's marker box has no
+   height, so it never competes). So the row reserves the 32px gutter with padding and the
+   marker is absolutely positioned in it, where it was: its top is the row's own top
+   padding (`top` left auto), and the text still starts 32px in. */
+.bn-block-content[data-content-type="bulletListItem"],
+.bn-block-content[data-content-type="numberedListItem"] {
+  position: relative;
+  padding-left: 32px;
+}
+
+.bn-block-content[data-content-type="bulletListItem"]::before,
+.bn-block-content[data-content-type="numberedListItem"]::before {
+  position: absolute;
+  left: 0;
+}
+
+.bn-block-content[data-content-type="bulletListItem"]::before {
+  width: 32px;
 }
 
 .bn-block-outer[data-prev-type="numberedListItem"]:not([data-prev-index="none"])
