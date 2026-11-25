@@ -12,7 +12,7 @@ import { findScaleByClassroomId, quizScaleForClassroom } from './emojiMapping.se
 
 // Staff grade adjustments: `ClassmojiService.quizAttempt.adjust` / `revert`.
 export { adjust, revert } from './quizGradeAdjust.service.ts';
-import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
+import { CONTRACT_VERSION, withoutServerMetadataKeys } from '@classmoji/utils/quiz-agent';
 
 /**
  * Thrown when an attempt id names no row.
@@ -379,10 +379,12 @@ export const getMessages = async (attemptId: string) => {
     return []; // No conversation yet
   }
 
-  return getPrisma().aIConversationMessage.findMany({
+  const rows = await getPrisma().aIConversationMessage.findMany({
     where: { conversation_id: conversation.id },
     orderBy: { created_at: 'asc' },
   });
+  // Never the server-only keys (a chat reply's stored usage).
+  return rows.map(row => ({ ...row, metadata: withoutServerMetadataKeys(row.metadata) }));
 };
 
 export const completeAttempt = async (
@@ -926,9 +928,11 @@ type TranscriptFields = { content: string; metadata: Prisma.JsonValue | null };
  * fixed line otherwise, and no metadata beyond the type and code. A
  * GENERAL_FAILURE row (the retired api.quiz sendMessage failed outside the
  * agent call) reads as the fixed line too, whatever older copy it was saved
- * with. Every other row passes through unchanged.
+ * with. Every other row passes through without its server-only keys
+ * (`QUIZ_SERVER_METADATA_KEYS`: a chat reply's stored usage).
  */
-const toTranscriptFields = ({ content, metadata }: TranscriptFields): TranscriptFields => {
+const toTranscriptFields = ({ content, metadata: stored }: TranscriptFields): TranscriptFields => {
+  const metadata = withoutServerMetadataKeys(stored);
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return { content, metadata: metadata || null };
   }
