@@ -34,8 +34,8 @@ import { withCollaboration } from '@blocknote/core/yjs';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT } from '@classmoji/page-schema/constants';
-import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import type { CollabUser } from '@classmoji/collab';
+import { drawableBlocks } from '~/utils/drawableBlocks.ts';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
 import {
@@ -317,12 +317,16 @@ const PageEditor = forwardRef(function PageEditor(
     },
     [pageId, onAssetUploaded, classroomId]
   );
-  // Code blocks as plain text: BlockNote 0.55 will not load a stored link
-  // inside one (see normalizeCodeBlockContent).
-  const typedInitialContent =
-    Array.isArray(initialContent) && initialContent.length > 0
-      ? (normalizeCodeBlockContent(initialContent) as PageBlockInsertions)
-      : undefined;
+  // Stored blocks as the editing schema can build them (drawableBlocks),
+  // once per content. The editor's save baseline is the document it opens
+  // with, so this alone marks nothing unsaved.
+  const typedInitialContent = useMemo(
+    () =>
+      Array.isArray(initialContent) && initialContent.length > 0
+        ? (drawableBlocks(initialContent) as PageBlockInsertions)
+        : undefined,
+    [initialContent]
+  );
 
   // The options both modes share.
   const baseOptions = {

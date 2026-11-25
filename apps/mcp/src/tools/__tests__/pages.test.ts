@@ -114,6 +114,32 @@ describe('page_create', () => {
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('blocks from a worker that predates cleaning are cleaned, not refused', async () => {
+    const run = (text: string, styles: Record<string, unknown>) => ({ type: 'text', text, styles });
+    mocks.wait.mockResolvedValue({
+      outcome: 'completed',
+      output: {
+        ok: true,
+        blocks: [
+          { id: 'b1', type: 'paragraph', content: [run('useFetcher', { bold: true, code: true })] },
+          { id: 'b2', type: 'paragraph', content: [run('docs', { href: 'https://x.dev' })] },
+        ],
+      },
+    });
+    await pageCreateTool.handler(
+      { classroom: 'org/w26', title: 'Week 1', html: '<p><b><code>useFetcher</code></b></p>' },
+      CTX
+    );
+    expect(mocks.createPage.mock.calls[0][0].blocks).toEqual([
+      { id: 'b1', type: 'paragraph', content: [run('useFetcher', { code: true })] },
+      {
+        id: 'b2',
+        type: 'paragraph',
+        content: [{ type: 'link', href: 'https://x.dev', content: [run('docs', {})] }],
+      },
+    ]);
+  });
+
   it('with html: converts on Trigger first, then creates with the blocks', async () => {
     await pageCreateTool.handler(
       { classroom: 'org/w26', title: 'Week 1', html: '<h2>Setup</h2>' },

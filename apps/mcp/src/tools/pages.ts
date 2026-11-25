@@ -29,6 +29,7 @@ import { uuidString } from '@classmoji/utils/zod-formats';
 import { closeLiveDocBeforeDelete, notifyLiveMetaChanged } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
+import { writableConvertedBlocks } from './pageContentRules.ts';
 import {
   loadPageInClassroom,
   ok,
@@ -120,9 +121,11 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
           classroomId: classroom.classroomId,
           title: args.title,
         });
-        blocks = await ClassmojiService.pageImport.convertHtml(
-          { html: args.html, title: args.title },
-          { timeoutMs: PAGE_HTML_CONVERT_WAIT_MS }
+        blocks = await writableConvertedBlocks(
+          await ClassmojiService.pageImport.convertHtml(
+            { html: args.html, title: args.title },
+            { timeoutMs: PAGE_HTML_CONVERT_WAIT_MS }
+          )
         );
       }
 

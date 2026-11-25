@@ -20,6 +20,7 @@ const { parsePageImportPayload, PAGE_IMPORT_CONVERT_TASK_ID, PAGE_IMPORT_PAYLOAD
 const { processMarkdownImport, wrapHtmlContent } =
   await import('@classmoji/services/markdown-importer');
 const { htmlToPageBlocks } = await import('@classmoji/page-html');
+const { validatePageBlocks } = await import('@classmoji/page-schema/server');
 
 type Block = {
   id?: string;
@@ -400,6 +401,33 @@ describe('html (MCP page_create)', () => {
         if (j !== i) expect(text).not.toContain(`document ${j}`);
       }
     });
+  });
+});
+
+describe('inline code', () => {
+  it('fits the stock style rules, from html and from markdown alike', async () => {
+    const html = await runPageImportConvert(
+      parsePageImportPayload({
+        kind: 'html',
+        html: '<p><strong><code>useFetcher</code></strong> and <a href="https://x.dev"><code>x</code></a></p>',
+      })
+    );
+    const markdown = await runPageImportConvert(
+      parsePageImportPayload({
+        kind: 'markdown',
+        markdown:
+          'Call **`useFetcher`** or *`useLoaderData`*, see [`<StrictMode>`](https://x.dev).',
+        images: [],
+        options: githubOptions,
+      })
+    );
+    for (const output of [html, markdown]) {
+      if (!output.ok) throw new Error('expected blocks');
+      expect(validatePageBlocks(output.blocks)).toEqual([]);
+      const json = JSON.stringify(output.blocks);
+      expect(json).toContain('"code":true');
+      expect(json).toContain('"type":"link"');
+    }
   });
 });
 
