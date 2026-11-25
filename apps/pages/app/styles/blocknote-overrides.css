@@ -10,6 +10,10 @@
   --ink-2: #5b5f69;
   --ink-3: #6d707b;
   --ink-4: #8a8d97;
+  --line: #dfe4ee;
+  --line-2: #c9d0de;
+  --line-strong: #a7afbf;
+  --line-cool: #e5e7ef;
 }
 .dark {
   --ink-0: #f1f2f6;
@@ -17,6 +21,10 @@
   --ink-2: #a4a9b8;
   --ink-3: #9398a6;
   --ink-4: #767c8c;
+  --line: #262a38;
+  --line-2: #323648;
+  --line-strong: #474c62;
+  --line-cool: #262a38;
 }
 
 /* Override default BlockNote font size. Body weight 400 and a 1.6 line height
@@ -322,26 +330,26 @@
   flex: none;
   align-self: flex-start;
   height: 25.6px;
-  background: radial-gradient(circle at 10px 12.8px, #c1c9d2 0 3px, transparent 3.5px);
+  background: radial-gradient(circle at 10px 12.8px, var(--line-2) 0 3px, transparent 3.5px);
 }
 
 .dark .bn-block-content[data-content-type="bulletListItem"]::before {
   background: radial-gradient(
     circle at 10px 12.8px,
-    rgba(255, 255, 255, 0.3) 0 3px,
+    var(--line-strong) 0 3px,
     transparent 3.5px
   );
 }
 
 /* One gray for the numbered circle and the check box. */
 .bn-editor {
-  --list-marker-bg: #e3e8ee;
-  --list-marker-fg: #697386;
+  --list-marker-bg: var(--line-cool);
+  --list-marker-fg: var(--ink-3);
 }
 
 .dark .bn-editor {
-  --list-marker-bg: rgba(255, 255, 255, 0.14);
-  --list-marker-fg: rgba(255, 255, 255, 0.7);
+  --list-marker-bg: var(--line-2);
+  --list-marker-fg: var(--ink-2);
 }
 
 .bn-block-content[data-content-type="numberedListItem"]::before {
@@ -379,7 +387,7 @@
   .bn-block-group
   .bn-block-group
   > .bn-block-outer:not([data-prev-depth-changed])::before {
-  border-left: 1.5px solid var(--st-line, #dcdee6) !important;
+  border-left: 1.5px solid var(--st-line, #dfe4ee) !important;
 }
 
 /* Under a bullet or a number, the line runs down the middle of the dot or
@@ -440,11 +448,11 @@
 }
 
 .bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23697386' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%236d707b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 .dark .bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23ffffffb3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23a4a9b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 .bn-block-outer

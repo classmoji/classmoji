@@ -1130,11 +1130,11 @@
   /* The number and the ring: the colour of the left menu's section headings. */
   --st-fg: var(--ink-4);
   --st-ring: var(--st-fg);
-  --st-line: #dcdee6;
+  --st-line: var(--line);
 }
 
 .dark .page-editor {
-  --st-line: rgba(255, 255, 255, 0.14);
+  --st-line: var(--line-2);
 }
 
 /* The circle is the heading's `::before`, drawn 46px to the left of its text

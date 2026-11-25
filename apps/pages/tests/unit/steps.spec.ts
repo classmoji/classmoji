@@ -222,9 +222,9 @@ test.describe('the guide line beside a nested list', () => {
       });
       expect(Math.abs(read.line - read.marker)).toBeLessThan(0.5);
       expect(read.width).toBe('1.5px');
-      // `--st-line` is #dcdee6 in the light theme.
-      expect(read.steps.toLowerCase()).toBe('#dcdee6');
-      expect(read.colour).toBe('rgb(220, 222, 230)');
+      // `--st-line` is the app's `--line` (#dfe4ee in the light theme).
+      expect(read.steps.toLowerCase()).toBe('#dfe4ee');
+      expect(read.colour).toBe('rgb(223, 228, 238)');
     });
   }
 });
