@@ -19,6 +19,7 @@ import { Component, StrictMode, useCallback, useRef, type ReactNode } from 'reac
 import { createRoot } from 'react-dom/client';
 import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
+import { installClickBurst } from '@classmoji/ui-components/click-burst';
 
 import { PageReader } from '~/components/reader/PageReader.tsx';
 import {
@@ -133,6 +134,9 @@ export function mountReaderIsland(host?: ReaderIslandHost): void {
     showIslandError(new Error('The reader island has no root or no data.'));
     return;
   }
+  // The burst every click of a control gives, as in the app (entry.client.tsx).
+  // The MCP's page render installs it too: nothing clicks there.
+  installClickBurst();
   // The class site keeps the visitor's place on reload and Back.
   const restoreScroll = data.surface === 'site' ? keepScrollPosition(window) : undefined;
   // The server's loading line goes when React takes the root over.

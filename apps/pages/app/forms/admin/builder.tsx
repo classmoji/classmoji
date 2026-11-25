@@ -560,7 +560,8 @@ export default function FormBuilder() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
+    // The form's authoring editor: no click burst (filling a form keeps it).
+    <div className="mx-auto max-w-7xl px-6 py-8" data-no-burst="">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         {/* `flex-1` so the column takes the row's free width: sized to its
             content, the description box had nothing for `w-full` to fill and

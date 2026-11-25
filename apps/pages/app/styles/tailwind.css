@@ -61,6 +61,11 @@
   --alert-note-bg: #f5f3ff;
   --alert-note-border: #e8e3ff;
   --alert-note-text: #6941c6;
+
+  /* The click burst's rays (@classmoji/ui-components/click-burst): the tick
+     burst's green where page-sections.css is loaded (--pg-burst), the same
+     values without it. */
+  --burst-color: var(--pg-burst, var(--color-primary, #1f883d));
 }
 
 .dark {
@@ -88,6 +93,17 @@
   --alert-note-bg: #2d2540;
   --alert-note-border: #3e3459;
   --alert-note-text: #c8b1ff;
+
+  --burst-color: var(--pg-burst, #3fb950);
+}
+
+/* A filled green button would hide green rays: its click burst is drawn in a
+   dark green instead (a light green in dark mode). */
+.bg-primary-600 {
+  --burst-color: #14532d;
+}
+.dark .bg-primary-600 {
+  --burst-color: #bbf7d0;
 }
 
 @theme {

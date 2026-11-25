@@ -15,6 +15,9 @@
   /* The tick burst's rays (viewer/sections/tickBurst.ts): 2px lines need a
      lighter green on a dark page. */
   --pg-burst: var(--pg-primary);
+  /* The click burst every control gives (@classmoji/ui-components/click-burst)
+     is the tick burst's green; --pg-burst carries the dark twin. */
+  --burst-color: var(--pg-burst);
   --pg-skel: rgba(55, 53, 47, 0.2);
   --pg-skel-hi: rgba(55, 53, 47, 0.05);
   --pg-glass-a: rgba(255, 255, 255, 0.5);

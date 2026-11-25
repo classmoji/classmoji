@@ -159,6 +159,8 @@ export function withSectionCheckbox<T extends HeadingNodeView>(
   button.className = 'pg-section-check';
   button.contentEditable = 'false';
   button.setAttribute('role', 'checkbox');
+  // Its burst is tickBurst's (tick-on only), not the click burst every control gives.
+  button.setAttribute('data-no-burst', '');
   const box = document.createElement('span');
   box.className = 'pg-section-check-box';
   box.innerHTML = CHECK_SVG;

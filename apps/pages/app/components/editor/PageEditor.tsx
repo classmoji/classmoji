@@ -470,7 +470,14 @@ const PageEditor = forwardRef(function PageEditor(
     // opened to the left of the handle, under the fixed sidebar. With it the
     // column bounds them, and a menu with no room on one side flips to the
     // other (the drag-handle menu opens to the right).
-    <div className="page-editor" style={{ position: 'relative' }} ref={setContainer}>
+    // `data-no-burst`: an editing surface, so neither its blocks nor that
+    // floating UI (portalled in here) give the click burst.
+    <div
+      className="page-editor"
+      style={{ position: 'relative' }}
+      ref={setContainer}
+      data-no-burst=""
+    >
       {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}
       <style>{`
         /* Editing chrome only. How a block looks (its size, line height,

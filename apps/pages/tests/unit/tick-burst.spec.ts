@@ -1,14 +1,17 @@
 /**
- * The tick burst (`viewer/sections/tickBurst.ts`): its ray geometry, and when
- * the real reader plays it (`tests/helpers/readerHarness.ts`): once on the
- * reader's own tick of a heading box or a student check list item, never on
- * untick, never from an inert "View as" box, never under reduced motion; its
- * colour (`--pg-burst`, lighter in dark mode), the heading tooltip it hides,
- * and the student item's check colour.
+ * The tick burst (`viewer/sections/tickBurst.ts`, the shared click burst's
+ * rays from `@classmoji/ui-components/click-burst`): its ray geometry, and
+ * when the real reader plays it (`tests/helpers/readerHarness.ts`): once on
+ * the reader's own tick of a heading box or a student check list item (never
+ * also the click burst every control gives), never on untick, never from an
+ * inert "View as" box, never under reduced motion; its colour (`--pg-burst`,
+ * lighter in dark mode), the heading tooltip it hides, and the student item's
+ * check colour. And the click burst itself on a plain reader control (a
+ * toggle's button): once per click, in the same green.
  */
 import { test, expect, type Page } from '@playwright/test';
 
-import { burstRays } from '~/components/viewer/sections/tickBurst.ts';
+import { burstRays } from '@classmoji/ui-components/click-burst';
 import { mountReader, siteIslandData } from '../helpers/readerHarness.ts';
 
 test.describe('burst geometry', () => {
@@ -61,6 +64,12 @@ const blocks = [
     props: { checked: true },
     content: text('An author’s item'),
   },
+  {
+    id: 'toggle',
+    type: 'toggleListItem',
+    content: text('More'),
+    children: [{ id: 'toggle-body', type: 'paragraph', content: text('Hidden') }],
+  },
 ];
 
 /** The student's own view (`live`), or "View as" them (inert). */
@@ -101,7 +110,7 @@ async function mount(page: Page, live: boolean, dark = false, checked = ['h-done
     new MutationObserver(records => {
       for (const record of records)
         for (const node of record.addedNodes) {
-          if (!(node instanceof SVGElement) || !node.classList.contains('pg-tick-burst')) continue;
+          if (!(node instanceof SVGElement) || !node.classList.contains('cm-burst')) continue;
           const style = getComputedStyle(node);
           const rect = node.getBoundingClientRect();
           seen.push({
@@ -137,7 +146,7 @@ interface Burst {
 const bursts = (page: Page) =>
   page.evaluate(() => (window as unknown as { __bursts: Burst[] }).__bursts.slice());
 const lineCounts = async (page: Page) => (await bursts(page)).map(burst => burst.lines);
-const live = (page: Page) => page.locator('body > svg.pg-tick-burst').count();
+const live = (page: Page) => page.locator('body > svg.cm-burst').count();
 const bursting = (page: Page) => page.locator('.pg-section-check--burst').count();
 /** `--pg-primary`'s colour (#1f883d without the page's tailwind tokens) and the dark burst's. */
 const GREEN = 'rgb(31, 136, 61)';
@@ -146,6 +155,8 @@ const headingBox = (page: Page, id: string) =>
   page.locator(`.bn-block[data-id="${id}"] .pg-section-check`);
 const itemBox = (page: Page, id: string) =>
   page.locator(`.bn-block[data-id="${id}"] input[type="checkbox"]`);
+const toggleButton = (page: Page) =>
+  page.locator('.bn-block[data-id="toggle"] .bn-toggle-button').first();
 
 test.describe('the tick burst in the reader', () => {
   test('ticking a heading on bursts once, tooltip hidden, and both are back after it plays', async ({
@@ -250,5 +261,71 @@ test.describe('the tick burst in the reader', () => {
     await page.waitForTimeout(100);
     expect(await lineCounts(page)).toEqual([]);
     expect(await bursting(page)).toBe(0);
+  });
+});
+
+test.describe('the click burst on a reader control', () => {
+  test('a toggle’s button bursts once per click, at the pointer, in the check green', async ({
+    page,
+  }) => {
+    await mount(page, true);
+    const button = toggleButton(page);
+    const box = await button.boundingBox();
+    if (!box) throw new Error('not drawn');
+    const point = { x: box.x + 3, y: box.y + 4 };
+    await page.mouse.click(point.x, point.y);
+    await expect(page.locator('.bn-block[data-id="toggle"] .bn-toggle-wrapper')).toHaveAttribute(
+      'data-show-children',
+      'true'
+    );
+    const [burst, ...more] = await bursts(page);
+    expect(more).toEqual([]);
+    expect(burst).toMatchObject({
+      lines: 4,
+      ariaHidden: 'true',
+      position: 'fixed',
+      pointerEvents: 'none',
+      color: GREEN,
+    });
+    // At the pointer, not the button's centre.
+    expect(burst.cx).toBeCloseTo(point.x, 0);
+    expect(burst.cy).toBeCloseTo(point.y, 0);
+    await expect.poll(() => live(page)).toBe(0);
+    await page.mouse.click(point.x, point.y);
+    expect(await lineCounts(page)).toEqual([4, 4]);
+  });
+
+  test('from the keyboard it bursts at the button’s centre', async ({ page }) => {
+    await mount(page, true);
+    const button = toggleButton(page);
+    await button.focus();
+    await page.keyboard.press('Enter');
+    const [burst, ...more] = await bursts(page);
+    expect(more).toEqual([]);
+    const at = await button.boundingBox();
+    if (!at) throw new Error('not drawn');
+    expect(burst.cx).toBeCloseTo(at.x + at.width / 2, 0);
+    expect(burst.cy).toBeCloseTo(at.y + at.height / 2, 0);
+  });
+
+  test('dark mode: the lighter burst green', async ({ page }) => {
+    await mount(page, true, true);
+    await toggleButton(page).click();
+    expect((await bursts(page)).map(burst => burst.color)).toEqual([DARK_BURST]);
+  });
+
+  test('a click on text bursts nothing', async ({ page }) => {
+    await mount(page, true);
+    await page.locator('.bn-block[data-id="p-1"]').click();
+    await page.waitForTimeout(100);
+    expect(await lineCounts(page)).toEqual([]);
+  });
+
+  test('reduced motion: nothing', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await mount(page, true);
+    await toggleButton(page).click();
+    await page.waitForTimeout(100);
+    expect(await lineCounts(page)).toEqual([]);
   });
 });

@@ -342,6 +342,8 @@ function PagePicker({ pages, isLoading, onSelect, onClose, anchorRef }: PagePick
     <div
       className="page-link-dropdown nav-grid-picker nav-grid-picker-portal"
       ref={containerRef}
+      // Editor chrome portalled out of .page-editor: no click burst either.
+      data-no-burst=""
       style={
         pos
           ? {

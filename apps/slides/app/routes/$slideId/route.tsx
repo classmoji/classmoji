@@ -2712,6 +2712,15 @@ export default function SlideViewer() {
     setCurrentSlideTheme(theme);
   }, []);
 
+  // While editing, the whole page is the editor (the deck, the toolbar and
+  // navbar, the sidebar, the handles, and the popovers, modals and menus
+  // portalled to <body>): no click burst anywhere until editing ends.
+  useEffect(() => {
+    if (!isEditing) return;
+    document.body.setAttribute('data-no-burst', '');
+    return () => document.body.removeAttribute('data-no-burst');
+  }, [isEditing]);
+
   // Trigger Reveal.js layout recalculation when entering edit mode
   // This fixes centering issues caused by CSS changes (like min-height on columns)
   // Reveal.js needs to recalculate its transform-based scaling after DOM changes
