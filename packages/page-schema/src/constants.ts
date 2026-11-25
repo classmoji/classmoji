@@ -1,10 +1,11 @@
 /**
- * Bump on ANY change to a block config (type, propSchema, content) or to the
- * set of blocks in `createPageSchema()`. The collab server refuses a browser
+ * Bump on ANY change to a block config (type, propSchema, content), to the
+ * set of blocks in `createPageSchema()`, or to its styles and marks (which
+ * marks a run may carry together). The collab server refuses a browser
  * whose schema version differs: a participant with a different schema deletes
  * the blocks it does not know, for everyone in the room.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * The Y.XmlFragment the page's blocks live in. BlockNote's server-util and
