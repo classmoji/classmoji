@@ -593,8 +593,8 @@ export class CollabRuntime {
   /**
    * One audit row per structural transaction from an editor: UPDATE on the
    * deck like deck_apply's, with the same `{ op, id }` entries, so "who
-   * deleted slide X" is one query over people and agents. `value` keeps two
-   * different edits in the dedup window apart.
+   * deleted slide X" is one query over people and agents. `value` is a short
+   * summary of the ops.
    */
   private auditStructure(
     doc: LoadedDoc,

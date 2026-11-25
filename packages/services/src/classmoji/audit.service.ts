@@ -16,10 +16,30 @@ const VALID_ACTIONS = [
 // Valid Role values from Prisma schema
 const VALID_ROLES = ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'];
 
+/**
+ * Read-class actions: a repeat of the same read is counted on the row it
+ * repeats (`count`) instead of becoming a row of its own. Every other action
+ * (CREATE, UPDATE, DELETE, COLLAB_CHECKPOINT) is a change, and every change
+ * is its own row.
+ */
+const COUNTED_ACTIONS: ReadonlySet<AuditLogAction> = new Set<AuditLogAction>([
+  'VIEW',
+  'ACCESS_DENIED',
+  'COLLAB_JOIN',
+  'COLLAB_LEAVE',
+]);
+
+/** How long after a read's FIRST occurrence a repeat still counts on its row. */
+export const REPEAT_WINDOW_MS = 5 * 1000;
+
 interface AuditLogData {
   user_id: string;
   classroom_id: string;
-  role: string;
+  /**
+   * The actor's role in the classroom. `null` only on ACCESS_DENIED (someone
+   * refused who holds no role there); every other action needs one.
+   */
+  role: string | null;
   resource_type: string;
   resource_id?: string | number | null;
   action: AuditLogAction;
@@ -27,45 +47,107 @@ interface AuditLogData {
 }
 
 export interface AuditCreateOptions {
-  /**
-   * `false` skips the 5-second dedup window below and always writes the row.
-   * For callers that already write only on a real state change (e.g. a page
-   * section checked, unchecked and checked again within seconds), where every
-   * call is a distinct event and coalescing would hide one.
-   */
+  /** Ignored: every change is recorded and repeated reads are counted. */
   dedupe?: boolean;
 }
 
-export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateOptions = {}) => {
+/**
+ * The one line a row that could not be written leaves in the logs, so a
+ * missing row can be found and explained: `audit_miss {"reason":…,"row":…}`.
+ * `row` is the payload the writer was asked to record.
+ */
+export function logAuditMiss(reason: string, row: unknown): void {
+  let line: string;
+  try {
+    line = JSON.stringify({ reason, row });
+  } catch {
+    line = JSON.stringify({ reason, row: String(row) });
+  }
+  console.error('audit_miss', line);
+}
+
+/**
+ * Invalid input: outside production a bug to fix now, so it throws; in
+ * production the caller's action has already happened, so the miss is logged
+ * and the call returns null.
+ */
+function refuse(reason: string, row: AuditLogData): null {
+  if (process.env.NODE_ENV !== 'production') {
+    throw new Error(`Audit row not written: ${reason}`);
+  }
+  logAuditMiss(reason, row);
+  return null;
+}
+
+/**
+ * `data` as the database will hand it back: JSON round-tripped (undefined
+ * keys dropped, Dates as strings), with every kind of "no data" as null.
+ */
+function storedForm(data: unknown): unknown {
+  if (data === undefined || data === null) return null;
+  return JSON.parse(JSON.stringify(data)) ?? null;
+}
+
+/** Deep equality of two JSON values; object key order does not matter. */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    const other = b as unknown[];
+    return a.length === other.length && a.every((item, i) => jsonEqual(item, other[i]));
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every(key => Object.hasOwn(right, key) && jsonEqual(left[key], right[key]));
+}
+
+/**
+ * Record one audit row.
+ *
+ * A change (CREATE, UPDATE, DELETE, COLLAB_CHECKPOINT) always inserts a row.
+ *
+ * A read-class row (VIEW, ACCESS_DENIED, COLLAB_JOIN, COLLAB_LEAVE) is first
+ * compared with the newest row for the same user, classroom, resource_type
+ * and resource_id, whatever that row's action. When that row has the same
+ * action, role and data (deep equal) and was FIRST written less than
+ * REPEAT_WINDOW_MS ago, its `count` goes up by one (and `updated_at` with
+ * it); otherwise a new row is inserted. So A, B, A is three rows, a poller
+ * repeating one read gets a new row every window rather than one row that
+ * grows forever, and an impersonated read never folds into the person's own
+ * (their data differs in `impersonated_by`). Two writers racing can produce
+ * an extra row; neither is ever dropped.
+ *
+ * Invalid input (no classroom or user, an unknown role or action, a missing
+ * role on anything but ACCESS_DENIED) throws outside production and, in
+ * production, logs one `audit_miss` line and returns null.
+ */
+export const create = async (data: AuditLogData, _options: AuditCreateOptions = {}) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
 
-  // Skip audit log creation if required fields are missing
-  if (!classroom_id || !user_id || !role) {
-    console.warn('Skipping audit log: missing required fields', { classroom_id, user_id, role });
-    return null;
-  }
+  if (!classroom_id) return refuse('missing classroom_id', data);
+  if (!user_id) return refuse('missing user_id', data);
+  if (!VALID_ACTIONS.includes(action)) return refuse(`invalid action "${action}"`, data);
 
-  // Validate role is a valid enum value, skip if not
-  if (!VALID_ROLES.includes(role)) {
-    console.warn(
-      `Skipping audit log: invalid role "${role}", valid roles are: ${VALID_ROLES.join(', ')}`
-    );
-    return null;
-  }
+  // 'NONE' is what the classroom gate passes today for a refused non-member.
+  // Those rows have never been written; the next change passes null instead
+  // (a role-less ACCESS_DENIED row) and removes this branch.
+  if (role === 'NONE') return null;
 
-  // Validate action is a valid enum value, skip if not
-  if (!VALID_ACTIONS.includes(action)) {
-    console.warn(
-      `Skipping audit log: invalid action "${action}", valid actions are: ${VALID_ACTIONS.join(', ')}`
-    );
-    return null;
+  if (role === null) {
+    if (action !== 'ACCESS_DENIED') return refuse(`missing role on ${action}`, data);
+  } else if (typeof role !== 'string' || !role) {
+    return refuse('missing role', data);
+  } else if (!VALID_ROLES.includes(role)) {
+    return refuse(`invalid role "${role}"`, data);
   }
 
   const normalizedResourceId =
     resource_id === null || resource_id === undefined ? null : String(resource_id);
-  const normalizedRole = role as Role;
+  const normalizedRole = role as Role | null;
 
-  // Build auditData with only valid fields (exclude invalid role before query)
   const auditData: Prisma.AuditLogUncheckedCreateInput = {
     user_id,
     classroom_id,
@@ -74,118 +156,58 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
     resource_id: normalizedResourceId,
     action,
   };
-
-  // Copy over optional fields if present
   if (data.data !== undefined) {
     auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
 
-  if (!dedupe) return getPrisma().auditLog.create({ data: auditData });
+  const prisma = getPrisma();
+  if (!COUNTED_ACTIONS.has(action)) return prisma.auditLog.create({ data: auditData });
 
-  const deduplicationWindowMs = 5 * 1000; // 5-second deduplication window
-
-  // Distinct tools acting on the same resource within the window must never
-  // coalesce — when the payload names a tool, it joins the dedup key. Rows
-  // without a tool keep the original key (unchanged behavior).
-  const payload =
-    data.data && typeof data.data === 'object' && !Array.isArray(data.data)
-      ? (data.data as Record<string, unknown>)
-      : undefined;
-  const tool = payload?.tool;
-
-  // The role the payload ACTS ON (data.role — e.g. the staff role being granted
-  // or removed), which is a different thing from the top-level `role` column
-  // above (the actor's own role in the classroom). Two calls that differ only in
-  // the role they act on are two distinct records, so it joins the key too. A
-  // second `data` filter cannot sit beside the first in the same object, so the
-  // clause goes under `AND` — Prisma combines both conjunctively. Payloads
-  // without a role keep the key exactly as it was.
-  const payloadRole = payload?.role;
-
-  // The VALUE the payload wrote (data.value). Without it, repeated edits of the
-  // same field through the same tool collapse: flipping a page public → draft →
-  // public inside the window records only the first, so the log ends up
-  // asserting a state the record is no longer in. The value is what makes those
-  // writes distinguishable, so it joins the key. A genuine double-submit — the
-  // same field set to the same value twice — still dedups, which is the case
-  // the window exists for. Payloads without a value keep the key unchanged.
-  const payloadValue = payload?.value;
-  const isScalar = (v: unknown): v is string | number | boolean =>
-    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
-
-  // Whether answers to identity questions were disclosed (data.identity_answers).
-  // A view with them hidden followed within the window by the same view with
-  // them shown is a reveal, and it must be recorded, so the flag joins the key.
-  // The same state twice still dedups.
-  const payloadIdentityAnswers = payload?.identity_answers;
-
-  // The block of a page the action targeted (data.block_id — page sections).
-  // Unlocking or checking two different sections of one page inside the window
-  // are two records, so the block joins the key.
-  const payloadBlockId = payload?.block_id;
-
-  // The client that made the call (data.client_id — the MCP's OAuth client).
-  // The same read through two clients inside the window (an assistant and a
-  // personal MCP client) are two records, so the client joins the key.
-  const payloadClientId = payload?.client_id;
-
-  // The rating the payload set (data.rating — e.g. a feedback review filtered
-  // to thumbs-down, then to thumbs-up). Two reads or writes that differ only in
-  // the rating are two records, so it joins the key.
-  const payloadRating = payload?.rating;
-
-  // A caller-built key for whatever else distinguishes one call from the next
-  // (data.filter_key — e.g. the ids a read was filtered by). Opaque here: two
-  // rows with different keys never coalesce; the same key twice still dedups.
-  const payloadFilterKey = payload?.filter_key;
-
-  // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
-  // beside each other in one object — they go under `AND`, which Prisma
-  // combines conjunctively with the rest.
-  const payloadFilters = [
-    ...(typeof payloadRole === 'string' ? [{ data: { path: ['role'], equals: payloadRole } }] : []),
-    ...(isScalar(payloadValue) ? [{ data: { path: ['value'], equals: payloadValue } }] : []),
-    ...(typeof payloadIdentityAnswers === 'boolean'
-      ? [{ data: { path: ['identity_answers'], equals: payloadIdentityAnswers } }]
-      : []),
-    ...(typeof payloadBlockId === 'string'
-      ? [{ data: { path: ['block_id'], equals: payloadBlockId } }]
-      : []),
-    ...(typeof payloadClientId === 'string'
-      ? [{ data: { path: ['client_id'], equals: payloadClientId } }]
-      : []),
-    ...(typeof payloadRating === 'string'
-      ? [{ data: { path: ['rating'], equals: payloadRating } }]
-      : []),
-    ...(typeof payloadFilterKey === 'string'
-      ? [{ data: { path: ['filter_key'], equals: payloadFilterKey } }]
-      : []),
-  ];
-
-  const recentLog = await getPrisma().auditLog.findFirst({
+  // Only the newest row inside the window can take the repeat: a newest row
+  // older than the window means a new row anyway. Two rows sharing the
+  // newest timestamp have no order between them, so neither is "the last".
+  const recent = await prisma.auditLog.findMany({
     where: {
       user_id,
       classroom_id,
-      role: normalizedRole,
       resource_type,
       resource_id: normalizedResourceId,
-      action,
-      ...(typeof tool === 'string' ? { data: { path: ['tool'], equals: tool } } : {}),
-      ...(payloadFilters.length > 0 ? { AND: payloadFilters } : {}),
-      timestamp: {
-        gte: new Date(Date.now() - deduplicationWindowMs),
-      },
+      timestamp: { gt: new Date(Date.now() - REPEAT_WINDOW_MS) },
     },
+    orderBy: { timestamp: 'desc' },
+    take: 2,
+    select: { id: true, action: true, role: true, data: true, timestamp: true },
   });
+  const [last, before] = recent;
+  const lastIsAlone = last && !(before && before.timestamp.getTime() === last.timestamp.getTime());
 
-  // An impersonated action and the person's own never coalesce, in either
-  // order (data.impersonated_by): checked on the row found, because a key
-  // filter only narrows when the new payload carries the field.
-  const recentImpersonator = (recentLog?.data as Record<string, unknown> | null)?.impersonated_by;
-  const payloadImpersonator = payload?.impersonated_by;
-  if (!recentLog || (recentImpersonator ?? null) !== (payloadImpersonator ?? null)) {
-    return getPrisma().auditLog.create({ data: auditData });
+  let newData: unknown;
+  try {
+    newData = storedForm(data.data);
+  } catch {
+    newData = undefined; // not JSON-serializable: never equal, so a new row
   }
 
-  return null;
+  if (
+    last &&
+    lastIsAlone &&
+    newData !== undefined &&
+    last.action === action &&
+    last.role === normalizedRole &&
+    jsonEqual(storedForm(last.data), newData)
+  ) {
+    try {
+      return await prisma.auditLog.update({
+        where: { id: last.id },
+        data: { count: { increment: 1 } },
+      });
+    } catch (error) {
+      // The row went away in between (its classroom deleted, say): insert.
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025')) {
+        throw error;
+      }
+    }
+  }
+
+  return prisma.auditLog.create({ data: auditData });
 };

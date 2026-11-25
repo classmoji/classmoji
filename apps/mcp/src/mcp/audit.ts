@@ -36,7 +36,7 @@ export interface AuditEntry {
    * sections tool acts as). Defaults to the enforcing membership's role.
    */
   role?: Role;
-  /** false: skip the audit service's 5-second dedup window (every call is an event). */
+  /** Ignored: every write is its own row (kept until the callers drop it). */
   dedupe?: boolean;
 }
 
@@ -59,11 +59,11 @@ function withImpersonation(
 }
 
 /**
- * Write an audit-log row for a mutation. The audit service console.warns and
- * SKIPS on malformed input, so the payload is built strictly from validated
- * context: `role` is the enforcing membership's Role enum (or the tool's own
- * validated override) and `action` is a literal from the AuditLogAction enum —
- * rows cannot be silently dropped.
+ * Write an audit-log row for a mutation. The audit service refuses malformed
+ * input (a throw outside production, an `audit_miss` log line in production),
+ * so the payload is built strictly from validated context: `role` is the
+ * enforcing membership's Role enum (or the tool's own validated override) and
+ * `action` is a literal from the AuditLogAction enum.
  */
 export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<void> {
   const classroom = ctx.classroom;
@@ -105,8 +105,10 @@ export interface ReadAudit {
    * is the classroom itself (`resourceId: classroom.classroomId`).
    *
    * A read that returns `data` (even empty) is a filtered read: its row also
-   * gets `data.filter_key`, a stable key of those filters, so two calls with
-   * different filters inside the audit service's 5-second window stay two rows.
+   * gets `data.filter_key`, a stable key of those filters. The filters
+   * themselves already tell two reads apart (the audit service counts a
+   * repeat only when the whole `data` is equal); the key makes a read's
+   * filters one field to query on.
    */
   ids?: (
     input: Record<string, unknown>,
@@ -126,8 +128,8 @@ export function filterKey(data: Record<string, string | number>): string {
 
 /**
  * Write the VIEW row for one successful read of `surface` (the tool or
- * resource name, stored as `data.tool` so two surfaces never merge in the
- * audit service's dedup window). `client_id` tells a person's own MCP client
+ * resource name, stored as `data.tool`; the audit service counts a repeat of
+ * the same read on its row). `client_id` tells a person's own MCP client
  * from Ask Moji. A failed write is logged and the read's answer stands, as
  * the web's audit helper does.
  */

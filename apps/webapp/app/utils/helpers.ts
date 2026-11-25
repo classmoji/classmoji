@@ -80,12 +80,7 @@ interface ClassroomAuditParams {
   resourceType: string;
   resourceId?: string | number | null;
   metadata?: Record<string, unknown> | null;
-  /**
-   * `false`: every call is its own row, even one the audit service's 5-second
-   * dedup window would fold into the previous one (two saves of the same
-   * settings in a row are two changes). Passed to `audit.create` as its
-   * options argument, the only place the service reads it.
-   */
+  /** Ignored: every change is its own row (kept until the callers drop it). */
   dedupe?: boolean;
 }
 
@@ -153,15 +148,12 @@ const writeAuditRow = async ({
  * the caller is already holding — and re-resolving by slug would also unbind
  * the logged classroom from the one the mutation was authorized against.
  *
- * `metadata.tool` is load-bearing, not decoration: the audit service dedups on
- * a 5-second window keyed on (user, classroom, role, resource_type,
- * resource_id, action) plus `data.tool` when present (see
- * packages/services/src/classmoji/audit.service.ts). Two different edits to the
- * same record in quick succession — flipping a page's status and then its menu
- * flag — are both UPDATE on the same resource_id, so without a distinct `tool`
- * the second row is silently dropped as a duplicate. Callers therefore pass a
- * route+intent identifier, which doubles as the field that makes the web and
- * MCP surfaces queryable together.
+ * `metadata.tool` names the route and intent: it tells two different edits of
+ * the same record apart in the log (flipping a page's status and then its
+ * menu flag are both UPDATE on the same resource_id), and it is the field that
+ * makes the web and MCP surfaces queryable together. Every change is its own
+ * row; a repeated read is counted on its row (see
+ * packages/services/src/classmoji/audit.service.ts).
  */
 export const addClassroomAuditLog = async (auditParams: ClassroomAuditParams) =>
   writeAuditRow(auditParams);

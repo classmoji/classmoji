@@ -323,6 +323,9 @@ const ActivityTab = ({ data }: { data: Extract<Data, { activity: unknown }> }) =
               <b className="font-medium text-ink-0">Someone</b>
             )}{' '}
             {a.text}
+            {a.count > 1 ? (
+              <span className="text-xs text-ink-4 tabular-nums"> ×{a.count}</span>
+            ) : null}
             {a.tool ? <span className="text-xs text-ink-4"> · {a.tool}</span> : null}
           </span>
         </li>

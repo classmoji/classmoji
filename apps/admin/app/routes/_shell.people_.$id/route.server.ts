@@ -99,6 +99,7 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
           resource_type: true,
           timestamp: true,
           data: true,
+          count: true,
           classroom: { select: { name: true, slug: true } },
         },
       }),
@@ -155,6 +156,7 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
         r.data && typeof r.data === 'object' && 'tool' in r.data
           ? String((r.data as { tool?: unknown }).tool)
           : null,
+      count: r.count,
     })),
     ...adminRows.map(r => {
       const reason =
@@ -167,6 +169,7 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
         text: `${r.actor?.name ?? 'An admin'} ${describeAdminAction(r.action, r.data)}${reason ? ` (reason: “${reason}”)` : ''}`,
         classroom: null,
         tool: null,
+        count: 1,
       };
     }),
     ...(user.first_sign_in_at
@@ -177,6 +180,7 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
             text: 'First sign-in',
             classroom: null,
             tool: null,
+            count: 1,
           },
         ]
       : []),

@@ -573,8 +573,8 @@ test.describe('forms responses — owner', () => {
       take: 2,
     });
     expect(b, 'two responses to select').toBeDefined();
-    // Selections no other test exports, so no earlier row inside the audit
-    // window can stand in for these.
+    // Selections no other test exports, so no earlier row can be counted as
+    // the same read as one of these.
     const exportOf = (kind: string, ids: string[]) =>
       page.request.post(exportPath, {
         maxRedirects: 0,
@@ -610,12 +610,15 @@ test.describe('forms responses — owner', () => {
       orderBy: { timestamp: 'asc' },
     });
     const values = rows.map(row => (row.data as { value?: unknown }).value as string);
-    // The fourth export is the first again (same sheet, same responses): one row.
-    expect(values).toHaveLength(3);
+    // The fourth export is the first again (same sheet, same responses, in
+    // another order): the same value, on a row of its own, since another
+    // export came in between.
+    expect(values).toHaveLength(4);
     expect(values[0]).toMatch(/^wide:[0-9a-f]{12}$/);
     expect(values[1]).toMatch(/^wide:[0-9a-f]{12}$/);
     expect(values[1]).not.toBe(values[0]);
     expect(values[2]).toBe(values[0].replace(/^wide:/, 'long:'));
+    expect(values[3]).toBe(values[0]);
     // The value names what was covered, never a response.
     expect(JSON.stringify(values)).not.toContain(a!.id);
     expect(JSON.stringify(values)).not.toContain(b!.id);
@@ -772,7 +775,7 @@ test.describe('forms responses — identity questions', () => {
     await loginAs(page, 'owner');
     const prisma = await getTestPrisma();
     // Two responses no other test here reveals: a second reveal of the SAME
-    // response inside the audit window is one row, by design.
+    // response within seconds is counted on the first one's row, by design.
     const pair = await prisma.formResponse.findMany({
       where: { form_id: formId!, user_id: { not: null } },
       select: { id: true, email: true },

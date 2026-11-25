@@ -1,9 +1,8 @@
 /**
  * Audit rows for live editing: COLLAB_JOIN / COLLAB_LEAVE per socket,
  * UPDATE for a person's structural edit of a deck (slides inserted, deleted,
- * moved), and ACCESS_DENIED for a refused join by a member of the doc's classroom. A
- * refused NON-member cannot be recorded (the audit row needs a classroom
- * role) — a known limitation of the audit schema.
+ * moved), and ACCESS_DENIED for a refused join by a member of the doc's classroom.
+ * A refused NON-member is not recorded yet (it holds no classroom role).
  *
  * Fire and forget: an audit failure never blocks or fails a connection.
  */
@@ -28,7 +27,11 @@ export function recordAudit(sink: AuditSink | undefined, entry: AuditEntry): voi
   });
 }
 
-/** The real sink: `ClassmojiService.audit.create` (dedups within 5 s). */
+/**
+ * The real sink: `ClassmojiService.audit.create`. Every structural UPDATE is
+ * its own row; a reconnect's repeated JOIN (or LEAVE) within seconds is
+ * counted on the row it repeats.
+ */
 export function createServiceAuditSink(
   create: (data: {
     user_id: string;
