@@ -802,6 +802,23 @@ describe('htmlToPageBlocks: code', () => {
     ]);
     expect(validatePageBlocks(blocks)).toEqual([]);
   });
+
+  it('a link inside inline code keeps the link (and its URL); the code around it stays', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p>See <code>go(<a href="https://go.dev/doc">docs</a>)</code></p>'
+    );
+    expect(blocks[0].content).toEqual([
+      { type: 'text', text: 'See ', styles: {} },
+      { type: 'text', text: 'go(', styles: { code: true } },
+      {
+        type: 'link',
+        href: 'https://go.dev/doc',
+        content: [{ type: 'text', text: 'docs', styles: {} }],
+      },
+      { type: 'text', text: ')', styles: { code: true } },
+    ]);
+    expect(validatePageBlocks(blocks)).toEqual([]);
+  });
 });
 
 describe('htmlToPageBlocks: media', () => {

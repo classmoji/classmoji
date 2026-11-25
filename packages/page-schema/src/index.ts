@@ -39,19 +39,12 @@ export {
   codeBlockDisplayLanguage,
   codeBlockHighlightLanguage,
   createPageSchema,
-  createStrictPageSchema,
-  pageStyleSpecs,
   type PageHeadingOptions,
   type PageSchema,
   type ToggledState,
 } from './schema.ts';
 export { normalizeCodeBlockContent } from './codeContent.ts';
-export {
-  cleanPageBlocks,
-  CODE_EXCLUDED_STYLES,
-  type CleanPageBlocksOptions,
-  type PageContentChange,
-} from './cleanContent.ts';
+export { cleanPageBlocks, CODE_EXCLUDED_STYLES, type PageContentChange } from './cleanContent.ts';
 export {
   lockedSectionGuard,
   lockedSectionGuardPlugin,
