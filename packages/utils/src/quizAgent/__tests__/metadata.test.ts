@@ -1,14 +1,17 @@
 /**
- * The quiz's server-only metadata: a stored reply's `usage` never reaches a
- * viewer, whatever the projection registry, and every other key is kept.
+ * The quiz's metadata rules: viewers get only `action` (after the projection),
+ * so a stored reply's `usage` never reaches one; raw-row readers drop `usage`
+ * and keep every other key.
  */
 import { describe, expect, it } from 'vitest';
 import {
   QUIZ_SERVER_METADATA_KEYS,
+  QUIZ_VIEWER_METADATA_KEYS,
   projectTranscript,
   quizStaffVisibility,
   quizVisibility,
-  withoutServerMetadata,
+  withViewerMetadata,
+  withoutServerMetadataKeys,
   type QuizUIMessage,
 } from '../index.ts';
 
@@ -49,29 +52,43 @@ const transcript = [
   },
 ] as unknown as QuizUIMessage[];
 
-describe('withoutServerMetadata', () => {
-  it('names usage as server-only', () => {
+describe('quiz viewer metadata', () => {
+  it('names action as the one viewer key and usage as server-only', () => {
+    expect([...QUIZ_VIEWER_METADATA_KEYS]).toEqual(['action']);
     expect(QUIZ_SERVER_METADATA_KEYS).toContain('usage');
   });
 
-  it('drops usage, keeps every other key, and returns a message without such keys as it is', () => {
-    const kept = withoutServerMetadata({ id: 'a', metadata: { usage: USAGE, other: 1 } });
-    expect(kept).toEqual({ id: 'a', metadata: { other: 1 } });
-    expect(withoutServerMetadata({ id: 'a', metadata: { usage: USAGE } })).toEqual({ id: 'a' });
-    const plain = { id: 'u', metadata: { action: 'next' } };
-    expect(withoutServerMetadata(plain)).toBe(plain);
-    const none: { id: string; metadata?: unknown } = { id: 'n' };
-    expect(withoutServerMetadata(none)).toBe(none);
+  it('withViewerMetadata keeps only the viewer keys; none left, no metadata', () => {
+    expect(
+      withViewerMetadata({ id: 'u', metadata: { action: 'next', usage: USAGE, later: 1 } })
+    ).toEqual({ id: 'u', metadata: { action: 'next' } });
+    expect(withViewerMetadata({ id: 'a', metadata: { usage: USAGE, other: 1 } })).toEqual({
+      id: 'a',
+    });
+    expect(withViewerMetadata({ id: 'n' } as { id: string; metadata?: unknown })).toEqual({
+      id: 'n',
+    });
+  });
+
+  it('withoutServerMetadataKeys drops usage, keeps every other key, null when nothing is left', () => {
+    expect(withoutServerMetadataKeys({ usage: USAGE, explorationSteps: [1] })).toEqual({
+      explorationSteps: [1],
+    });
+    expect(withoutServerMetadataKeys({ usage: USAGE })).toBeNull();
+    const plain = { errorType: 'AGENT_FAILURE' };
+    expect(withoutServerMetadataKeys(plain)).toBe(plain);
+    expect(withoutServerMetadataKeys(null)).toBeNull();
   });
 
   it('a stored usage never reaches the student or the staff view; the action still does', () => {
     for (const registry of [quizVisibility, quizStaffVisibility]) {
-      // What the projection alone would pass: the reason for the strip.
+      // What the projection alone would pass: the reason for the allow-list.
       expect(JSON.stringify(projectTranscript(transcript, registry))).toContain('cacheTtl');
-      const viewed = projectTranscript(transcript.map(withoutServerMetadata), registry);
+      const viewed = projectTranscript(transcript, registry).map(withViewerMetadata);
       const json = JSON.stringify(viewed);
       expect(json).not.toContain('usage');
       expect(json).not.toContain('cacheTtl');
+      expect(json).not.toContain('steps');
       expect(json).not.toContain('record_question_result');
       expect(viewed[0].metadata).toEqual({ action: 'next' });
       expect(viewed[1].metadata).toBeUndefined();

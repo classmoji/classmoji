@@ -26,7 +26,8 @@ const RUN = Boolean(DATABASE_URL) && isLocal && !isSharedDevDb;
 const getPrisma = (await import('@classmoji/database')).default;
 const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
-const { createNew, updateAttemptDurations } = await import('../quizAttempt.service.ts');
+const attemptService = await import('../quizAttempt.service.ts');
+const { createNew, updateAttemptDurations } = attemptService;
 const { BUTTON_TEXT, CONTRACT_VERSION, deriveResult } = await import('@classmoji/utils/quiz-agent');
 const { SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
 
@@ -1963,6 +1964,11 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     // The model's history keeps it (server side only).
     const canonical = await chat.loadCanonicalMessages(attemptId);
     expect(canonical.find(m => m.id === id)?.metadata).toEqual({ usage });
+    // The raw-row reads drop it too.
+    const raw = await attemptService.findWithMessages(attemptId);
+    expect(raw.messages.find(m => m.content === 'First question.')?.metadata).toBeNull();
+    expect(JSON.stringify(raw.messages)).not.toContain('cacheTtl');
+    expect(JSON.stringify(await attemptService.getMessages(attemptId))).not.toContain('cacheTtl');
 
     // A usage that is not the usage shape is dropped; the reply is still saved.
     const bad = `reply-${randomUUID()}`;
@@ -1977,6 +1983,65 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     });
     expect(badRow.content).toBe('Next.');
     expect(badRow.metadata).toBeNull();
+  });
+
+  it("leaves metadata.usage equal to the save's valid usage or absent, never an earlier save's or the message's own", async () => {
+    const usage = {
+      input: 100,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 100,
+      reasoning: 0,
+      calls: 1,
+      model: 'claude-x',
+      cacheTtl: '1h' as const,
+    };
+    const invalid = { ...usage, extra: 1 } as never;
+    const attemptId = await newAttempt();
+    await say(attemptId, 'hello');
+    const metadataOf = async (id: string) =>
+      (
+        await prisma.aIConversationMessage.findFirstOrThrow({
+          where: { ui_message_id: id },
+          select: { metadata: true },
+        })
+      ).metadata;
+    const save = (id: string, final: boolean, o: { usage?: never }, metadata?: object) =>
+      chat.persistAssistantMessage(
+        attemptId,
+        {
+          id,
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'Partly.' }],
+          ...(metadata ? { metadata } : {}),
+        } as never,
+        { final, ...o }
+      );
+
+    // A partial save with a valid usage, then the final save with an invalid one: no usage.
+    const a = `reply-${randomUUID()}`;
+    await save(a, false, { usage: usage as never });
+    expect(await metadataOf(a)).toEqual({ usage });
+    await save(a, true, { usage: invalid });
+    expect(await metadataOf(a)).toBeNull();
+
+    // A partial save with a valid usage, then the final save with none: no usage either.
+    const b = `reply-${randomUUID()}`;
+    await save(b, false, { usage: usage as never });
+    await save(b, true, {});
+    expect(await metadataOf(b)).toBeNull();
+
+    // A usage inside the message's own metadata is ignored; its other keys are kept.
+    const forged = { ...usage, input: 1, calls: 99 };
+    const c = `reply-${randomUUID()}`;
+    await save(c, true, {}, { usage: forged, note: 'kept' });
+    expect(await metadataOf(c)).toEqual({ note: 'kept' });
+    const d = `reply-${randomUUID()}`;
+    await save(d, true, { usage: usage as never }, { usage: forged });
+    expect(await metadataOf(d)).toEqual({ usage });
+    const e = `reply-${randomUUID()}`;
+    await save(e, true, { usage: invalid }, { usage: forged });
+    expect(await metadataOf(e)).toBeNull();
   });
 
   it('admits 200 student messages, clicks included; the next completes the attempt from the recorded results and is refused for good', async () => {

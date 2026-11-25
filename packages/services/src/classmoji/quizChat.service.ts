@@ -21,7 +21,7 @@
 import { createHash } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { isReleased } from '@classmoji/utils';
-import type { Prisma } from '@classmoji/database/client';
+import { Prisma } from '@classmoji/database/client';
 import {
   CodeSubmissionInputSchema,
   CodeSubmissionPartSchema,
@@ -38,7 +38,8 @@ import {
   replyShowsHint,
   reservedCheckText,
   sandboxProgressOf,
-  withoutServerMetadata,
+  withViewerMetadata,
+  withoutServerMetadataKeys,
   type AttemptProgress,
   type CodeSubmissionInput,
   type CodeSubmissionPart,
@@ -1021,10 +1022,12 @@ export const storeHiddenOpening = (attemptId: string): Promise<QuizUIMessage> =>
  * save (`final: false`) never overwrites a final one, and an id that belongs
  * to a non-assistant row is refused.
  *
- * `o.usage` (the turn's model usage, `AskMojiUsageSchema`) is stored as
- * `metadata.usage`, server-only (`QUIZ_SERVER_METADATA_KEYS`): one that is
- * not the usage shape is dropped with a warning, and the reply is saved
- * without it.
+ * `metadata.usage` (server-only, `QUIZ_SERVER_METADATA_KEYS`) is, after
+ * every save, exactly `o.usage` when it is the usage shape
+ * (`AskMojiUsageSchema`), else absent: an invalid one is dropped with a
+ * warning and the reply saved without it, a `usage` inside `m.metadata` is
+ * ignored, and an earlier save's usage never stays behind. Every other
+ * metadata key is kept as before (the row's, then the message's).
  */
 export const persistAssistantMessage = async (
   attemptId: string,
@@ -1048,27 +1051,42 @@ export const persistAssistantMessage = async (
     };
     const existing = await tx.aIConversationMessage.findUnique({
       where,
-      select: { role: true, final: true },
+      select: { role: true, final: true, metadata: true },
     });
     const parts = toJson(m.parts ?? []);
     const content = textOf(m.parts);
-    const stored = {
-      ...(isObject(m.metadata) ? m.metadata : {}),
-      ...(usage?.success ? { usage: usage.data } : {}),
+    /** `base` and the message's own keys, without any usage, then the validated one. */
+    const metadataOver = (base: unknown): Record<string, unknown> => {
+      const kept = {
+        ...(isObject(base) ? base : {}),
+        ...(isObject(m.metadata) ? m.metadata : {}),
+      };
+      return {
+        ...(withoutServerMetadataKeys(kept) ?? {}),
+        ...(usage?.success ? { usage: usage.data } : {}),
+      };
     };
-    const metadata = isObject(m.metadata) || usage?.success ? toJson(stored) : undefined;
 
     if (existing) {
       if (existing.role !== 'ASSISTANT') {
         throw new Error('persistAssistantMessage: message id belongs to another message');
       }
       if (existing.final && !o.final) return;
+      const next = metadataOver(existing.metadata);
+      const metadata =
+        Object.keys(next).length > 0
+          ? toJson(next)
+          : existing.metadata === null
+            ? undefined
+            : Prisma.DbNull;
       await tx.aIConversationMessage.update({
         where,
         data: { parts, content, final: o.final, ...(metadata ? { metadata } : {}) },
       });
       return;
     }
+    const created = metadataOver(undefined);
+    const metadata = Object.keys(created).length > 0 ? toJson(created) : undefined;
     await tx.aIConversationMessage.create({
       data: {
         conversation_id: conversationId,
@@ -1216,17 +1234,18 @@ export type TranscriptViewer = 'student' | 'staff';
 
 /**
  * The transcript a viewer gets: the canonical messages, projected for them,
- * without the server-only metadata (`QUIZ_SERVER_METADATA_KEYS`: the stored
- * usage) for either viewer.
+ * each message's metadata cut to the viewer keys (`QUIZ_VIEWER_METADATA_KEYS`:
+ * `action`) for either viewer, so the stored usage, or any key added later,
+ * never reaches one.
  */
 export const loadTranscriptForViewer = async (
   attemptId: string,
   viewer: TranscriptViewer = 'student'
 ): Promise<QuizUIMessage[]> =>
   projectTranscript(
-    (await loadCanonicalMessages(attemptId)).map(withoutServerMetadata),
+    await loadCanonicalMessages(attemptId),
     viewer === 'staff' ? quizStaffVisibility : quizVisibility
-  ) as QuizUIMessage[];
+  ).map(withViewerMetadata) as QuizUIMessage[];
 
 /**
  * What the attempt drawer states about the message limit. An open attempt:
