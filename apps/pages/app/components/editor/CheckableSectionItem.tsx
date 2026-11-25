@@ -89,7 +89,10 @@ export function CheckableBadgeYield() {
     selector: state => (state?.show ? state.block.id : null),
   });
   if (!blockId || typeof CSS === 'undefined' || typeof CSS.escape !== 'function') return null;
+  const block = `.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block`;
+  // A toggle heading's content sits in its frame (BlockNote's toggle frame).
+  const heading = '.bn-block-content[data-content-type="heading"][data-checkable="true"]';
   return (
-    <style>{`.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="heading"][data-checkable="true"] .pg-checkable-badge, .bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="checkListItem"][data-personal="true"] > .pg-personal-badge { opacity: 0; pointer-events: none; }`}</style>
+    <style>{`${block} > ${heading} .pg-checkable-badge, ${block} > .bn-toggle-frame > .bn-toggle-slot > ${heading} .pg-checkable-badge, ${block} > .bn-block-content[data-content-type="checkListItem"][data-personal="true"] > .pg-personal-badge { opacity: 0; pointer-events: none; }`}</style>
   );
 }

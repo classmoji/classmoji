@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { BlockNoteSchema, type BlockNoteEditor } from '@blocknote/core';
 import { insertOrUpdateBlockForSlashMenu } from '@blocknote/core/extensions';
-import { multiColumnSchema } from '@blocknote/xl-multi-column';
+import { ColumnBlock, ColumnListBlock } from '@blocknote/xl-multi-column';
 import { createPageCodeBlockSpec, pageDefaultBlockSpecs } from '@classmoji/page-schema';
 import {
   IconBulb,
@@ -61,25 +61,34 @@ import { LockedSection, focusLockedSectionTitle } from './LockedSectionBlock.tsx
 // `resolveFileUrl` like the image block's picture does.
 const filteredDefaultBlockSpecs = pageDefaultBlockSpecs();
 
-export const schema = BlockNoteSchema.create({
-  blockSpecs: {
-    ...filteredDefaultBlockSpecs,
-    // Override default code block with syntax highlighting
-    codeBlock: createPageCodeBlockSpec(),
-    // Same block, same wrapper, same parse — plus srcset/sizes at render time.
-    image: ResponsiveImage(),
-    ...multiColumnSchema.blockSpecs,
-    callout: Callout(),
-    terminal: Terminal(),
-    profile: Profile(),
-    divider: Divider(),
-    embed: Embed(),
-    video: Video(), // Custom video block
-    pageLink: PageLink(), // Page link block (fetches pages via API)
-    navGrid: NavGrid(), // Page directory — authored navigation hub (class sites)
-    lockedSection: LockedSection(), // Body hidden from a student until they unlock it
-  },
-});
+/**
+ * The block specs as written, before a schema builds them. Every schema made
+ * from these (this one, the editing schema, the viewer's) starts from them,
+ * never from another schema's `blockSpecs`: a built spec has no
+ * `experimental_keyboard` left (BlockNote 0.56+ resolves it into the node),
+ * so a schema rebuilt from built specs loses each block's keyboard settings —
+ * Enter in a list item would start a paragraph instead of the next item.
+ */
+export const pageBlockSpecs = {
+  ...filteredDefaultBlockSpecs,
+  // Override default code block with syntax highlighting
+  codeBlock: createPageCodeBlockSpec(),
+  // Same block, same wrapper, same parse — plus srcset/sizes at render time.
+  image: ResponsiveImage(),
+  column: ColumnBlock,
+  columnList: ColumnListBlock,
+  callout: Callout(),
+  terminal: Terminal(),
+  profile: Profile(),
+  divider: Divider(),
+  embed: Embed(),
+  video: Video(), // Custom video block
+  pageLink: PageLink(), // Page link block (fetches pages via API)
+  navGrid: NavGrid(), // Page directory — authored navigation hub (class sites)
+  lockedSection: LockedSection(), // Body hidden from a student until they unlock it
+};
+
+export const schema = BlockNoteSchema.create({ blockSpecs: pageBlockSpecs });
 
 export type PageBlockEditor =
   typeof schema extends BlockNoteSchema<infer BSchema, infer ISchema, infer SSchema>

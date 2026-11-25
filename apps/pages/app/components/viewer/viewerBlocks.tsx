@@ -3,6 +3,7 @@ import {
   audioParse,
   createAudioBlockConfig,
   createFileBlockConfig,
+  createToggleFrame,
   createToggleListItemBlockSpec,
   fileParse,
 } from '@blocknote/core';
@@ -21,7 +22,7 @@ import {
   lockedSectionConfig,
 } from '@classmoji/page-schema';
 
-import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
+import { pageBlockSpecs } from '~/components/editor/blocks/index.tsx';
 import { readerCanShowMedia } from '~/components/editor/blocks/readOnlyGates.ts';
 import { useResolvedFileUrl } from '~/components/editor/blocks/useResolvedFileUrl.ts';
 import { useMediaDownloadHref } from '~/hooks/useMediaDownloads.ts';
@@ -29,7 +30,7 @@ import { MediaDownloadLink } from './MediaDownloadLink.tsx';
 import { LockedSectionView, type LockedSectionViewProps } from './sections/LockedSectionView.tsx';
 import { withSectionCheckbox } from './sections/sectionCheckbox.ts';
 import { withPersonalCheckbox } from './sections/personalCheckListItem.ts';
-import { withOpenToggle } from './toggles.ts';
+import { toggledStateFor } from './toggles.ts';
 
 /**
  * The schema the read-only page viewer renders with: the editor's, with the
@@ -138,22 +139,24 @@ const DownloadableAudio = createReactBlockSpec(createAudioBlockConfig, config =>
 /**
  * The shared page heading with its render wrapped: a checkable heading gets
  * the reader's tick box (`withSectionCheckbox`), and a toggle heading is drawn
- * open where the viewer opens every toggle (`toggles.ts`). Built from a FRESH spec, not
+ * open where the viewer opens every toggle (`toggledStateFor`, `toggles.ts`).
+ * Built from a FRESH spec, not
  * from `editorSchema.blockSpecs.heading`: a spec that has been through a
  * schema carries its ProseMirror node, whose node view closes over the
  * original render, and a schema reuses that node as is. Config, parse rules,
- * toggle wrapper, input rules and shortcuts are the shared heading's.
+ * toggle frame, input rules and shortcuts are the shared heading's.
  */
 function createViewerHeadingSpec() {
-  const base = createPageHeadingBlockSpec();
+  const base = createPageHeadingBlockSpec({ toggledState: toggledStateFor });
   const render = base.implementation.render;
+  if (!render) throw new Error('The page heading spec has no render.');
   return {
     ...base,
     implementation: {
       ...base.implementation,
       render(this: unknown, ...args: Parameters<typeof render>) {
         const [block, editor] = args;
-        const view = withOpenToggle(render.apply(this as never, args), editor as object);
+        const view = render.apply(this as never, args);
         if ((block.props as { checkable?: unknown }).checkable !== true) return view;
         return withSectionCheckbox(view as never, block as never, editor as object);
       },
@@ -170,6 +173,7 @@ function createViewerHeadingSpec() {
 function createViewerCheckListItemSpec() {
   const base = createPageCheckListItemBlockSpec();
   const render = base.implementation.render;
+  if (!render) throw new Error('The page check list item spec has no render.');
   return {
     ...base,
     implementation: {
@@ -185,20 +189,19 @@ function createViewerCheckListItemSpec() {
 }
 
 /**
- * BlockNote's toggle list item with its render wrapped: drawn open where the
- * viewer opens every toggle (`toggles.ts`). A FRESH spec, as the heading
- * above; everything else is BlockNote's.
+ * BlockNote's toggle list item, drawn open where the viewer opens every
+ * toggle: its frame is BlockNote's `createToggleFrame` (its own `renderFrame`)
+ * with the viewer's store (`toggledStateFor`, `toggles.ts`). A FRESH spec, as
+ * the heading above; everything else is BlockNote's.
  */
 function createViewerToggleListItemSpec() {
   const base = createToggleListItemBlockSpec();
-  const render = base.implementation.render;
   return {
     ...base,
     implementation: {
       ...base.implementation,
-      render(this: unknown, ...args: Parameters<typeof render>) {
-        return withOpenToggle(render.apply(this as never, args), args[1] as object);
-      },
+      renderFrame: (...[block, editor]: Parameters<typeof createToggleFrame>) =>
+        createToggleFrame(block, editor, toggledStateFor(editor)),
     },
   } as typeof base;
 }
@@ -217,7 +220,7 @@ type SchemaOptions = NonNullable<Parameters<typeof BlockNoteSchema.create>[0]>;
 
 export const viewerSchema = BlockNoteSchema.create({
   blockSpecs: {
-    ...editorSchema.blockSpecs,
+    ...pageBlockSpecs,
     heading: createViewerHeadingSpec(),
     checkListItem: createViewerCheckListItemSpec(),
     toggleListItem: createViewerToggleListItemSpec(),

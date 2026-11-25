@@ -185,6 +185,17 @@
   left: calc(var(--heading-pad-left, 0px) - 2px);
 }
 
+/* A toggle heading's chevron (in its frame, blocknote-overrides.css) goes
+   after the inline box, as it did when it sat inside the heading. */
+.pg-reader-sections[data-section-checks='inline']
+  .bn-toggle-frame:has(
+    > .bn-toggle-slot
+      > .bn-block-content[data-content-type='heading'][data-checkable='true']
+      > .pg-section-check:not([hidden])
+  ) {
+  --toggle-check-room: 32px;
+}
+
 /* Tooltip: BlockNote's tooltip colours, above the box. It starts at the box's
    left edge and runs right, so it never reaches past the box into the
    gutter's clipping edge. */
@@ -353,8 +364,8 @@
   row-gap: 2px;
 }
 
-/* The heading (or a toggle heading's wrapper) takes the rest of the row and
-   keeps its alignment there. */
+/* The heading takes the rest of the row and keeps its alignment there (a
+   toggle heading's chevron is outside, in its frame). */
 .bn-editor
   .bn-block-content[data-content-type='heading']:has(> .pg-done-chip-slot:not(:empty))
   > :first-child {
@@ -376,24 +387,6 @@
   )
   > :first-child {
   text-align: right;
-}
-
-.bn-editor
-  .bn-block-content[data-content-type='heading'][data-text-alignment='center']:has(
-    > .pg-done-chip-slot:not(:empty)
-  )
-  > div
-  > .bn-toggle-wrapper {
-  justify-content: center;
-}
-
-.bn-editor
-  .bn-block-content[data-content-type='heading'][data-text-alignment='right']:has(
-    > .pg-done-chip-slot:not(:empty)
-  )
-  > div
-  > .bn-toggle-wrapper {
-  justify-content: flex-end;
 }
 
 /* The drag-handle menu's "Checkable section" switch. */

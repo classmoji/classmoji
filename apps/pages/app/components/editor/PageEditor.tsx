@@ -340,6 +340,12 @@ const PageEditor = forwardRef(function PageEditor(
     // editor extension. Page comments draw decorations only (nothing without
     // threads, and never a change to the document).
     extensions: [syntaxHighlighter, pageCommentsExtension()],
+    // BlockNote 0.55's behaviour, kept: the side menu also shows for a block
+    // while the pointer is up to 250px left or right of the editor (0.56 cut
+    // that to the editor itself), and Mod+A selects the whole document at once
+    // (0.56 selects the current block first).
+    sideMenu: { hoverMargin: 250 },
+    selectAllBehavior: 'document' as const,
   };
 
   // Create the BlockNote editor with multi-column drop cursor + dictionary.

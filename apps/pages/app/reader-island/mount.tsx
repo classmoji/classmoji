@@ -21,6 +21,7 @@ import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
 import { PageReader } from '~/components/reader/PageReader.tsx';
+import { MANTINE_8_THEME, mantine8CssVariables } from '~/utils/mantineTheme.ts';
 import {
   READER_ISLAND_DATA_ID,
   READER_ISLAND_ROOT_ID,
@@ -37,6 +38,7 @@ export { hostOptionsFor, type ReaderIslandHost };
 const noToastHotKey = () => false;
 
 const MANTINE_THEME = {
+  ...MANTINE_8_THEME,
   fontFamily:
     "'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
   fontFamilyMonospace:
@@ -92,7 +94,7 @@ function ReaderIslandApp({
   }, [content, onSettled]);
 
   return (
-    <MantineProvider theme={MANTINE_THEME}>
+    <MantineProvider theme={MANTINE_THEME} cssVariablesResolver={mantine8CssVariables}>
       <ToastContainer
         position="top-center"
         autoClose={3000}

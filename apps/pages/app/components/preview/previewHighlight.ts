@@ -134,8 +134,15 @@ export const MARK_OFFSET = 'padding-left: 0.75rem; margin-left: -0.75rem;';
  * nested change marks the nested block only. Light and dark variants.
  */
 export function previewHighlightCss(changes: PreviewChanges, scope: string): string {
+  // A toggle block's content sits in its frame (BlockNote's toggle frame).
   const selector = (ids: string[]) =>
-    ids.map(id => `.${scope} .bn-block[data-id=${cssAttrValue(id)}] > .bn-block-content`);
+    ids.flatMap(id => {
+      const block = `.${scope} .bn-block[data-id=${cssAttrValue(id)}]`;
+      return [
+        `${block} > .bn-block-content`,
+        `${block} > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content`,
+      ];
+    });
   const rules: string[] = [];
   const changed = selector(changes.changed);
   const added = selector(changes.added);

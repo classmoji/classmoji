@@ -14,6 +14,7 @@ import {
 import React, { useEffect } from 'react';
 import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
+import { MANTINE_8_THEME, mantine8CssVariables } from '~/utils/mantineTheme.ts';
 
 import { withLogin } from '@classmoji/utils';
 import {
@@ -385,11 +386,13 @@ const App = () => {
       <body className="bg-white dark:bg-[#191919]" suppressHydrationWarning>
         <MantineProvider
           theme={{
+            ...MANTINE_8_THEME,
             fontFamily:
               "'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
             fontFamilyMonospace:
               "'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
           }}
+          cssVariablesResolver={mantine8CssVariables}
         >
           <ToastContainer
             position="top-center"

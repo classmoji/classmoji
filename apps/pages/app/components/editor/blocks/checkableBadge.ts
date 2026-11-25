@@ -103,6 +103,7 @@ function withCheckableBadge<T extends HeadingNodeView>(
 export function createEditorHeadingSpec() {
   const base = createPageHeadingBlockSpec();
   const render = base.implementation.render;
+  if (!render) throw new Error('The page heading spec has no render.');
   return {
     ...base,
     implementation: {
@@ -164,6 +165,7 @@ function withPersonalBadge<T extends HeadingNodeView>(view: T): T {
 export function createEditorCheckListItemSpec() {
   const base = createPageCheckListItemBlockSpec();
   const render = base.implementation.render;
+  if (!render) throw new Error('The page check list item spec has no render.');
   return {
     ...base,
     implementation: {

@@ -1,3 +1,5 @@
+import type { ToggledState } from '@classmoji/page-schema';
+
 /**
  * Toggle list items and toggle headings, opened for good in one viewer.
  *
@@ -7,14 +9,12 @@
  * exception: a screenshot must show the bodies, so there every toggle is drawn
  * OPEN, and nothing is written to the browser's storage.
  *
- * How: BlockNote's toggle wrapper (`createToggleWrapper`) takes a toggled-state
- * store, but its blocks call it with the default one and offer no option to
- * pass another — using it would mean copying BlockNote's toggle list item (and
- * page-schema's heading) render wholesale. Instead the viewer's heading and
- * toggle list item specs wrap BlockNote's own render (viewerBlocks.tsx) and,
- * for an editor marked here, set the wrapper's `data-show-children` to
- * `"true"` on the node view's fresh DOM, before ProseMirror attaches it (so
- * no mutation is observed, and a re-created node view is opened again).
+ * How: BlockNote draws a toggle's chevron in the block's frame
+ * (`createToggleFrame`, the `renderFrame` of its toggle list item and of
+ * page-schema's heading), which reads and writes the open state through a
+ * store. The viewer's heading and toggle list item (viewerBlocks.tsx) pass
+ * `toggledStateFor(editor)`: for an editor marked here, a store that is
+ * always open and writes nothing; otherwise `undefined`, BlockNote's own.
  * Printing opens every toggle on every surface by CSS instead
  * (`styles/page-reader.css`).
  */
@@ -30,16 +30,13 @@ export function togglesOpenIn(editor: object): boolean {
   return openEditors.has(editor);
 }
 
-type NodeViewLike = { dom: Node };
+/** Every toggle open; nothing stored. */
+const ALWAYS_OPEN: ToggledState = {
+  get: () => true,
+  set: () => {},
+};
 
-/** The node view with its own toggle (if it has one) open, when its editor is marked. */
-export function withOpenToggle<T extends NodeViewLike>(view: T, editor: object): T {
-  if (!openEditors.has(editor)) return view;
-  const dom = view.dom as Element;
-  // The block's OWN wrapper: its children sit in a sibling block group, not
-  // inside the block content, so the first match is this block's.
-  const wrapper =
-    typeof dom.querySelector === 'function' ? dom.querySelector('.bn-toggle-wrapper') : null;
-  wrapper?.setAttribute('data-show-children', 'true');
-  return view;
+/** The toggle store for `editor`'s frames: always open when marked, else BlockNote's. */
+export function toggledStateFor(editor: object): ToggledState | undefined {
+  return openEditors.has(editor) ? ALWAYS_OPEN : undefined;
 }

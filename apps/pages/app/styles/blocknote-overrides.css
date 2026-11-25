@@ -228,20 +228,36 @@
   margin-bottom: 6px;
 }
 
+/* A toggle heading (BlockNote 0.56+) draws its chevron in a frame around the
+   heading's content and children: `.bn-block > .bn-toggle-frame >
+   .bn-toggle-slot > (.bn-block-content, .bn-block-group)`. Each rule below
+   names that shape too. */
 .bn-block-outer:not(:first-child)
-  > .bn-block:has(> .bn-block-content[data-content-type="heading"]:not([data-level])),
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"]:not([data-level]),
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]:not([data-level])
+  ),
 .bn-block-outer:not(:first-child)
-  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="1"]) {
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"][data-level="1"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="1"]
+  ) {
   padding-top: 2em;
 }
 
 .bn-block-outer:not(:first-child)
-  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="2"]) {
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"][data-level="2"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="2"]
+  ) {
   padding-top: 1.75em;
 }
 
 .bn-block-outer:not(:first-child)
-  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="3"]) {
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"][data-level="3"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="3"]
+  ) {
   padding-top: 1.25em;
 }
 
@@ -251,17 +267,139 @@
         [data-level="4"],
         [data-level="5"],
         [data-level="6"]
+      ),
+    > .bn-toggle-frame
+      > .bn-toggle-slot
+      > .bn-block-content[data-content-type="heading"]:is(
+        [data-level="4"],
+        [data-level="5"],
+        [data-level="6"]
       )
   ) {
   padding-top: 1em;
 }
 
-.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="heading"]):not(
-    :has(> .bn-block > .bn-block-group)
-  )
+.bn-block-outer:has(
+    > .bn-block > .bn-block-content[data-content-type="heading"],
+    > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+  ):not(:has(> .bn-block > .bn-block-group, > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-group))
   + .bn-block-outer
-  > .bn-block:has(> .bn-block-content[data-content-type="heading"]) {
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+  ) {
   padding-top: 0;
+}
+
+/* A toggle heading's chevron, laid out as it was inside the heading (up to
+   BlockNote 0.55): over the start of the heading's own box, on its first
+   line, inside a colored heading's bar, after the reader's inline tick box
+   (page-sections.css, `--toggle-check-room`), with the text 24px further in.
+   So the heading's box starts where the chevron does, as before, and the
+   tick box and the author's badge keep their place in its gutter. The frame
+   is one column: chevron and heading share its first row, the children and
+   BlockNote's "Add block" button follow. BlockNote's own gap above the frame
+   (`padding-top: 18px`) is the gap above, already on `.bn-block`.
+   `--toggle-*` repeat on the frame what the heading's box says
+   (`--level`, `--heading-pad-*`), for the chevron beside it.
+   (0,6,0) and more against BlockNote's (0,5,0). */
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="heading"]) {
+  padding-top: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  --toggle-level: 30px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(
+    > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="2"]
+  ) {
+  --toggle-level: 24px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(
+    > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="3"]
+  ) {
+  --toggle-level: 20px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(
+    > .bn-toggle-slot
+      > .bn-block-content[data-content-type="heading"]:is(
+        [data-level="4"],
+        [data-level="5"],
+        [data-level="6"]
+      )
+  ) {
+  --toggle-level: 16px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(
+    > .bn-toggle-slot
+      > .bn-block-content[data-content-type="heading"]:is(
+        [data-background-color="blue"],
+        [data-background-color="red"],
+        [data-background-color="yellow"],
+        [data-background-color="orange"],
+        [data-background-color="green"],
+        [data-background-color="purple"],
+        [data-background-color="pink"],
+        [data-background-color="brown"],
+        [data-background-color="gray"]
+      )
+  ) {
+  --toggle-pad-top: 3px;
+  --toggle-pad-left: 4px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="heading"])
+  > .bn-toggle-button {
+  grid-area: 1 / 1;
+  justify-self: start;
+  z-index: 1;
+  margin-left: calc(var(--toggle-pad-left, 0px) + var(--toggle-check-room, 0px));
+  margin-top: calc(var(--toggle-pad-top, 0px) + (var(--toggle-level) * 1.3 - 24px) / 2);
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="heading"])
+  > .bn-toggle-slot
+  > .bn-block-content[data-content-type="heading"] {
+  grid-area: 1 / 1;
+  /* After the colored bar's own padding and the inline tick box's room
+     (both `!important` where they are set). */
+  padding-left: calc(
+    var(--heading-pad-left, 0px) + var(--toggle-check-room, 0px) + 24px
+  ) !important;
+}
+
+/* An open, empty toggle's "Add block" button sat inside the block's box,
+   right under its line (above the box's 3px bottom padding); a toggle
+   heading's also above the heading's 6px margin, in its line height. */
+.bn-block-outer > .bn-block > .bn-toggle-frame > .bn-toggle-add-block-button {
+  margin-top: -3px;
+  margin-bottom: 3px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="heading"])
+  > .bn-toggle-add-block-button {
+  margin-top: -9px;
+  margin-bottom: 9px;
+  line-height: 1.3;
 }
 
 /* Room around code and terminal blocks. BlockNote gives them none, so the
@@ -294,6 +432,14 @@
     > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
     > .react-renderer > .bn-block-content[data-content-type="terminal"]
   ),
+.bn-toggle-frame:not(:has(> .bn-toggle-slot > .bn-block-content[data-content-type="heading"]))
+  > .bn-toggle-slot
+  > .bn-block-group
+  > .bn-block-outer:first-child
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .react-renderer > .bn-block-content[data-content-type="terminal"]
+  ),
 .bn-block-outer:has(
     > .bn-block
       > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
@@ -308,16 +454,37 @@
       > .bn-block-outer:last-child
       > .bn-block
       > .react-renderer
+      > .bn-block-content[data-content-type="terminal"],
+    > .bn-block
+      > .bn-toggle-frame
+      > .bn-toggle-slot
+      > .bn-block-group
+      > .bn-block-outer:last-child
+      > .bn-block
+      > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .bn-block
+      > .bn-toggle-frame
+      > .bn-toggle-slot
+      > .bn-block-group
+      > .bn-block-outer:last-child
+      > .bn-block
+      > .react-renderer
       > .bn-block-content[data-content-type="terminal"]
   )
   + .bn-block-outer
-  > .bn-block:not(:has(> .bn-block-content[data-content-type="heading"])) {
+  > .bn-block:not(
+    :has(
+      > .bn-block-content[data-content-type="heading"],
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+    )
+  ) {
   padding-top: 1em;
 }
 
-.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="heading"]):not(
-    :has(> .bn-block > .bn-block-group)
-  )
+.bn-block-outer:has(
+    > .bn-block > .bn-block-content[data-content-type="heading"],
+    > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+  ):not(:has(> .bn-block > .bn-block-group, > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-group))
   + .bn-block-outer
   > .bn-block:has(
     > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
@@ -353,7 +520,10 @@
    whole `.bn-block` (`.bn-block:has(> [data-background-color])`), which would
    color the gap above the bar and the 6px under it, and in dark mode leaked its
    light colors around the bar. */
-.bn-block:has(> .bn-block-content[data-content-type="heading"][data-background-color]) {
+.bn-block:has(
+    > .bn-block-content[data-content-type="heading"][data-background-color],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-background-color]
+  ) {
   background-color: transparent !important;
 }
 
