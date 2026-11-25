@@ -1094,3 +1094,33 @@ describe('calendar_event_links_set', () => {
     ).toBe(true);
   });
 });
+
+describe('recurrence_rule is the shape the calendar reads (#917)', () => {
+  const rule = calendarEventCreateTool.inputSchema.recurrence_rule as z.ZodTypeAny;
+
+  it('takes weekdays and an optional end, as a date or an instant', () => {
+    for (const value of [
+      { days: ['monday', 'wednesday'] },
+      { days: ['friday'], until: '2026-12-11' },
+      { days: ['tuesday'], until: '2026-12-11T23:59:00-05:00' },
+      { days: ['thursday'], until: null },
+    ]) {
+      expect(rule.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+  });
+
+  it('refuses what the calendar would ignore or misread', () => {
+    for (const value of [
+      {},
+      { until: '2026-12-11' },
+      { days: [] },
+      { days: ['Monday'] },
+      { days: ['mon'] },
+      { days: ['monday'], until: '2026-02-30' },
+      { days: ['monday'], until: 'next friday' },
+      { days: ['monday'], freq: 'WEEKLY' },
+    ]) {
+      expect(rule.safeParse(value).success, JSON.stringify(value)).toBe(false);
+    }
+  });
+});
