@@ -372,10 +372,25 @@
 .bn-block-content:is(
     [data-content-type="bulletListItem"],
     [data-content-type="numberedListItem"],
-    [data-content-type="checkListItem"]
+    [data-content-type="checkListItem"],
+    [data-content-type="toggleListItem"]
   )
   ~ .bn-block-group {
   margin-left: 32px;
+}
+
+/* A check list item and a toggle list item start their text 32px in, as a
+   bullet and a number do: their 24px marker (the tick box, the chevron) gets
+   the 8px the other two have after theirs. */
+.bn-block-content[data-content-type="checkListItem"] > div:has(> input) {
+  margin-right: 8px;
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="toggleListItem"])
+  > .bn-toggle-button {
+  margin-right: 8px;
 }
 
 /* Room above headings — every surface, like the scale above (issue #717).
