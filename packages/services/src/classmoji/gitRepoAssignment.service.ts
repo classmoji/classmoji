@@ -167,14 +167,31 @@ export const findFirst = async (query: Prisma.GitRepoAssignmentWhereInput) => {
  * @param {string} classroomId - UUID of the Classroom
  * @returns {Promise<Object[]>}
  */
+/**
+ * A classroom's repos whose submissions count: every team repo, and an
+ * individual repo only while its student is still on the roster (holds a
+ * STUDENT membership here). Removing a student deletes that membership but
+ * leaves their repos and submission rows in place, so without this a removed
+ * student kept showing in submission lists and counts and was handed a grader
+ * by bulk assignment (#927). Their rows are kept, not deleted: re-adding the
+ * student brings them back.
+ */
+export const onRosterRepoWhere = (classroomId: string): Prisma.GitRepoWhereInput => ({
+  classroom_id: classroomId,
+  OR: [
+    { student_id: null },
+    {
+      student: {
+        classroom_memberships: { some: { classroom_id: classroomId, role: 'STUDENT' } },
+      },
+    },
+  ],
+});
+
 export const findByClassroomId = async (classroomId: string) => {
   return withLogins(
     await getPrisma().gitRepoAssignment.findMany({
-      where: {
-        git_repo: {
-          classroom_id: classroomId,
-        },
-      },
+      where: { git_repo: onRosterRepoWhere(classroomId) },
       include: {
         assignment: true,
         // Commit count for the repository column, as of the last refresh.
@@ -220,14 +237,20 @@ export const findByClassroomId = async (classroomId: string) => {
 export const findByAssignmentId = async (
   assignmentId: string,
   classroomSlug: string | null = null,
-  classroomId: string | null = null
+  classroomId: string | null = null,
+  /** Leave out removed students' repos (onRosterRepoWhere); needs classroomId. */
+  { onRosterOnly = false }: { onRosterOnly?: boolean } = {}
 ) => {
   const where: Prisma.GitRepoAssignmentWhereInput = { assignment_id: assignmentId };
 
   if (classroomSlug || classroomId) {
     where.git_repo = {
       ...(classroomSlug ? { classroom: { slug: classroomSlug } } : {}),
-      ...(classroomId ? { classroom_id: classroomId } : {}),
+      ...(classroomId
+        ? onRosterOnly
+          ? onRosterRepoWhere(classroomId)
+          : { classroom_id: classroomId }
+        : {}),
     };
   }
 
