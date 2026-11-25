@@ -15,7 +15,7 @@
  * compared.
  */
 import { test, expect } from '@playwright/test';
-import { BlockNoteEditor } from '@blocknote/core';
+import { BlockNoteEditor, BlockNoteSchema } from '@blocknote/core';
 import {
   SCHEMA_VERSION,
   createPageSchema,
@@ -112,6 +112,21 @@ test.describe('the server page schema matches every app schema', () => {
       expect(markNames(schema)).toEqual(serverMarks);
     });
   }
+
+  // BlockNote's own style rules, unchanged: inline code excludes every other
+  // formatting mark and the link. Content is judged by these rules
+  // (`validatePageBlocks`); a schema that relaxed them would let the editor
+  // write runs no other schema can load.
+  test('every schema keeps BlockNote’s stock mark rules', () => {
+    const stock = markNames(BlockNoteSchema.create() as unknown as AnySchema);
+    expect(stock).toContain(
+      'code excludes backgroundColor,bold,code,italic,link,strike,textColor,underline'
+    );
+    const all: Array<[string, AnySchema]> = [['server schema', server], ...appSchemas];
+    for (const [name, schema] of all) {
+      expect(markNames(schema), name).toEqual(stock);
+    }
+  });
 
   test('every custom block config is the one the app renders', () => {
     for (const [type, config] of Object.entries(customBlockConfigs)) {

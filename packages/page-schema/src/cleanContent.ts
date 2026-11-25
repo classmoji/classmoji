@@ -2,7 +2,7 @@ import { defaultStyleSpecs } from '@blocknote/core';
 
 /**
  * Stored page content made to fit BlockNote's STOCK style rules, the rules
- * every page will be judged by (`validatePageBlocks` in
+ * every page is judged by (`validatePageBlocks` in
  * `@classmoji/page-schema/server`). Pure JSON in, JSON out: no editor, no DOM,
  * so the pages app runs it in the browser before a document reaches BlockNote.
  *
@@ -66,26 +66,15 @@ type BlockLike = {
   children?: unknown;
 };
 
-/** One call's state: what it found, and how. */
+/** One call's state: what it found. */
 interface Pass {
   changes: PageContentChange[];
-  keepCodeMarks: boolean;
 }
 
 /** The pass, at one block. */
 interface Ctx extends Pass {
   blockId: string | null;
   blockType: string | null;
-}
-
-export interface CleanPageBlocksOptions {
-  /**
-   * Leave inline code beside other marks and inside links: what the app
-   * schemas (`pageStyleSpecs`) still draw. For the pages app's reader and
-   * editor until those schemas take the stock styles; everything that WRITES
-   * content cleans with the stock rules (the default).
-   */
-  keepCodeMarks?: boolean;
 }
 
 /** A run's first characters, for reports. */
@@ -149,12 +138,10 @@ function cleanRun(run: Run, inLink: boolean, ctx: Ctx): { run: Run; href?: strin
   }
 
   const current = () => next ?? styles;
-  if (ctx.keepCodeMarks) {
-    // Nothing more: code beside other marks is drawn as it is.
-  } else if ((inLink || href !== undefined) && current().code) {
+  if ((inLink || href !== undefined) && current().code) {
     drop('code', 'dropped inline code inside a link (the link stays)');
   }
-  if (!ctx.keepCodeMarks && current().code) {
+  if (current().code) {
     for (const key of CODE_EXCLUDED_STYLES) {
       if (current()[key]) drop(key, `dropped ${key} from inline code (the code stays)`);
     }
@@ -284,14 +271,11 @@ function cleanList(blocks: unknown[], pass: Pass): unknown[] {
  * BlockNote's stock style rules, at any depth (children, columns, table
  * cells), and what was changed. See the module comment for the rules.
  */
-export function cleanPageBlocks<T>(
-  blocks: T,
-  { keepCodeMarks = false }: CleanPageBlocksOptions = {}
-): {
+export function cleanPageBlocks<T>(blocks: T): {
   blocks: T;
   changes: PageContentChange[];
 } {
   const changes: PageContentChange[] = [];
   if (!Array.isArray(blocks)) return { blocks, changes };
-  return { blocks: cleanList(blocks, { changes, keepCodeMarks }) as T, changes };
+  return { blocks: cleanList(blocks, { changes }) as T, changes };
 }

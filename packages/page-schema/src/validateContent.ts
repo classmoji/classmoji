@@ -1,16 +1,17 @@
-import { BlockNoteEditor, blockToNode } from '@blocknote/core';
+import { blockToNode } from '@blocknote/core';
 
 import { CODE_EXCLUDED_STYLES, runSnippet } from './cleanContent.ts';
 import { normalizeCodeBlockContent } from './codeContent.ts';
-import { createStrictPageSchema } from './schema.ts';
+import { getPageEditor } from './editor.ts';
 
 /** ProseMirror's node and mark, as BlockNote builds them. */
 type PMNode = ReturnType<typeof blockToNode>;
 type Mark = PMNode['marks'][number];
 
 /**
- * Page content judged by BlockNote's STOCK rules (`createStrictPageSchema`),
- * the way BlockNote 0.57 judges `initialContent`: each block built with
+ * Page content judged by the page schema (`createPageSchema`, BlockNote's
+ * stock style rules) the way BlockNote 0.57 judges `initialContent`: each
+ * block built with
  * `blockToNode`, the document assembled and `check()`ed. A document that
  * passes here opens in the editor and the reader; one that does not would
  * throw there and show nothing.
@@ -34,15 +35,9 @@ export interface PageContentProblem {
   text?: string;
 }
 
-let strictEditor: ReturnType<typeof createStrictEditor> | undefined;
-
-function createStrictEditor() {
-  return BlockNoteEditor.create({ schema: createStrictPageSchema() });
-}
-
+/** The shared unmounted page editor (`getPageEditor`): the page schema. */
 function editor() {
-  strictEditor ??= createStrictEditor();
-  return strictEditor;
+  return getPageEditor();
 }
 
 /** The ProseMirror schema `validatePageBlocks` builds against. */
