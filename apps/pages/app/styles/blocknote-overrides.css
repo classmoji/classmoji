@@ -388,8 +388,8 @@
 /* A check list item and a toggle list item start their text 32px in, as a
    bullet and a number do. The toggle's 24px chevron gets an 8px gap after it.
 
-   The check box is the numbered list's circle, as a box: the same 20px, the
-   same gray (--list-marker-bg), the same place on the first line, with a gray
+   The check box is the numbered list's circle, as a rounded box: 18px, which reads as
+   the circle's 20px, in its gray (--list-marker-bg), centred on the first line, with a gray
    tick when it is ticked. BlockNote's box is the browser's 12px one. A student
    check list item keeps the reader's check green when ticked (page-sections.css
    sets its colour). */
