@@ -380,9 +380,11 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Git organization not configured for this classroom' };
       }
 
-      // A copy is a new slide: same plan limit as creating one, checked before
-      // the folder copy so a refusal leaves nothing in the content repo.
-      await ClassmojiService.planLimits.assertCanCreateContent(slide.classroom_id, 'slides');
+      // A copy is a new deck (the row below is always one): same plan limit as
+      // creating one, checked before the folder copy so a refusal leaves nothing
+      // in the content repo. One value for the kind checked and the kind written.
+      const copyKind = 'DECK' as const;
+      await ClassmojiService.planLimits.assertCanCreateSlide(slide.classroom_id, copyKind);
 
       // Content repo is STORED and user-editable — never re-derived from the namespace.
       const repo = slide.classroom.content_repo;
@@ -530,6 +532,7 @@ export const action = async ({ request }: { request: Request }) => {
           slug: newSlug,
           content_path: newContentPath,
           classroom_id: slide.classroom_id,
+          kind: copyKind,
           created_by: authData.userId || slide.created_by,
           is_draft: slide.is_draft,
           is_public: slide.is_public,

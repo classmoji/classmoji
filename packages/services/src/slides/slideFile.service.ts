@@ -163,9 +163,10 @@ export async function createFileSlide({
   const validation = validateSlideFile({ filename, size: file.length });
   if (!validation.valid) throw new SlideSourceError(validation.error);
 
-  const { classroom, orgLogin, repo, slug, contentPath } = await prepareSlideCreate({
+  const { classroom, orgLogin, repo, slug, contentPath, kind } = await prepareSlideCreate({
     classroomId,
     title,
+    kind: 'FILE',
   });
 
   const storageName = slideFileStorageName(filename, slug);
@@ -202,7 +203,7 @@ export async function createFileSlide({
         content_path: contentPath,
         classroom_id: classroomId,
         created_by: createdBy,
-        kind: 'FILE',
+        kind,
         source_path: sourcePath,
         source_filename: displayFilename(filename, storageName),
         source_mime: validation.mime,
@@ -255,7 +256,11 @@ export async function createLinkSlide({
   const link = validateSlideLinkUrl(url);
   if (!link.ok) throw new SlideSourceError(link.error);
 
-  const { slug, contentPath } = await prepareSlideCreate({ classroomId, title });
+  const { slug, contentPath, kind } = await prepareSlideCreate({
+    classroomId,
+    title,
+    kind: 'LINK',
+  });
 
   // Same race as the other two creates, with nothing to clean up: a link that
   // lost the slug wrote no file. See `createSlide` for the window itself.
@@ -268,7 +273,7 @@ export async function createLinkSlide({
         content_path: contentPath,
         classroom_id: classroomId,
         created_by: createdBy,
-        kind: 'LINK',
+        kind,
         source_url: link.url,
       },
     });
@@ -459,7 +464,11 @@ export async function createFileSlideFromMedia({
   // The upload first: a document that cannot be used is the thing to hear
   // about, whatever the title.
   const source = await mediaSlideSource({ id: classroomId }, mediaId);
-  const { slug, contentPath } = await prepareSlideCreate({ classroomId, title });
+  const { slug, contentPath, kind } = await prepareSlideCreate({
+    classroomId,
+    title,
+    kind: 'FILE',
+  });
 
   let slide;
   try {
@@ -470,7 +479,7 @@ export async function createFileSlideFromMedia({
         content_path: contentPath,
         classroom_id: classroomId,
         created_by: createdBy,
-        kind: 'FILE',
+        kind,
         media_id: source.mediaId,
         source_filename: source.filename,
         source_mime: source.mime,

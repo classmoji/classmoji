@@ -37,7 +37,7 @@ import { enqueueDeckThumbnail } from './deckThumbnail.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
-import { contentAllowance, contentLimitMessage, type LimitedContent } from './planLimits.ts';
+import { contentAllowance, skippedOverLimitText, slidesWithinAllowance } from './planLimits.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
 // The slide FILE policy, from the module that has no cheerio in it — importing
 // the `./slides` barrel here would pull the deck engine into the import task.
@@ -46,7 +46,7 @@ import {
   SLIDE_FILE_TOO_LARGE_MESSAGE,
   isCommitTooLargeRefusal,
 } from '../slides/slideSource.ts';
-import type { Prisma } from '@classmoji/database/client';
+import type { Prisma, SlideKind } from '@classmoji/database/client';
 
 /** Cap on retained warnings and on per-warning detail length (bounded output). */
 const MAX_WARNINGS = 50;
@@ -860,20 +860,31 @@ interface RepoContext {
 type WarnFn = (scope: string, detail: string) => void;
 
 /**
- * The source rows a free target has room for under its plan limit, oldest
+ * The source pages a free target has room for under its plan limit, oldest
  * first, with one warning for the rest. Applied before anything is staged, so
- * a skipped page or slide writes nothing to the target repo.
+ * a skipped page writes nothing to the target repo.
  */
-async function withinPlanLimit<T>(
+async function pagesWithinPlanLimit<T>(rows: T[], classroomId: string, warn: WarnFn): Promise<T[]> {
+  const { limit, remaining } = await contentAllowance(classroomId, 'pages');
+  if (limit === null || remaining === null || rows.length <= remaining) return rows;
+  warn('pages', skippedOverLimitText('pages', rows.length - remaining, limit));
+  return rows.slice(0, remaining);
+}
+
+/**
+ * The same for slides, where only decks count: every file and link comes
+ * across, and the decks up to the target's room, oldest first.
+ */
+async function slidesWithinPlanLimit<T extends { kind: SlideKind }>(
   rows: T[],
   classroomId: string,
-  kind: LimitedContent,
   warn: WarnFn
 ): Promise<T[]> {
-  const { limit, remaining } = await contentAllowance(classroomId, kind);
-  if (limit === null || remaining === null || rows.length <= remaining) return rows;
-  warn(kind, `skipped ${rows.length - remaining} ${kind}. ${contentLimitMessage(kind, limit)}`);
-  return rows.slice(0, remaining);
+  const { limit, remaining } = await contentAllowance(classroomId, 'slides');
+  if (limit === null) return rows;
+  const { kept, skipped } = slidesWithinAllowance(rows, remaining);
+  if (skipped > 0) warn('slides', skippedOverLimitText('slides', skipped, limit));
+  return kept;
 }
 
 function errText(error: unknown): string {
@@ -1336,13 +1347,12 @@ async function importPages({
   /** The run's media copy — see `openImportMediaCopy`. Absent: refs verbatim. */
   media?: ImportMediaCopy;
 }): Promise<number> {
-  const sourcePages = await withinPlanLimit(
+  const sourcePages = await pagesWithinPlanLimit(
     await getPrisma().page.findMany({
       where: { classroom_id: source.classroomId },
       orderBy: { created_at: 'asc' },
     }),
     target.classroomId,
-    'pages',
     warn
   );
   // The real total lands before the empty-set return, so the bar sizes itself
@@ -1726,13 +1736,12 @@ async function importSlides({
   /** The run's media copy — shared with the pages pass. Absent: refs verbatim. */
   media?: ImportMediaCopy;
 }): Promise<number> {
-  const sourceSlides = await withinPlanLimit(
+  const sourceSlides = await slidesWithinPlanLimit(
     await getPrisma().slide.findMany({
       where: { classroom_id: source.classroomId },
       orderBy: { created_at: 'asc' },
     }),
     target.classroomId,
-    'slides',
     warn
   );
   // Same as pages: the real total before the empty-set return.

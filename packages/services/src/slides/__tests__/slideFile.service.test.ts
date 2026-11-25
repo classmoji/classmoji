@@ -25,11 +25,13 @@ const slideFindUnique = vi.fn();
 const slideCreate = vi.fn();
 const slideUpdate = vi.fn();
 
-// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
-vi.mock('../../classmoji/planLimits.ts', () => ({
-  assertCanCreateContent: vi.fn(async () => {}),
-  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
-  contentLimitMessage: () => '',
+// The REAL plan limits run here (pinned in planLimits.test.ts), so these tests
+// cannot drift from the rule; only what it reads is stubbed. Every classroom is
+// Pro (no limit) unless a test puts it on Free at its deck limit.
+const getProStateForClassroomId = vi.fn();
+const slideCount = vi.fn();
+vi.mock('../../classmoji/subscription.service.ts', () => ({
+  getProStateForClassroomId: (...args: unknown[]) => getProStateForClassroomId(...args),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -40,6 +42,7 @@ vi.mock('@classmoji/database', () => ({
       findUnique: (...args: unknown[]) => slideFindUnique(...args),
       create: (...args: unknown[]) => slideCreate(...args),
       update: (...args: unknown[]) => slideUpdate(...args),
+      count: (...args: unknown[]) => slideCount(...args),
     },
   }),
 }));
@@ -205,6 +208,8 @@ const githubTooLarge = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getProStateForClassroomId.mockResolvedValue({ isPro: true, tier: 'PRO', isActive: true });
+  slideCount.mockResolvedValue(0);
   events.length = 0;
   process.env.CONTENT_DELIVERY_ORIGIN = 'https://cdn.classmoji.test';
   process.env.CONTENT_SIGNING_SECRET = 'test-master-secret';
@@ -233,7 +238,38 @@ afterEach(() => {
 
 // ─── Create ──────────────────────────────────────────────────────────────────
 
+/**
+ * A free class with every deck slot taken (10 decks, the Free limit). The rule
+ * that a file or a link is not counted is the real one: `assertCanCreateSlide`
+ * returns before it reads anything for those kinds.
+ */
+function atDeckLimit() {
+  getProStateForClassroomId.mockResolvedValue({ isPro: false, tier: 'FREE', isActive: true });
+  slideCount.mockResolvedValue(10);
+}
+
+/** What the plan check read: nothing at all for a file or a link. */
+function expectNotCounted() {
+  expect(getProStateForClassroomId).not.toHaveBeenCalled();
+  expect(slideCount).not.toHaveBeenCalled();
+}
+
 describe('createFileSlide', () => {
+  it('is allowed in a free class at its deck limit: a file is not counted', async () => {
+    atDeckLimit();
+
+    const { slide } = await createFileSlide({
+      classroomId: CLASSROOM_ID,
+      title: 'Lecture 1',
+      createdBy: 'user-1',
+      filename: 'Lecture 1.pdf',
+      file: PDF,
+    });
+
+    expect(slide).toMatchObject({ kind: 'FILE' });
+    expectNotCounted();
+  });
+
   it('commits one file, records it, and stores both names', async () => {
     const { slide, path } = await createFileSlide({
       classroomId: CLASSROOM_ID,
@@ -467,6 +503,20 @@ describe('createFileSlide', () => {
 });
 
 describe('createLinkSlide', () => {
+  it('is allowed in a free class at its deck limit: a link is not counted', async () => {
+    atDeckLimit();
+
+    const { slide } = await createLinkSlide({
+      classroomId: CLASSROOM_ID,
+      title: 'Reading list',
+      createdBy: 'user-1',
+      url: 'https://example.com/reading',
+    });
+
+    expect(slide).toMatchObject({ kind: 'LINK' });
+    expectNotCounted();
+  });
+
   it('stores a normalized URL and writes nothing to the repo', async () => {
     const { slide, host } = await createLinkSlide({
       classroomId: CLASSROOM_ID,
@@ -798,6 +848,20 @@ describe('media-backed file slides', () => {
   beforeEach(() => {
     mediaRows.clear();
     mediaRows.set(MEDIA_ID, mediaRow());
+  });
+
+  it('is allowed in a free class at its deck limit: a file is not counted', async () => {
+    atDeckLimit();
+
+    const { slide } = await createFileSlideFromMedia({
+      classroomId: CLASSROOM_ID,
+      title: 'Week 3',
+      createdBy: 'user-1',
+      mediaId: MEDIA_ID,
+    });
+
+    expect(slide).toMatchObject({ kind: 'FILE', media_id: MEDIA_ID });
+    expectNotCounted();
   });
 
   it('creates a slide over a finished upload, with no commit and no repo folder', async () => {

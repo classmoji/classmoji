@@ -212,6 +212,18 @@ describe('plan features', () => {
     expect(labels).not.toContain('Repositories');
   });
 
+  it('limits slide decks per class on Free, the one kind of slide the limit counts', () => {
+    const freeLines = billing
+      .planFeatures()
+      .filter(row => row.free !== false)
+      .map(row => billing.featureText(row.label, row.free));
+
+    expect(freeLines).toContain('Slide decks per class: up to 10');
+    expect(billing.proFeatures().map(row => billing.featureText(row.label, row.pro))).toContain(
+      'Unlimited slide decks per class'
+    );
+  });
+
   it('reads as plain lines', () => {
     expect(billing.featureText('Classrooms', 'Unlimited')).toBe('Unlimited classrooms');
     expect(billing.featureText('Pages per class', 'Up to 10')).toBe('Pages per class: up to 10');
