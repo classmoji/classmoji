@@ -58,6 +58,7 @@ import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { renderAfterPageApply } from './pageRender.ts';
+import { assertWritablePageContent } from './pageContentRules.ts';
 import {
   loadPageWithRepoInClassroom,
   mapSemanticMergeError,
@@ -658,6 +659,11 @@ async function applyLive(
     }
     throw error;
   }
+  // Content the page editor cannot open is refused before anything is sent.
+  await assertWritablePageContent(
+    priorBlocks,
+    ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[])
+  );
 
   // Only what the ops depend on must still be as the agent was shown it:
   // the server judges that inside the live transaction.
@@ -744,7 +750,9 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
     'restructuring, rewrites. When a preview already exists, preview applies STACK onto it ' +
     "and expected_sha must come from a read at: 'preview' (main's sha will conflict). " +
-    'render: true also returns images of the page around the changed blocks (see page_render).',
+    'render: true also returns images of the page around the changed blocks (see page_render). ' +
+    'Inline code takes no other formatting and cannot sit inside a link; content the page ' +
+    'editor cannot open is refused (INVALID_CONTENT, nothing written).',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -906,6 +914,10 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
   // Client-supplied blocks (insert/replace_all payloads) may lack ids —
   // fill them deterministically so this apply PERSISTS stable ids.
   newBlocks = ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[]);
+
+  // Content the page editor cannot open is refused before anything is
+  // written (a preview branch included).
+  await assertWritablePageContent(priorBlocks, newBlocks);
 
   let createdPreviewBranch = false;
   if (committedTo === 'preview') {

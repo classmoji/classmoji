@@ -43,8 +43,11 @@ vi.mock('@classmoji/collab/env', async () => {
 });
 
 // The page schema's round trip, stood in for: fills BlockNote's default
-// props the way the live document does.
-vi.mock('@classmoji/page-schema/server', () => {
+// props the way the live document does. The content check is the real one.
+vi.mock('@classmoji/page-schema/server', async () => {
+  const actual = await vi.importActual<typeof import('@classmoji/page-schema/server')>(
+    '@classmoji/page-schema/server'
+  );
   const fill = (blocks: unknown[]): unknown[] =>
     blocks.map(block => {
       const b = block as { props?: Record<string, unknown>; children?: unknown[] };
@@ -57,6 +60,7 @@ vi.mock('@classmoji/page-schema/server', () => {
   return {
     blocksToYDoc: (blocks: unknown[]) => blocks,
     yDocToBlocks: (doc: unknown[]) => fill(doc),
+    validatePageBlocks: actual.validatePageBlocks,
   };
 });
 
@@ -540,6 +544,37 @@ describe('live apply', () => {
       )
     ).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(calls.some(call => call.method === 'POST')).toBe(false);
+  });
+
+  it('refuses content the page editor cannot open before sending anything', async () => {
+    await expect(
+      pageContentApplyTool.handler(
+        {
+          classroom: 'org/x',
+          page_id: PAGE_ID,
+          expected_sha: 'live:1.7',
+          ops: [
+            {
+              op: 'update',
+              id: 'p1',
+              block: {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'loader', styles: { code: true, italic: true } }],
+              },
+            },
+          ],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      code: 'INVALID_CONTENT',
+      message: expect.stringContaining(
+        `block 'p1' (paragraph, "loader"): inline code can't also be italic`
+      ),
+    });
+    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('says the live service is down rather than writing git', async () => {
