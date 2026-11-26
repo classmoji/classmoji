@@ -20,10 +20,9 @@ export const SLIDES_ANTD_THEME: ThemeConfig = {
   } as ThemeConfig['token'],
   components: {
     // Space.Addon (antd 6's input addon, the "px" cells of the properties
-    // panel): antd 5's addon background (colorFillAlter), 11px padding and
-    // 14px text, small size included.
+    // panel): antd 5's 11px padding and 14px text, small size included. Its
+    // background is set back in ui-components/styles/antd.css.
     Addon: {
-      colorBgContainerDisabled: 'rgba(0, 0, 0, 0.02)',
       paddingSM: 11,
       paddingXS: 11,
       fontSizeSM: 14,

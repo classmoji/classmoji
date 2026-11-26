@@ -151,9 +151,9 @@ const darkTheme = {
     InputNumber: {
       lineWidthFocus: 0,
     },
-    // Space.Addon (antd 6's input addon): the addonBg above and antd 5's padding.
+    // Space.Addon (antd 6's input addon): antd 5's padding. Its background, the
+    // addonBg above, is --cm-antd-addon-bg in styles/global.css.
     Addon: {
-      colorBgContainerDisabled: '#171717',
       paddingSM: 11,
     },
     Modal: {

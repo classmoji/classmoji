@@ -121,10 +121,9 @@ const theme = {
     DatePicker: {
       lineWidthFocus: 0,
     },
-    // Space.Addon, antd 6's replacement for input addons: antd 5's addon
-    // background (Input addonBg, colorFillAlter) and 11px padding.
+    // Space.Addon, antd 6's replacement for input addons: antd 5's 11px
+    // padding. Its background is set back in ui-components/styles/antd.css.
     Addon: {
-      colorBgContainerDisabled: 'rgba(20, 21, 26, 0.02)',
       paddingSM: 11,
     },
     FloatButton: {

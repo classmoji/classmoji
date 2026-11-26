@@ -84,6 +84,13 @@ html.pointer-cursors label[for] {
   background-color: var(--panel) !important;
   border-color: rgb(231 229 238) !important; /* stone-200 */
 }
+/* antd 5's dark input-addon background (the dark theme's Input addonBg),
+   read by ui-components/styles/antd.css for antd 6's Space.Addon. */
+html.dark,
+html[data-theme='dark'] {
+  --cm-antd-addon-bg: #171717;
+  --cm-antd-addon-disabled-bg: #171717;
+}
 html.dark .ant-card,
 html[data-theme='dark'] .ant-card {
   border-color: rgb(38 38 41) !important; /* neutral-800 */

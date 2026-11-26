@@ -76,6 +76,17 @@
   background-color: var(--ant-select-option-selected-bg);
 }
 
+/* Space.Addon, antd 6's input addon: it paints an enabled addon with the
+   disabled-field colour (colorBgContainerDisabled); antd 5 used the lighter
+   addon colour (colorFillAlter, or an app's own: --cm-antd-addon-bg) and kept
+   the disabled colour for a disabled field. */
+.ant-space-addon.ant-space-addon-variant-outlined:not(.ant-space-addon-disabled) {
+  background: var(--cm-antd-addon-bg, var(--ant-color-fill-alter));
+}
+.ant-space-addon.ant-space-addon-variant-outlined.ant-space-addon-disabled {
+  background: var(--cm-antd-addon-disabled-bg, var(--ant-color-bg-container-disabled));
+}
+
 /* A danger outlined button under the pointer: antd 6 paints its border with
    the hover text colour and its background with the button's container colour
    (green on the dark theme). antd 5 used the error border-hover colour and the

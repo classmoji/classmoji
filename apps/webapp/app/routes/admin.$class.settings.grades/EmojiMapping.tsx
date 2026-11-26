@@ -444,8 +444,8 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
               />
               <Space.Compact className="!w-28">
                 {/* antd 5 squeezed this addon to 23px inside the 7rem group (its
-                    icon was clipped away); the same 23px, with the icon showing. */}
-                <Space.Addon className="!px-[3.5px]">
+                    icon was clipped away); the same field width, with the icon showing. */}
+                <Space.Addon className="!px-[3px] shrink-0">
                   <img src={tokenImage} alt="token" className="w-4 h-4" />
                 </Space.Addon>
                 <Input
