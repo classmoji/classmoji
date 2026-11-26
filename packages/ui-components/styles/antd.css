@@ -1,0 +1,130 @@
+/* =============================================================================
+   antd 6 → antd 5 look.
+
+   antd 6 changed a few defaults that no theme token can set back. Each rule
+   below restores antd 5's look for one of them, scoped to the antd class it
+   is about, and says what antd 6 does instead. Theme tokens live in each app's
+   antd config (apps/webapp/app/config/antd.ts and antdDark.ts).
+
+   These rules are unlayered on purpose: antd's own styles are unlayered too,
+   and every selector here is more specific than antd's (antd wraps its hash
+   in :where()), so they win without !important.
+   ============================================================================= */
+
+/* An open single Select: antd 6 fades its whole value to 25% opacity, custom
+   label included (the calendar's coloured category dot, the class selector's
+   bold name). antd 5 only greyed the text to the placeholder colour, and a
+   label with its own colour kept it. */
+.ant-select.ant-select-open .ant-select-content.ant-select-content-has-value {
+  opacity: 1;
+  color: var(--ant-color-text-placeholder, rgba(0, 0, 0, 0.25));
+}
+
+/* A single Select is as tall as its content in antd 6; antd 5 fixed it at the
+   control height, so a select whose label is shorter or taller than a line
+   (the class selector, the calendar's event-type select) keeps antd 5's
+   height and the content stays centred. */
+.ant-select.ant-select-single:not(.ant-select-sm):not(.ant-select-lg) {
+  height: 32px;
+}
+.ant-select.ant-select-single.ant-select-sm {
+  height: 24px;
+}
+.ant-select.ant-select-single.ant-select-lg {
+  height: 40px;
+}
+
+/* Borderless inputs, pickers and number fields: antd 6 adds the missing
+   border's width to their vertical padding so they match outlined ones in
+   height (32px). antd 5 did not (30px), and the borderless fields of the
+   calendar and token modals were laid out on that. */
+.ant-input.ant-input-borderless:not(.ant-input-sm):not(.ant-input-lg),
+.ant-input-affix-wrapper.ant-input-borderless:not(.ant-input-affix-wrapper-sm):not(
+    .ant-input-affix-wrapper-lg
+  ),
+.ant-picker.ant-picker-borderless:not(.ant-picker-small):not(.ant-picker-large) {
+  padding-block: 4px;
+}
+.ant-input.ant-input-borderless.ant-input-sm,
+.ant-input-affix-wrapper.ant-input-borderless.ant-input-affix-wrapper-sm,
+.ant-picker.ant-picker-borderless.ant-picker-small {
+  padding-block: 0;
+}
+.ant-input.ant-input-borderless.ant-input-lg,
+.ant-input-affix-wrapper.ant-input-borderless.ant-input-affix-wrapper-lg,
+.ant-picker.ant-picker-borderless.ant-picker-large {
+  padding-block: 7px;
+}
+/* InputNumber pads its inner input, through this variable. */
+.ant-input-number.ant-input-number-borderless:not(.ant-input-number-sm):not(.ant-input-number-lg) {
+  --ant-input-number-input-padding-block: 4px;
+}
+.ant-input-number.ant-input-number-borderless.ant-input-number-sm {
+  --ant-input-number-input-padding-block: 0px;
+}
+.ant-input-number.ant-input-number-borderless.ant-input-number-lg {
+  --ant-input-number-input-padding-block: 7px;
+}
+
+/* A selected option under the pointer: antd 6 paints it with
+   controlItemBgActiveHover (a darker blue, or a darker accent); antd 5 kept the
+   selected colour. */
+.ant-select-dropdown
+  .ant-select-item-option-selected.ant-select-item-option-active:not(
+    .ant-select-item-option-disabled
+  ) {
+  background-color: var(--ant-select-option-selected-bg);
+}
+
+/* A danger outlined button under the pointer: antd 6 paints its border with
+   the hover text colour and its background with the button's container colour
+   (green on the dark theme). antd 5 used the error border-hover colour and the
+   default button's hover background. */
+.ant-btn.ant-btn-color-dangerous:is(.ant-btn-variant-outlined, .ant-btn-variant-dashed):not(
+    :disabled
+  ):not(.ant-btn-disabled):hover {
+  border-color: var(--ant-color-error-border-hover);
+  background: var(--ant-button-default-hover-bg);
+}
+
+/* The active tab's label: antd 5 thickened it with a hairline text-shadow
+   (its `tabsActiveTextShadow`), which antd 6 dropped. */
+.ant-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  text-shadow: 0 0 0.25px currentcolor;
+}
+
+/* Small pagination (every table here): antd 6 puts 4px between the page
+   items and only 4px after the total, and sets the total 2px short of the
+   item height. antd 5: no gap between items, 8px after the total, total on
+   the item's line. */
+.ant-pagination.ant-pagination-small {
+  --ant-pagination-item-spacing-actual: 0px;
+}
+.ant-pagination.ant-pagination-small .ant-pagination-total-text {
+  margin-inline-end: 8px;
+  line-height: 24px;
+}
+/* …and its page-size select keeps antd 5's room between the value and the
+   arrow (antd 6 leaves 2.6px less). */
+.ant-pagination .ant-pagination-options .ant-select-sm .ant-select-content {
+  margin-inline-end: 8.62px;
+}
+
+/* Popover, popconfirm and tooltip: antd 6 draws their shadow with a
+   `filter: drop-shadow` on the whole popup (no spread, the arrow casts it
+   too); antd 5 drew a box-shadow on the box and a small one on the arrow. */
+.ant-popover:not(.ant-popover-hidden),
+.ant-tooltip:not(.ant-tooltip-hidden) {
+  filter: none;
+}
+.ant-popover .ant-popover-container,
+.ant-tooltip .ant-tooltip-container {
+  box-shadow:
+    0 6px 16px 0 rgba(0, 0, 0, 0.08),
+    0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
+}
+.ant-popover .ant-popover-arrow::after,
+.ant-tooltip .ant-tooltip-arrow::after {
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.05);
+}

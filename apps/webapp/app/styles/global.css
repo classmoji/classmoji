@@ -8,6 +8,8 @@
 @import '@classmoji/ui-components/styles/tokens.css';
 @import '@classmoji/ui-components/styles/fonts.css';
 @import '@classmoji/ui-components/styles/components.css';
+/* antd 6 defaults that no token restores to antd 5's look. */
+@import '@classmoji/ui-components/styles/antd.css';
 
 * {
   box-sizing: border-box;
