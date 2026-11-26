@@ -58,7 +58,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         className="w-full bg-transparent hover:bg-nav-hover rounded-md transition-colors"
         popupMatchSelectWidth={true}
         open={open}
-        onDropdownVisibleChange={visible => {
+        onOpenChange={visible => {
           cancelClose();
           setOpen(visible);
         }}
@@ -70,7 +70,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
             }`}
           />
         }
-        dropdownRender={menu => (
+        popupRender={menu => (
           <div onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
             {menu}
           </div>

@@ -863,7 +863,9 @@ label {
 
 /* ============ ONBOARDING TOUR FOOTER ============ */
 /* Stack the antd Tour footer: full-width progress bar on top, nav buttons on
-   their own row below (default is bar-left / buttons-right on a single line). */
+   their own row below (default is bar-left / buttons-right on a single line).
+   Each selector list names the antd 5 class first, then its antd 6 name
+   (-buttons -> -actions, -inner -> -section); the v6 names match nothing on v5. */
 .cm-tour .ant-tour-footer {
   flex-direction: column;
   align-items: stretch;
@@ -872,7 +874,8 @@ label {
 .cm-tour .ant-tour-indicators {
   width: 100%;
 }
-.cm-tour .ant-tour-buttons {
+.cm-tour .ant-tour-buttons,
+.cm-tour .ant-tour-actions {
   display: flex;
   justify-content: flex-end;
   margin: 0;
@@ -932,7 +935,8 @@ label {
    bites on narrow/phone screens, where antd's default width would otherwise run
    flush to (or past) the borders. */
 .cm-tour .ant-tour,
-.cm-tour .ant-tour-inner {
+.cm-tour .ant-tour-inner,
+.cm-tour .ant-tour-section {
   max-width: calc(100vw - 2rem);
 }
 
