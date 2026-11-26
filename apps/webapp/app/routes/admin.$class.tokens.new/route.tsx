@@ -159,7 +159,9 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
               min={1}
               variant="borderless"
               placeholder="Number of tokens"
-              className="!text-lg !font-semibold !px-0"
+              // No padding override: antd 6 pads this root, where antd 5 padded the
+              // inner input (and `!px-0` on the root did nothing).
+              className="!text-lg !font-semibold"
               style={{ width: '100%' }}
             />
           </Form.Item>

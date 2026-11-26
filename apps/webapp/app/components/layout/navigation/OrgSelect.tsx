@@ -55,7 +55,10 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
       <Select
         placeholder="Select classroom"
         variant="borderless"
-        className="w-full bg-transparent hover:bg-nav-hover rounded-md transition-colors"
+        // antd 6 styles this root element itself (background, radius and a
+        // padding-based height), and its unlayered styles beat Tailwind's, so
+        // the tint, the radius and antd 5's 32px height are `!important`.
+        className="w-full !h-[32px] !rounded-md hover:!bg-nav-hover transition-colors"
         popupMatchSelectWidth={true}
         open={open}
         onOpenChange={visible => {
