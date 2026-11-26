@@ -357,17 +357,19 @@ const TeamRow = ({
   description: React.ReactNode;
   action?: React.ReactNode;
 }) => (
-  <li className="flex items-center justify-between py-3 border-b border-[rgba(5,5,5,0.06)] dark:border-[#404040] last:border-b-0 text-[14px] leading-[1.5714]">
+  // Pixel values, not the spacing scale: the root font size is 17px here, so
+  // `py-3` would be 12.75px rather than antd's 12px.
+  <li className="flex items-center justify-between py-[12px] border-b border-[rgba(5,5,5,0.06)] dark:border-[#404040] last:border-b-0 text-[14px] leading-[1.5714]">
     <div className="flex flex-1 items-start max-w-full">
-      <div className="me-4">
+      <div className="me-[16px]">
         <Avatar icon={<IconUsers size={16} />} />
       </div>
       <div className="flex-[1_0] w-0">
-        <div className="mb-1 text-[rgba(20,21,26,0.88)] dark:text-[#e5e5e5]">{title}</div>
+        <div className="mb-[4px] text-[rgba(20,21,26,0.88)] dark:text-[#e5e5e5]">{title}</div>
         <div className="text-[rgba(20,21,26,0.45)] dark:text-[#a3a3a3]">{description}</div>
       </div>
     </div>
-    {action && <div className="flex-none ms-12 pe-2">{action}</div>}
+    {action && <div className="flex-none ms-[48px] pe-[8px]">{action}</div>}
   </li>
 );
 
