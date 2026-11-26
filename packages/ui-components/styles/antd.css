@@ -33,13 +33,13 @@
    (the class selector, the calendar's event-type select) keeps antd 5's
    height and the content stays centred. */
 .ant-select.ant-select-single:not(.ant-select-sm):not(.ant-select-lg) {
-  height: 32px;
+  height: var(--ant-control-height, 32px);
 }
 .ant-select.ant-select-single.ant-select-sm {
-  height: 24px;
+  height: var(--ant-control-height-sm, 24px);
 }
 .ant-select.ant-select-single.ant-select-lg {
-  height: 40px;
+  height: var(--ant-control-height-lg, 40px);
 }
 
 /* Borderless inputs, pickers and number fields: antd 6 adds the missing

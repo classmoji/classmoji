@@ -1,19 +1,39 @@
 /* antd 6 → antd 5 look for the home-page demos, which draw the webapp's antd
    controls. The webapp restores these in
    packages/ui-components/styles/antd.css; the site does not depend on that
-   package, so the two rules its demos need are repeated here. Keep them in
-   step with that file. Unlayered on purpose, like antd's own styles. */
+   package, so the rules its demos need are repeated here. Keep them in step
+   with that file. Unlayered on purpose, like antd's own styles. */
+
+/* A single Select's value: antd 5 set it in normal weight (400); antd 6 lets
+   it take the page's weight. */
+.ant-select.ant-select-single .ant-select-content.ant-select-content-has-value {
+  font-weight: 400;
+}
+
+/* A button's icon: antd 6 centres it in a flex box, a little lower than
+   antd 5, which set it on the text's line. */
+.ant-btn > .ant-btn-icon {
+  display: block;
+}
+.ant-btn > .ant-btn-icon > .anticon {
+  display: inline-flex;
+  vertical-align: -0.125em;
+}
+.ant-btn > .ant-btn-icon > .anticon::before {
+  content: none;
+}
 
 /* A single Select is as tall as its content in antd 6; antd 5 fixed it at the
-   control height (the quiz demo's small select came out 0.9px taller). */
+   control height (the quiz demo's small select came out 0.9px taller). The
+   publish demo sets its own controlHeight, hence the variables. */
 .ant-select.ant-select-single:not(.ant-select-sm):not(.ant-select-lg) {
-  height: 32px;
+  height: var(--ant-control-height, 32px);
 }
 .ant-select.ant-select-single.ant-select-sm {
-  height: 24px;
+  height: var(--ant-control-height-sm, 24px);
 }
 .ant-select.ant-select-single.ant-select-lg {
-  height: 40px;
+  height: var(--ant-control-height-lg, 40px);
 }
 
 /* A Select's arrow sits inside the select's horizontal padding in antd 6, 12px
