@@ -188,7 +188,7 @@
 /* …and its page-size select keeps antd 5's width (antd 6 leaves 3px less
    room after the value). */
 .ant-pagination .ant-pagination-options .ant-select-sm .ant-select-content {
-  margin-inline-end: 8.98px;
+  margin-inline-end: 9.01px;
 }
 
 /* A time picker's hour/minute columns: antd 6 always shows their scrollbar and
