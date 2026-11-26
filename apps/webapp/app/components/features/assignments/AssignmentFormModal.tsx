@@ -466,7 +466,7 @@ const AssignmentFormModal = ({
       open={open}
       onClose={onClose}
       placement="right"
-      width="min(100vw, 720px)"
+      size="min(100vw, 720px)"
       destroyOnHidden
       maskClosable={!busy}
       title={

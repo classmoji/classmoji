@@ -199,7 +199,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} width="50%">
+    <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} size="50%">
       {canRenameTeam && (
         <>
           <p className="pb-2 font-semibold text-base">Rename team</p>

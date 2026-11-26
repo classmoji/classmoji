@@ -263,7 +263,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
         }}
         onClose={close}
         open={opened}
-        width={width}
+        size={width}
         closeIcon={<IconX className="text-ink-1" size={18} />}
         footer={
           <div className="flex justify-end py-2">

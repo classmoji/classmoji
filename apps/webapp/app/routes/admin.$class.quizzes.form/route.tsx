@@ -448,7 +448,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         }
         open={opened}
         onClose={close}
-        width="100%"
+        size="100%"
         styles={{
           header: {
             backgroundColor: isDarkMode ? '#1f2937' : '#f9f9f9',
