@@ -90,6 +90,13 @@
   inset-inline-end: calc(11px - var(--ant-select-border-size, 1px));
 }
 
+/* An InputNumber's text box inherits its line height in antd 6, so a field
+   given a text-size class (the token modal's large number) takes that class's
+   line height; antd 5 kept the theme's (lineHeight), 0.29px taller there. */
+.ant-input-number:not(.ant-input-number-lg) > .ant-input-number-input {
+  line-height: var(--ant-line-height, 1.5714285714285714);
+}
+
 /* A selected option under the pointer: antd 6 paints it with
    controlItemBgActiveHover (a darker blue, or a darker accent); antd 5 kept the
    selected colour. */
