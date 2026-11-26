@@ -180,6 +180,25 @@
   margin-inline-end: 8.98px;
 }
 
+/* A time picker's hour/minute columns: antd 6 always shows their scrollbar and
+   centres the numbers in a 47px cell. antd 5 showed the scrollbar only under
+   the pointer and set the numbers 14px from the left of a 48px cell
+   ((timeColumnWidth − timeCellHeight) / 2, at the default 56px and 28px). */
+.ant-picker-dropdown .ant-picker-time-panel-column {
+  overflow-y: hidden;
+  text-align: start;
+}
+.ant-picker-dropdown .ant-picker-time-panel-column:hover {
+  overflow-y: auto;
+}
+.ant-picker-dropdown
+  .ant-picker-time-panel-column
+  > li.ant-picker-time-panel-cell
+  .ant-picker-time-panel-cell-inner {
+  width: 48px;
+  padding-inline-start: 14px;
+}
+
 /* Small horizontal Steps (the create- and import-classroom wizards). antd 6
    sizes each step to its content, so steps with longer titles are wider and
    the icons no longer sit at even intervals; draws the line to an upcoming
