@@ -216,6 +216,11 @@
   > .ant-steps-item:last-child {
   flex: none;
 }
+/* antd 6 centres the line on the icon (11.5px down); antd 5 drew it at the
+   middle of the title's 24px line, half a pixel lower. */
+.ant-steps.ant-steps-small.ant-steps-horizontal.ant-steps-title-horizontal .ant-steps-item-rail {
+  margin-top: calc(var(--ant-cmp-steps-icon-size, 24px) / 2);
+}
 .ant-steps.ant-steps-small .ant-steps-item-rail-wait {
   --ant-cmp-steps-item-solid-line-color: var(--ant-color-split);
 }
