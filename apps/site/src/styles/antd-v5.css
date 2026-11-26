@@ -18,9 +18,11 @@
 
 /* A Select's arrow sits inside the select's horizontal padding in antd 6, 12px
    from the edge of a default select and 8px from a small one. antd 5 put it
-   11px from the edge at every size. */
+   11px from the edge at every size; `translate` moves it without changing the
+   select's width. */
 .ant-select .ant-select-suffix {
-  margin-inline-end: calc(
-    11px - var(--ant-select-border-size, 1px) - var(--ant-select-padding-horizontal, 11px)
-  );
+  translate: calc(
+      var(--ant-select-border-size, 1px) + var(--ant-select-padding-horizontal, 11px) - 11px
+    )
+    0;
 }
