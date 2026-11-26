@@ -180,6 +180,15 @@
   border-inline-end: 1px solid var(--ant-table-border-color);
 }
 
+/* A table wider than its card (horizontal scroll): antd 6 rounds the scroll
+   box's top corners, clipping the header cell under the right corner; antd 5
+   left the scroll box square, so that cell's corner showed. */
+.ant-table-wrapper .ant-table-container > .ant-table-content,
+.ant-table-wrapper .ant-table-container::before,
+.ant-table-wrapper .ant-table-container::after {
+  border-radius: 0;
+}
+
 /* A table that sizes its columns to their content measures each header title
    in a hidden row. antd 6 sets that copy in bold (700) by an inline style,
    wider than the 600 the header shows, so such columns come out about 1px
