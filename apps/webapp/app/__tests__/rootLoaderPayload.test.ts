@@ -172,7 +172,6 @@ vi.mock('@classmoji/services', async () => ({
 }));
 
 // The component tree root.tsx renders; none of it runs in a loader test.
-vi.mock('@ant-design/v5-patch-for-react-19', () => ({}));
 vi.mock('@classmoji/ui-components', () => ({
   CalloutProvider: () => null,
   CalloutSlot: () => null,
