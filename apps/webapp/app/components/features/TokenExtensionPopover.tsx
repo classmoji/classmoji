@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Button, InputNumber, Popover } from 'antd';
+import { Button, InputNumber, Popover, Space } from 'antd';
 import { IconCalendarPlus } from '@tabler/icons-react';
 import { useRevalidator } from 'react-router';
 import useSound from 'use-sound';
@@ -167,13 +167,15 @@ const TokenExtensionPopover = ({
           </p>
         )}
         <div className="mt-4">
-          <InputNumber
-            addonAfter="hour(s)"
-            value={hours}
-            onChange={setTime}
-            min={1}
-            max={maxHours === undefined ? undefined : Math.max(1, maxHours)}
-          />
+          <Space.Compact>
+            <InputNumber
+              value={hours}
+              onChange={setTime}
+              min={1}
+              max={maxHours === undefined ? undefined : Math.max(1, maxHours)}
+            />
+            <Space.Addon>hour(s)</Space.Addon>
+          </Space.Compact>
           <Button
             className="w-full mt-4"
             onClick={() => onPurchaseExtensionHours(hours)}

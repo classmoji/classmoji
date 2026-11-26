@@ -10,6 +10,7 @@ import {
   InputNumber,
   Radio,
   Select,
+  Space,
   Spin,
   Tag,
 } from 'antd';
@@ -773,12 +774,20 @@ const AssignmentFormModal = ({
         <Section n={gradingStep} title="Grading & schedule" className="mt-2" />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-          <Form.Item
-            name="weight"
-            label="Weight"
-            rules={[{ required: true, message: 'Enter a weight' }]}
-          >
-            <InputNumber addonAfter="%" min={0} className="w-full" />
+          {/* The input is its own noStyle Form.Item so it stays the direct child
+              that receives the form value; its errors show on this item. */}
+          <Form.Item label="Weight" htmlFor="weight" required>
+            <Space.Compact block>
+              <Form.Item
+                name="weight"
+                noStyle
+                rules={[{ required: true, message: 'Enter a weight' }]}
+              >
+                {/* Inline: antd's own width rule outranks a Tailwind utility. */}
+                <InputNumber min={0} style={{ width: '100%', minWidth: 0 }} />
+              </Form.Item>
+              <Space.Addon>%</Space.Addon>
+            </Space.Compact>
           </Form.Item>
           <Form.Item
             name="tokens_per_hour"

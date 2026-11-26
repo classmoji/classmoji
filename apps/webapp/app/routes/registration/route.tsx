@@ -440,15 +440,20 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                         {isGitLab ? 'Gitlab Username' : 'Github Username'}
                       </span>
                     }
-                    name="login"
                     className="mb-6"
                   >
-                    <Input
-                      addonBefore="@"
-                      readOnly
-                      className="bg-gray-50"
-                      prefix={<UserOutlined className="text-gray-400" />}
-                    />
+                    {/* The field is its own Form.Item so the Input stays the direct
+                        child that receives the form value (see Email above). */}
+                    <Space.Compact block>
+                      <Space.Addon>@</Space.Addon>
+                      <Form.Item name="login" noStyle>
+                        <Input
+                          readOnly
+                          className="bg-gray-50"
+                          prefix={<UserOutlined className="text-gray-400" />}
+                        />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
                 )}
 

@@ -1,4 +1,4 @@
-import { Input, InputNumber, Button, Table, Popconfirm } from 'antd';
+import { Input, InputNumber, Button, Table, Popconfirm, Space } from 'antd';
 import { useState } from 'react';
 
 import { DeleteOutlined } from '@ant-design/icons';
@@ -133,17 +133,20 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
         const isEditing = editingCell?.letterGrade === record.letter_grade;
         if (isEditing) {
           return (
-            <InputNumber
-              size="small"
-              min={0}
-              max={100}
-              value={editValue}
-              onChange={value => setEditValue(value)}
-              onPressEnter={() => handleCellUpdate(record.letter_grade, editValue)}
-              onBlur={() => handleCellUpdate(record.letter_grade, editValue)}
-              className="w-20"
-              addonAfter="%"
-            />
+            <Space.Compact size="small" className="w-20">
+              <InputNumber
+                size="small"
+                min={0}
+                max={100}
+                value={editValue}
+                onChange={value => setEditValue(value)}
+                onPressEnter={() => handleCellUpdate(record.letter_grade, editValue)}
+                onBlur={() => handleCellUpdate(record.letter_grade, editValue)}
+                // Inline: antd's own width rule outranks a Tailwind utility.
+                style={{ width: '100%', minWidth: 0 }}
+              />
+              <Space.Addon>%</Space.Addon>
+            </Space.Compact>
           );
         }
         return (
@@ -210,16 +213,18 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
               maxLength={2}
               className="!w-28"
             />
-            <Input
-              placeholder="Min value"
-              value={minGrade ?? undefined}
-              onChange={e => setMinGrade(e.target.value)}
-              type="number"
-              min={0}
-              max={100}
-              addonAfter="%"
-              className="!w-32"
-            />
+            <Space.Compact className="!w-32">
+              <Input
+                placeholder="Min value"
+                value={minGrade ?? undefined}
+                onChange={e => setMinGrade(e.target.value)}
+                type="number"
+                min={0}
+                max={100}
+                className="min-w-0"
+              />
+              <Space.Addon>%</Space.Addon>
+            </Space.Compact>
             <Button type="primary" onClick={createLetterGradeMapping}>
               Add
             </Button>

@@ -1,4 +1,4 @@
-import { Input, InputNumber, Button, Table, Popconfirm, Alert, Select } from 'antd';
+import { Input, InputNumber, Button, Table, Popconfirm, Alert, Select, Space } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
@@ -442,15 +442,19 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                 max={100}
                 className="!w-28"
               />
-              <Input
-                value={extraTokens}
-                onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
-                type="number"
-                min={0}
-                placeholder="Tokens"
-                addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
-                className="!w-28"
-              />
+              <Space.Compact className="!w-28">
+                <Space.Addon>
+                  <img src={tokenImage} alt="token" className="w-4 h-4" />
+                </Space.Addon>
+                <Input
+                  value={extraTokens}
+                  onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
+                  type="number"
+                  min={0}
+                  placeholder="Tokens"
+                  className="min-w-0"
+                />
+              </Space.Compact>
               <Input
                 placeholder="Description (optional)"
                 value={description}
