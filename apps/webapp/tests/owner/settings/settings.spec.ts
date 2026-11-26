@@ -181,7 +181,7 @@ test.describe('Danger Zone Tab', () => {
     await page.getByRole('button', { name: /^Remove$/i }).click();
 
     // Modal title is `Remove <classSlug> classroom`; testOrg === classSlug.
-    const modal = page.locator('.ant-modal-content');
+    const modal = page.locator('.ant-modal');
     await expect(modal.getByText(`Remove ${testOrg} classroom`)).toBeVisible();
     await expect(
       modal.getByText(/The following data will be removed: repositories, student enrollments/i)

@@ -80,12 +80,17 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 // The loader is under test; the view layer only needs to import.
 vi.mock('~/components', () => ({ Countdown: () => null }));
 vi.mock('~/utils/quizUtils', () => ({ formatDuration: () => '' }));
+// What the route and useStartQuiz take from antd. Dialogs come from
+// App.useApp(); Modal is only rendered as a component.
 vi.mock('antd', () => ({
+  App: Object.assign(() => null, {
+    useApp: () => ({ modal: { confirm: vi.fn(), error: vi.fn(), warning: vi.fn() } }),
+  }),
   Table: () => null,
   Badge: () => null,
   Typography: { Text: () => null },
   Button: () => null,
-  Modal: Object.assign(() => null, { confirm: vi.fn(), error: vi.fn(), warning: vi.fn() }),
+  Modal: () => null,
   Tag: () => null,
   Tooltip: () => null,
   Space: () => null,

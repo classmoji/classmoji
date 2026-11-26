@@ -166,7 +166,7 @@ test.describe('Student Week View — linked resources', () => {
     await chip.click();
     const deckTab = await opened;
 
-    await expect(page.locator('.ant-modal-content')).toHaveCount(0);
+    await expect(page.locator('.ant-modal')).toHaveCount(0);
     if (deckTab) await deckTab.close();
   });
 });
