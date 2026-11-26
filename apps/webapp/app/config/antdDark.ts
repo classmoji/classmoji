@@ -1,5 +1,5 @@
 import { BRAND, BRAND_LIGHT, BRAND_TEXT, PRIMARY } from './theme.ts';
-import { ANTD_V5_SHADOWS } from './antd.ts';
+import { ANTD_V5_BOX_SHADOW_TERTIARY } from './antd.ts';
 
 // Keep in sync with --font-sans (see config/antd.ts). Ant components otherwise
 // fall back to the default system font stack instead of Mona Sans.
@@ -30,11 +30,13 @@ const darkTheme = {
     colorWarning: '#f59e0b',
     colorError: '#ef4444',
     colorInfo: '#3b82f6',
-    // antd 6's dark algorithm turns shadows into a white glow; keep antd 5's.
-    ...ANTD_V5_SHADOWS,
-    // antd 6 borders disabled controls with this (#686868 on dark), where
+    // antd 6's dark algorithm derives its shadows from a white colorShadow (a
+    // faint glow); black gives back antd 5's shadows. See config/antd.ts.
+    colorShadow: '#000',
+    boxShadowTertiary: ANTD_V5_BOX_SHADOW_TERTIARY,
+    // antd 6 borders disabled inputs with this (#686868 on dark), where
     // antd 5 kept colorBorder: a disabled select stood out more than an
-    // enabled one.
+    // enabled one. Buttons set their own below.
     colorBorderDisabled: '#404040',
   },
   components: {
@@ -57,6 +59,9 @@ const darkTheme = {
       defaultColor: '#e5e5e5',
       defaultHoverBg: '#404040',
       defaultHoverBorderColor: '#525252',
+      // A disabled button keeps colorBorder (green), as in antd 5; antd 6
+      // borders it with colorBorderDisabled, which `algorithm` re-derives grey.
+      colorBorderDisabled: BRAND,
       // `type="text"` buttons take their colour from colorText, which is
       // BRAND_TEXT (black, for text on the green fill) above. Without these
       // they render black on the dark surface.

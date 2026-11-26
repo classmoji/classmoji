@@ -35,7 +35,7 @@ import type { MembershipWithOrganization, AppUser, Role } from '~/types';
 import { ROOT_USER_INCLUDE } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
-import antdTheme, { TAG_CONFIG } from './config/antd';
+import antdTheme, { MESSAGE_CONFIG, TAG_CONFIG } from './config/antd';
 import antdDarkTheme from './config/antdDark';
 import useStore from './store';
 import { getRoleFromPath } from './constants/roleSettings';
@@ -582,7 +582,9 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               </div>
             )}
           >
-            <AntdApp>
+            {/* antd 6 moved message toasts 8px up; `top` puts them back where
+                antd 5 drew them. */}
+            <AntdApp message={MESSAGE_CONFIG}>
               <UserContext.Provider value={{ user }}>
                 <CalloutProvider>
                   <FetcherProvider>

@@ -8,36 +8,14 @@ const FONT_SANS =
   "'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 
 /**
- * antd 5's shadows, which antd 6 changed: a deeper boxShadowTertiary, and in
- * dark mode every shadow turned into a faint white glow. Both themes spread
- * these so overlays, cards and drawers keep the depth they had. Popovers and
- * tooltips draw theirs with a CSS filter in antd 6, so dropShadowPopover is
- * antd 5's popover shadow as drop-shadows.
+ * antd 5's shadows. antd 6 deepened boxShadowTertiary (both modes), and its
+ * dark algorithm derives every shadow from a white `colorShadow`, a faint
+ * glow; with `colorShadow: '#000'` (antdDark.ts) the rest come out exactly as
+ * antd 5's. Popover and tooltip shapes are restored in
+ * @classmoji/ui-components/styles/antd.css.
  */
-const V5_SHADOW =
-  '0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)';
-export const ANTD_V5_SHADOWS = {
-  boxShadow: V5_SHADOW,
-  boxShadowSecondary: V5_SHADOW,
-  boxShadowTertiary:
-    '0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02)',
-  boxShadowPopoverArrow: '2px 2px 5px rgba(0, 0, 0, 0.05)',
-  boxShadowCard:
-    '0 1px 2px -2px rgba(0,0,0,0.16), 0 3px 6px 0 rgba(0,0,0,0.12), 0 5px 12px 4px rgba(0,0,0,0.09)',
-  boxShadowDrawerRight:
-    '-6px 0 16px 0 rgba(0, 0, 0, 0.08), -3px 0 6px -4px rgba(0, 0, 0, 0.12), -9px 0 28px 8px rgba(0, 0, 0, 0.05)',
-  boxShadowDrawerLeft:
-    '6px 0 16px 0 rgba(0, 0, 0, 0.08), 3px 0 6px -4px rgba(0, 0, 0, 0.12), 9px 0 28px 8px rgba(0, 0, 0, 0.05)',
-  boxShadowDrawerUp: V5_SHADOW,
-  boxShadowDrawerDown:
-    '0 -6px 16px 0 rgba(0, 0, 0, 0.08), 0 -3px 6px -4px rgba(0, 0, 0, 0.12), 0 -9px 28px 8px rgba(0, 0, 0, 0.05)',
-  boxShadowTabsOverflowLeft: 'inset 10px 0 8px -8px rgba(0, 0, 0, 0.08)',
-  boxShadowTabsOverflowRight: 'inset -10px 0 8px -8px rgba(0, 0, 0, 0.08)',
-  boxShadowTabsOverflowTop: 'inset 0 10px 8px -8px rgba(0, 0, 0, 0.08)',
-  boxShadowTabsOverflowBottom: 'inset 0 -10px 8px -8px rgba(0, 0, 0, 0.08)',
-  dropShadowPopover:
-    'drop-shadow(0 6px 16px rgba(0,0,0,0.08)) drop-shadow(0 3px 6px rgba(0,0,0,0.12)) drop-shadow(0 9px 28px rgba(0,0,0,0.05))',
-};
+export const ANTD_V5_BOX_SHADOW_TERTIARY =
+  '0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02)';
 
 /**
  * antd 6 draws Tags filled (no border) and without the trailing 8px margin
@@ -49,6 +27,12 @@ export const TAG_CONFIG = {
   variant: 'outlined',
   styles: { root: { marginInlineEnd: 8 } },
 } as const;
+
+/**
+ * The root App's message config. antd 6 draws toasts 8px higher than antd 5
+ * (its list sits at `top - 16px` inside 24px of padding); top 16 is antd 5's.
+ */
+export const MESSAGE_CONFIG = { top: 16 } as const;
 
 const theme = {
   token: {
@@ -67,7 +51,7 @@ const theme = {
     colorLinkHover: '#14151a', // --ink-0
     colorLinkActive: '#14151a',
     fontFamily: FONT_SANS,
-    ...ANTD_V5_SHADOWS,
+    boxShadowTertiary: ANTD_V5_BOX_SHADOW_TERTIARY,
   },
   components: {
     Button: {
@@ -106,6 +90,11 @@ const theme = {
     Progress: {
       defaultColor: BRAND_LIGHT,
       colorSuccess: BRAND,
+    },
+    Tag: {
+      // antd 6 derives the default Tag fill from colorFillTertiary (#f6f6f6);
+      // antd 5's was #fafafa.
+      defaultBg: '#fafafa',
     },
     Select: {
       optionSelectedBg: '#f3f4f6',
