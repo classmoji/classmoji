@@ -440,6 +440,8 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                         {isGitLab ? 'Gitlab Username' : 'Github Username'}
                       </span>
                     }
+                    // The label still names the input the inner item renders (id "login").
+                    htmlFor="login"
                     className="mb-6"
                   >
                     {/* The field is its own Form.Item so the Input stays the direct
