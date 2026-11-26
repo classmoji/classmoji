@@ -13,6 +13,27 @@ const ACCENT = '#21883d';
 const FONT_SANS =
   "'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 
+/**
+ * antd 5's shadows, as the webapp pins them (apps/webapp/app/config/antd.ts):
+ * antd 6 deepened boxShadowTertiary and turned dark-mode shadows white.
+ */
+const V5_SHADOW =
+  '0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)';
+const ANTD_V5_SHADOWS = {
+  boxShadow: V5_SHADOW,
+  boxShadowSecondary: V5_SHADOW,
+  boxShadowTertiary:
+    '0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02)',
+  boxShadowPopoverArrow: '2px 2px 5px rgba(0, 0, 0, 0.05)',
+  boxShadowCard:
+    '0 1px 2px -2px rgba(0,0,0,0.16), 0 3px 6px 0 rgba(0,0,0,0.12), 0 5px 12px 4px rgba(0,0,0,0.09)',
+  dropShadowPopover:
+    'drop-shadow(0 6px 16px rgba(0,0,0,0.08)) drop-shadow(0 3px 6px rgba(0,0,0,0.12)) drop-shadow(0 9px 28px rgba(0,0,0,0.05))',
+};
+
+/** The webapp's Tag config: outlined with antd 5's 8px margin (antd 6 fills them). */
+const TAG_CONFIG = { variant: 'outlined', styles: { root: { marginInlineEnd: 8 } } } as const;
+
 export const APP_ANTD_THEME: ThemeConfig = {
   token: {
     colorPrimary: ACCENT,
@@ -21,6 +42,7 @@ export const APP_ANTD_THEME: ThemeConfig = {
     colorLinkHover: '#14151a',
     colorLinkActive: '#14151a',
     fontFamily: FONT_SANS,
+    ...ANTD_V5_SHADOWS,
   },
   components: {
     Button: {
@@ -57,6 +79,7 @@ export const APP_ANTD_DARK_THEME: ThemeConfig = {
     colorLink: '#d9dbe3',
     colorLinkHover: '#f1f2f6',
     colorLinkActive: '#f1f2f6',
+    ...ANTD_V5_SHADOWS,
   },
   components: {
     Button: {
@@ -84,7 +107,7 @@ export const APP_ANTD_DARK_THEME: ThemeConfig = {
 export function AppAntd({ children }: { children: ReactNode }) {
   const isDark = useIsDark();
   return (
-    <ConfigProvider theme={isDark ? APP_ANTD_DARK_THEME : APP_ANTD_THEME}>
+    <ConfigProvider theme={isDark ? APP_ANTD_DARK_THEME : APP_ANTD_THEME} tag={TAG_CONFIG}>
       {children}
     </ConfigProvider>
   );
