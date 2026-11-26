@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import WithAddon from '~/components/ui/inputs/WithAddon';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
@@ -440,22 +441,18 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                         {isGitLab ? 'Gitlab Username' : 'Github Username'}
                       </span>
                     }
-                    // The label still names the input the inner item renders (id "login").
-                    htmlFor="login"
+                    name="login"
                     className="mb-6"
                   >
-                    {/* The field is its own Form.Item so the Input stays the direct
-                        child that receives the form value (see Email above). */}
-                    <Space.Compact block>
-                      <Space.Addon>@</Space.Addon>
-                      <Form.Item name="login" noStyle>
-                        <Input
-                          readOnly
-                          className="bg-gray-50"
-                          prefix={<UserOutlined className="text-gray-400" />}
-                        />
-                      </Form.Item>
-                    </Space.Compact>
+                    {/* WithAddon passes the form's value on to the Input; the
+                        addon greys with the form while it submits. */}
+                    <WithAddon before="@" block disabled={isSubmitting}>
+                      <Input
+                        readOnly
+                        className="bg-gray-50"
+                        prefix={<UserOutlined className="text-gray-400" />}
+                      />
+                    </WithAddon>
                   </Form.Item>
                 )}
 
