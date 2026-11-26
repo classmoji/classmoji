@@ -147,16 +147,11 @@ const StepImportModules = ({
                   value={sourceClassroomId}
                   onChange={handleSourceChange}
                   className="w-full"
-                  showSearch={{
-                    optionFilterProp: 'children',
-                    filterOption: (input, option) =>
-                      (option as unknown as { children: string })!.children
-                        .toLowerCase()
-                        .includes(input.toLowerCase()),
-                  }}
+                  // Search the class name: an option's children are markup, not text.
+                  showSearch={{ optionFilterProp: 'label' }}
                 >
                   {importableClassrooms.map(classroom => (
-                    <Select.Option key={classroom.id} value={classroom.id}>
+                    <Select.Option key={classroom.id} value={classroom.id} label={classroom.name}>
                       <div className="flex items-center gap-2">
                         {(classroom.git_organization as { avatar_url?: string } | null)
                           ?.avatar_url && (
