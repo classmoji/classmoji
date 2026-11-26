@@ -1,0 +1,26 @@
+/* antd 6 → antd 5 look for the home-page demos, which draw the webapp's antd
+   controls. The webapp restores these in
+   packages/ui-components/styles/antd.css; the site does not depend on that
+   package, so the two rules its demos need are repeated here. Keep them in
+   step with that file. Unlayered on purpose, like antd's own styles. */
+
+/* A single Select is as tall as its content in antd 6; antd 5 fixed it at the
+   control height (the quiz demo's small select came out 0.9px taller). */
+.ant-select.ant-select-single:not(.ant-select-sm):not(.ant-select-lg) {
+  height: 32px;
+}
+.ant-select.ant-select-single.ant-select-sm {
+  height: 24px;
+}
+.ant-select.ant-select-single.ant-select-lg {
+  height: 40px;
+}
+
+/* A Select's arrow sits inside the select's horizontal padding in antd 6, 12px
+   from the edge of a default select and 8px from a small one. antd 5 put it
+   11px from the edge at every size. */
+.ant-select .ant-select-suffix {
+  margin-inline-end: calc(
+    11px - var(--ant-select-border-size, 1px) - var(--ant-select-padding-horizontal, 11px)
+  );
+}
