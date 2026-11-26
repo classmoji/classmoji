@@ -1,4 +1,5 @@
 import { BRAND, BRAND_LIGHT, BRAND_TEXT, PRIMARY } from './theme.ts';
+import { ANTD_V5_SHADOWS } from './antd.ts';
 
 // Keep in sync with --font-sans (see config/antd.ts). Ant components otherwise
 // fall back to the default system font stack instead of Mona Sans.
@@ -29,6 +30,8 @@ const darkTheme = {
     colorWarning: '#f59e0b',
     colorError: '#ef4444',
     colorInfo: '#3b82f6',
+    // antd 6's dark algorithm turns shadows into a white glow; keep antd 5's.
+    ...ANTD_V5_SHADOWS,
   },
   components: {
     Button: {
@@ -94,7 +97,6 @@ const darkTheme = {
       cardBg: '#262626',
     },
     Tag: {
-      bordered: false,
       defaultBg: '#262626',
       defaultColor: '#e5e5e5',
     },
@@ -107,6 +109,10 @@ const darkTheme = {
     Select: {
       optionSelectedBg: '#404040',
       optionActiveBg: '#262626',
+      // See config/antd.ts: antd 6 paints a hovered selected option with this.
+      controlItemBgActiveHover: '#404040',
+      // See config/antd.ts: no focus ring on borderless controls, as in antd 5.
+      lineWidthFocus: 0,
       optionSelectedFontWeight: 600,
       optionSelectedColor: BRAND,
       selectorBg: '#262626',
@@ -130,6 +136,15 @@ const darkTheme = {
       hoverBorderColor: '#525252',
       activeBorderColor: '#737373',
       activeShadow: 'none',
+      lineWidthFocus: 0,
+    },
+    InputNumber: {
+      lineWidthFocus: 0,
+    },
+    // Space.Addon (antd 6's input addon): the addonBg above and antd 5's padding.
+    Addon: {
+      colorBgContainerDisabled: '#171717',
+      paddingSM: 11,
     },
     Modal: {
       contentBg: '#262626',
@@ -167,6 +182,7 @@ const darkTheme = {
       cellRangeBorderColor: 'transparent',
       cellBgDisabled: '#171717',
       cellRangeHoverBg: '#525252',
+      lineWidthFocus: 0,
     },
     Checkbox: {
       colorBgContainer: '#262626',
@@ -397,14 +413,6 @@ const darkTheme = {
       linkHoverColor: BRAND,
       separatorColor: '#737373',
     },
-    List: {
-      colorText: '#e5e5e5',
-      colorTextDescription: '#a3a3a3',
-      colorTextDisabled: '#737373',
-      itemPaddingLG: '16px 24px',
-      colorSplit: '#404040',
-      itemHoverBg: '#262626',
-    },
     Descriptions: {
       colorText: '#e5e5e5',
       colorTextSecondary: '#a3a3a3',
@@ -440,11 +448,6 @@ const darkTheme = {
       authorTimeColor: '#a3a3a3',
       avatarBg: '#404040',
       contentBg: '#262626',
-    },
-    BackTop: {
-      colorText: '#e5e5e5',
-      colorTextLightSolid: BRAND_TEXT,
-      colorBgElevated: BRAND,
     },
     Image: {
       colorBgMask: 'rgba(0, 0, 0, 0.85)',

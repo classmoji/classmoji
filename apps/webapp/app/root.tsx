@@ -35,7 +35,7 @@ import type { MembershipWithOrganization, AppUser, Role } from '~/types';
 import { ROOT_USER_INCLUDE } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
-import antdTheme from './config/antd';
+import antdTheme, { TAG_CONFIG } from './config/antd';
 import antdDarkTheme from './config/antdDark';
 import useStore from './store';
 import { getRoleFromPath } from './constants/roleSettings';
@@ -574,6 +574,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                 algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
               } as ThemeConfig
             }
+            tag={TAG_CONFIG}
             renderEmpty={() => (
               <div className="flex justify-center flex-col items-center gap-2 py-4">
                 <IconMoodSad size={25} />
