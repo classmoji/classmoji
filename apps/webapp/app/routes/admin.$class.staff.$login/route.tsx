@@ -322,6 +322,9 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
               percent={Math.round(stats.progress)}
               size={60}
               strokeColor={getProgressColor(stats.progress)}
+              // antd 6's circle is inline-flex on the text baseline, which adds
+              // 6px of line box under it; middle keeps antd 5's card height.
+              style={{ verticalAlign: 'middle' }}
             />
           </Card>
         </div>
