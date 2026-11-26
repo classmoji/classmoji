@@ -119,18 +119,27 @@ vi.mock('~/hooks', () => ({
 }));
 vi.mock('~/utils/quizUtils', () => ({ formatDuration: () => '' }));
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
+// What the three routes and the components they import take from antd.
+// Dialogs come from App.useApp(); Modal is only rendered as a component.
 vi.mock('antd', () => ({
+  App: Object.assign(() => null, {
+    useApp: () => ({ modal: { confirm: vi.fn(), error: vi.fn() } }),
+  }),
+  Alert: () => null,
   Table: () => null,
   Button: () => null,
   Tag: () => null,
   Tooltip: () => null,
   Badge: () => null,
   Space: () => null,
-  Modal: Object.assign(() => null, { confirm: vi.fn(), error: vi.fn() }),
+  Modal: () => null,
   Select: () => null,
   Spin: () => null,
   Drawer: () => null,
   ConfigProvider: () => null,
+  Form: Object.assign(() => null, { Item: () => null }),
+  Input: Object.assign(() => null, { TextArea: () => null }),
+  Segmented: () => null,
   theme: { darkAlgorithm: {}, defaultAlgorithm: {} },
 }));
 vi.mock('@ant-design/icons', () => ({

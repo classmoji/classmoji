@@ -47,9 +47,9 @@ vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: { submit: vi.fn() } }) }));
 vi.mock('~/hooks/useGitWeb', () => ({ useGitWeb: () => ({}) }));
 vi.mock('antd', () => ({
+  App: Object.assign(() => null, { useApp: () => ({ modal: { confirm: vi.fn() } }) }),
   Button: () => null,
   Form: Object.assign(() => null, { Item: () => null }),
-  Modal: { confirm: vi.fn() },
   Switch: () => null,
 }));
 vi.mock('@tabler/icons-react', () => ({ IconExternalLink: () => null }));
