@@ -25,8 +25,10 @@ vi.mock('react-router', () => ({
   useLocation: () => ({ pathname: '/student/cs52/quizzes' }),
   useRevalidator: () => ({ revalidate: mocks.revalidate }),
 }));
+// The dialogs come from antd's <App> context (mounted in root.tsx), not the
+// static Modal methods.
 vi.mock('antd', () => ({
-  Modal: { error: mocks.modalError, confirm: mocks.modalConfirm },
+  App: { useApp: () => ({ modal: { error: mocks.modalError, confirm: mocks.modalConfirm } }) },
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
