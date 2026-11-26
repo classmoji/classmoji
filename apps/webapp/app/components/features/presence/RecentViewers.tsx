@@ -182,7 +182,7 @@ const RecentViewers = ({
 
   return (
     <Dropdown
-      dropdownRender={() => dropdownContent}
+      popupRender={() => dropdownContent}
       trigger={['hover', 'click']}
       placement="bottomRight"
     >

@@ -62,7 +62,7 @@ const StepBasicInfo = ({
   };
 
   // Custom dropdown footer with "Install on another organization" button
-  const dropdownRender = (menu: React.ReactNode) => (
+  const popupRender = (menu: React.ReactNode) => (
     <>
       {menu}
       <Divider style={{ margin: '8px 0' }} />
@@ -101,7 +101,7 @@ const StepBasicInfo = ({
                   placeholder="Select GitHub Organization"
                   className="w-full"
                   status={errors.git_org_id ? 'error' : ''}
-                  dropdownRender={dropdownRender}
+                  popupRender={popupRender}
                 >
                   {gitOrgs.map(org => (
                     <Select.Option key={org.id} value={org.id}>

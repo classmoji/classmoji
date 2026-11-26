@@ -64,7 +64,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
       content={dropdownContent}
       trigger={['hover']}
       placement={placement}
-      overlayClassName="z-50"
+      classNames={{ root: 'z-50' }}
     >
       {children}
     </Popover>
