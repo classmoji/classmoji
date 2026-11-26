@@ -4,7 +4,7 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { fallbackMode } from '~/utils/sessionMode.server';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
-import { Button, Card, Alert, Steps, Spin, message } from 'antd';
+import { App, Button, Card, Alert, Steps, Spin } from 'antd';
 
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
@@ -355,6 +355,7 @@ const CreateClassroomForm = ({
   const { gitOrgs, importableClassrooms, githubAppName, quizzesVisible } = loaderData;
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
+  const { message } = App.useApp();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
 
   // Post-install wait. After an install the org isn't in the DB / GitHub's
@@ -453,7 +454,7 @@ const CreateClassroomForm = ({
       if (fetcherData.activation_warning) message.warning(fetcherData.activation_warning, 10);
       navigate(`/admin/${fetcherData.classroomSlug}/dashboard`);
     }
-  }, [fetcher!.data, navigate]);
+  }, [fetcher!.data, navigate, message]);
 
   // The last create request, so "Archive X and continue" can send it again.
   const lastSubmission = useRef<Record<string, unknown> | null>(null);
