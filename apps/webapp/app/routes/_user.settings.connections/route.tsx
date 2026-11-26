@@ -218,10 +218,9 @@ const SettingsConnections = ({ loaderData }: Route.ComponentProps) => {
         <Alert
           type="error"
           showIcon
-          closable
-          onClose={() => setError(null)}
+          closable={{ onClose: () => setError(null) }}
           style={{ marginBottom: 8 }}
-          message={error}
+          title={error}
         />
       )}
 

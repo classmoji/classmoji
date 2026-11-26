@@ -508,7 +508,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
               }}
             >
               {saveError && (
-                <Alert type="error" showIcon message={saveError} style={{ marginBottom: 16 }} />
+                <Alert type="error" showIcon title={saveError} style={{ marginBottom: 16 }} />
               )}
               <Form
                 form={form}

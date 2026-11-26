@@ -49,7 +49,7 @@ const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSel
   }, [classSlug]);
 
   if (error) {
-    return <Alert type="warning" message={error} className="mb-2" />;
+    return <Alert type="warning" title={error} className="mb-2" />;
   }
 
   return (

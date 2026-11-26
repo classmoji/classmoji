@@ -304,7 +304,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
           <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
 
           {actionError && (
-            <Alert message={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
+            <Alert title={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
           )}
 
           <Form

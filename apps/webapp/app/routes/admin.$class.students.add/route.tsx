@@ -248,7 +248,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
 
             {categorized.valid.length === 0 && categorized.skipped.length > 0 && (
               <Alert
-                message="No new students to add"
+                title="No new students to add"
                 description="All students in your input are either already enrolled or have invalid data."
                 type="warning"
                 showIcon

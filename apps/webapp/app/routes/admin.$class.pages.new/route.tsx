@@ -564,7 +564,7 @@ function NewPageForm({ loaderData }: Route.ComponentProps) {
           <>
             {createError && (
               <Alert
-                message="Error"
+                title="Error"
                 description={createError}
                 type="error"
                 closable

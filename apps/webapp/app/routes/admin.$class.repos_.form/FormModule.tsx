@@ -358,7 +358,7 @@ const FormModule = ({
         <div>
           <Alert
             type="error"
-            message="Please check the highlighted fields and correct any issues."
+            title="Please check the highlighted fields and correct any issues."
             showIcon
             className="mb-4"
           />
@@ -659,7 +659,7 @@ const FormModule = ({
                   className="mb-4"
                   showIcon
                   type={gitlabRunner === 'unknown' ? 'info' : 'warning'}
-                  message={
+                  title={
                     gitlabRunner === 'none'
                       ? 'No CI runner is available to this class on your Gitlab, so the tests will not run.'
                       : gitlabRunner === 'offline'

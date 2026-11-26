@@ -341,7 +341,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
             type="warning"
             showIcon
             icon={<WarningOutlined />}
-            message="Orphaned Grades Detected"
+            title="Orphaned Grades Detected"
             description={
               <div className="mt-2">
                 <p className="mb-3 text-ink-2">

@@ -252,11 +252,10 @@ const SettingsGeneral = () => {
             <Alert
               type="success"
               showIcon
-              closable
-              onClose={() => setChangedTo(null)}
+              closable={{ onClose: () => setChangedTo(null) }}
               // Inline: antd's own margin rule outranks a Tailwind utility here.
               style={{ marginBottom: 32 }}
-              message={`Email updated to ${changedTo}.`}
+              title={`Email updated to ${changedTo}.`}
               description="Any classroom invitations sent to this address have been added to your account."
             />
           )}
@@ -338,7 +337,7 @@ const SettingsGeneral = () => {
                 sent to that address are picked up automatically once it is verified.
               </p>
 
-              {error && <Alert type="error" showIcon message={error} className="mb-4" />}
+              {error && <Alert type="error" showIcon title={error} className="mb-4" />}
 
               <div className="flex flex-col gap-3 max-w-md">
                 <div className="flex gap-2">
@@ -464,10 +463,9 @@ const PasswordSection = () => {
         <Alert
           type={message.type}
           showIcon
-          closable
-          onClose={() => setMessage(null)}
+          closable={{ onClose: () => setMessage(null) }}
           style={{ marginBottom: 24 }}
-          message={message.text}
+          title={message.text}
         />
       )}
 

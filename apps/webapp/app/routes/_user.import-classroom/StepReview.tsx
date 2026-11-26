@@ -89,7 +89,7 @@ export default function StepReview({
           className="mb-4"
           type="warning"
           showIcon
-          message="Some items were skipped while reading the export"
+          title="Some items were skipped while reading the export"
           description={
             <ul className="list-disc ml-5">
               {bundleWarnings.slice(0, 8).map((w, i) => (
