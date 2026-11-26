@@ -24,5 +24,7 @@ export default defineConfig({
   test: {
     include: ['app/**/__tests__/**/*.test.ts?(x)', 'app/**/*.test.ts?(x)'],
     environment: 'node',
+    // jsdom has no ResizeObserver; antd components construct one on mount.
+    setupFiles: ['./app/__tests__/support/resizeObserver.ts'],
   },
 });

@@ -167,9 +167,13 @@ test.describe('Slides Theme Switching', () => {
     const dropdown = page.locator('.ant-select-dropdown');
     await dropdown.waitFor({ state: 'visible' });
 
-    await dropdown.locator('.rc-virtual-list-holder').evaluate(el => {
-      el.scrollTop = el.scrollHeight;
-    });
+    // The list's scroll container: rc-virtual-list-holder in antd 5,
+    // ant-select-dropdown-list-holder in antd 6.
+    await dropdown
+      .locator('.rc-virtual-list-holder, .ant-select-dropdown-list-holder')
+      .evaluate(el => {
+        el.scrollTop = el.scrollHeight;
+      });
 
     const nightOption = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("Night")'
@@ -212,9 +216,7 @@ test.describe('Slides Theme Switching', () => {
     // rather than treating a missing option as a pass.
     await expect(page.locator('.reveal')).toHaveAttribute('data-code-theme', 'github-dark');
     // Selection is reflected in the dropdown's displayed value too.
-    await expect(codeThemeDropdown.locator('.ant-select-selection-item')).toContainText(
-      /GitHub Dark/i
-    );
+    await expect(codeThemeDropdown).toContainText(/GitHub Dark/i);
   });
 
   test('theme persists after save and reload', async ({ page }) => {
@@ -259,9 +261,8 @@ test.describe('Slides Theme Switching', () => {
     const themesSectionAfterReload = page
       .locator('.ant-collapse-item')
       .filter({ hasText: 'Presentation Themes' });
-    const themeDropdownValue = themesSectionAfterReload
-      .locator('.ant-select-selection-item')
-      .first();
+    // The select's own text is its shown value (antd 6 has no -selection-item).
+    const themeDropdownValue = themesSectionAfterReload.locator('.ant-select').first();
     await expect(themeDropdownValue).toContainText('Beige');
   });
 

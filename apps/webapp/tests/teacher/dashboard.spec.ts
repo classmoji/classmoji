@@ -32,7 +32,7 @@ test.describe('Teacher shell', () => {
     // The role label lives in the dropdown option, not the selected label.
     // This is also the regression guard for the switcher crash: before TEACHER
     // had a roleSettings entry, opening this dropdown threw on undefined.path.
-    const orgSelect = page.locator('.ant-select-selector').first();
+    const orgSelect = page.locator('.ant-select').first();
     await orgSelect.click();
     await expect(page.getByText('Teacher', { exact: true }).first()).toBeVisible({
       timeout: 10000,

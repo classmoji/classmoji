@@ -619,8 +619,9 @@ test.describe('svg and html slide blocks in the editor', () => {
         .poll(
           async () =>
             luminance(
+              // The painted panel: -content in antd 5, -container in antd 6.
               await modal
-                .locator('.ant-modal-content')
+                .locator('.ant-modal-content, .ant-modal-container')
                 .evaluate(el => getComputedStyle(el).backgroundColor)
             ),
           { timeout: 10_000 }

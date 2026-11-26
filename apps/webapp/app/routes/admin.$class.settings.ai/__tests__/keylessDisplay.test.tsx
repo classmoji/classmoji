@@ -98,6 +98,12 @@ const render = (
 
 const ALL_NULL = Object.fromEntries(Object.keys(DEFAULT_LABELS).map(field => [field, null]));
 
+// A select's placeholder and its shown value: antd 5 names them
+// -selection-placeholder and -selection-item, antd 6 -placeholder and
+// -content-has-value.
+const PLACEHOLDER = /\bant-select-(?:selection-)?placeholder(?![\w-])/g;
+const SHOWN_VALUE = /ant-select-selection-item|ant-select-content-has-value/;
+
 describe('AI settings: keyless display', () => {
   it('shows every platform default and no stored choice without a key', () => {
     const html = render(false, ALL_NULL);
@@ -105,8 +111,8 @@ describe('AI settings: keyless display', () => {
     for (const label of new Set(Object.values(DEFAULT_LABELS))) {
       expect(html).toContain(`Default: ${label}`);
     }
-    expect(html.match(/ant-select-selection-placeholder/g)).toHaveLength(8);
-    expect(html).not.toContain('ant-select-selection-item');
+    expect(html.match(PLACEHOLDER)).toHaveLength(8);
+    expect(html).not.toMatch(SHOWN_VALUE);
     expect(html).not.toContain('Claude Opus 5.5');
     expect(html.match(/ant-select-disabled/g)).toHaveLength(8);
     expect(html).toContain('Using system defaults');
@@ -116,7 +122,8 @@ describe('AI settings: keyless display', () => {
     const html = render(true, { ...ALL_NULL, llm_model: 'claude-opus-5-5' });
 
     expect(html).toContain('Claude Opus 5.5');
-    expect(html.match(/ant-select-selection-placeholder/g)).toHaveLength(7);
+    expect(html.match(PLACEHOLDER)).toHaveLength(7);
+    expect(html.match(new RegExp(SHOWN_VALUE, 'g'))).toHaveLength(1);
     expect(html).not.toContain('ant-select-disabled');
     expect(html).toContain('Using classroom key');
   });
