@@ -242,7 +242,7 @@ const ContributorBreakdown = ({
         }}
         footer={null}
         title={linkTarget ? `Link ${web.label} user ${linkTarget} to a student` : undefined}
-        destroyOnClose
+        destroyOnHidden
         data-testid="link-contributor-modal"
       >
         <div className="space-y-3">

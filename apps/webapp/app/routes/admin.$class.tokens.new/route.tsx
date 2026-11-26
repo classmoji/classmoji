@@ -108,7 +108,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
       centered
       closable={false}
       maskClosable
-      destroyOnClose
+      destroyOnHidden
       styles={{
         content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
