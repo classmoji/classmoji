@@ -122,10 +122,18 @@
   background: var(--ant-button-default-hover-bg);
 }
 
-/* A button icon that is a bare SVG (the app's Tabler icons): antd 6 centres it
-   in a flex box, 1.25px lower than antd 5, which set it on the text's line. */
-.ant-btn > .ant-btn-icon:has(> svg) {
+/* A button's icon: antd 6 centres it in a flex box, so a bare SVG (the app's
+   Tabler icons) sits 1.25px lower than in antd 5, and an antd icon 0.25px
+   lower. antd 5 set both on the text's line. */
+.ant-btn > .ant-btn-icon {
   display: block;
+}
+.ant-btn > .ant-btn-icon > .anticon {
+  display: inline-flex;
+  vertical-align: -0.125em;
+}
+.ant-btn > .ant-btn-icon > .anticon::before {
+  content: none;
 }
 
 /* The active tab's label: antd 5 thickened it with a hairline text-shadow
