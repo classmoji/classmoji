@@ -66,6 +66,15 @@
   --ant-input-number-input-padding-block: 7px;
 }
 
+/* A Select's arrow (and clear ×) sits inside the select's horizontal padding
+   in antd 6, 12px from the edge of a default select and 8px from a small one.
+   antd 5 put it 11px from the edge at every size. */
+.ant-select .ant-select-suffix {
+  margin-inline-end: calc(
+    11px - var(--ant-select-border-size, 1px) - var(--ant-select-padding-horizontal, 11px)
+  );
+}
+
 /* A selected option under the pointer: antd 6 paints it with
    controlItemBgActiveHover (a darker blue, or a darker accent); antd 5 kept the
    selected colour. */
@@ -98,10 +107,37 @@
   background: var(--ant-button-default-hover-bg);
 }
 
+/* A button icon that is a bare SVG (the app's Tabler icons): antd 6 centres it
+   in a flex box, 1.25px lower than antd 5, which set it on the text's line. */
+.ant-btn > .ant-btn-icon:has(> svg) {
+  display: block;
+}
+
 /* The active tab's label: antd 5 thickened it with a hairline text-shadow
    (its `tabsActiveTextShadow`), which antd 6 dropped. */
 .ant-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
   text-shadow: 0 0 0.25px currentcolor;
+}
+
+/* A bordered table's first right-fixed column (the gradebook's Total): antd 5
+   drew the table's border along its left edge, over any border of the cell's
+   own; antd 6 dropped that line, so the cell's own border shows instead. */
+.ant-table.ant-table-bordered
+  > .ant-table-container
+  > :is(.ant-table-content, .ant-table-header, .ant-table-body, .ant-table-summary)
+  > table
+  > :is(thead, tbody, tfoot)
+  > tr
+  > .ant-table-cell-fix-end-shadow::after {
+  border-inline-end: 1px solid var(--ant-table-border-color);
+}
+
+/* A table that sizes its columns to their content measures each header title
+   in a hidden row. antd 6 sets that copy in bold (700) by an inline style,
+   wider than the 600 the header shows, so such columns come out about 1px
+   wider than antd 5's, which measured in the header's own weight. */
+.ant-table-measure-row > td > div {
+  font-weight: var(--ant-font-weight-strong, 600) !important;
 }
 
 /* Small pagination (every table here): antd 6 puts 4px between the page
@@ -115,10 +151,37 @@
   margin-inline-end: 8px;
   line-height: 24px;
 }
-/* …and its page-size select keeps antd 5's room between the value and the
-   arrow (antd 6 leaves 2.6px less). */
+/* …and its page-size select keeps antd 5's width and room between the value
+   and the arrow (with the arrow rule above, antd 6 leaves 0.38px more). */
 .ant-pagination .ant-pagination-options .ant-select-sm .ant-select-content {
-  margin-inline-end: 8.62px;
+  margin-inline-end: 5.62px;
+}
+
+/* Small horizontal Steps (the create- and import-classroom wizards). antd 6
+   sizes each step to its content, so steps with longer titles are wider and
+   the icons no longer sit at even intervals; draws the line to an upcoming
+   step in the disabled-text grey (darker), 8px after the title; fills an
+   upcoming step's circle lighter; and sets its number at 14px. antd 5: equal
+   steps (the last as wide as its content), the split colour, 12px after the
+   title, colorFillContent, 12px. */
+.ant-steps.ant-steps-small.ant-steps-horizontal.ant-steps-title-horizontal {
+  --ant-cmp-steps-title-horizontal-rail-margin: 12px;
+}
+.ant-steps.ant-steps-small.ant-steps-horizontal.ant-steps-title-horizontal > .ant-steps-item {
+  flex: 1 1 0;
+}
+.ant-steps.ant-steps-small.ant-steps-horizontal.ant-steps-title-horizontal
+  > .ant-steps-item:last-child {
+  flex: none;
+}
+.ant-steps.ant-steps-small .ant-steps-item-rail-wait {
+  --ant-cmp-steps-item-solid-line-color: var(--ant-color-split);
+}
+.ant-steps.ant-steps-small.ant-steps-filled .ant-steps-item-wait {
+  --ant-cmp-steps-item-icon-bg-color: var(--ant-color-fill-content);
+}
+.ant-steps.ant-steps-small .ant-steps-item-icon {
+  font-size: var(--ant-font-size-sm, 12px);
 }
 
 /* Popover, popconfirm and tooltip: antd 6 draws their shadow with a
