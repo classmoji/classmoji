@@ -85,12 +85,12 @@
 }
 
 /* In the gutter, centred on the heading's first line (below the heading's top
-   padding, --heading-pad-top; the line is --level × 1.3, see
+   padding, --heading-pad-top; the line is --level × --heading-lh (1.3 to 1.6 by level), see
    blocknote-overrides). */
 .pg-section-check {
   position: absolute;
   left: -34px;
-  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * 1.3 - 24px) / 2);
+  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * var(--heading-lh, 1.25) - 24px) / 2);
   width: 24px;
   height: 24px;
   display: flex;
@@ -241,6 +241,14 @@
   accent-color: var(--pg-primary);
 }
 
+.bn-block-outer
+  .bn-block-content[data-content-type='checkListItem']
+  > div
+  > input.pg-personal-check.pg-personal-check:checked {
+  background-color: var(--pg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
 /* A student check list item that cannot be ticked here (signed out, not a
    member, "View as"): no pointer. BlockNote's own rule sets one on every
    item's box, hence the matching selector. */
@@ -285,7 +293,7 @@
 .bn-editor .pg-checkable-badge {
   position: absolute;
   left: -30px;
-  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * 1.3 - 16px) / 2);
+  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * var(--heading-lh, 1.25) - 16px) / 2);
   width: 16px;
   height: 16px;
   background-color: #9ca3af;
@@ -358,7 +366,7 @@
   align-self: flex-start;
   margin-left: auto;
   padding-left: 12px;
-  margin-top: calc((var(--level, 24px) * 1.3 - 24px) / 2);
+  margin-top: calc((var(--level, 24px) * var(--heading-lh, 1.25) - 24px) / 2);
   user-select: none;
 }
 
@@ -1109,4 +1117,92 @@
 .pg-activity-pop-empty-text {
   margin-top: 2px;
   font-size: 12px;
+}
+
+/* =====================================================================
+   Steps: a numbered circle on an H1 or H2, and a line to the next step
+   ===================================================================== */
+
+/* The colours: a transparent circle with a thin ring, and a hairline. Both
+   themes are stated here; the generated rules (utils/stepStyles.ts) only place
+   things. */
+.page-editor {
+  /* The number and the ring: the colour of the left menu's section headings. */
+  --st-fg: var(--ink-4);
+  --st-ring: var(--st-fg);
+  --st-line: var(--line);
+}
+
+.dark .page-editor {
+  --st-line: var(--line-2);
+}
+
+/* The circle is the heading's `::before`, drawn 46px to the left of its text
+   (the step's indent). It is empty, so invisible, until a generated rule gives
+   it the step's number: a heading with the prop at another level, or a step
+   the generated rules do not know, shows nothing. Only H1 and H2 are steps. */
+.page-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  ) {
+  position: relative;
+}
+
+.page-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )::before {
+  content: '';
+  position: absolute;
+  left: -46px;
+  top: 0;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--st-ring);
+  color: var(--st-fg);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 30px;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: none;
+  pointer-events: none;
+}
+
+/* A heading that is both a step and checkable: the check moves out to the left
+   of the circle (the circle takes the 46px left of the text), 8px clear of it:
+   the reader's 24px tick box at -78px, the editor's 16px badge at -70px. The
+   inline layout (no room for the gutter) keeps the box inside the heading,
+   between the circle and the text. */
+.pg-reader-sections
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )[data-checkable='true']
+  .pg-section-check {
+  left: -78px;
+}
+
+.pg-reader-sections[data-section-checks='inline']
+  .bn-block-content[data-content-type='heading'][data-step='true'][data-checkable='true']
+  .pg-section-check {
+  left: calc(var(--heading-pad-left, 0px) - 2px);
+}
+
+.bn-editor
+  .bn-block-content[data-content-type='heading'][data-step='true']:is(
+    :not([data-level]),
+    [data-level='1'],
+    [data-level='2']
+  )[data-checkable='true']
+  .pg-checkable-badge {
+  left: -70px;
 }

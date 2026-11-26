@@ -47,6 +47,7 @@ import {
 import { openLockedSections } from '~/components/viewer/sections/sectionCheckbox.ts';
 import {
   SECTION_CHECK_GUTTER,
+  SECTION_CHECK_GUTTER_STEP,
   clipLeftOf,
   sectionCheckLayout,
 } from '~/components/viewer/sections/useSectionCheckGutter.ts';
@@ -2245,6 +2246,21 @@ test.describe('the tick box gutter', () => {
     expect(sectionCheckLayout(pane(354))).toBe('gutter');
     // One tight heading puts every box inline.
     expect(sectionCheckLayout(page(heading(300) + heading(20)).body)).toBe('inline');
+  });
+
+  test('a step heading needs room for the circle too', () => {
+    const step = (left: number) =>
+      page(
+        `<div>${heading(left, '').replace('data-checkable="true"', 'data-checkable="true" data-step="true" data-level="2"')}</div>`
+      ).body;
+    // 38px is enough for a plain heading and not for a step: its box sits 78px out.
+    expect(sectionCheckLayout(step(SECTION_CHECK_GUTTER))).toBe('inline');
+    expect(sectionCheckLayout(step(SECTION_CHECK_GUTTER_STEP))).toBe('gutter');
+    // A step prop on an H3 is not a step: the plain gutter will do.
+    const deep = page(
+      `<div>${heading(SECTION_CHECK_GUTTER).replace('data-checkable="true"', 'data-checkable="true" data-step="true" data-level="3"')}</div>`
+    ).body;
+    expect(sectionCheckLayout(deep)).toBe('gutter');
   });
 
   test('hidden boxes and collapsed headings are not measured', () => {

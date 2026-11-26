@@ -54,6 +54,8 @@ import {
   PersonalCheckListItem,
 } from './CheckableSectionItem.tsx';
 import { DoneChips } from './DoneChips.tsx';
+import { StepSectionItem } from './StepSectionItem.tsx';
+import { useEditorStepStyles } from '~/hooks/useStepStyles.ts';
 import { AddBlockButton } from './AddBlockButton.tsx';
 import { AlignedSideMenuController } from './AlignedSideMenuController.tsx';
 import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
@@ -94,6 +96,7 @@ const CustomDragHandleMenu = () => (
     <ReplaceUrlItem>Replace URL</ReplaceUrlItem>
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
     <CheckableSectionItem />
+    <StepSectionItem />
     <PersonalCheckListItem />
   </DragHandleMenu>
 );
@@ -415,6 +418,9 @@ const PageEditor = forwardRef(function PageEditor(
 
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
+  // The circles and lines of any step headings, read off the live document.
+  const stepCss = useEditorStepStyles(editor as never);
+
   const sectionStatsValue = useMemo(
     () => ({ pageId, stats: sectionStats }),
     [pageId, sectionStats]
@@ -459,6 +465,8 @@ const PageEditor = forwardRef(function PageEditor(
           aliases: item.aliases,
           group: item.group,
           placeAfter: item.placeAfter,
+          // A custom item's own key, so another can be listed after it.
+          key: item.key,
           icon: item.icon,
           onItemClick: () => item.onItemClick(editor),
         })),
@@ -489,6 +497,7 @@ const PageEditor = forwardRef(function PageEditor(
       data-no-burst=""
     >
       {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}
+      {stepCss ? <style data-testid="step-styles">{stepCss}</style> : null}
       <style>{`
         /* Editing chrome only. How a block looks (its size, line height,
            callout card, divider rule) lives in blocknote-overrides.css, which

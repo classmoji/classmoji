@@ -71,7 +71,8 @@ export interface PageHeadingOptions {
 
 /**
  * The heading every page schema uses: BlockNote's, plus a `checkable` prop
- * (a "checkable section": readers tick the heading and its section fades).
+ * (a "checkable section": readers tick the heading and its section fades) and
+ * a `step` prop (a numbered step, H1 and H2 only).
  *
  * `checkable` has NO default (`default: undefined`, like BlockNote's own
  * `numberedListItem.start`): a heading that never had it stays without it
@@ -113,6 +114,14 @@ export function createPageHeadingBlockSpec({ toggledState }: PageHeadingOptions 
       ...base.config.propSchema,
       /** Readers can tick this heading's section (set from the block menu). */
       checkable: { default: undefined, type: 'boolean' as const },
+      /**
+       * The heading is a numbered step: a circle with its number and a line to
+       * the next step (set from the block menu or the slash menu). Only H1 and
+       * H2 are steps; the prop on any other level is ignored by
+       * `isStepHeading` (`@classmoji/page-schema/sections`). Like `checkable`
+       * it has no default, so a heading that never had it stays without it.
+       */
+      step: { default: undefined, type: 'boolean' as const },
     },
   };
   return createBlockSpec<typeof config.type, typeof config.propSchema, typeof config.content>(
@@ -224,17 +233,19 @@ function enterAtStartAddsLineAbove(
 }
 
 /**
- * Enter at the start of a non-empty checkable heading: an empty heading
- * above (`enterAtStartAddsLineAbove`), the heading keeps its id and text.
- * The new line is what BlockNote's split leaves above today, the same type
- * and props (level, toggle, colours, alignment), minus `checkable`: it is a
- * blank line the author is about to write into, and a blank heading with a
- * reader tick box would be a section with nothing to tick.
+ * Enter at the start of a non-empty checkable or step heading: an empty
+ * heading above (`enterAtStartAddsLineAbove`), the heading keeps its id and
+ * text. The new line is what BlockNote's split leaves above today, the same
+ * type and props (level, toggle, colours, alignment), minus `checkable` and
+ * `step`: it is a blank line the author is about to write into, and a blank
+ * heading with a reader tick box would be a section with nothing to tick, or
+ * a numbered step with no title.
  */
 function checkableHeadingEnter(editor: AnyEditor): boolean {
   return enterAtStartAddsLineAbove(editor, content => {
-    if (content.type.name !== 'heading' || content.attrs.checkable !== true) return null;
-    const { checkable: _checkable, ...attrs } = content.attrs;
+    if (content.type.name !== 'heading') return null;
+    if (content.attrs.checkable !== true && content.attrs.step !== true) return null;
+    const { checkable: _checkable, step: _step, ...attrs } = content.attrs;
     return { type: 'heading', attrs };
   });
 }

@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import type { Block, BlockNoteEditor } from '@blocknote/core';
 import { SideMenuExtension } from '@blocknote/core/extensions';
+import { isStepHeading } from '@classmoji/page-schema/sections';
 import {
   SideMenuController,
   useBlockNoteEditor,
@@ -15,6 +16,8 @@ import {
 type Editor = BlockNoteEditor<any, any, any>;
 type SideMenuBlock = Block<any, any, any>;
 /* eslint-enable @typescript-eslint/no-explicit-any */
+import { STEP_INDENT } from '~/utils/stepStyles.ts';
+
 type Middleware = NonNullable<
   NonNullable<FloatingUIOptions['useFloatingOptions']>['middleware']
 >[number];
@@ -57,7 +60,7 @@ function firstLineOffset(editor: Editor, block: SideMenuBlock | undefined): Midd
     // these options and comparing `fn` by its SOURCE text, so without the block
     // id here every new closure looks identical and the first block's sticks.
     options: { blockId: block?.id },
-    fn: ({ y, rects }) => {
+    fn: ({ x, y, rects }) => {
       if (!block) return {};
       // The side menu's block is a snapshot from when the pointer arrived, and
       // the block can change under it (``` turns a paragraph into a code
@@ -70,9 +73,21 @@ function firstLineOffset(editor: Editor, block: SideMenuBlock | undefined): Midd
           ? undefined
           : measureFirstLine(editor, current.id, rects.floating.height);
       // On the "left-start" placement the cross axis is the vertical one.
-      return { y: y + (measured ?? fallbackOffset(editor, current)) };
+      return {
+        x: x - stepSideMenuShift(current),
+        y: y + (measured ?? fallbackOffset(editor, current)),
+      };
     },
   };
+}
+
+/**
+ * How far left, in px, the menu moves for `block`: a step heading draws its
+ * numbered circle in the 46px left of its text, exactly where the menu sits,
+ * so the menu moves out past the circle. Every other block keeps its place.
+ */
+export function stepSideMenuShift(block: unknown): number {
+  return isStepHeading(block) ? STEP_INDENT : 0;
 }
 
 /** How far below the block's top the menu must start to sit centered on the

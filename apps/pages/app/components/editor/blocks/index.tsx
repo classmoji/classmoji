@@ -13,6 +13,7 @@ import {
   IconFileText,
   IconLayoutGrid,
   IconLock,
+  IconListNumbers,
   IconSquareCheck,
   IconUserCheck,
 } from '@tabler/icons-react';
@@ -104,6 +105,9 @@ export const createSchemaWithPages = () => schema;
 /** The heading levels the slash menu offers a checkable version of. */
 const CHECKABLE_HEADING_LEVELS = [1, 2, 3] as const;
 
+/** The heading levels that can be steps (H1 and H2). */
+const STEP_HEADING_LEVELS = [1, 2] as const;
+
 /**
  * Slash menu items for custom blocks.
  * These appear when the user types "/" in the editor.
@@ -115,6 +119,8 @@ export const customSlashMenuItems: Array<{
   group: string;
   /** Key of the item this one is listed directly after (slashMenuOrder.ts). */
   placeAfter?: string;
+  /** This item's own key, for another item's `placeAfter`. */
+  key?: string;
   icon: JSX.Element;
   onItemClick: (editor: PageBlockEditor) => void;
 }> = [
@@ -217,7 +223,6 @@ export const customSlashMenuItems: Array<{
       'checkable',
       'check',
       'done',
-      'step',
       'section',
       `h${level}`,
       `heading${level}`,
@@ -227,11 +232,36 @@ export const customSlashMenuItems: Array<{
     // Listed directly after the plain heading of the same level (BlockNote's
     // dictionary key for it), see slashMenuOrder.ts.
     placeAfter: level === 1 ? 'heading' : `heading_${level}`,
+    key: `checkable_heading_${level}`,
     icon: <IconSquareCheck size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
       insertOrUpdateBlockForSlashMenu(editor, {
         type: 'heading',
         props: { level, checkable: true },
+      });
+    },
+  })),
+  ...STEP_HEADING_LEVELS.map(level => ({
+    title: `Step heading ${level}`,
+    subtext: 'Numbered step, joined to the next',
+    // `step`/`steps` list both; `h1`/`heading1` list it next to "Heading 1".
+    aliases: [
+      'step',
+      'steps',
+      'numbered',
+      'number',
+      `h${level}`,
+      `heading${level}`,
+      `step${level}`,
+    ],
+    group: 'Headings',
+    // Directly after the Checkable heading of the same level (slashMenuOrder.ts).
+    placeAfter: `checkable_heading_${level}`,
+    icon: <IconListNumbers size={18} />,
+    onItemClick: (editor: PageBlockEditor) => {
+      insertOrUpdateBlockForSlashMenu(editor, {
+        type: 'heading',
+        props: { level, step: true },
       });
     },
   })),

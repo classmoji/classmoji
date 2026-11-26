@@ -28,6 +28,7 @@ import {
 } from '~/hooks/useReaderSections.tsx';
 import { openLockedSections, sectionStoreFor } from './sections/sectionCheckbox.ts';
 import { useSectionFade } from './sections/useSectionFade.ts';
+import { useStepStyles } from '~/hooks/useStepStyles.ts';
 import { useSectionCheckGutter } from './sections/useSectionCheckGutter.ts';
 import { openAllToggles } from './toggles.ts';
 
@@ -244,6 +245,7 @@ const BlockNoteViewer = ({
   // Drawn wherever the reader's ticks are shown ("View as" included), not
   // only where they can be changed.
   const fade = useSectionFade(content, checked, showChecks);
+  const stepCss = useStepStyles(content);
   // Tick boxes in the gutter, or inline where the gutter has no room.
   const gutterRef = useSectionCheckGutter(showChecks);
   const fadeRef = fade.containerRef;
@@ -279,6 +281,7 @@ const BlockNoteViewer = ({
       <div className="page-editor pg-reader-sections" ref={containerRef}>
         {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}
         {fade.css ? <style data-testid="section-fade-styles">{fade.css}</style> : null}
+        {stepCss ? <style data-testid="step-styles">{stepCss}</style> : null}
         <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
           <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
             <MediaDownloadContext.Provider value={downloads}>

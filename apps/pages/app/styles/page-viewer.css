@@ -4,41 +4,41 @@
   font-family: var(--font-sans);
   line-height: var(--line-height-relaxed);
   color: var(--color-text-default);
-  letter-spacing: -0.003em;
 }
 
 .page-viewer h1,
 .page-viewer h2,
 .page-viewer h3 {
-  letter-spacing: var(--letter-spacing-tight);
+  letter-spacing: -0.025em;
   font-weight: 700;
 }
 
 /* Headings */
 .page-viewer h1 {
   font-size: 2rem;
-  line-height: 1.2;
-  margin-top: 2rem;
-  margin-bottom: 0.5rem;
+  line-height: 1.3;
+  margin-top: 3.5rem;
+  margin-bottom: 0.6rem;
 }
 
 .page-viewer h2 {
   font-size: 1.5rem;
-  line-height: 1.3;
-  margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
+  line-height: 1.4;
+  margin-top: 1.4rem;
+  margin-bottom: 0.64rem;
 }
 
 .page-viewer h3 {
   font-size: 1.25rem;
-  line-height: 1.4;
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
+  line-height: 1.5;
+  margin-top: 1.4rem;
+  margin-bottom: 0.8rem;
+  letter-spacing: -0.01em;
 }
 
 /* Paragraphs */
 .page-viewer p {
-  margin-bottom: 0.875rem;
+  margin-bottom: 1rem;
 }
 
 /* Links */
@@ -64,13 +64,13 @@
 /* Lists */
 .page-viewer ul {
   list-style-type: disc;
-  padding-left: 1.5rem;
+  padding-left: 2em;
   margin-bottom: 1rem;
 }
 
 .page-viewer ol {
   list-style-type: decimal;
-  padding-left: 1.5rem;
+  padding-left: 2em;
   margin-bottom: 1rem;
 }
 
@@ -80,15 +80,20 @@
 
 /* Code blocks */
 .page-viewer pre {
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  border-radius: var(--radius-md);
+  background-color: #f5f5f5;
+  color: #36464e;
+  border-radius: 6px;
   padding: 1rem;
   overflow-x: auto;
   margin-bottom: 1rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: 85%;
+  line-height: 1.45;
   position: relative;
+}
+
+.dark .page-viewer pre {
+  background-color: #151b23;
+  color: #f0f6fc;
 }
 
 .page-viewer pre code {
@@ -110,29 +115,48 @@
 
 /* Blockquotes */
 .page-viewer blockquote {
-  border-left: 3px solid var(--color-border-medium);
-  padding-left: 1rem;
-  margin-bottom: 1rem;
-  color: var(--color-text-subtle);
+  border-left: 4px solid rgba(0, 0, 0, 0.32);
+  padding: 0 0 0 0.75em;
+  margin: 0 0 1rem;
+  color: rgba(0, 0, 0, 0.55);
 }
 
-/* Tables */
+.dark .page-viewer blockquote {
+  border-left-color: rgba(255, 255, 255, 0.32);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Tables: a thin outer border and lines between rows only. */
 .page-viewer table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
   margin-bottom: 1rem;
 }
 
 .page-viewer th,
 .page-viewer td {
-  border: 1px solid var(--color-border-default);
-  padding: 0.5rem 0.75rem;
+  border: 0;
+  padding: 0.94em 1.25em;
   text-align: left;
 }
 
+.page-viewer td {
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
 .page-viewer th {
-  background-color: var(--color-bg-subtle);
-  font-weight: 600;
+  font-weight: 700;
+}
+
+.dark .page-viewer table {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.dark .page-viewer td {
+  border-top-color: rgba(255, 255, 255, 0.14);
 }
 
 /* Images */
@@ -145,9 +169,13 @@
 
 /* Horizontal rule */
 .page-viewer hr {
-  border: none;
-  border-top: 1px solid var(--color-border-default);
-  margin: 2rem 0;
+  border: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  margin: 1.5rem 0;
+}
+
+.dark .page-viewer hr {
+  border-top-color: rgba(255, 255, 255, 0.14);
 }
 
 /* Copy button for code blocks */
