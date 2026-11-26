@@ -232,6 +232,9 @@
 .ant-popover:not(.ant-popover-hidden),
 .ant-tooltip:not(.ant-tooltip-hidden) {
   filter: none;
+  /* antd 6 also gives them `will-change: transform`, which puts them on their
+     own layer and snaps their text to different pixels (up to 1px). */
+  will-change: auto;
 }
 .ant-popover .ant-popover-container,
 .ant-tooltip .ant-tooltip-container {
