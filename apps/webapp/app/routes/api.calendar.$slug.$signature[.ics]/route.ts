@@ -49,7 +49,8 @@ export const loader = async ({ params }: Route.LoaderArgs) => {
   try {
     const icsContent = await ClassmojiService.icsGenerator.generateCalendarFeed(
       classroom.id,
-      classroom.slug
+      classroom.slug,
+      classroom.settings?.timezone
     );
 
     return new Response(icsContent, {

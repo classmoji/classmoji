@@ -455,4 +455,40 @@ describe('the calendar feed', () => {
     expect(args).toHaveLength(3);
     expect(args[0]).toBe('class-1');
   });
+
+  describe('a deadline', () => {
+    // A deadline is an all-day event, so the feed carries only its date. That
+    // date is the one in the classroom's zone, not the UTC one: 11:59 PM in New
+    // York is already the next day in UTC.
+    const deadline = (startTime: string) =>
+      event({
+        id: 'due',
+        title: 'Due: Lab 1',
+        event_type: 'DEADLINE',
+        is_deadline: true,
+        start_time: new Date(startTime),
+        end_time: new Date(startTime),
+      });
+
+    const dateOf = async (startTime: string, timeZone?: string | null) => {
+      getClassroomCalendar.mockResolvedValue([deadline(startTime)]);
+      const feed = await generateCalendarFeed('class-1', 'demo-class', timeZone);
+      return /^DTSTART;VALUE=DATE:(\d{8})$/m.exec(eventsById(feed)['due'] ?? '')?.[1];
+    };
+
+    it('falls on its local date when the zone is behind UTC', async () => {
+      // 11:59 PM Wed Nov 25 in New York = 04:59 Thu Nov 26 UTC
+      expect(await dateOf('2026-11-26T04:59:00Z', 'America/New_York')).toBe('20261125');
+    });
+
+    it('falls on its local date when the zone is ahead of UTC', async () => {
+      // 12:59 AM Thu Nov 26 in India = 19:29 Wed Nov 25 UTC
+      expect(await dateOf('2026-11-25T19:29:00Z', 'Asia/Kolkata')).toBe('20261126');
+    });
+
+    it('falls on its UTC date when the classroom has no zone', async () => {
+      expect(await dateOf('2026-11-26T04:59:00Z', null)).toBe('20261126');
+      expect(await dateOf('2026-11-26T04:59:00Z')).toBe('20261126');
+    });
+  });
 });
