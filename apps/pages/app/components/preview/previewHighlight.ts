@@ -181,7 +181,7 @@ export function previewHighlightCss(changes: PreviewChanges, scope: string): str
     const all = [...plain(ids), ...framedList(ids), ...framedHeading(ids)];
     return [
       `${plain(ids).join(',\n')} { ${look} ${MARK_OFFSET} }`,
-      `${framedList(ids).join(',\n')} { ${look} padding-left: calc(24px + 0.75rem); margin-left: calc(-24px - 0.75rem); width: calc(100% + 24px); box-sizing: border-box; }`,
+      `${framedList(ids).join(',\n')} { ${look} padding-left: calc(32px + 0.75rem); margin-left: calc(-32px - 0.75rem); width: calc(100% + 32px); box-sizing: border-box; }`,
       `${framedHeading(ids).join(',\n')} { ${look} padding-left: calc(var(--heading-pad-left, 0px) + var(--toggle-check-room, 0px) + 24px + 0.75rem) !important; margin-left: -0.75rem; }`,
       `${coloredHeading(ids).join(',\n')} { padding-left: calc(var(--heading-pad-left, 0px) + var(--toggle-check-room, 0px) + 24px) !important; }`,
       `${chevrons(ids).join(',\n')} { position: relative; z-index: 1; }`,

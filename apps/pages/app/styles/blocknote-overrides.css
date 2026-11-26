@@ -1,9 +1,29 @@
 /* BlockNote theme customizations for Classmoji pages */
 
-/* Override default BlockNote font size */
+/* Override default BlockNote font size. Body weight 400 and a 1.6 line height
+   (Zensical's reading rhythm), with a touch of negative tracking; emphasis is
+   700 (see `strong` below). The line height is on `.bn-block-outer`, the
+   element BlockNote itself sets it on, so every block inherits it. */
 .bn-editor {
   font-size: 16px;
-  font-weight: 500;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.bn-editor .bn-block-outer {
+  line-height: 1.6;
+}
+
+.bn-editor strong,
+.bn-inline-content strong {
+  font-weight: 700;
+}
+
+/* Monospace keeps its natural spacing. */
+.bn-block-content[data-content-type="codeBlock"],
+.bn-block-content[data-content-type="terminal"],
+.bn-block-content code {
+  letter-spacing: normal;
 }
 
 /* Side menu spacing - increase gap from content */
@@ -94,7 +114,7 @@
 }
 
 /* Heading scale — ONE definition, every surface.
-   Notion style: H1 30px, H2 24px, H3 20px, H4-H6 16px.
+   H1 30px, H2 24px, H3 20px, H4 16px, H5 and H6 13px.
 
    These sizes used to exist only under `.page-editor`, the class the editor
    and the in-app viewer wrap content in. A server-rendered class-site
@@ -142,11 +162,11 @@
 }
 
 .bn-block-content[data-content-type="heading"][data-level="5"] {
-  --level: 16px;
+  --level: 13px;
 }
 
 .bn-block-content[data-content-type="heading"][data-level="6"] {
-  --level: 16px;
+  --level: 13px;
 }
 
 /* While a block changes type or level, BlockNote keeps the OLD size for one
@@ -175,23 +195,245 @@
 }
 
 .bn-block-outer[data-prev-level="5"] {
-  --prev-level: 16px;
+  --prev-level: 13px;
 }
 
 .bn-block-outer[data-prev-level="6"] {
-  --prev-level: 16px;
+  --prev-level: 13px;
 }
 
-/* Stated rather than left to BlockNote's own heading rule, which is gated on
-   `.bn-block-outer:not([data-prev-type])` and so drops out for the frame a
-   block is changing type. BlockNote's default is the 1.5 every other block
-   inherits from `.bn-block-outer`.
+/* Heading type, after Zensical: bold 700 (BlockNote's own weight, so nothing
+   to restate), line height tighter on the big levels and relaxing down the
+   scale, and tighter tracking on H1 and H2. `--heading-lh` is stated once per
+   level and read by the line height here and by the tick box and badge in
+   page-sections.css, which sit on the heading's first line.
 
-   Body text is not restated anywhere: its 16px is `.bn-editor` (top of this
-   file) and its line height is BlockNote's own 1.5, on every surface. */
+   Stated rather than left to BlockNote's own heading rule, which is gated on
+   `.bn-block-outer:not([data-prev-type])` and so drops out for the frame a
+   block is changing type.
+
+   Body text is not restated here: its 16px is `.bn-editor` (top of this
+   file) and its line height is `.bn-block-outer`'s 1.6. */
 .bn-block-content[data-content-type="heading"] {
+  --heading-lh: 1.6;
   font-weight: 700;
-  line-height: 1.3;
+  line-height: var(--heading-lh);
+  letter-spacing: -0.01em;
+}
+
+.bn-block-content[data-content-type="heading"]:is(:not([data-level]), [data-level="1"]) {
+  --heading-lh: 1.3;
+  letter-spacing: -0.025em;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="2"] {
+  --heading-lh: 1.4;
+  letter-spacing: -0.025em;
+}
+
+.bn-block-content[data-content-type="heading"][data-level="3"] {
+  --heading-lh: 1.5;
+}
+
+/* H5 and H6 read as quiet labels: 13px, muted, and H5 in capitals. */
+.bn-block-content[data-content-type="heading"]:is([data-level="5"], [data-level="6"]) {
+  color: var(--color-text-subtle, rgba(55, 53, 47, 0.65));
+}
+
+.dark .bn-block-content[data-content-type="heading"]:is([data-level="5"], [data-level="6"]) {
+  color: var(--color-text-subtle, rgba(255, 255, 255, 0.55));
+}
+
+.bn-block-content[data-content-type="heading"][data-level="5"] {
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* Paragraph and list rhythm: GitHub's 16px between paragraphs and 4px between
+   list items. BlockNote gives every block 3px above and below (6px between
+   blocks). Padding, not margin, for the same reason as the heading gap: the
+   space has to stay inside the block's box for the side menu.
+
+   A list and a paragraph meet at 16px: the paragraph's 8px, the item's 2px and
+   6px on whichever block comes second. Headings and code cards keep their own
+   gaps above. */
+.bn-block-content[data-content-type="paragraph"] {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.bn-block-content:is(
+    [data-content-type="bulletListItem"],
+    [data-content-type="numberedListItem"],
+    [data-content-type="checkListItem"]
+  ) {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type$="ListItem"])
+  + .bn-block-outer
+  > .bn-block:has(> .bn-block-content[data-content-type="paragraph"]),
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="paragraph"])
+  + .bn-block-outer
+  > .bn-block:has(> .bn-block-content[data-content-type$="ListItem"]) {
+  padding-top: 6px;
+}
+
+/* A list is indented 32px and a nested list another 32px. BlockNote's marker
+   is 24px wide and its nested group 24px in. */
+.bn-block-content[data-content-type="bulletListItem"]::before,
+.bn-block-content[data-content-type="numberedListItem"]::before {
+  min-width: 32px;
+}
+
+/* List markers, after Stripe's docs: a small pale dot for bullets (the same dot
+   at every nesting depth) and a pale 20px circle holding the number, no
+   period, for numbered items. Both sit on one centre line, 10px in, and the
+   text starts 32px in.
+
+   BlockNote sets the marker's `content` from several selectors, up to (0,7,1)
+   for nested bullets, so ours is `!important` rather than a chase. The number
+   is BlockNote's own `--index`/`--prev-index` (`attr(data-index)`), so a
+   renumbered list and the frame while a block changes type still read right.
+   Position: the line is 25.6px (16px × 1.6); the dot is centred on it, the
+   circle is 20px with 2.8px above. */
+.bn-block-content[data-content-type="bulletListItem"]::before {
+  content: "" !important;
+  flex: none;
+  align-self: flex-start;
+  height: 25.6px;
+  background: radial-gradient(circle at 10px 12.8px, #c1c9d2 0 3px, transparent 3.5px);
+}
+
+.dark .bn-block-content[data-content-type="bulletListItem"]::before {
+  background: radial-gradient(
+    circle at 10px 12.8px,
+    rgba(255, 255, 255, 0.3) 0 3px,
+    transparent 3.5px
+  );
+}
+
+/* One gray for the numbered circle and the check box. */
+.bn-editor {
+  --list-marker-bg: #e3e8ee;
+  --list-marker-fg: #697386;
+}
+
+.dark .bn-editor {
+  --list-marker-bg: rgba(255, 255, 255, 0.14);
+  --list-marker-fg: rgba(255, 255, 255, 0.7);
+}
+
+.bn-block-content[data-content-type="numberedListItem"]::before {
+  content: var(--index) !important;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  flex: none;
+  min-width: 20px;
+  width: 20px;
+  height: 20px;
+  margin: 2.8px 0 0;
+  padding: 0;
+  border-radius: 50%;
+  background-color: var(--list-marker-bg);
+  color: var(--list-marker-fg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The markers are out of the row's flow. A marker that is a flex item beside the text is
+   the row's first child, and a click to the right of the text then resolves to it: the
+   cursor lands at the START of the row instead of the end (a heading's marker box has no
+   height, so it never competes). So the row reserves the 32px gutter with padding and the
+   marker is absolutely positioned in it, where it was: its top is the row's own top
+   padding (`top` left auto), and the text still starts 32px in. */
+.bn-block-content[data-content-type="bulletListItem"],
+.bn-block-content[data-content-type="numberedListItem"] {
+  position: relative;
+  padding-left: 32px;
+}
+
+.bn-block-content[data-content-type="bulletListItem"]::before,
+.bn-block-content[data-content-type="numberedListItem"]::before {
+  position: absolute;
+  left: 0;
+}
+
+.bn-block-content[data-content-type="bulletListItem"]::before {
+  width: 32px;
+}
+
+.bn-block-outer[data-prev-type="numberedListItem"]:not([data-prev-index="none"])
+  > .bn-block
+  > .bn-block-content[data-content-type="numberedListItem"]::before {
+  content: var(--prev-index) !important;
+}
+
+
+.bn-block-content:is(
+    [data-content-type="bulletListItem"],
+    [data-content-type="numberedListItem"],
+    [data-content-type="checkListItem"],
+    [data-content-type="toggleListItem"]
+  )
+  ~ .bn-block-group {
+  margin-left: 32px;
+}
+
+/* A check list item and a toggle list item start their text 32px in, as a
+   bullet and a number do. The toggle's 24px chevron gets an 8px gap after it.
+
+   The check box is the numbered list's circle, as a rounded box: 18px, which reads as
+   the circle's 20px, in its gray (--list-marker-bg), centred on the first line, with a gray
+   tick when it is ticked. BlockNote's box is the browser's 12px one. A student
+   check list item keeps the reader's check green when ticked (page-sections.css
+   sets its colour). */
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div:has(> input) {
+  display: flex;
+  align-items: center;
+  height: 25.6px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin: 0 13px 0 1px;
+  border: 0;
+  border-radius: 6px;
+  background-color: var(--list-marker-bg);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23697386' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.dark .bn-block-outer .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7.4l2.7 2.7L11 4.6' fill='none' stroke='%23ffffffb3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(> .bn-toggle-slot > .bn-block-content[data-content-type="toggleListItem"])
+  > .bn-toggle-button {
+  margin-right: 8px;
 }
 
 /* Room above headings — every surface, like the scale above (issue #717).
@@ -212,12 +454,11 @@
      (getDraggableBlockFromElement), and the section fade and tick box hover
      go by the block too. A margin outside it hid the drag handle and dimmed a
      ticked section while the pointer crossed the gap.
-   - The 6px under the bar is a margin on the heading's content. `.bn-block`
-     is a flex column, so it sits between the bar and the heading's own
-     children (a toggle's body) and does not collapse. In px, because an `em`
-     there is the heading's own `--level`.
-   - The `em` above is on `.bn-block`, the 16px body size, so the gap does not
-     grow with the heading.
+   - The space under the heading (4 to 10px by level) is a margin on the
+     heading's content. `.bn-block` is a flex column, so it sits between the
+     heading and its own children (a toggle's body) and does not collapse. In
+     px, because an `em` there is the heading's own `--level`.
+   - The gap above is in px too, so it does not grow with the heading.
    - `:not(:first-child)`: no gap on the first block of the page, a column or a
      nested group.
    - A heading right after a heading with no children of its own keeps only the
@@ -225,10 +466,27 @@
 .bn-block-content[data-content-type="heading"] {
   --heading-pad-top: 0px;
   padding-top: var(--heading-pad-top);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
-/* A toggle heading (BlockNote 0.56+) draws its chevron in a frame around the
+/* The space under a heading, by level (Zensical's, less the 8px a paragraph
+   adds above its own text). */
+.bn-block-content[data-content-type="heading"]:is(:not([data-level]), [data-level="1"]) {
+  margin-bottom: 10px;
+}
+
+.bn-block-content[data-content-type="heading"]:is([data-level="4"], [data-level="5"], [data-level="6"]) {
+  margin-bottom: 4px;
+}
+
+/* The gap above a heading, by level: `--heading-gap` is the space from the
+   text above to the heading. The block above has already put 8px of padding
+   under a paragraph (2px under a list item), and padding does not collapse
+   the way Zensical's margins do, so the heading pads by the gap less that
+   amount: the total is the same whatever comes before it. H1 56px, H2 and H3
+   22px, H4 16px, H5 and H6 18px.
+
+   A toggle heading (BlockNote 0.56+) draws its chevron in a frame around the
    heading's content and children: `.bn-block > .bn-toggle-frame >
    .bn-toggle-slot > (.bn-block-content, .bn-block-group)`. Each rule below
    names that shape too. */
@@ -242,43 +500,63 @@
     > .bn-block-content[data-content-type="heading"][data-level="1"],
     > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="1"]
   ) {
-  padding-top: 2em;
+  --heading-gap: 56px;
+  padding-top: calc(var(--heading-gap) - 8px);
 }
 
 .bn-block-outer:not(:first-child)
   > .bn-block:has(
-    > .bn-block-content[data-content-type="heading"][data-level="2"],
-    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="2"]
+    > .bn-block-content[data-content-type="heading"]:is([data-level="2"], [data-level="3"]),
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]:is([data-level="2"], [data-level="3"])
   ) {
-  padding-top: 1.75em;
+  --heading-gap: 22px;
+  padding-top: calc(var(--heading-gap) - 8px);
 }
 
 .bn-block-outer:not(:first-child)
   > .bn-block:has(
-    > .bn-block-content[data-content-type="heading"][data-level="3"],
-    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="3"]
+    > .bn-block-content[data-content-type="heading"][data-level="4"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="4"]
   ) {
-  padding-top: 1.25em;
+  --heading-gap: 16px;
+  padding-top: calc(var(--heading-gap) - 8px);
 }
 
 .bn-block-outer:not(:first-child)
   > .bn-block:has(
-    > .bn-block-content[data-content-type="heading"]:is(
-        [data-level="4"],
-        [data-level="5"],
-        [data-level="6"]
-      ),
-    > .bn-toggle-frame
-      > .bn-toggle-slot
-      > .bn-block-content[data-content-type="heading"]:is(
-        [data-level="4"],
-        [data-level="5"],
-        [data-level="6"]
-      )
+    > .bn-block-content[data-content-type="heading"]:is([data-level="5"], [data-level="6"]),
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]:is([data-level="5"], [data-level="6"])
   ) {
-  padding-top: 1em;
+  --heading-gap: 18px;
+  padding-top: calc(var(--heading-gap) - 8px);
 }
 
+/* After a list item, which pads 2px under its text. */
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type$="ListItem"])
+  + .bn-block-outer
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+  ) {
+  padding-top: calc(var(--heading-gap) - 2px);
+}
+
+/* After a code or terminal card, which pads nothing under itself: the full gap. */
+.bn-block-outer:has(
+    > .bn-block
+      > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .bn-block > .react-renderer > .bn-block-content[data-content-type="terminal"]
+  )
+  + .bn-block-outer
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"],
+    > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
+  ) {
+  padding-top: var(--heading-gap);
+}
+
+/* A heading right after a heading with no children of its own: a small step,
+   so an H2 and the H3 under it read as one unit. */
 .bn-block-outer:has(
     > .bn-block > .bn-block-content[data-content-type="heading"],
     > .bn-block > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
@@ -288,7 +566,7 @@
     > .bn-block-content[data-content-type="heading"],
     > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-content-type="heading"]
   ) {
-  padding-top: 0;
+  padding-top: 8px;
 }
 
 /* A toggle heading's chevron, laid out as it was inside the heading (up to
@@ -310,6 +588,7 @@
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
   --toggle-level: 30px;
+  --toggle-lh: 1.3;
 }
 
 .bn-block-outer
@@ -318,6 +597,7 @@
     > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="2"]
   ) {
   --toggle-level: 24px;
+  --toggle-lh: 1.4;
 }
 
 .bn-block-outer
@@ -326,6 +606,7 @@
     > .bn-toggle-slot > .bn-block-content[data-content-type="heading"][data-level="3"]
   ) {
   --toggle-level: 20px;
+  --toggle-lh: 1.5;
 }
 
 .bn-block-outer
@@ -339,6 +620,17 @@
       )
   ) {
   --toggle-level: 16px;
+  --toggle-lh: 1.6;
+}
+
+/* H5 and H6 are 13px labels. */
+.bn-block-outer
+  > .bn-block
+  > .bn-toggle-frame:has(
+    > .bn-toggle-slot
+      > .bn-block-content[data-content-type="heading"]:is([data-level="5"], [data-level="6"])
+  ) {
+  --toggle-level: 13px;
 }
 
 .bn-block-outer
@@ -369,7 +661,7 @@
   justify-self: start;
   z-index: 1;
   margin-left: calc(var(--toggle-pad-left, 0px) + var(--toggle-check-room, 0px));
-  margin-top: calc(var(--toggle-pad-top, 0px) + (var(--toggle-level) * 1.3 - 24px) / 2);
+  margin-top: calc(var(--toggle-pad-top, 0px) + (var(--toggle-level) * var(--toggle-lh, 1.3) - 24px) / 2);
 }
 
 .bn-block-outer
@@ -740,6 +1032,45 @@
 .bn-container .bn-block-content[data-content-type="codeBlock"] {
   /* Clips the bar to the rounded corners. Long lines scroll inside the <pre>. */
   overflow: hidden;
+
+  /* Zensical's code block: a flat pale card in light mode (the dark card below
+     in dark mode). Everything on the card reads these, so the two themes
+     differ in one place. */
+  --code-bg: #f5f5f5;
+  --code-fg: #36464e;
+  --code-border: transparent;
+  --code-bar: #ececec;
+  --code-bar-border: #e2e2e2;
+  --code-bar-hover: #e2e2e2;
+  --code-label: #6b7479;
+  --code-label-hover: #36464e;
+  --code-fade: 245 245 245;
+  background-color: var(--code-bg);
+  color: var(--code-fg);
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+}
+
+.dark .bn-container .bn-block-content[data-content-type="codeBlock"] {
+  --code-bg: #141414;
+  --code-fg: #ffffff;
+  --code-border: #333333;
+  --code-bar: #2d2d2d;
+  --code-bar-border: #1a1a1a;
+  --code-bar-hover: #333333;
+  --code-label: #8e8e8e;
+  --code-label-hover: #d4d4d4;
+  --code-fade: 20 20 20;
+}
+
+/* BlockNote paints every token with its dark theme (`.shiki { color:
+   var(--shiki-dark) }`); a light card takes the light one. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] .shiki {
+  color: var(--shiki-light, var(--code-fg));
+}
+
+.dark .bn-container .bn-block-content[data-content-type="codeBlock"] .shiki {
+  color: var(--shiki-dark, var(--code-fg));
 }
 
 /* Absolute: the block content is a flex row, so an in-flow bar would sit
@@ -751,8 +1082,8 @@
   left: 0;
   right: 0;
   height: 34px;
-  background-color: #2d2d2d;
-  border-bottom: 1px solid #1a1a1a;
+  background-color: var(--code-bar);
+  border-bottom: 1px solid var(--code-bar-border);
   pointer-events: none;
   transition: none;
 }
@@ -785,7 +1116,7 @@
   margin: 0;
   padding: 0;
   line-height: 24px;
-  color: #8e8e8e;
+  color: var(--code-label);
   font-size: 13px !important;
   /* BlockNote shows the select only on hover; the bar always names it. */
   opacity: 1 !important;
@@ -866,6 +1197,16 @@
   z-index: 1;
 }
 
+/* On a code block the copy control takes the card's label colours (the
+   terminal's stay as they are). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > :is(.bn-copy-button, .bn-copy-toggle) {
+  color: var(--code-label);
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > :is(.bn-copy-button, .bn-copy-toggle):is(:hover, :focus-visible) {
+  color: var(--code-label-hover);
+}
+
 /* Terminal: the header is a flex row; push it to the far end. */
 .terminal-header > .bn-copy-button,
 .terminal-header > .bn-copy-toggle {
@@ -916,10 +1257,10 @@
   margin: 0;
   padding: 0 14px;
   border: 0;
-  border-top: 1px solid #1a1a1a;
+  border-top: 1px solid var(--code-bar-border);
   border-radius: 0;
-  background-color: #2d2d2d;
-  color: #8e8e8e;
+  background-color: var(--code-bar);
+  color: var(--code-label);
   font-size: 13px !important;
   line-height: 1;
   cursor: pointer;
@@ -929,14 +1270,14 @@
 }
 
 .bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:hover {
-  color: #d4d4d4;
-  background-color: #333333;
+  color: var(--code-label-hover);
+  background-color: var(--code-bar-hover);
 }
 
 .bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:focus-visible {
   outline: 2px solid #60a5fa;
   outline-offset: -2px;
-  color: #d4d4d4;
+  color: var(--code-label-hover);
 }
 
 .bn-code-expand svg {
@@ -965,14 +1306,11 @@
   bottom: 34px;
   z-index: 1;
   height: 44px;
-  background: linear-gradient(to bottom, rgb(22 22 22 / 0), rgb(22 22 22) 88%);
+  background: linear-gradient(to bottom, rgb(var(--code-fade) / 0), rgb(var(--code-fade)) 88%);
   pointer-events: none;
   transition: opacity 200ms ease;
 }
 
-.dark .bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-fade {
-  background: linear-gradient(to bottom, rgb(20 20 20 / 0), rgb(20 20 20) 88%);
-}
 
 .bn-code-expand[aria-expanded="true"] ~ .bn-code-fade {
   opacity: 0;
@@ -1069,11 +1407,6 @@
   cursor: default !important;
 }
 
-/* Dark mode: the body and outline of a dark terminal block. */
-.dark .bn-block-content[data-content-type="codeBlock"] {
-  background-color: #141414;
-  border: 1px solid #333333;
-}
 
 /* Dark mode: BlockNote paints the editor column #1f1f1f on the #191919 page,
    a lighter band down the middle. Transparent makes it flush, as on the class
@@ -1094,19 +1427,20 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background-color: rgba(0, 0, 0, 0.03);
-  border-radius: 10px;
+  /* A pale blue tint, no side rule, as in Zensical's callouts (its "note"). */
+  background-color: rgba(68, 138, 255, 0.1);
+  border-radius: 6px;
 }
 
 .dark .callout-block {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: rgba(68, 138, 255, 0.14);
 }
 
-/* One body line tall (16px × BlockNote's 1.5), pinned to the top: the emoji
+/* One body line tall (16px × the 1.6 line height), pinned to the top: the emoji
    sits centred on the first line of text however many lines follow. Its
    glyph is larger than the line and overflows the box evenly. */
 .callout-block .callout-emoji {
-  height: 24px;
+  height: 25.6px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1124,18 +1458,73 @@
    without a width it shrank to nothing and the rule vanished for readers. */
 .divider-block {
   width: 100%;
-  margin: 1rem 0;
+  margin: 1.5rem 0;
 }
 
+/* A 1px hairline, as in Zensical. */
 .divider-block hr {
-  border: none;
-  border-top: 2px solid rgba(0, 0, 0, 0.1);
+  border: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
   margin: 0;
   width: 100%;
 }
 
 .dark .divider-block hr {
-  border-top-color: rgba(255, 255, 255, 0.15);
+  border-top-color: rgba(255, 255, 255, 0.14);
+}
+
+/* Blockquote, after Zensical: a 4px gray rule, 12px in, quiet text. */
+.bn-block-content[data-content-type="quote"] blockquote {
+  margin: 0;
+  padding: 0 0 0 0.75em;
+  color: rgba(0, 0, 0, 0.55);
+  border-left: 4px solid rgba(0, 0, 0, 0.32);
+}
+
+.dark .bn-block-content[data-content-type="quote"] blockquote {
+  color: rgba(255, 255, 255, 0.55);
+  border-left-color: rgba(255, 255, 255, 0.32);
+}
+
+/* Tables, after Zensical: a thin outer border, lines between rows only (no
+   vertical lines, no striping), roomy cells and a faint tint under the
+   pointer. BlockNote's own cell rule is (0,3,1), so these repeat its selector.
+   Separate borders so the outer border can take a radius. */
+.bn-editor [data-content-type="table"] table {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.bn-editor [data-content-type="table"] th,
+.bn-editor [data-content-type="table"] td {
+  padding: 0.94em 1.25em;
+  border: 0;
+}
+
+.bn-editor [data-content-type="table"] td {
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.bn-editor [data-content-type="table"] th {
+  font-weight: 700;
+}
+
+.bn-editor [data-content-type="table"] tbody tr:hover td {
+  background-color: rgba(0, 0, 0, 0.035);
+}
+
+.dark .bn-editor [data-content-type="table"] table {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.dark .bn-editor [data-content-type="table"] td {
+  border-top-color: rgba(255, 255, 255, 0.14);
+}
+
+.dark .bn-editor [data-content-type="table"] tbody tr:hover td {
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 /* Profile card styling */

@@ -272,12 +272,9 @@ test.describe('the click burst on a reader control', () => {
     const button = toggleButton(page);
     const box = await button.boundingBox();
     if (!box) throw new Error('not drawn');
-    const point = { x: box.x + 3, y: box.y + 4 };
+    const point = { x: Math.round(box.x + 3), y: Math.round(box.y + 4) };
     await page.mouse.click(point.x, point.y);
-    await expect(page.locator('.bn-block[data-id="toggle"] .bn-toggle-wrapper')).toHaveAttribute(
-      'data-show-children',
-      'true'
-    );
+    await expect(button).toHaveAttribute('aria-expanded', 'true');
     const [burst, ...more] = await bursts(page);
     expect(more).toEqual([]);
     expect(burst).toMatchObject({
