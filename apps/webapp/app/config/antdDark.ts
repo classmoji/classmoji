@@ -32,6 +32,10 @@ const darkTheme = {
     colorInfo: '#3b82f6',
     // antd 6's dark algorithm turns shadows into a white glow; keep antd 5's.
     ...ANTD_V5_SHADOWS,
+    // antd 6 borders disabled controls with this (#686868 on dark), where
+    // antd 5 kept colorBorder: a disabled select stood out more than an
+    // enabled one.
+    colorBorderDisabled: '#404040',
   },
   components: {
     Button: {
