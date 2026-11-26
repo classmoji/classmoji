@@ -8,7 +8,8 @@
 
    These rules are unlayered on purpose: antd's own styles are unlayered too,
    and every selector here is more specific than antd's (antd wraps its hash
-   in :where()), so they win without !important.
+   in :where()), so they win without !important. The one !important below
+   overrides an inline style.
    ============================================================================= */
 
 /* An open single Select: antd 6 fades its whole value to 25% opacity, custom
@@ -66,13 +67,17 @@
   --ant-input-number-input-padding-block: 7px;
 }
 
-/* A Select's arrow (and clear ×) sits inside the select's horizontal padding
-   in antd 6, 12px from the edge of a default select and 8px from a small one.
-   antd 5 put it 11px from the edge at every size. */
+/* A Select's arrow and clear (×) sit inside the select's horizontal padding in
+   antd 6, 12px from the edge of a default select and 8px from a small one.
+   antd 5 put both 11px from the edge at every size. (The doubled class beats
+   antd's small-size clear rule, which has the same specificity.) */
 .ant-select .ant-select-suffix {
   margin-inline-end: calc(
     11px - var(--ant-select-border-size, 1px) - var(--ant-select-padding-horizontal, 11px)
   );
+}
+.ant-select .ant-select-clear.ant-select-clear {
+  inset-inline-end: calc(11px - var(--ant-select-border-size, 1px));
 }
 
 /* A selected option under the pointer: antd 6 paints it with
