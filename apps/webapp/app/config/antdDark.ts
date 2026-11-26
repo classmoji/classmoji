@@ -115,7 +115,8 @@ const darkTheme = {
       optionActiveBg: '#262626',
       // See config/antd.ts: antd 6 paints a hovered selected option with this.
       controlItemBgActiveHover: '#404040',
-      // See config/antd.ts: no focus ring on borderless controls, as in antd 5.
+      // See config/antd.ts: no ring on focused borderless controls or clear
+      // buttons, as in antd 5.
       lineWidthFocus: 0,
       optionSelectedFontWeight: 600,
       optionSelectedColor: BRAND,

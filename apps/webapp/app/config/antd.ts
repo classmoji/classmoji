@@ -114,8 +114,10 @@ const theme = {
       // (antd 5 kept optionSelectedBg there).
       controlItemBgActiveHover: '#f3f4f6',
       optionSelectedFontWeight: 600,
-      // antd 6 rings a focused borderless control; antd 5 drew nothing. Only
-      // the borderless variant reads this token.
+      // antd 6 rings a keyboard-focused borderless control and a focused clear
+      // (×) button; antd 5 drew neither. These four components read this token
+      // only for those two rings, so 0 removes them and nothing else. It is an
+      // accessibility trade: the rings are new keyboard focus indicators.
       lineWidthFocus: 0,
     },
     Input: {
