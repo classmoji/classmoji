@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GITLAB_ANTD_BUTTON, GITLAB_BUTTON_LOGO } from '~/components/ui/gitlabButton';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Alert, Button, Card, Form, Input, Select, message } from 'antd';
+import { Alert, App, Button, Card, Form, Input, Select } from 'antd';
 
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
@@ -52,6 +52,7 @@ const GitLabClassroomForm = ({
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { fetcher, notify } = useGlobalFetcher();
+  const { message } = App.useApp();
   const [groupId, setGroupId] = useState<number | null>(gitlab.groups[0]?.id ?? null);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -89,7 +90,7 @@ const GitLabClassroomForm = ({
     if (!data?.classroomSlug) return;
     if (data.activation_warning) message.warning(data.activation_warning, 10);
     navigate(`/admin/${data.classroomSlug}/dashboard`);
-  }, [data, navigate]);
+  }, [data, navigate, message]);
 
   const submit = () => {
     let importConfig = null;
