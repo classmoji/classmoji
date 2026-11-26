@@ -147,6 +147,17 @@ const assignment = (key: string, name: string, weight: number): Row => ({
   published: true,
 });
 
+/** The tree's disclosure chevron (antd 6 takes it as `components.ExpandIcon`). */
+function TreeExpandIcon({ record }: { record?: Row }) {
+  return record?.children?.length ? (
+    <span className="float-left mr-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded align-middle text-ink-3">
+      <IconChevronDown size={16} />
+    </span>
+  ) : (
+    <span className="float-left mr-2 inline-block h-5 w-5 shrink-0" />
+  );
+}
+
 /** The app's antd theme at the demo's scale: the stage is smaller than a real page. */
 function Compact({ children }: { children: React.ReactNode }) {
   return (
@@ -639,17 +650,10 @@ export function PublishDemo() {
                 tableLayout="fixed"
                 size="middle"
                 pagination={false}
+                components={{ ExpandIcon: TreeExpandIcon }}
                 expandable={{
                   // Folders open by default, as on the real page.
                   expandedRowKeys: rows.filter(r => r.children?.length).map(r => r.key),
-                  expandIcon: ({ record }) =>
-                    record.children?.length ? (
-                      <span className="float-left mr-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded align-middle text-ink-3">
-                        <IconChevronDown size={16} />
-                      </span>
-                    ) : (
-                      <span className="float-left mr-2 inline-block h-5 w-5 shrink-0" />
-                    ),
                 }}
               />
             </div>
