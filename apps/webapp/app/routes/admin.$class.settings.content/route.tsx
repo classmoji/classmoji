@@ -1,5 +1,5 @@
 import { useParams } from 'react-router';
-import { Button, Form, Modal, Switch } from 'antd';
+import { App, Button, Form, Switch } from 'antd';
 import { IconExternalLink } from '@tabler/icons-react';
 
 import { namedAction } from '~/utils/namedAction.server';
@@ -47,6 +47,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { organization, liveEditingAvailable } = loaderData;
   const { class: classSlug } = useParams();
+  const { modal } = App.useApp();
 
   const { fetcher } = useGlobalFetcher();
   const web = useGitWeb();
@@ -106,7 +107,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   // — every asset URL in the classroom changes at once — even though it is a
   // safe one, and the confirm is where "safe" gets said out loud.
   const handleResetContentCache = () => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Reset content cache',
       content:
         'Every image and file gets a new URL and is fetched fresh. Nothing is deleted, and links you have already shared keep working.',
