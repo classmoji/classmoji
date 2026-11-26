@@ -15,8 +15,10 @@
 /* An open single Select: antd 6 fades its whole value to 25% opacity, custom
    label included (the calendar's coloured category dot, the class selector's
    bold name). antd 5 only greyed the text to the placeholder colour, and a
-   label with its own colour kept it. */
-.ant-select.ant-select-open .ant-select-content.ant-select-content-has-value {
+   label with its own colour kept it. While the user types a search, antd hides
+   the value (transparent), and this rule must stand aside. */
+.ant-select.ant-select-open
+  .ant-select-content.ant-select-content-has-value:not(.ant-select-content-has-search-value) {
   opacity: 1;
   color: var(--ant-color-text-placeholder, rgba(0, 0, 0, 0.25));
 }

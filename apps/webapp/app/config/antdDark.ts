@@ -155,6 +155,8 @@ const darkTheme = {
     // addonBg above, is --cm-antd-addon-bg in styles/global.css.
     Addon: {
       paddingSM: 11,
+      paddingXS: 11,
+      fontSizeSM: 14,
     },
     Modal: {
       contentBg: '#262626',

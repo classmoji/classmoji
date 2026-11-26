@@ -122,9 +122,12 @@ const theme = {
       lineWidthFocus: 0,
     },
     // Space.Addon, antd 6's replacement for input addons: antd 5's 11px
-    // padding. Its background is set back in ui-components/styles/antd.css.
+    // padding and 14px text, small size included. Its background is set back
+    // in ui-components/styles/antd.css.
     Addon: {
       paddingSM: 11,
+      paddingXS: 11,
+      fontSizeSM: 14,
     },
     FloatButton: {
       colorPrimary: BRAND,
