@@ -1,36 +1,15 @@
 import { Outlet, useNavigate } from 'react-router';
-import { Checkbox, Modal, Table, Tag } from 'antd';
+import { Checkbox, Modal } from 'antd';
 import { useState } from 'react';
 
-import {
-  ButtonNew,
-  TeamThumbnailView,
-  AvatarGroup,
-  SearchInput,
-  TableActionButtons,
-} from '~/components';
+import { ButtonNew, SearchInput } from '~/components';
+import TeamsTagTable from '~/components/features/teams/TeamsTagTable';
 import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
-
-interface Team {
-  id: string;
-  name: string;
-  slug: string;
-  avatar_url?: string | null;
-  tags: Array<{ id: string; tag: { name: string } }>;
-  memberships: Array<{
-    user: {
-      name: string | null;
-      login: string | null;
-      avatar_url?: string | null;
-      [key: string]: unknown;
-    };
-  }>;
-}
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -74,66 +53,6 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   const filteredTeams = teams.filter((t: { name: string }) =>
     t.name.toLowerCase().includes(query.toLowerCase())
   );
-
-  const columns = [
-    {
-      title: 'Team',
-      dataIndex: 'name',
-      key: 'name',
-      render: (_: unknown, team: Team) => {
-        return <TeamThumbnailView team={team} />;
-      },
-    },
-    {
-      title: 'Tags',
-      dataIndex: 'tags',
-      key: 'tags',
-      width: 200,
-      render: (tags: Team['tags']) => {
-        if (tags.length == 0) return <span className="text-gray-500 italic">No tags</span>;
-
-        const list = tags.map((tag: Team['tags'][number]) => (
-          <Tag key={tag.id} color="blue" className="mb-1">
-            #{tag.tag.name}
-          </Tag>
-        ));
-
-        return <div className="flex flex-wrap gap-1">{list}</div>;
-      },
-    },
-    {
-      title: 'Members',
-      dataIndex: 'members',
-      key: 'members',
-      width: 140,
-      render: (_: unknown, team: Team) => {
-        const users = team.memberships.map(
-          (membership: Team['memberships'][number]) => membership.user
-        );
-        if (users.length == 0) return <span className="text-gray-500 italic">No members</span>;
-        return (
-          <div className="flex items-center gap-2">
-            <AvatarGroup users={users} />
-            <span className="text-sm text-gray-600">({users.length})</span>
-          </div>
-        );
-      },
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 200,
-      render: (_: unknown, team: Team) => {
-        return (
-          <TableActionButtons
-            onView={() => navigate(`./${team.slug}/edit`)}
-            onDelete={() => onDeleteTeam(team)}
-            skipDeleteConfirm
-          />
-        );
-      },
-    },
-  ];
 
   return (
     <div className="min-h-full relative">
@@ -179,24 +98,12 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
-        <Table
-          columns={columns}
-          dataSource={filteredTeams}
-          rowHoverable={false}
-          rowKey={record => record.id}
-          // Fixed metadata columns (Tags/Members/Actions) plus a min for the
-          // flexing Team column. Below this the table scrolls inside its card
-          // instead of widening the page; above it the Team column fills.
-          scroll={{ x: 760 }}
-          pagination={{
-            pageSize: 20,
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
-          }}
-          size="middle"
-          locale={{
-            emptyText: query ? (
+        <TeamsTagTable
+          teams={filteredTeams}
+          onView={team => navigate(`./${team.slug}/edit`)}
+          onDelete={onDeleteTeam}
+          emptyText={
+            query ? (
               <div className="text-center py-8 text-ink-3">
                 <div className="font-medium">No teams found matching &quot;{query}&quot;</div>
                 <div className="text-sm">Try adjusting your search terms.</div>
@@ -206,8 +113,8 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
                 <div className="font-medium">No teams created yet</div>
                 <div className="text-sm">Create your first team to get started.</div>
               </div>
-            ),
-          }}
+            )
+          }
         />
       </div>
     </div>
