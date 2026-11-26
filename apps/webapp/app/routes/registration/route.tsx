@@ -301,7 +301,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
           className="shadow-xs border border-gray-200 dark:border-neutral-800"
           styles={{ body: { padding: '24px' } }}
         >
-          <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
+          <Spin spinning={isSubmitting} description="Setting up your account..." fullscreen />
 
           {actionError && (
             <Alert title={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
