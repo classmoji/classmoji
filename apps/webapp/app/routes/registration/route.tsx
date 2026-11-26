@@ -445,13 +445,11 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                     className="mb-6"
                   >
                     {/* WithAddon passes the form's value on to the Input; the
-                        addon greys with the form while it submits. */}
-                    <WithAddon before="@" block disabled={isSubmitting}>
-                      <Input
-                        readOnly
-                        className="bg-gray-50"
-                        prefix={<UserOutlined className="text-gray-400" />}
-                      />
+                        addon greys with the form while it submits. The grey
+                        sits on the wrapper, under the addon and the disabled
+                        field, where antd 5 put an addon input's className. */}
+                    <WithAddon before="@" block disabled={isSubmitting} className="bg-gray-50">
+                      <Input readOnly prefix={<UserOutlined className="text-gray-400" />} />
                     </WithAddon>
                   </Form.Item>
                 )}
