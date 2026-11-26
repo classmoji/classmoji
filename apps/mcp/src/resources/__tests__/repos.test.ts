@@ -125,6 +125,28 @@ describe('repos resource', () => {
     });
   });
 
+  it('shows staff the assignment description assignment_update edits (#968)', async () => {
+    findByClassroomId.mockResolvedValue([
+      {
+        ...REPO_ROW,
+        assignments: [
+          {
+            id: 'a-1',
+            title: 'Final Demos',
+            weight: 10,
+            is_published: true,
+            grades_released: false,
+            tokens_per_hour: null,
+            description: 'Demo in class on Tuesday.',
+          },
+        ],
+      },
+    ]);
+    const staff = (await reposResource.handler(VARS, ctxFor('OWNER'), URI)) as ReposPayload;
+    const [assignment] = staff.repositories[0].assignments as Array<Record<string, unknown>>;
+    expect(assignment.description).toBe('Demo in class on Tuesday.');
+  });
+
   it('tells staff which module each assignment belongs to, and not students', async () => {
     const ASSIGNMENT = {
       id: 'a-1',

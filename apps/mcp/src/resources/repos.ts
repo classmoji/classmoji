@@ -86,7 +86,7 @@ interface AssignmentRow {
   weight: number;
   is_extra_credit?: boolean;
   is_published: boolean;
-  description?: string;
+  description?: string | null;
   student_deadline?: Date | null;
   grader_deadline?: Date | null;
   /** Empty = the classroom's default price. */
@@ -219,6 +219,9 @@ export const reposResource: ResourceDefinition = {
             release_at: a.release_at ?? null,
             grades_released: a.grades_released,
             ...price(a.tokens_per_hour),
+            // What assignment_update description edits: the issue body in
+            // ISSUE mode, the instructions in REPO mode.
+            description: a.description ?? null,
           })),
         })),
       };

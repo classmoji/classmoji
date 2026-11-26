@@ -1,7 +1,7 @@
 /**
  * assignment_update — title / is_published / deadline / weight / grades_released /
- * grader_deadline / release_at / closes_at / tokens_per_hour / module_id (the
- * move to another module).
+ * grader_deadline / release_at / closes_at / tokens_per_hour / description /
+ * module_id (the move to another module).
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
  *   - general edits (weight, …):   OWNER only, but see QUIZ below
@@ -33,6 +33,10 @@
  *                                  refused there for every role.
  *   - grades_released on a QUIZ:   refused for every role: a quiz's score shows
  *                                  as soon as an attempt completes.
+ *   - description:                 OWNER only (the edit form's "Issue body" /
+ *                                  instructions field, same route). It is
+ *                                  read when an issue is opened, so a change
+ *                                  reaches future issues only (#968).
  *   - title, is_published:         OWNER only (the assignment edit form,
  *                                  admin.$class.assignments `update`), except
  *                                  is_published on a QUIZ row, which a teacher
@@ -195,6 +199,7 @@ interface AssignmentUpdateArgs {
   release_at?: string | null;
   closes_at?: string | null;
   tokens_per_hour?: number | null;
+  description?: string;
   module_id?: string;
 }
 
@@ -225,7 +230,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   description:
     'Updates an assignment (a due-dated, gradeable unit of a module): title, is_published, ' +
     'student_deadline, weight, grades_released, grader_deadline, release_at, closes_at, ' +
-    'tokens_per_hour and/or module_id. Owners can update all fields; teachers only ' +
+    'tokens_per_hour, description and/or module_id. Owners can update all fields; teachers only ' +
     'grades_released and student_deadline, and on a quiz assignment student_deadline, weight, ' +
     'release_at, closes_at, tokens_per_hour and is_published. title is unique per repository. ' +
     'Publishing a repo assignment, or moving its release_at, adds it to existing student ' +
@@ -235,7 +240,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     'release_at is when a repo assignment opens in ' +
     'student repos (checked hourly); on a quiz, when a published quiz opens. ' +
     'closes_at (quiz only) stops new attempts. grades_released is refused on a quiz (its ' +
-    'score shows at once). Pass null to clear grader_deadline, release_at or closes_at.\n' +
+    'score shows at once). Pass null to clear grader_deadline, release_at or closes_at. ' +
+    'description: future issues only.\n' +
     'module_id MOVES the assignment to the end of another module (see list_modules; ' +
     'module_reorder sets the order): an assignment belongs to exactly one module. A quiz ' +
     'moves with quiz_update module_id. Only the module changes; weight, deadlines, grades and ' +
@@ -293,6 +299,14 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .describe(
         "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
       ),
+    description: z
+      .string()
+      .max(10000)
+      .optional()
+      .describe(
+        'Issue body (ISSUE mode) or instructions (REPO mode); empty string clears it. Reaches ' +
+          'issues opened from then on, never ones already open; list_repos shows it. Owner only'
+      ),
     module_id: uuidString()
       .optional()
       .describe(
@@ -329,6 +343,11 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     if (args.tokens_per_hour !== undefined) {
       updates.tokens_per_hour = values.tokens_per_hour = args.tokens_per_hour;
     }
+    // The text can run to 10,000 characters: the audit row records its length.
+    if (args.description !== undefined) {
+      updates.description = args.description;
+      values.description_length = args.description.length;
+    }
 
     // What the caller asked to change, for the empty check and the role tier.
     // module_id is not a column write (see the header), so it is counted here
@@ -341,7 +360,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       throw new ToolError(
         'invalid_params',
         'Provide at least one of: title, is_published, student_deadline, weight, ' +
-          'grades_released, grader_deadline, release_at, closes_at, tokens_per_hour, module_id'
+          'grades_released, grader_deadline, release_at, closes_at, tokens_per_hour, ' +
+          'description, module_id'
       );
     }
 
@@ -450,6 +470,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       | 'release_at'
       | 'closes_at'
       | 'tokens_per_hour'
+      | 'description'
     > = assignment;
     let release: ReleaseOutcome | null = null;
     if (fields.length > 0) {
@@ -523,6 +544,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
           ? { closes_at: updated.closes_at?.toISOString() ?? null }
           : {}),
         tokens_per_hour: updated.tokens_per_hour,
+        description: updated.description,
       },
       ...(movedFromModuleId ? { moved_from_module_id: movedFromModuleId } : {}),
       ...(release
