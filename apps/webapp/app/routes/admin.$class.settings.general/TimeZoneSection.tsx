@@ -58,9 +58,8 @@ const TimeZoneSection = ({ current, zones }: TimeZoneSectionProps) => {
             onChange={value => setZone(value ?? null)}
             options={timeZoneOptions(zones, current)}
             placeholder="Not set"
-            showSearch
+            showSearch={{ optionFilterProp: 'label' }}
             allowClear
-            optionFilterProp="label"
             aria-label="Course time zone"
             style={{ width: '100%' }}
           />

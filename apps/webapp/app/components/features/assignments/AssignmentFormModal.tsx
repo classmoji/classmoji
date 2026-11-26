@@ -503,8 +503,7 @@ const AssignmentFormModal = ({
             rules={[{ required: true, message: 'Choose a module' }]}
           >
             <Select
-              showSearch
-              optionFilterProp="label"
+              showSearch={{ optionFilterProp: 'label' }}
               placeholder="Choose a module"
               disabled={isEdit}
               options={modules.map(m => ({ value: m.id, label: m.title }))}
@@ -568,8 +567,7 @@ const AssignmentFormModal = ({
                     extra={`Every team carrying this tag gets one ${terms.repo}.`}
                   >
                     <Select
-                      showSearch
-                      optionFilterProp="label"
+                      showSearch={{ optionFilterProp: 'label' }}
                       placeholder="Choose a team tag…"
                       options={allTags.map(t => ({ value: t.id, label: t.name }))}
                       notFoundContent={
@@ -716,11 +714,9 @@ const AssignmentFormModal = ({
               }
             >
               <Select
-                showSearch
-                filterOption={false}
+                showSearch={{ filterOption: false, onSearch: setTemplateQuery }}
                 placeholder="Leave empty for a blank template, or search…"
                 loading={templateLoading}
-                onSearch={setTemplateQuery}
                 notFoundContent={
                   templateLoading ? (
                     <span className="text-sm text-ink-3">
@@ -765,8 +761,7 @@ const AssignmentFormModal = ({
             rules={[{ required: true, message: 'Pick a target' }]}
           >
             <Select
-              showSearch
-              optionFilterProp="label"
+              showSearch={{ optionFilterProp: 'label' }}
               disabled={isEdit}
               placeholder={`Select a ${kind.toLowerCase()}…`}
               options={targetOptions}
@@ -831,8 +826,7 @@ const AssignmentFormModal = ({
           <Form.Item name="page_ids" label="Linked pages">
             <Select
               mode="multiple"
-              showSearch
-              optionFilterProp="label"
+              showSearch={{ optionFilterProp: 'label' }}
               placeholder="Pages students should read"
               options={pages.map(p => ({ value: p.id, label: p.title || 'Untitled' }))}
             />
@@ -840,8 +834,7 @@ const AssignmentFormModal = ({
           <Form.Item name="slide_ids" label="Linked slides">
             <Select
               mode="multiple"
-              showSearch
-              optionFilterProp="label"
+              showSearch={{ optionFilterProp: 'label' }}
               placeholder="Slide decks for this assignment"
               options={slides.map(d => ({ value: d.id, label: d.title || 'Untitled' }))}
             />

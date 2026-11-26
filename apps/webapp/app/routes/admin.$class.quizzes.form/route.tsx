@@ -583,9 +583,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     >
                       <Select
                         mode="multiple"
-                        showSearch
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
-                        optionFilterProp="label"
                         placeholder="Pick the pages and slide decks this quiz is about"
                         options={sourceMaterialSelectOptions}
                       />

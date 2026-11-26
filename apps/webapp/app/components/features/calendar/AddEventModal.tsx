@@ -418,7 +418,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />
@@ -443,7 +443,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />
@@ -468,7 +468,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />

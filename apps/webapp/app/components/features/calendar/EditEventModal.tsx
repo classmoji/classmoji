@@ -640,7 +640,7 @@ const EditEventModal = ({
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
-                      optionFilterProp="label"
+                      showSearch={{ optionFilterProp: 'label' }}
                       allowClear
                       className="w-full"
                     />
@@ -665,7 +665,7 @@ const EditEventModal = ({
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
-                      optionFilterProp="label"
+                      showSearch={{ optionFilterProp: 'label' }}
                       allowClear
                       className="w-full"
                     />
@@ -690,7 +690,7 @@ const EditEventModal = ({
                         featured,
                         onToggleFeatured: toggleFeatured,
                       })}
-                      optionFilterProp="label"
+                      showSearch={{ optionFilterProp: 'label' }}
                       allowClear
                       className="w-full"
                     />

@@ -147,13 +147,13 @@ const StepImportModules = ({
                   value={sourceClassroomId}
                   onChange={handleSourceChange}
                   className="w-full"
-                  showSearch
-                  optionFilterProp="children"
-                  filterOption={(input, option) =>
-                    (option as unknown as { children: string })!.children
-                      .toLowerCase()
-                      .includes(input.toLowerCase())
-                  }
+                  showSearch={{
+                    optionFilterProp: 'children',
+                    filterOption: (input, option) =>
+                      (option as unknown as { children: string })!.children
+                        .toLowerCase()
+                        .includes(input.toLowerCase()),
+                  }}
                 >
                   {importableClassrooms.map(classroom => (
                     <Select.Option key={classroom.id} value={classroom.id}>

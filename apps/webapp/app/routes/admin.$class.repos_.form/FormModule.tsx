@@ -700,7 +700,7 @@ const FormModule = ({
                 value={linkedPageIds}
                 onChange={setLinkedPageIds}
                 style={{ width: '100%' }}
-                optionFilterProp="label"
+                showSearch={{ optionFilterProp: 'label' }}
                 disabled={pages.length === 0}
                 options={pages.map((page: PageRef) => ({
                   value: page.id,
@@ -717,7 +717,7 @@ const FormModule = ({
                 value={linkedSlideIds}
                 onChange={setLinkedSlideIds}
                 style={{ width: '100%' }}
-                optionFilterProp="label"
+                showSearch={{ optionFilterProp: 'label' }}
                 disabled={slides.length === 0}
                 options={slides.map((slide: SlideRef) => ({
                   value: slide.id,

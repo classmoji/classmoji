@@ -822,10 +822,10 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
             placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
-            showSearch
-            filterOption={(input, option) =>
-              option!.label.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                option!.label.toLowerCase().includes(input.toLowerCase()),
+            }}
             options={repos.map(r => ({ value: r.name, label: r.name }))}
           />
         )}

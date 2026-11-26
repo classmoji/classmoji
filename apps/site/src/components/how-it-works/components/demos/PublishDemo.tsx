@@ -345,9 +345,8 @@ function RepositoryForm({ s }: { s: State }) {
               <Select
                 className="w-full"
                 open={false}
-                showSearch
+                showSearch={{ searchValue: s.templateOpen ? s.templateQuery : undefined }}
                 value={s.template ?? undefined}
-                searchValue={s.templateOpen ? s.templateQuery : undefined}
                 placeholder="Type to search template repositories..."
                 options={[{ value: TEMPLATE, label: TEMPLATE }]}
               />

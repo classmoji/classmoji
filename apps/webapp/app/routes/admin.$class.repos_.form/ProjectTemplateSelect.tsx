@@ -71,8 +71,7 @@ const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSel
         ),
         title: p.title, // Store title for later use
       }))}
-      optionFilterProp="title"
-      showSearch
+      showSearch={{ optionFilterProp: 'title' }}
     />
   );
 };

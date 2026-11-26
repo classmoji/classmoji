@@ -761,9 +761,8 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
             disabled={!site}
             loading={homePageFetcher.state !== 'idle'}
             placeholder="Choose a page"
-            showSearch
+            showSearch={{ optionFilterProp: 'label' }}
             allowClear
-            optionFilterProp="label"
             aria-label="Home page"
             onChange={value => saveSetting(homePageFetcher, { home_page_id: value ?? null })}
             options={pageOptions.map(page => ({ value: page.id, label: page.title }))}

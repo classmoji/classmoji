@@ -155,7 +155,7 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             <Select
               data-tour="teams-new-tags"
               mode="multiple"
-              optionFilterProp="label"
+              showSearch={{ optionFilterProp: 'label' }}
               placeholder="Choose team tags…"
               value={tagsList}
               options={allTags.map(tag => ({ label: tag.name, value: tag.id }))}

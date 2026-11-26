@@ -195,7 +195,13 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                   data-tour="tokens-new-students"
                   mode="multiple"
                   placeholder="Search and select students…"
-                  showSearch
+                  showSearch={{
+                    filterOption: (input, option) => {
+                      return (option as { label: string })!.label
+                        .toLowerCase()
+                        .includes(input.toLowerCase());
+                    },
+                  }}
                   allowClear
                   maxTagCount="responsive"
                   className="w-full"
@@ -203,11 +209,6 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                     label: student.name,
                     value: JSON.stringify(student),
                   }))}
-                  filterOption={(input, option) => {
-                    return (option as { label: string })!.label
-                      .toLowerCase()
-                      .includes(input.toLowerCase());
-                  }}
                 />
               </Form.Item>
             )}

@@ -103,11 +103,10 @@ const AddContentItemModal = ({
           />
         )}
         <Select
-          showSearch
+          showSearch={{ optionFilterProp: 'label' }}
           allowClear
           className="w-full"
           placeholder={`Select a ${TYPE_META[type].label.toLowerCase()}…`}
-          optionFilterProp="label"
           value={targetId}
           onChange={setTargetId}
           options={candidateOptions(type, candidates, items)}

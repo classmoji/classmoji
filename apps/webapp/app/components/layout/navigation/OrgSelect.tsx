@@ -62,7 +62,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           cancelClose();
           setOpen(visible);
         }}
-        suffixIcon={
+        suffix={
           <IconChevronDown
             size={16}
             className={`text-ink-4 transition-transform duration-200 ease-out ${
