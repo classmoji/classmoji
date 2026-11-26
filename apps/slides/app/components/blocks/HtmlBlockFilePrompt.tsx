@@ -100,7 +100,7 @@ function HtmlBlockFilePromptModal({
         title={one && files ? `Also delete its file ${files[0]}?` : 'Also delete their files?'}
         onCancel={busy ? undefined : onKeep}
         closable={!busy}
-        maskClosable={false}
+        mask={{ closable: false }}
         width={440}
         centered
         footer={[

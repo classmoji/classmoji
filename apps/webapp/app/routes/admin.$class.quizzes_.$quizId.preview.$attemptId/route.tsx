@@ -204,7 +204,7 @@ export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentPr
         }
         open={opened}
         onClose={() => handleClose()}
-        maskClosable={false}
+        mask={{ closable: false }}
         size="90%"
         styles={{
           header: {

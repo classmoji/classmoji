@@ -188,7 +188,7 @@ const MediaUploadDialog = ({
       onCancel={close}
       footer={null}
       width={520}
-      maskClosable={!uploading}
+      mask={{ closable: !uploading }}
       destroyOnHidden
     >
       <div className="pr-6">

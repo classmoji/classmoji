@@ -427,7 +427,7 @@ const EditEventModal = ({
       width={560}
       centered
       closable={false}
-      maskClosable
+      mask={{ closable: true }}
       styles={{
         container: { padding: 0, borderRadius: 16, overflow: 'hidden' },
         body: { padding: 0 },

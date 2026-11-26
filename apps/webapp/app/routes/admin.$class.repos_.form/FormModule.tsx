@@ -737,7 +737,7 @@ const FormModule = ({
           width={600}
           centered
           closable={false}
-          maskClosable={false}
+          mask={{ closable: false }}
           styles={{
             mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
             container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },

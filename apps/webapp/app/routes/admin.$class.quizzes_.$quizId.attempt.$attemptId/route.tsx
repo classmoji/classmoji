@@ -501,7 +501,7 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
         }
         open={opened}
         onClose={handleClose}
-        maskClosable={false}
+        mask={{ closable: false }}
         size="90%"
         styles={{
           header: {

@@ -468,7 +468,7 @@ const AssignmentFormModal = ({
       placement="right"
       size="min(100vw, 720px)"
       destroyOnHidden
-      maskClosable={!busy}
+      mask={{ closable: !busy }}
       title={
         <span className="flex items-center gap-2.5">
           <span>{isEdit ? `Edit assignment: ${assignment?.title}` : 'New assignment'}</span>

@@ -514,7 +514,7 @@ function NewPageForm({ loaderData }: Route.ComponentProps) {
       width={700}
       centered
       closable={false}
-      maskClosable={!isCreating}
+      mask={{ closable: !isCreating }}
       styles={{
         container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },

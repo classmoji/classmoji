@@ -150,7 +150,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       width={720}
       centered
       closable={false}
-      maskClosable
+      mask={{ closable: true }}
       styles={{
         container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
