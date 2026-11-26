@@ -57,6 +57,8 @@ export const APP_ANTD_THEME: ThemeConfig = {
       defaultShadow: 'none',
     },
     Table: { headerBg: '#ffffff', rowHoverBg: '#fafafa' },
+    // antd 6 fills a default Tag with colorFillTertiary (#f6f6f6); antd 5's #fafafa.
+    Tag: { defaultBg: '#fafafa' },
     Input: { hoverBorderColor: '#d1d5db', activeBorderColor: '#9ca3af', activeShadow: 'none' },
   },
 };
