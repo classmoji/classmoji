@@ -104,6 +104,17 @@
    disabled-field colour (colorBgContainerDisabled); antd 5 used the lighter
    addon colour (colorFillAlter, or an app's own: --cm-antd-addon-bg) and kept
    the disabled colour for a disabled field. */
+.ant-space-addon {
+  /* antd 5's addon text was normal weight; Space.Addon takes the page's (450). */
+  font-weight: 400;
+}
+/* In a Space.Compact an addon drops its border on the field's side, yet the
+   compact still overlaps the two by 1px, so the field starts 1px inside the
+   addon (antd 5: the field's border met the addon's edge). */
+.ant-space-compact > .ant-space-addon.ant-space-addon-compact-first-item,
+.ant-space-compact > :has(+ .ant-space-addon.ant-space-addon-compact-last-item) {
+  margin-inline-end: 0;
+}
 .ant-space-addon.ant-space-addon-variant-outlined:not(.ant-space-addon-disabled) {
   background: var(--cm-antd-addon-bg, var(--ant-color-fill-alter));
 }
