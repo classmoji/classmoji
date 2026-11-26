@@ -283,7 +283,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
       content:
         "Removes the classroom's Anthropic API key and every model and effort choice on this page.",
       okText: 'Clear',
-      okType: 'danger',
+      okButtonProps: { danger: true },
       onOk: () => {
         submit({ _action: 'clearLLMSettings' });
       },

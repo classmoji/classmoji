@@ -488,7 +488,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       content:
         'This will delete all your preview attempts for this quiz. This action cannot be undone.',
       okText: 'Clear',
-      okType: 'danger',
+      okButtonProps: { danger: true },
       onOk: () => {
         fetcher.submit(
           { _action: 'clearMyAttempts' },
