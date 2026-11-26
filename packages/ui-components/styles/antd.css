@@ -97,6 +97,13 @@
   line-height: var(--ant-line-height, 1.5714285714285714);
 }
 
+/* A checked, disabled radio: antd 5 drew its dot at half the radio's size
+   (8px); antd 6 keeps the 6px dot of an enabled one. */
+.ant-radio.ant-radio-checked.ant-radio-disabled::after {
+  width: 8px;
+  height: 8px;
+}
+
 /* A selected option under the pointer: antd 6 paints it with
    controlItemBgActiveHover (a darker blue, or a darker accent); antd 5 kept the
    selected colour. */
