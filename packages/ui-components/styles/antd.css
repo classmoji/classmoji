@@ -21,6 +21,13 @@
   color: var(--ant-color-text-placeholder, rgba(0, 0, 0, 0.25));
 }
 
+/* A single Select's value: antd 5 set it in normal weight (400); antd 6 drops
+   that rule with the old value element, so the value takes the page's weight
+   (450 in the webapp). A custom label with its own weight keeps it. */
+.ant-select.ant-select-single .ant-select-content.ant-select-content-has-value {
+  font-weight: 400;
+}
+
 /* A single Select is as tall as its content in antd 6; antd 5 fixed it at the
    control height, so a select whose label is shorter or taller than a line
    (the class selector, the calendar's event-type select) keeps antd 5's
@@ -69,12 +76,15 @@
 
 /* A Select's arrow and clear (×) sit inside the select's horizontal padding in
    antd 6, 12px from the edge of a default select and 8px from a small one.
-   antd 5 put both 11px from the edge at every size. (The doubled class beats
-   antd's small-size clear rule, which has the same specificity.) */
+   antd 5 put both 11px from the edge at every size. The arrow is moved with
+   `translate` so the select keeps its width and its value its room. (The
+   doubled class beats antd's small-size clear rule, which has the same
+   specificity.) */
 .ant-select .ant-select-suffix {
-  margin-inline-end: calc(
-    11px - var(--ant-select-border-size, 1px) - var(--ant-select-padding-horizontal, 11px)
-  );
+  translate: calc(
+      var(--ant-select-border-size, 1px) + var(--ant-select-padding-horizontal, 11px) - 11px
+    )
+    0;
 }
 .ant-select .ant-select-clear.ant-select-clear {
   inset-inline-end: calc(11px - var(--ant-select-border-size, 1px));
@@ -156,10 +166,10 @@
   margin-inline-end: 8px;
   line-height: 24px;
 }
-/* …and its page-size select keeps antd 5's width and room between the value
-   and the arrow (with the arrow rule above, antd 6 leaves 0.38px more). */
+/* …and its page-size select keeps antd 5's width (antd 6 leaves 3px less
+   room after the value). */
 .ant-pagination .ant-pagination-options .ant-select-sm .ant-select-content {
-  margin-inline-end: 5.62px;
+  margin-inline-end: 8.98px;
 }
 
 /* Small horizontal Steps (the create- and import-classroom wizards). antd 6

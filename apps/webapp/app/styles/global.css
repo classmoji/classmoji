@@ -110,6 +110,11 @@ body {
      Explicit weights on headings/labels (500–700) are unaffected. */
   font-weight: 450;
 }
+/* ui-components' antd.css sets a single Select's value at 400, as antd 5 did;
+   what you type into a searchable one stays at the body weight, as in antd 5. */
+.ant-select.ant-select-single .ant-select-content > .ant-select-input {
+  font-weight: 450;
+}
 .display {
   font-family: var(--font-display);
   letter-spacing: -0.005em;
