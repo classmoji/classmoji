@@ -21,7 +21,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
       open={show}
       onOpenChange={setShow}
       placement="top"
-      overlayInnerStyle={{ padding: '10px 12px' }}
+      styles={{ container: { padding: '10px 12px' } }}
       content={
         <EmojiGradeOptions
           repositoryAssignment={repositoryAssignment}

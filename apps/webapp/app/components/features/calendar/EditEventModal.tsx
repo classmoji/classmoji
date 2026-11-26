@@ -429,7 +429,7 @@ const EditEventModal = ({
       closable={false}
       maskClosable
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        container: { padding: 0, borderRadius: 16, overflow: 'hidden' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },

@@ -740,7 +740,7 @@ const FormModule = ({
           maskClosable={false}
           styles={{
             mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
-            content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+            container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
           }}
         >
           <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
