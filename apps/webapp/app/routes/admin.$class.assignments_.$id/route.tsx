@@ -412,7 +412,7 @@ const AssignmentPage = ({ loaderData, params }: Route.ComponentProps) => {
             <span>
               Weight <span className="text-ink-1 font-medium">{assignment.weight}%</span>
               {assignment.is_extra_credit && (
-                <Tag color="green" bordered={false} className="text-xs m-0 ml-1">
+                <Tag color="green" variant="filled" className="text-xs m-0 ml-1">
                   EC
                 </Tag>
               )}

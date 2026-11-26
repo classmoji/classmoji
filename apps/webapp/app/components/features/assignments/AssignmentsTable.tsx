@@ -118,7 +118,7 @@ const AssignmentsTable = ({
             <span className="text-ink-1 truncate">{a.title}</span>
           )}
           {a.is_extra_credit && (
-            <Tag color="green" bordered={false} className="text-xs m-0 shrink-0">
+            <Tag color="green" variant="filled" className="text-xs m-0 shrink-0">
               EC
             </Tag>
           )}

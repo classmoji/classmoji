@@ -162,11 +162,11 @@ export function GradingDemo() {
       className: 'border-l border-line',
       render: (_, r) => (
         <div className="flex flex-wrap gap-1">
-          <Tag color="green" bordered={false} className="m-0">
+          <Tag color="green" variant="filled" className="m-0">
             Submitted
           </Tag>
           {r.late && (
-            <Tag color="orange" bordered={false} className="m-0">
+            <Tag color="orange" variant="filled" className="m-0">
               Late
             </Tag>
           )}
