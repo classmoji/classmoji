@@ -31,6 +31,7 @@ import { formsListUrl } from './adminLinks.server.ts';
 import {
   NO_STORE,
   auditResponses,
+  auditResponsesChange,
   identityAudit,
   loadIdentityAnswers,
   loadResponseRows,
@@ -284,7 +285,7 @@ export const action = async ({
 
     for (const responseId of ids) {
       await ClassmojiService.formResponse.updateStaff({ responseId, ...patch });
-      await auditResponses({
+      await auditResponsesChange({
         context,
         tool: 'forms.responses.staff_update',
         action: 'UPDATE',
@@ -300,7 +301,7 @@ export const action = async ({
       await ClassmojiService.formResponse.deleteResponse(responseId);
       // The one act here that destroys collected PII. The audit row is the only
       // record that it happened.
-      await auditResponses({
+      await auditResponsesChange({
         context,
         tool: 'forms.responses.delete',
         action: 'DELETE',

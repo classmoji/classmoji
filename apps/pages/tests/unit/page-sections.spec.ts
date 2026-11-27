@@ -1312,10 +1312,9 @@ test.describe('POST /api/page-sections', () => {
     );
     expect(calls.audit).toEqual([]);
 
+    // The audit service's `record` answers a failed write; it does not throw.
     const { deps: noAudit, calls: noAuditCalls } = makeDeps({
-      audit: async () => {
-        throw new Error('audit down');
-      },
+      audit: async () => ({ written: false, reason: 'audit write failed: audit down' }),
     });
     const res = await call(
       handleSectionsPost(
@@ -1446,10 +1445,9 @@ test.describe('GET /api/page-sections', () => {
   });
 
   test('a failed audit does not fail the list', async () => {
+    // The audit service's `record` answers a failed write; it does not throw.
     const { deps } = makeDeps({
-      audit: async () => {
-        throw new Error('audit down');
-      },
+      audit: async () => ({ written: false, reason: 'audit write failed: audit down' }),
     });
     expect(
       (await call(handleSectionsGet(get('pageId=page-a&blockId=solo', 'teacher-1'), deps))).status

@@ -252,8 +252,10 @@ export const action = async ({
   const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!);
   if (!form) throw new Response('Form not found', { status: 404 });
 
+  // Written after each saved change: a failed write is reported (`audit_miss`)
+  // and the save is answered as saved.
   const audit = (action: 'UPDATE', tool: string, data: Record<string, unknown> = {}) =>
-    ClassmojiService.audit.create({
+    ClassmojiService.audit.record({
       user_id: userId,
       classroom_id: classroom.id,
       role: membership.role,
