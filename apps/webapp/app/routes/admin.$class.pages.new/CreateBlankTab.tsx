@@ -8,7 +8,8 @@ export default function CreateBlankTab() {
         name="title"
         rules={[{ required: true, message: 'Please enter a title' }]}
       >
-        <Input placeholder="Course Overview" data-tour="pages-new-title" />
+        {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
+        <Input placeholder="Course Overview" data-tour="pages-new-title" autoFocus />
       </Form.Item>
 
       {/* Hidden inputs */}

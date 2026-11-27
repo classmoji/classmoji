@@ -208,8 +208,10 @@ const MediaUploadDialog = ({
             onChange={event => chooseFile(event.target.files?.[0] ?? null)}
             className="sr-only"
           />
+          {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
           <button
             type="button"
+            autoFocus
             onClick={() => inputRef.current?.click()}
             disabled={locked}
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left ring-1 ring-line transition-colors hover:bg-nav-hover disabled:cursor-not-allowed disabled:opacity-60"

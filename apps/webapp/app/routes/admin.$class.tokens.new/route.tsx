@@ -154,7 +154,9 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             ]}
             className="!mb-3"
           >
+            {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
             <InputNumber
+              autoFocus
               data-tour="tokens-new-amount"
               min={1}
               variant="borderless"

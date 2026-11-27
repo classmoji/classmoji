@@ -192,7 +192,9 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           size="sm"
         />
 
+        {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
         <Input.TextArea
+          autoFocus
           data-tour="students-add-roster"
           value={inputText}
           onChange={e => setInputText(e.target.value)}

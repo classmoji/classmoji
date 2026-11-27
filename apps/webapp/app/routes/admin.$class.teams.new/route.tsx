@@ -139,7 +139,9 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             validateStatus={nameError ? 'error' : undefined}
             help={nameError ? 'Team name is required' : undefined}
           >
+            {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
             <Input
+              autoFocus
               data-tour="teams-new-name"
               placeholder="Enter team name"
               onChange={e => setName(e.currentTarget.value)}

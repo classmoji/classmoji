@@ -89,7 +89,9 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 
       <Form layout="vertical">
         <Form.Item label="Assignment" name="assignment" required>
+          {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
           <Select
+            autoFocus
             onChange={setAssignment}
             value={assignment}
             defaultValue={assignment}
