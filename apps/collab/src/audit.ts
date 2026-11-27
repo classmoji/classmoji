@@ -1,8 +1,10 @@
 /**
  * Audit rows for live editing: COLLAB_JOIN / COLLAB_LEAVE per socket,
  * UPDATE for a person's structural edit of a deck (slides inserted, deleted,
- * moved), and ACCESS_DENIED for a refused join by a member of the doc's classroom.
- * A refused NON-member is not recorded yet (it holds no classroom role).
+ * moved), and ACCESS_DENIED for a refused join to a doc that exists, in the
+ * doc's classroom: a member's with their role, and a signed-in person who
+ * holds no role there as that classroom's one non-member row for the day
+ * (`recordNonMemberRefusal`, counted).
  *
  * Fire and forget: an audit failure never blocks or fails a connection.
  */
@@ -16,8 +18,15 @@ export interface AuditEntry {
   data?: Record<string, unknown>;
 }
 
+/** A refused join by someone who holds no role in the doc's classroom. */
+export interface NonMemberRefusal {
+  userId: string;
+  classroomId: string;
+}
+
 export interface AuditSink {
   record(entry: AuditEntry): Promise<unknown>;
+  recordNonMemberRefusal(refusal: NonMemberRefusal): Promise<unknown>;
 }
 
 export function recordAudit(sink: AuditSink | undefined, entry: AuditEntry): void {
@@ -27,8 +36,22 @@ export function recordAudit(sink: AuditSink | undefined, entry: AuditEntry): voi
   });
 }
 
+export function recordNonMemberRefusal(
+  sink: AuditSink | undefined,
+  refusal: NonMemberRefusal
+): void {
+  if (!sink) return;
+  // Called, never awaited: a rejection (or a throw) is logged and dropped.
+  Promise.resolve()
+    .then(() => sink.recordNonMemberRefusal(refusal))
+    .catch(err => {
+      console.error(`[collab] audit ACCESS_DENIED for ${refusal.userId} failed:`, err);
+    });
+}
+
 /**
- * The real sink: `ClassmojiService.audit.create`. Every structural UPDATE is
+ * The real sink: `ClassmojiService.audit.create` and
+ * `ClassmojiService.audit.recordNonMemberRefusal`. Every structural UPDATE is
  * its own row; a reconnect's repeated JOIN (or LEAVE) within seconds is
  * counted on the row it repeats.
  */
@@ -41,7 +64,8 @@ export function createServiceAuditSink(
     resource_type: string;
     resource_id: string;
     data?: Record<string, unknown>;
-  }) => Promise<unknown>
+  }) => Promise<unknown>,
+  nonMemberRefusal: (refusal: NonMemberRefusal) => Promise<unknown>
 ): AuditSink {
   return {
     record: entry =>
@@ -54,5 +78,7 @@ export function createServiceAuditSink(
         resource_id: entry.resourceId,
         ...(entry.data ? { data: entry.data } : {}),
       }),
+    recordNonMemberRefusal: refusal =>
+      nonMemberRefusal({ userId: refusal.userId, classroomId: refusal.classroomId }),
   };
 }

@@ -505,6 +505,25 @@ describe('admin quizzes action — audit rows', () => {
     expect(mocks.remove).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
+
+  it("names one of the route's own actions to the gate, never the body's text", async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    for (const sent of [
+      'publishQuiz',
+      'not an action at all',
+      { nested: 'object' },
+      42,
+      undefined,
+    ]) {
+      mocks.assertClassroomAccess.mockClear();
+      await submit({ _action: sent, id: 'quiz-1' }).catch(() => {});
+      expect(mocks.assertClassroomAccess).toHaveBeenCalledTimes(1);
+      expect(mocks.assertClassroomAccess.mock.calls[0][0]).toMatchObject({
+        attemptedAction: sent === 'publishQuiz' ? 'publishQuiz' : 'unknown',
+      });
+    }
+  });
 });
 
 /**

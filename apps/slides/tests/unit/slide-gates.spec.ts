@@ -419,6 +419,22 @@ test.describe('the content proxy route', () => {
     // the deck rule.
     expect(PROXY_SOURCE.match(/throw forbidden\(\);/g)).toHaveLength(5);
   });
+
+  test("records no non-member refusal for the deck rows it checks, and keeps it for the file slide's", () => {
+    // The deck rule asks every deck row on the folder, other classrooms'
+    // included; the file-slide rule asks only the classrooms this request was
+    // authorized against.
+    const deckCheck = PROXY_SOURCE.slice(PROXY_SOURCE.indexOf('rightsFor: async deck =>'));
+    const deckCall = deckCheck.slice(0, deckCheck.indexOf('});') + 3);
+    expect(deckCall).toContain('assertSlideAccess({');
+    expect(deckCall).toContain('recordNonMemberRefusal: false');
+
+    const fileCheck = PROXY_SOURCE.slice(PROXY_SOURCE.indexOf('assertView: fileSlide =>'));
+    const fileCall = fileCheck.slice(0, fileCheck.indexOf('}),') + 3);
+    expect(fileCall).toContain('assertSlideAccess({');
+    expect(fileCall).not.toContain('recordNonMemberRefusal');
+    expect(PROXY_SOURCE.match(/recordNonMemberRefusal/g)).toHaveLength(1);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

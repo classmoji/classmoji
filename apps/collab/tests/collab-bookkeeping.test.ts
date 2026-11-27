@@ -278,20 +278,55 @@ describe('audit', () => {
     await waitFor(() => server.audit.entries.some(e => e.action === 'COLLAB_LEAVE'), 3000, 'leave');
   });
 
-  it('records ACCESS_DENIED for a refused member, nothing for a non-member', async () => {
+  it('records ACCESS_DENIED for a refused member with their role', async () => {
     const student = open(ROOM, { userId: 'student-1' });
     await waitFor(() => student.authFailures.length > 0, 3000, 'refusal');
-    const stranger = open(ROOM, { userId: 'stranger' });
-    await waitFor(() => stranger.authFailures.length > 0, 3000, 'refusal');
     await waitFor(() => server.audit.entries.length > 0, 3000, 'audit');
     expect(server.audit.entries).toEqual([
-      expect.objectContaining({
+      {
         action: 'ACCESS_DENIED',
         userId: 'student-1',
+        classroomId: CLASSROOM_ID,
         role: 'STUDENT',
+        resourceType: 'collab_page',
+        resourceId: PAGE,
         data: { reason: 'forbidden' },
-      }),
+      },
     ]);
+    expect(server.audit.nonMemberRefusals).toEqual([]);
+  });
+
+  it("records a refused non-member as the classroom's non-member refusal, with only who and where", async () => {
+    const stranger = open(ROOM, { userId: 'stranger' });
+    await waitFor(() => stranger.authFailures.length > 0, 3000, 'refusal');
+    await waitFor(() => server.audit.nonMemberRefusals.length > 0, 3000, 'audit');
+    expect(server.audit.nonMemberRefusals).toEqual([
+      [{ userId: 'stranger', classroomId: CLASSROOM_ID }],
+    ]);
+    expect(server.audit.entries).toEqual([]);
+  });
+
+  it('refuses a non-member the same when the refusal cannot be recorded', async () => {
+    server.audit.failNonMemberRefusals = true;
+    const stranger = open(ROOM, { userId: 'stranger' });
+    await waitFor(() => stranger.authFailures.length > 0, 3000, 'refusal');
+    expect(server.audit.nonMemberRefusals).toEqual([
+      [{ userId: 'stranger', classroomId: CLASSROOM_ID }],
+    ]);
+    expect(stranger.authFailures[0]).toMatch(/forbidden/i);
+  });
+
+  it('records nothing for a connection with no session or for a doc that does not exist', async () => {
+    const anonymous = open(ROOM, { userId: null });
+    await waitFor(() => anonymous.authFailures.length > 0, 3000, 'refusal');
+    const missing = open(roomName('page', 'no-such-page', 1), { userId: 'stranger' });
+    await waitFor(() => missing.authFailures.length > 0, 3000, 'refusal');
+    // A refusal that is recorded is called before its connection is refused.
+    const member = open(ROOM, { userId: 'student-1' });
+    await waitFor(() => member.authFailures.length > 0, 3000, 'refusal');
+    await waitFor(() => server.audit.entries.length > 0, 3000, 'audit');
+    expect(server.audit.entries.map(e => e.userId)).toEqual(['student-1']);
+    expect(server.audit.nonMemberRefusals).toEqual([]);
   });
 });
 

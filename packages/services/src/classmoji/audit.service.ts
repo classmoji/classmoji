@@ -36,8 +36,9 @@ interface AuditLogData {
   user_id: string;
   classroom_id: string;
   /**
-   * The actor's role in the classroom. `null` only on ACCESS_DENIED (someone
-   * refused who holds no role there); every other action needs one.
+   * The actor's role in the classroom. `null` only on ACCESS_DENIED; every
+   * other action needs one. A refusal of someone who holds no role in the
+   * classroom is recorded with `recordNonMemberRefusal`, not here.
    */
   role: string | null;
   resource_type: string;
@@ -82,6 +83,80 @@ export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> 
   } catch (error) {
     logAuditMiss(
       `platform audit write failed: ${error instanceof Error ? error.message : String(error)}`,
+      row
+    );
+  }
+}
+
+/** The one `data` a non-member's refusal row carries. */
+const NON_MEMBER_REFUSAL_DATA = JSON.stringify({ reason: 'not_classroom_member', tool: 'gate' });
+
+/**
+ * The id of a person's refusal row in a classroom on one UTC day: a SHA-256
+ * of the three, laid out as a UUID (version 8), so every refusal that day
+ * lands on the same row.
+ */
+async function nonMemberRefusalId(userId: string, classroomId: string, day: string) {
+  const key = JSON.stringify(['not_classroom_member', userId, classroomId, day]);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(
+    ''
+  );
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * Record that a signed-in person who holds no role in a classroom was
+ * refused there: ONE `ACCESS_DENIED` row per person, classroom and UTC day,
+ * with a fixed shape (null role, resource_type CLASSROOM, resource_id the
+ * classroom, data `{ reason: 'not_classroom_member', tool: 'gate' }`) and
+ * nothing taken from the request. A further refusal that day raises the
+ * row's `count` and moves `updated_at` to it; `timestamp` stays the first.
+ *
+ * One statement, `INSERT … ON CONFLICT (id) DO UPDATE` on an id derived from
+ * the three, so parallel refusals add up on the one row. Never throws: a
+ * failed write (an unknown user or classroom, the database away) leaves one
+ * `audit_miss` line. Writes nothing without a user id and a classroom id.
+ *
+ * `now` is for tests; the gates leave it out.
+ */
+export async function recordNonMemberRefusal(
+  { userId, classroomId }: { userId: string; classroomId: string },
+  { now = new Date() }: { now?: Date } = {}
+): Promise<void> {
+  const row = {
+    user_id: userId,
+    classroom_id: classroomId,
+    role: null,
+    action: 'ACCESS_DENIED',
+    resource_type: 'CLASSROOM',
+    resource_id: classroomId,
+    data: JSON.parse(NON_MEMBER_REFUSAL_DATA) as unknown,
+  };
+  if (!userId || !classroomId) {
+    logAuditMiss(!userId ? 'missing user_id' : 'missing classroom_id', row);
+    return;
+  }
+  try {
+    const at = now.toISOString();
+    const id = await nonMemberRefusalId(userId, classroomId, at.slice(0, 10));
+    // `timestamp` and `updated_at` are UTC wall times (timestamp without time
+    // zone), written from `now` so the row does not depend on the session's zone.
+    await getPrisma().$executeRaw`
+      INSERT INTO audit_logs
+        ("id", "classroom_id", "user_id", "role", "action", "resource_type", "resource_id",
+         "data", "count", "timestamp", "updated_at")
+      VALUES
+        (${id}, ${classroomId}, ${userId}, NULL, 'ACCESS_DENIED', 'CLASSROOM', ${classroomId},
+         ${NON_MEMBER_REFUSAL_DATA}::jsonb, 1,
+         ${at}::timestamptz AT TIME ZONE 'UTC', ${at}::timestamptz AT TIME ZONE 'UTC')
+      ON CONFLICT ("id") DO UPDATE SET
+        "count" = audit_logs."count" + 1,
+        "updated_at" = GREATEST(audit_logs."updated_at", EXCLUDED."updated_at")`;
+  } catch (error) {
+    logAuditMiss(
+      `non-member refusal write failed: ${error instanceof Error ? error.message : String(error)}`,
       row
     );
   }
@@ -151,11 +226,6 @@ export const create = async (data: AuditLogData) => {
   if (!classroom_id) return refuse('missing classroom_id', data);
   if (!user_id) return refuse('missing user_id', data);
   if (!VALID_ACTIONS.includes(action)) return refuse(`invalid action "${action}"`, data);
-
-  // 'NONE' is what the classroom gate passes today for a refused non-member.
-  // Those rows have never been written; the next change passes null instead
-  // (a role-less ACCESS_DENIED row) and removes this branch.
-  if (role === 'NONE') return null;
 
   if (role === null) {
     if (action !== 'ACCESS_DENIED') return refuse(`missing role on ${action}`, data);
