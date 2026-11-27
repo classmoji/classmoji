@@ -638,7 +638,7 @@ const RepositoryAssignmentsTable = ({
                       <Alert
                         type="error"
                         showIcon
-                        message="Couldn't load analytics"
+                        title="Couldn't load analytics"
                         description={entry.message}
                         closable
                       />

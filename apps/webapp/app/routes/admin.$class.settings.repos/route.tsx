@@ -223,7 +223,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
             offers the fix, so showing both repeats the diagnosis in vaguer
             words underneath the cure. */}
         {!showInstallBanner && (
-          <Alert message={error ?? `${terms.Repo} settings unavailable.`} type="warning" showIcon />
+          <Alert title={error ?? `${terms.Repo} settings unavailable.`} type="warning" showIcon />
         )}
       </div>
     );
@@ -282,7 +282,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
           />
           {githubOrganization.default_repository_permission && (
             <Alert
-              message={permissionExplanations[githubOrganization.default_repository_permission]}
+              title={permissionExplanations[githubOrganization.default_repository_permission]}
               type="warning"
               showIcon={true}
               style={{ marginTop: '10px' }}

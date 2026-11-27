@@ -100,7 +100,8 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
           required
           rules={[{ required: true, message: 'Title is required' }]}
         >
-          <Input />
+          {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
+          <Input autoFocus />
         </Form.Item>
         <Form.Item label={`${terms.PR} description`} name="description">
           <Input.TextArea rows={6} />

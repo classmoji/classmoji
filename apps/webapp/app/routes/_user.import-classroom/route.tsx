@@ -133,7 +133,7 @@ const ImportClassroom = () => {
           />
         )}
 
-        {data?.error && <Alert className="mt-4" type="error" showIcon message={data.error} />}
+        {data?.error && <Alert className="mt-4" type="error" showIcon title={data.error} />}
 
         <div className="flex justify-between mt-8">
           <div>

@@ -150,9 +150,9 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       width={720}
       centered
       closable={false}
-      maskClosable
+      mask={{ closable: true }}
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+        container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
@@ -192,7 +192,9 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           size="sm"
         />
 
+        {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
         <Input.TextArea
+          autoFocus
           data-tour="students-add-roster"
           value={inputText}
           onChange={e => setInputText(e.target.value)}
@@ -248,7 +250,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
 
             {categorized.valid.length === 0 && categorized.skipped.length > 0 && (
               <Alert
-                message="No new students to add"
+                title="No new students to add"
                 description="All students in your input are either already enrolled or have invalid data."
                 type="warning"
                 showIcon

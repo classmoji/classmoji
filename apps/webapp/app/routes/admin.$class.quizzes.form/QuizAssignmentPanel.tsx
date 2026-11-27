@@ -321,8 +321,7 @@ export const EditableAssignmentPanel = ({
           help={moduleId ? undefined : 'Choose a module'}
         >
           <Select
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             placeholder="Choose a module"
             options={modules.map(m => ({ value: m.id, label: m.title }))}
             data-testid="quiz-module-select"

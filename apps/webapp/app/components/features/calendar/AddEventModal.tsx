@@ -207,9 +207,9 @@ const AddEventModal = ({
       width={560}
       centered
       closable={false}
-      maskClosable
+      mask={{ closable: true }}
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        container: { padding: 0, borderRadius: 16, overflow: 'hidden' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
@@ -418,7 +418,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />
@@ -443,7 +443,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />
@@ -468,7 +468,7 @@ const AddEventModal = ({
                           featured,
                           onToggleFeatured: toggleFeatured,
                         })}
-                        optionFilterProp="label"
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
                         className="w-full"
                       />

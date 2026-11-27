@@ -312,7 +312,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
         <Alert
           type="info"
           showIcon
-          message="Creating a classroom requires Github or Gitlab"
+          title="Creating a classroom requires Github or Gitlab"
           description="Connect an account in Settings to create a classroom."
         />
       </div>
@@ -599,7 +599,7 @@ const CreateClassroomForm = ({
         ) : (
           <Alert
             type="warning"
-            message="No GitHub Organizations Available"
+            title="No GitHub Organizations Available"
             description={
               <div>
                 <p className="mb-4">

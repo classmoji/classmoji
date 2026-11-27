@@ -111,7 +111,7 @@ const AskMojiExchange = ({ loaderData }: Route.ComponentProps) => {
       <Drawer
         open
         onClose={close}
-        width="min(720px, 100vw)"
+        size="min(720px, 100vw)"
         closeIcon={<IconX className="text-ink-1" size={18} />}
         title={
           <span>

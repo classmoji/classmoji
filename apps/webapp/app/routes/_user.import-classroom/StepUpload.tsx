@@ -65,7 +65,7 @@ export default function StepUpload({ onFile, parsing, parseError, fileName }: Pr
           className="mt-4"
           type="error"
           showIcon
-          message="Could not read that file"
+          title="Could not read that file"
           description={parseError}
         />
       )}

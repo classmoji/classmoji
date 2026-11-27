@@ -415,12 +415,9 @@
    TOOLBAR OVERFLOW MENU
    Styles for the responsive toolbar hamburger menu popover
    Ant Design Popover renders in a portal, so we style via classNames.root.
-   The inner box is .ant-popover-inner in antd 5 and .ant-popover-container in
-   antd 6; each rule names both (the v6 name matches nothing on v5).
    ============================================================================= */
 
 /* Popover container - remove default Ant Design background/padding */
-.slides-toolbar-popover .ant-popover-inner,
 .slides-toolbar-popover .ant-popover-container {
   padding: 0;
   background: transparent;
@@ -430,14 +427,12 @@
 }
 
 /* Dark mode for popover (class-based - when .dark is on html/body) */
-.dark .slides-toolbar-popover .ant-popover-inner,
 .dark .slides-toolbar-popover .ant-popover-container {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 /* Dark mode for popover (system preference fallback) */
 @media (prefers-color-scheme: dark) {
-  .slides-toolbar-popover .ant-popover-inner,
   .slides-toolbar-popover .ant-popover-container {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   }
@@ -1147,10 +1142,7 @@
   @apply p-2;
 }
 
-/* Ant Design Collapse customization for slide properties.
-   The panel content is .ant-collapse-content / -content-box in antd 5 and
-   .ant-collapse-panel / -body in antd 6; those rules name both (the v6 names
-   match nothing on v5). */
+/* Ant Design Collapse customization for slide properties. */
 .slide-properties-collapse {
   @apply !bg-transparent !border-0;
 }
@@ -1177,12 +1169,10 @@
 }
 
 /* Panel content */
-.slide-properties-collapse .ant-collapse-content,
 .slide-properties-collapse .ant-collapse-panel {
   @apply !border-t !border-gray-200 dark:!border-gray-700;
 }
 
-.slide-properties-collapse .ant-collapse-content-box,
 .slide-properties-collapse .ant-collapse-body {
   @apply !px-3 !pt-3 !pb-3;
   @apply !bg-white dark:!bg-gray-800;

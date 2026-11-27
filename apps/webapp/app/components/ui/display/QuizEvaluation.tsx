@@ -86,7 +86,7 @@ const QuizEvaluation = ({
     <div style={{ marginTop: 20 }}>
       {slots?.beforeResults}
       <Alert
-        message="Quiz Complete!"
+        title="Quiz Complete!"
         description="Your responses have been evaluated. Here are your results:"
         type="success"
         showIcon
@@ -155,7 +155,7 @@ const QuizEvaluation = ({
 
         {evaluationData.feedback_effort_note && (
           <Alert
-            message="Learning Journey"
+            title="Learning Journey"
             description={evaluationData.feedback_effort_note}
             type="info"
             showIcon={false}

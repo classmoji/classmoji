@@ -156,7 +156,7 @@ export default function BlockSourceModal({
         // Escape belongs to the editor (closing a completion list), never
         // to discarding the source.
         keyboard={false}
-        maskClosable={false}
+        mask={{ closable: false }}
         destroyOnHidden
         width="min(1200px, 94vw)"
         title={kind === 'svg' ? 'SVG source' : 'HTML source'}

@@ -23,6 +23,11 @@ vi.mock('antd', () => ({
   Button: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) => (
     <button disabled={disabled}>{children}</button>
   ),
+  // The hours field sits in a Space.Compact with a Space.Addon (antd 6).
+  Space: {
+    Compact: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    Addon: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  },
 }));
 vi.mock('react-router', () => ({ useRevalidator: () => ({ revalidate: vi.fn() }) }));
 // Only the type is imported; keep the services package out of this render.

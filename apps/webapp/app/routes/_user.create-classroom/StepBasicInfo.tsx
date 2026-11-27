@@ -84,7 +84,7 @@ const StepBasicInfo = ({
   );
 
   return (
-    <Spin spinning={isRefreshing} tip="Refreshing organizations...">
+    <Spin spinning={isRefreshing} description="Refreshing organizations...">
       <div className="space-y-4">
         <div>
           <p className="block text-sm font-medium mb-1">

@@ -107,10 +107,10 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
       width={560}
       centered
       closable={false}
-      maskClosable
+      mask={{ closable: true }}
       destroyOnHidden
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+        container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
@@ -154,12 +154,16 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             ]}
             className="!mb-3"
           >
+            {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
             <InputNumber
+              autoFocus
               data-tour="tokens-new-amount"
               min={1}
               variant="borderless"
               placeholder="Number of tokens"
-              className="!text-lg !font-semibold !px-0"
+              // No padding override: antd 6 pads this root, where antd 5 padded the
+              // inner input (and `!px-0` on the root did nothing).
+              className="!text-lg !font-semibold"
               style={{ width: '100%' }}
             />
           </Form.Item>
@@ -195,7 +199,13 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                   data-tour="tokens-new-students"
                   mode="multiple"
                   placeholder="Search and select students…"
-                  showSearch
+                  showSearch={{
+                    filterOption: (input, option) => {
+                      return (option as { label: string })!.label
+                        .toLowerCase()
+                        .includes(input.toLowerCase());
+                    },
+                  }}
                   allowClear
                   maxTagCount="responsive"
                   className="w-full"
@@ -203,11 +213,6 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                     label: student.name,
                     value: JSON.stringify(student),
                   }))}
-                  filterOption={(input, option) => {
-                    return (option as { label: string })!.label
-                      .toLowerCase()
-                      .includes(input.toLowerCase());
-                  }}
                 />
               </Form.Item>
             )}

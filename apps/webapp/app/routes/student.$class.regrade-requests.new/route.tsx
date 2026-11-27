@@ -80,7 +80,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
         disabled: !comment || !assignment,
       }}
     >
-      <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />
+      <Alert title="Explain your regrade/resubmit request below." type="info" showIcon banner />
 
       <p className="my-4 text-sm text-gray-500">
         If you want a regrade or to resubmit your assignment, you can use this form to contact the
@@ -89,7 +89,9 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 
       <Form layout="vertical">
         <Form.Item label="Assignment" name="assignment" required>
+          {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
           <Select
+            autoFocus
             onChange={setAssignment}
             value={assignment}
             defaultValue={assignment}

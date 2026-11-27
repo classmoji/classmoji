@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useFetcher, useParams } from 'react-router';
-import { Button, Input, Popconfirm, Select, Switch, Tooltip } from 'antd';
+import { Button, Input, Popconfirm, Select, Space, Switch, Tooltip } from 'antd';
 import { IconCrown, IconExternalLink } from '@tabler/icons-react';
 import { namedAction } from '~/utils/namedAction.server';
 
@@ -654,15 +654,17 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
         {editing || !site ? (
           <>
             <div className="flex flex-wrap items-center gap-3">
-              <Input
-                value={subdomain}
-                onChange={event => setSubdomain(event.target.value)}
-                onPressEnter={() => claimable && claim()}
-                addonAfter={`.${baseDomain}`}
-                placeholder="cs52"
-                aria-label="Subdomain"
-                className="max-w-sm"
-              />
+              <Space.Compact block className="max-w-sm">
+                <Input
+                  value={subdomain}
+                  onChange={event => setSubdomain(event.target.value)}
+                  onPressEnter={() => claimable && claim()}
+                  placeholder="cs52"
+                  aria-label="Subdomain"
+                  className="min-w-0"
+                />
+                <Space.Addon>{`.${baseDomain}`}</Space.Addon>
+              </Space.Compact>
               {availability && availability.status !== 'empty' && (
                 <span className={`text-sm font-medium ${statusTone[availability.status] ?? ''}`}>
                   {availability.status === 'available'
@@ -761,9 +763,8 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
             disabled={!site}
             loading={homePageFetcher.state !== 'idle'}
             placeholder="Choose a page"
-            showSearch
+            showSearch={{ optionFilterProp: 'label' }}
             allowClear
-            optionFilterProp="label"
             aria-label="Home page"
             onChange={value => saveSetting(homePageFetcher, { home_page_id: value ?? null })}
             options={pageOptions.map(page => ({ value: page.id, label: page.title }))}

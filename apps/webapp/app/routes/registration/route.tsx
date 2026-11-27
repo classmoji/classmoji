@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import WithAddon from '~/components/ui/inputs/WithAddon';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
@@ -301,10 +302,10 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
           className="shadow-xs border border-gray-200 dark:border-neutral-800"
           styles={{ body: { padding: '24px' } }}
         >
-          <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
+          <Spin spinning={isSubmitting} description="Setting up your account..." fullscreen />
 
           {actionError && (
-            <Alert message={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
+            <Alert title={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
           )}
 
           <Form
@@ -443,12 +444,13 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                     name="login"
                     className="mb-6"
                   >
-                    <Input
-                      addonBefore="@"
-                      readOnly
-                      className="bg-gray-50"
-                      prefix={<UserOutlined className="text-gray-400" />}
-                    />
+                    {/* WithAddon passes the form's value on to the Input; the
+                        addon greys with the form while it submits. The grey
+                        sits on the wrapper, under the addon and the disabled
+                        field, where antd 5 put an addon input's className. */}
+                    <WithAddon before="@" block disabled={isSubmitting} className="bg-gray-50">
+                      <Input readOnly prefix={<UserOutlined className="text-gray-400" />} />
+                    </WithAddon>
                   </Form.Item>
                 )}
 

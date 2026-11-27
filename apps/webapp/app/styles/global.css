@@ -8,6 +8,8 @@
 @import '@classmoji/ui-components/styles/tokens.css';
 @import '@classmoji/ui-components/styles/fonts.css';
 @import '@classmoji/ui-components/styles/components.css';
+/* antd 6 defaults that no token restores to antd 5's look. */
+@import '@classmoji/ui-components/styles/antd.css';
 
 * {
   box-sizing: border-box;
@@ -82,6 +84,19 @@ html.pointer-cursors label[for] {
   background-color: var(--panel) !important;
   border-color: rgb(231 229 238) !important; /* stone-200 */
 }
+/* antd 5's dark input-addon background (the dark theme's Input addonBg),
+   read by ui-components/styles/antd.css for antd 6's Space.Addon. That token
+   was Input's only: a number field's addon kept antd's own colours. */
+html.dark,
+html[data-theme='dark'] {
+  --cm-antd-addon-bg: #171717;
+  --cm-antd-addon-disabled-bg: #171717;
+}
+html.dark .ant-space-compact:has(> .ant-input-number),
+html[data-theme='dark'] .ant-space-compact:has(> .ant-input-number) {
+  --cm-antd-addon-bg: var(--ant-color-fill-alter);
+  --cm-antd-addon-disabled-bg: var(--ant-color-bg-container-disabled);
+}
 html.dark .ant-card,
 html[data-theme='dark'] .ant-card {
   border-color: rgb(38 38 41) !important; /* neutral-800 */
@@ -99,6 +114,11 @@ body {
   /* Mona Sans renders lighter than DM Sans at the same nominal weight. Nudge
      the default body weight up so regular text doesn't read as too thin.
      Explicit weights on headings/labels (500–700) are unaffected. */
+  font-weight: 450;
+}
+/* ui-components' antd.css sets a single Select's value at 400, as antd 5 did;
+   what you type into a searchable one stays at the body weight, as in antd 5. */
+.ant-select.ant-select-single .ant-select-content > .ant-select-input {
   font-weight: 450;
 }
 .display {
@@ -863,9 +883,7 @@ label {
 
 /* ============ ONBOARDING TOUR FOOTER ============ */
 /* Stack the antd Tour footer: full-width progress bar on top, nav buttons on
-   their own row below (default is bar-left / buttons-right on a single line).
-   Each selector list names the antd 5 class first, then its antd 6 name
-   (-buttons -> -actions, -inner -> -section); the v6 names match nothing on v5. */
+   their own row below (default is bar-left / buttons-right on a single line). */
 .cm-tour .ant-tour-footer {
   flex-direction: column;
   align-items: stretch;
@@ -874,7 +892,6 @@ label {
 .cm-tour .ant-tour-indicators {
   width: 100%;
 }
-.cm-tour .ant-tour-buttons,
 .cm-tour .ant-tour-actions {
   display: flex;
   justify-content: flex-end;
@@ -935,7 +952,6 @@ label {
    bites on narrow/phone screens, where antd's default width would otherwise run
    flush to (or past) the borders. */
 .cm-tour .ant-tour,
-.cm-tour .ant-tour-inner,
 .cm-tour .ant-tour-section {
   max-width: calc(100vw - 2rem);
 }

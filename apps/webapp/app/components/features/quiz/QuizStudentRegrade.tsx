@@ -101,7 +101,7 @@ export function QuizRegradeButton({
         cancelButtonProps={{ disabled: busy }}
         destroyOnHidden
       >
-        <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />
+        <Alert title="Explain your regrade/resubmit request below." type="info" showIcon banner />
         <Form layout="vertical" className="mt-4">
           <Form.Item label="Assignment">
             <span className="inline-flex flex-wrap items-center gap-2">

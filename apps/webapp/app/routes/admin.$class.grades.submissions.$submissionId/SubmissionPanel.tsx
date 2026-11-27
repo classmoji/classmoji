@@ -166,7 +166,7 @@ const SubmissionPanel = ({ data, context }: SubmissionPanelProps) => {
         mask={false}
         // Esc is handled with J / K below, so it works wherever focus is.
         keyboard={false}
-        width="min(420px, 100vw)"
+        size="min(420px, 100vw)"
         closeIcon={<IconX className="text-ink-1" size={18} />}
         data-testid="submission-panel"
         title={
