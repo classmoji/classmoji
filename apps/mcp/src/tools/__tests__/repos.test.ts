@@ -50,7 +50,13 @@ vi.mock('@classmoji/services', () => ({
     module: { findById: (...a: unknown[]) => mocks.moduleFindById(...a) },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     contentManifest: { saveManifest: (...a: unknown[]) => mocks.saveManifest(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
 }));
 

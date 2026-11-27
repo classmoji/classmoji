@@ -41,7 +41,13 @@ vi.mock('@classmoji/services', () => ({
       setLateOverrideInClassroom: (...a: unknown[]) => mocks.setLateOverride(...a),
     },
     assignment: { findById: (...a: unknown[]) => mocks.assignmentFindById(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     classroom: {
       findAll: (...a: unknown[]) => mocks.classroomFindAll(...a),
       getClassroomForUI: (c: unknown) => c,
@@ -422,7 +428,7 @@ describe('submission_late_override — skips and audit failures', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('keeps the committed result and flags audit_incomplete when an audit write fails', async () => {
+  it('keeps the committed result and names the ids whose audit write failed', async () => {
     const ids = Array.from(
       { length: 45 },
       (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
@@ -433,23 +439,26 @@ describe('submission_late_override — skips and audit failures', () => {
       if (row.resource_id === ids[3] || row.resource_id === ids[30]) throw new Error(secret);
     });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ctx = { ...CTX } as ToolContext;
 
     const result = await submissionLateOverrideTool.handler(
       { classroom: 'org/c', git_repo_assignment_ids: ids, is_late_override: true },
-      CTX
+      ctx
     );
     const payload = parse(result);
 
     expect(payload).toMatchObject({
       success: true,
       updated_count: 45,
-      audit_incomplete: true,
       audit_failed_ids: [ids[3], ids[30]],
     });
-    // Every row was attempted, in parallel chunks — the loop did not stop at the failure.
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(45);
+    // The registry adds `audit_incomplete` from this mark (through the registry, below).
+    expect(ctx.auditIncomplete).toBe(true);
+    // Every row was attempted, in parallel chunks — the loop did not stop at the
+    // failure; the two that failed were each tried once more.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(47);
     // The error is logged server-side and never reaches the client.
-    expect(logged).toHaveBeenCalled();
+    expect(logged.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(2);
     expect(result.content[0].text).not.toContain(secret);
     logged.mockRestore();
   });
@@ -538,6 +547,32 @@ describe('submission_late_override — through the registry', () => {
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ updated_count: 1 });
     expect(auditRows()[0].role).toBe(role);
+  });
+
+  it('answers normally with audit_incomplete when an audit row is not written', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [SUB_A] }));
+    mocks.auditCreate.mockRejectedValue(new Error('db down'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await call(ARGS);
+    expect(result.isError).toBeFalsy();
+    expect(parse(result)).toMatchObject({
+      success: true,
+      updated_count: 1,
+      audit_incomplete: true,
+      audit_failed_ids: [SUB_A],
+    });
+    expect(mocks.setLateOverride).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+  });
+
+  it('adds no audit_incomplete when the row lands', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [SUB_A] }));
+
+    const payload = parse(await call(ARGS));
+    expect(payload).not.toHaveProperty('audit_incomplete');
   });
 
   it.each(['ASSISTANT', 'STUDENT'])('refuses %s before the handler runs', async role => {

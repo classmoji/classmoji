@@ -65,7 +65,13 @@ vi.mock('@classmoji/services', async () => {
       contentIndex: { slideMetadataText: () => '' },
       pageSections: sections,
       pageComments: comments,
-      audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
+      audit: {
+        create: (...args: unknown[]) => mocks.auditCreate(...args),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
     },
   };
 });
@@ -1257,10 +1263,10 @@ describe('writes and audit rows', () => {
 
   it('does not turn a failed audit write into a tool error', async () => {
     mocks.auditCreate.mockRejectedValue(new Error('db down'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect((await create(STUDENT_A, {})).changed).toBe(true);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(error).toHaveBeenCalledWith('audit_miss', expect.any(String));
+    error.mockRestore();
   });
 });
 

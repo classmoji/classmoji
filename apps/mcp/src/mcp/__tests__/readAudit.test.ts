@@ -46,7 +46,13 @@ vi.mock('@classmoji/services', () => ({
       findByClassroomAndUser: (...args: unknown[]) => mocks.findByClassroomAndUser(...args),
       findUsersByRole: (...args: unknown[]) => mocks.findUsersByRole(...args),
     },
-    audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
+    audit: {
+      create: (...args: unknown[]) => mocks.auditCreate(...args),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
 }));
 
@@ -440,14 +446,19 @@ describe('audited reads', () => {
     ]);
   });
 
-  it('a failed audit write is logged and the read still answers', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    mocks.auditCreate.mockRejectedValueOnce(new Error('db down'));
+  it('a failed audit write is logged and the read still answers, with no field added', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.auditCreate.mockRejectedValue(new Error('db down'));
     const result = await call(viewer('ta-a'), 't_staff_read', { classroom: 'org/x' });
     expect(result.isError).toBeFalsy();
+    // The read's answer exactly: no audit_incomplete on a read.
     expect(JSON.parse(result.content[0].text)).toEqual({ students: ['SECRET-NAME'] });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('t_staff_read'), expect.any(Error));
-    warn.mockRestore();
+    // Tried once more, then one audit_miss line naming the row.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    const misses = error.mock.calls.filter(c => c[0] === 'audit_miss');
+    expect(misses).toHaveLength(1);
+    expect(String(misses[0][1])).toContain('t_staff_read');
+    error.mockRestore();
   });
 });
 

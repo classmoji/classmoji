@@ -132,6 +132,8 @@ import {
   requireClassroomCtx,
   scopedNotFound,
   writeAudit,
+  writeAuditOrFail,
+  type AuditEntry,
   type FormRecord,
 } from './shared.ts';
 
@@ -1457,15 +1459,23 @@ interface FormTeamsGetArgs {
 }
 
 /** A view of people's placements is a read of other people's submissions: audited. */
+/**
+ * How a read row is written: before the data is handed over and failing the
+ * call (`writeAuditOrFail`, the default), or after a change this call already
+ * saved (`writeAudit`: a failed write is flagged, not an error).
+ */
+type AuditWriter = (ctx: ToolContext, entry: AuditEntry) => Promise<unknown>;
+
 async function auditRunRead(
   ctx: ToolContext,
   form: FormRecord,
   setId: string,
   run: { id: string; number: number },
   extra: Record<string, string | number> = {},
-  tool = 'form_teams_get'
+  tool = 'form_teams_get',
+  write: AuditWriter = writeAuditOrFail
 ): Promise<void> {
-  await writeAudit(ctx, {
+  await write(ctx, {
     resource_type: TEAM_SETS_RESOURCE,
     resource_id: run.id,
     action: 'VIEW',
@@ -1497,10 +1507,11 @@ async function auditIssuesRead(
   form: FormRecord,
   resourceId: string,
   issues: readonly (CheckIssue & { names?: string[] })[],
-  value: string
+  value: string,
+  write: AuditWriter = writeAuditOrFail
 ): Promise<void> {
   if (!issuesNamePeople(issues)) return;
-  await writeAudit(ctx, {
+  await write(ctx, {
     resource_type: TEAM_SETS_RESOURCE,
     resource_id: resourceId,
     action: 'VIEW',
@@ -2148,7 +2159,15 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
     );
 
     if (!run) {
-      await auditIssuesRead(ctx, form, saved.id, issues, `checks:${patchFingerprint(patch)}`);
+      // After the save: recorded like the save, a failed write flagged.
+      await auditIssuesRead(
+        ctx,
+        form,
+        saved.id,
+        issues,
+        `checks:${patchFingerprint(patch)}`,
+        writeAudit
+      );
       return ok({
         team_set: setRef(saved),
         started: false,
@@ -2187,7 +2206,14 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
         : run;
 
     if (!TERMINAL_STATUSES.has(latest.status)) {
-      await auditIssuesRead(ctx, form, latest.id, issues, `checks:${patchFingerprint(patch)}`);
+      await auditIssuesRead(
+        ctx,
+        form,
+        latest.id,
+        issues,
+        `checks:${patchFingerprint(patch)}`,
+        writeAudit
+      );
       return ok({
         team_set: setRef(saved),
         started: true,
@@ -2203,7 +2229,7 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
     );
     // The finished run's teams name their members: a read of people, audited
     // as form_teams_get audits it.
-    await auditRunRead(ctx, form, saved.id, latest, {}, 'form_teams_run');
+    await auditRunRead(ctx, form, saved.id, latest, {}, 'form_teams_run', writeAudit);
     return ok({
       team_set: setRef(saved),
       started: true,
@@ -2275,7 +2301,7 @@ export const formTeamsCreateTool: ToolDefinition<FormTeamsCreateArgs> = {
         'Run'
       );
       // The preview names every member of every team: audited like a run read.
-      await writeAudit(ctx, {
+      await writeAuditOrFail(ctx, {
         resource_type: TEAM_SETS_RESOURCE,
         resource_id: preview.run_id,
         action: 'VIEW',

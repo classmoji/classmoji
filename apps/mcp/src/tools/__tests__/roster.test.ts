@@ -35,7 +35,13 @@ vi.mock('@classmoji/services', () => ({
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
   buildRemoveUserPayload,
 }));

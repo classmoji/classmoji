@@ -62,7 +62,13 @@ vi.mock('@classmoji/services', () => {
       classroomMembership: {
         findByClassroomId: (...a: unknown[]) => mocks.findMembershipsByClassroomId(...a),
       },
-      audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+      audit: {
+        create: (...a: unknown[]) => mocks.auditCreate(...a),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
       organizationTag: { findOrCreate: (...a: unknown[]) => mocks.tagFindOrCreate(...a) },
     },
   };

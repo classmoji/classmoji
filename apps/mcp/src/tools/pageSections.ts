@@ -256,21 +256,16 @@ export async function pageDraftHiddenFromCaller(
 }
 
 /**
- * The audit row for an act that already happened, as the caller's ACCEPTED
- * role. A failed write is logged and the tool's answer stands (the HTTP
- * surface does the same).
+ * The audit row for an act that already happened (or a status read), as the
+ * caller's ACCEPTED role. A failed write is logged by the audit service and
+ * the tool's answer stands (the HTTP surface does the same).
  */
 async function auditQuietly(
   ctx: ToolContext,
   role: Role,
   entry: Omit<AuditEntry, 'role'>
 ): Promise<void> {
-  try {
-    await writeAudit(ctx, { ...entry, role });
-  } catch (error) {
-    const tool = (entry.data as { tool?: unknown } | undefined)?.tool;
-    console.warn(`[mcp] page sections audit (${String(tool)}) failed:`, error);
-  }
+  await writeAudit(ctx, { ...entry, role });
 }
 
 /** The tree this viewer may see: staff everything, others with closed sections emptied. */
