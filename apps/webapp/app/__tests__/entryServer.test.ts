@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 
 /**
  * The webapp's server entry (app/entry.server.tsx): `handleError` logs what
- * React Router's default logged and reports real failures once; a streaming
- * render error after the shell is reported too. Sentry itself is mocked
+ * React Router's default logged and reports real failures once (through
+ * `reportRouteError`, to a fake reporter here); a streaming render error
+ * after the shell is reported too. Sentry itself is mocked
  * (`./utils/sentry.server`): the assertions are on what the entry hands it.
  */
 
@@ -56,22 +58,37 @@ afterEach(() => {
 });
 
 describe('handleError', () => {
+  // handleError reports through @classmoji/utils/error-report (the reporter
+  // initServerSentry registers); a fake reporter stands in for it here.
+  type Report = { error: unknown; context: ReportContext };
+  let reports: Report[];
+  beforeEach(() => {
+    reports = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        reports.push({ error, context });
+      },
+      flush: async () => true,
+    });
+  });
+  afterEach(() => setErrorReporter(null));
+
+  const HANDLE_ERROR = { surface: 'react_router.handle_error', handled: false };
+
   it('logs and reports a thrown error, once', () => {
     const error = new Error('loader exploded');
     handle(error);
+    handle(error);
 
-    expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(error);
-    expect(mocks.capture).toHaveBeenCalledTimes(1);
-    expect(mocks.capture).toHaveBeenCalledWith(error, { surface: 'react_router.handle_error' });
+    expect(reports).toEqual([{ error, context: HANDLE_ERROR }]);
   });
 
-  it('reports a thrown 5xx Response', () => {
-    const response = new Response('down', { status: 503 });
-    handle(response);
-    expect(mocks.capture).toHaveBeenCalledWith(response, {
-      surface: 'react_router.handle_error',
-    });
+  it('reports a thrown 5xx Response as the Error naming its status', () => {
+    handle(new Response('down', { status: 503 }));
+    expect(reports).toHaveLength(1);
+    expect((reports[0].error as Error).message).toMatch(/^Response 503/);
+    expect(reports[0].context).toEqual(HANDLE_ERROR);
   });
 
   it('logs a 404 route error response by its inner error and does not report it', () => {
@@ -80,27 +97,27 @@ describe('handleError', () => {
     handle(notFound);
 
     expect(errorSpy).toHaveBeenCalledWith(inner);
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
   });
 
   it('does not report a thrown 4xx Response or redirect', () => {
     handle(new Response(null, { status: 403 }));
     handle(new Response(null, { status: 302, headers: { Location: '/' } }));
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
   });
 
   it('neither logs nor reports when the request was aborted', () => {
     handle(new Error('client went away'), request(true));
     expect(errorSpy).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
   });
 
-  it('logs as before and reports nothing when Sentry is off', () => {
-    mocks.enabled.value = false;
+  it('logs as before and reports nothing when Sentry is off (no reporter)', () => {
+    setErrorReporter(null);
     const error = new Error('loader exploded');
     handle(error);
     expect(errorSpy).toHaveBeenCalledWith(error);
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
   });
 
   it('logs nothing in test mode, like the default', () => {

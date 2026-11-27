@@ -2,7 +2,8 @@
  * The admin Worker (workers/app.ts) with Sentry off: no `SENTRY_DSN` binding
  * (blank here, which the SDK would otherwise read itself), so nothing is
  * sent, though `reportError` is called during the request, and the answer is
- * unchanged. Its own file: the SDK keeps one client per isolate.
+ * unchanged, body included (never re-wrapped by the SDK). Its own file: the
+ * SDK keeps one client per isolate.
  */
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { setErrorReporter } from '@classmoji/utils/error-report';
@@ -46,6 +47,11 @@ it('sends nothing without a DSN', async () => {
       ctx
     );
     expect(response.status).toBe(503);
+    // The SDK registers its end-of-request flush at once when it hands the
+    // body back as built; it defers it to the end of a body it re-wrapped
+    // (text/plain without a length, like this 503, unless told otherwise).
+    expect(waits).toHaveLength(1);
+    expect(await response.text()).toBe('Service misconfigured');
     await Promise.allSettled(waits);
   } finally {
     error.mockRestore();

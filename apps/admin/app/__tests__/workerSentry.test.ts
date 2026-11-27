@@ -55,9 +55,10 @@ it('reports during a request and flushes through ctx.waitUntil', async () => {
       ctx
     );
     expect(response.status).toBe(503);
+    // The send happens in the flush the SDK hands to waitUntil, registered
+    // as the response is handed back: the body was not re-wrapped.
+    expect(waits).toHaveLength(1);
     expect(await response.text()).toBe('Service misconfigured');
-    // The send happens in the flush the SDK hands to waitUntil.
-    expect(waits.length).toBeGreaterThan(0);
     await Promise.allSettled(waits);
   } finally {
     error.mockRestore();

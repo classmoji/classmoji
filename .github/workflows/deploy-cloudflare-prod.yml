@@ -11,6 +11,8 @@ on:
     paths:
       - 'apps/content/**'
       - 'packages/content-signing/**'
+      # The Worker bundles @classmoji/utils (error reporting, Sentry options).
+      - 'packages/utils/**'
       - '.github/workflows/deploy-cloudflare-prod.yml'
   workflow_dispatch:
 

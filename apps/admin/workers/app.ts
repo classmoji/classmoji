@@ -44,10 +44,20 @@ const requestHandler = createRequestHandler(
 // 600 KB of code) in the Worker bundle, which is near its memory limit.
 const integrations = workerIntegrations({ fetchIntegration, httpServerIntegration });
 
-// Once per isolate. With Sentry off the SDK has no client and drops reports.
+// Once per isolate. With Sentry off the SDK's client is disabled and drops reports.
 setErrorReporter(createSentryReporter({ withScope, captureException, flush }));
+
+/**
+ * The SDK would otherwise treat a `text/plain` body without a length (the
+ * health check's `ok`, the missing-Hyperdrive 503) as streaming and hand the
+ * client a re-wrapped copy. Set on and off alike: the SDK builds a client,
+ * and wraps the request, even when disabled.
+ */
+const notStreaming = () => false;
 
 export default withSentry((env: ClassmojiWorkerEnv): CloudflareOptions => {
   const options = sentryServerOptions(env, { app: 'admin', runtime: 'worker' });
-  return options ? { ...options, integrations } : sentryOffOptions();
+  return options
+    ? { ...options, integrations, isStreamingResponse: notStreaming }
+    : { ...sentryOffOptions(), isStreamingResponse: notStreaming };
 }, createWorkerHandler<ClassmojiWorkerEnv>(requestHandler));

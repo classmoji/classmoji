@@ -16,6 +16,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 
@@ -244,6 +245,31 @@ describe('loadClassroomIsPro', () => {
     await expect(loadClassroomIsPro(CLASSROOM.id)).resolves.toBe(false);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+
+  it('reports the swallowed failure, tagged with the classroom id only', async () => {
+    const failure = new Error('connection pool timeout');
+    mocks.getProStateForClassroomId.mockRejectedValue(failure);
+    const reports: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        reports.push({ error, context });
+      },
+      flush: async () => true,
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(loadClassroomIsPro(CLASSROOM.id)).resolves.toBe(false);
+    } finally {
+      consoleError.mockRestore();
+      setErrorReporter(null);
+    }
+    expect(reports).toEqual([
+      {
+        error: failure,
+        context: { surface: 'subscription.pro_state', tags: { classroom_id: CLASSROOM.id } },
+      },
+    ]);
   });
 
   it('returns the resolver’s decision as a bare boolean', async () => {

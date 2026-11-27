@@ -27,25 +27,45 @@
  *
  * Usage, Node (Fly): `initServerSentry('webapp')` from `@classmoji/utils/sentry-node`.
  *
- * Usage, Worker (`@sentry/cloudflare` 11):
+ * Usage, React Router entry.server (Node and Workers): `handleError` calls
+ * `reportRouteError` (below).
  *
- *   import * as Sentry from '@sentry/cloudflare';
- *   export default Sentry.withSentry(
- *     (env: Env): Sentry.CloudflareOptions => {
- *       const options = sentryServerOptions(env, { app: 'content', runtime: 'worker' });
- *       return options
- *         ? { ...options, integrations: workerIntegrations(Sentry) }
- *         : sentryOffOptions();
- *     },
- *     handler
- *   );
- *   // and once, at module scope, so reportError() from shared code reaches it:
- *   setErrorReporter(createSentryReporter(Sentry));
+ * Usage, Worker (`@sentry/cloudflare` 11; apps/content/src/index.ts and
+ * apps/admin/workers/app.ts do exactly this):
+ *
+ *   import {
+ *     captureException, fetchIntegration, flush, httpServerIntegration,
+ *     withScope, withSentry, type CloudflareOptions,
+ *   } from '@sentry/cloudflare';
+ *   // Once, at module scope, so reportError() from shared code reaches it:
+ *   setErrorReporter(createSentryReporter({ withScope, captureException, flush }));
+ *   const notStreaming = () => false;
+ *   export default withSentry((env: Env): CloudflareOptions => {
+ *     const options = sentryServerOptions(env, { app: 'content', runtime: 'worker' });
+ *     return options
+ *       ? {
+ *           ...options,
+ *           integrations: workerIntegrations({ fetchIntegration, httpServerIntegration }),
+ *           isStreamingResponse: notStreaming,
+ *         }
+ *       : { ...sentryOffOptions(), isStreamingResponse: notStreaming };
+ *   }, handler);
+ *
+ * Named imports, never `import * as Sentry` handed around as a value: a
+ * namespace used as a value keeps every export of the SDK (its AI, database
+ * and framework integrations) in the Worker bundle, 130 to 220 KiB gzipped
+ * more, where only these few functions are needed.
+ *
+ * `isStreamingResponse: () => false`, on and off alike: the SDK builds a
+ * client and wraps every request even when disabled, and otherwise treats a
+ * `text/plain` body without a length (a plain `new Response('ok')`), ndjson
+ * or an event stream as streaming and hands the client a re-wrapped copy of
+ * the body, with its own end-of-request flush deferred to the body's end.
  *
  * The reporter only calls the SDK when something is reported; with Sentry off
- * the SDK has no client and drops it.
+ * the SDK's client is disabled and drops it.
  *
- * Annotate the callback's return type (`Sentry.CloudflareOptions`): withSentry
+ * Annotate the callback's return type (`CloudflareOptions`): withSentry
  * infers its options type from the callback, and the on/off union otherwise
  * fails its exact-keys check (pinned by sentryServer.sdkTypes.test.ts).
  * Never return `undefined` from that callback: `withSentry` then reads
@@ -58,7 +78,14 @@
  * default streamed spans the SDK ignores it and prints a warning at init.)
  */
 import type { Breadcrumb, DataCollection, ErrorEvent, EventHint } from '@sentry/core';
-import type { ErrorReporter, ReportContext } from './errorReport.ts';
+import {
+  hasErrorReporter,
+  markReported,
+  reportError,
+  wasReported,
+  type ErrorReporter,
+  type ReportContext,
+} from './errorReport.ts';
 import { sentryEnvironment } from './sentry.ts';
 
 export type ServerApp =
@@ -176,8 +203,9 @@ export const WORKER_REPLACED_INTEGRATIONS: readonly string[] = ['Console', 'Fetc
  * The `integrations` option for `@sentry/cloudflare`: its defaults minus
  * Console, with Fetch re-added without breadcrumbs and HttpServer without
  * bodies or spans (it still gives each request its own scope and the
- * method + URL that `scrubEvent` rewrites). Pass the SDK namespace (or just
- * its two factories) so this module never imports the SDK itself.
+ * method + URL that `scrubEvent` rewrites). Pass the two factories (named
+ * imports, see the Worker note in the header) so this module never imports
+ * the SDK itself.
  */
 export const workerIntegrations =
   <I extends NamedIntegration>(sdk: {
@@ -449,6 +477,15 @@ type ScrubbableEvent = {
 };
 
 /**
+ * Contexts that describe the visitor or where they are, never sent. On a
+ * Worker `@sentry/cloudflare` sets `culture.timezone` from `request.cf` (the
+ * visitor's time zone); on Node `culture` is the server's locale, not needed.
+ * `geo` and `cf` are not set by the SDK today; dropped in case a later
+ * version or an integration copies location data from `request.cf` there.
+ */
+const VISITOR_CONTEXTS = ['culture', 'geo', 'cf'] as const;
+
+/**
  * An event as it may be sent (mutated in place and returned, as `beforeSend`
  * allows):
  * - `request` → `{ method, url }`, the URL through `scrubUrl` (no headers,
@@ -457,6 +494,8 @@ type ScrubbableEvent = {
  * - `transaction`, `message`, `logentry`, exception messages → scrubbed;
  * - stack frames lose `vars` (local variables);
  * - `breadcrumbs` → `scrubBreadcrumb` (console ones dropped);
+ * - `contexts.culture`, `.geo`, `.cf` (the visitor's time zone or location)
+ *   → removed;
  * - `tags`, `extra`, `contexts` → secret keys dropped, strings scrubbed;
  *   `extra.__serialized__` (the contents of a non-Error value captured as an
  *   exception) is dropped.
@@ -518,7 +557,10 @@ export const scrubEvent = <E extends ScrubbableEvent>(event: E): E => {
     delete event.extra.__serialized__;
     event.extra = scrubValue(event.extra) as E['extra'];
   }
-  if (event.contexts) event.contexts = scrubValue(event.contexts) as E['contexts'];
+  if (event.contexts) {
+    for (const key of VISITOR_CONTEXTS) delete event.contexts[key];
+    event.contexts = scrubValue(event.contexts) as E['contexts'];
+  }
 
   return event;
 };
@@ -632,7 +674,7 @@ const markSentryCaptured = (value: unknown): void => {
  * The `ErrorReporter` for `setErrorReporter` (`@classmoji/utils/error-report`)
  * on top of a Sentry SDK. Node gets it from `initServerSentry`; a Worker
  * registers it itself once its Sentry client exists:
- * `setErrorReporter(createSentryReporter(Sentry))`.
+ * `setErrorReporter(createSentryReporter({ withScope, captureException, flush }))`.
  */
 export const createSentryReporter = (sdk: SentryReporterSdk): ErrorReporter => ({
   capture: (error, context) => captureWithContext(sdk, error, context),
@@ -658,6 +700,55 @@ export const shouldReportRouteError = (
   if (typeof Response !== 'undefined' && error instanceof Response) return error.status >= 500;
   if (isRouteErrorResponseLike(error)) return error.status >= 500;
   return true;
+};
+
+/**
+ * React Router's `handleError` for every app's entry.server, on Node and on
+ * Workers alike:
+ *
+ *   export const handleError: HandleErrorFunction = (error, { request }) =>
+ *     reportRouteError(error, request, { mode: process.env.NODE_ENV });
+ *
+ * It first logs exactly what React Router 8.5.1's default handler logs
+ * (`lib/server-runtime/server.ts`): nothing for an aborted request or when
+ * React Router runs in test mode, else a route error response's inner Error
+ * when it has one, else the error. Then, when `shouldReportRouteError` says it
+ * is a real failure, it reports it through `reportError` as unhandled, with
+ * surface `react_router.handle_error`: once per error object (the same
+ * once-only set as `captureServerException` and every choke point), and not
+ * at all while no reporter is registered (Sentry off).
+ *
+ * `mode` is the mode React Router's request handler was created with (its
+ * default skips the log in 'test'): `process.env.NODE_ENV` under
+ * react-router-serve and `@react-router/express`, `import.meta.env.MODE` in a
+ * Worker (apps/admin/workers/app.ts passes that).
+ *
+ * A thrown 5xx `Response` is a failure here, though `reportError` skips every
+ * Response (control flow, in library code): it goes as the Error naming its
+ * status (`toReportableError`), and the Response itself is marked reported.
+ */
+export const reportRouteError = (
+  error: unknown,
+  request: { signal?: { aborted?: boolean } } | undefined,
+  options: { mode?: string } = {}
+): void => {
+  if (options.mode !== 'test' && !request?.signal?.aborted) {
+    // React Router's ErrorResponseImpl carries the error it wraps; the
+    // public ErrorResponse type does not declare it.
+    const inner = isRouteErrorResponseLike(error)
+      ? (error as { error?: unknown }).error
+      : undefined;
+    console.error(inner ? inner : error);
+  }
+  if (!shouldReportRouteError(error, request)) return;
+  const context = { surface: 'react_router.handle_error', handled: false };
+  if (typeof Response !== 'undefined' && error instanceof Response) {
+    if (!hasErrorReporter() || wasReported(error)) return;
+    markReported(error);
+    reportError(toReportableError(error), context);
+    return;
+  }
+  reportError(error, context);
 };
 
 const isRouteErrorResponseLike = (

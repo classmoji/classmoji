@@ -9,20 +9,16 @@
  * Node, from workers/app.ts on a Worker; nothing when Sentry is off. It uses
  * only the isomorphic reporter, so one entry serves both runtimes.
  */
-import { isRouteErrorResponse, type HandleErrorFunction } from 'react-router';
-import { reportError } from '@classmoji/utils/error-report';
-import { shouldReportRouteError } from '@classmoji/utils/sentry-server';
+import type { HandleErrorFunction } from 'react-router';
+import { reportRouteError } from '@classmoji/utils/sentry-server';
 
 export { default, streamTimeout } from '@classmoji/workers/entry-server';
 
-export const handleError: HandleErrorFunction = (error, { request }) => {
-  // React Router's default (server-runtime/server.js), minus its test-mode
-  // check, which a production build never meets.
-  if (!request.signal.aborted) {
-    const inner = isRouteErrorResponse(error) ? (error as { error?: unknown }).error : undefined;
-    console.error(inner ? inner : error);
-  }
-  if (shouldReportRouteError(error, request)) {
-    reportError(error, { surface: 'react_router.handle_error', handled: false });
-  }
-};
+/**
+ * React Router's mode is the build's: workers/app.ts creates its handler with
+ * `import.meta.env.MODE`, and on Fly `@react-router/express` reads `NODE_ENV`,
+ * which is the same mode the Fly image was built in (production, or
+ * development under the dev server).
+ */
+export const handleError: HandleErrorFunction = (error, { request }) =>
+  reportRouteError(error, request, { mode: import.meta.env.MODE });

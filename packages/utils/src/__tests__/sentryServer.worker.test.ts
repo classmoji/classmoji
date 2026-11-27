@@ -23,6 +23,16 @@ import {
 import * as secrets from './fixtures/sentrySecrets.ts';
 
 const DSN = 'https://public@o0.ingest.sentry.io/0';
+const REQUEST_CF = {
+  timezone: 'Pacific/Chatham',
+  colo: 'ZQX',
+  asn: 64512,
+  city: 'Waitangi',
+  country: 'NZ',
+  latitude: '-43.95',
+  longitude: '-176.56',
+  httpProtocol: 'HTTP/2',
+};
 const captured: Envelope[] = [];
 
 type WorkerEnv = { SENTRY_DSN?: string; SENTRY_ENVIRONMENT?: string };
@@ -66,6 +76,9 @@ const call = async (path: string, env: WorkerEnv) => {
     headers: secrets.REQUEST_HEADERS,
     body: secrets.REQUEST_BODY,
   });
+  // workerd gives every request a `cf` object about the visitor; the SDK
+  // copies its time zone into `contexts.culture`.
+  Object.defineProperty(request, 'cf', { value: REQUEST_CF });
   let threw = false;
   try {
     await (
@@ -100,6 +113,15 @@ describe('withSentry with sentryServerOptions (real @sentry/cloudflare)', () => 
     expect(sent).toHaveLength(2);
     const text = JSON.stringify(captured);
     for (const secret of secrets.FORBIDDEN) expect(text, `leaked ${secret}`).not.toContain(secret);
+    for (const value of [
+      REQUEST_CF.timezone,
+      REQUEST_CF.colo,
+      REQUEST_CF.city,
+      '64512',
+      '-43.95',
+    ]) {
+      expect(text, `leaked request.cf ${value}`).not.toContain(value);
+    }
     for (const [, items] of captured) {
       for (const [header] of items) expect((header as { type: string }).type).toBe('event');
     }
@@ -107,6 +129,7 @@ describe('withSentry with sentryServerOptions (real @sentry/cloudflare)', () => 
       expect(event.environment).toBe('staging');
       expect(event.tags).toMatchObject({ app: 'content', runtime: 'worker' });
       expect(event.request).toEqual({ method: 'POST', url: 'https://content.test/join/[code]' });
+      expect(event.contexts).not.toHaveProperty('culture');
     }
     const [reported, thrown] = sent as Array<{
       tags: Record<string, unknown>;

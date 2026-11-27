@@ -34,10 +34,15 @@ let logged: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   reported = [];
   logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+  // React Router's default skips logging in test mode; the entry passes the
+  // build's mode (import.meta.env.MODE, 'test' under vitest), so the log
+  // branch needs a build mode here.
+  vi.stubEnv('MODE', 'production');
 });
 afterEach(() => {
   setErrorReporter(null);
   logged.mockRestore();
+  vi.unstubAllEnvs();
 });
 
 const withReporter = () =>
@@ -82,10 +87,18 @@ describe('handleError', () => {
     expect(reported).toEqual([]);
   });
 
-  it('does not report a thrown Response', () => {
+  it('reports a thrown 5xx Response as the Error naming its status, not a 4xx one', () => {
     withReporter();
+    handleError(new Response(null, { status: 404 }), args());
     handleError(new Response(null, { status: 500 }), args());
-    expect(reported).toEqual([]);
+    expect(reported).toHaveLength(1);
+    expect((reported[0].error as Error).message).toMatch(/^Response 500/);
+  });
+
+  it('does not log in test mode, like the default', () => {
+    vi.stubEnv('MODE', 'test');
+    handleError(new Error('quiet'), args());
+    expect(logged).not.toHaveBeenCalled();
   });
 
   it('without a reporter only logs, and does not throw', () => {

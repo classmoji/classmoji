@@ -3,9 +3,9 @@
  * that the answers and logs around it stay as they were.
  *
  * - `handleError` (app/entry.server.tsx) logs what React Router's default
- *   did, then hands real failures (not aborts, not 4xx) to
- *   `captureServerException`, stubbed here so nothing starts Sentry in this
- *   shared worker;
+ *   did, then hands real failures (not aborts, not 4xx) to the reporter
+ *   (`reportRouteError`); `@classmoji/utils/sentry-node` is stubbed so
+ *   nothing starts Sentry in this shared worker;
  * - `sessionReadFailed` turns a failed session read into null, reported;
  * - the reader APIs' `guarded()` 500 is reported, once;
  * - server.ts starts Sentry before anything else it imports.
@@ -74,9 +74,13 @@ const quietly = async <T>(run: () => Promise<T>): Promise<T> => {
 // ─── handleError ────────────────────────────────────────────────────────────
 
 test.describe('entry.server handleError', () => {
-  type Captured = Array<[unknown, { surface?: string }]>;
-  const captured = () =>
-    ((globalThis as unknown as { __pagesCaptured: Captured }).__pagesCaptured ??= []);
+  // handleError reports through @classmoji/utils/error-report
+  // (`reportRouteError`); the stub of sentry-node only keeps Sentry from
+  // starting in this shared worker.
+  type HandleErrorReport = { error: unknown; context: ReportContext };
+  let handled: HandleErrorReport[] = [];
+  const captured = () => handled;
+  const HANDLE_ERROR = { surface: 'react_router.handle_error', handled: false };
   let handleError: HandleErrorFunction;
   const savedNodeEnv = process.env.NODE_ENV;
 
@@ -85,14 +89,20 @@ test.describe('entry.server handleError', () => {
       app('entry.server.tsx'),
       {
         '@classmoji/utils/sentry-node': stubModule(
-          'export const captureServerException = (error, context) => { (globalThis.__pagesCaptured ??= []).push([error, context]); };'
+          'export const captureServerException = () => {};'
         ),
       }
     ));
   });
 
   test.beforeEach(() => {
-    captured().length = 0;
+    handled = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        handled.push({ error, context });
+      },
+      flush: async () => true,
+    });
     process.env.NODE_ENV = 'production';
   });
 
@@ -111,7 +121,7 @@ test.describe('entry.server handleError', () => {
     const error = new Error('loader blew up');
     const { logged } = capturingConsole(() => handleError(error, args()));
     expect(logged).toEqual([[error]]);
-    expect(captured()).toEqual([[error, { surface: 'react_router.handle_error' }]]);
+    expect(captured()).toEqual([{ error, context: HANDLE_ERROR }]);
   });
 
   test('a thrown 4xx Response: logged as before, not reported', () => {
@@ -121,10 +131,11 @@ test.describe('entry.server handleError', () => {
     expect(captured()).toEqual([]);
   });
 
-  test('a thrown 5xx Response is reported', () => {
+  test('a thrown 5xx Response is reported, as the Error naming its status', () => {
     const response = new Response('down', { status: 503 });
     capturingConsole(() => handleError(response, args()));
-    expect(captured().map(([value]) => value)).toEqual([response]);
+    expect(captured()).toHaveLength(1);
+    expect((captured()[0].error as Error).message).toMatch(/^Response 503/);
   });
 
   test('a route error response logs its inner error, as the default does', () => {

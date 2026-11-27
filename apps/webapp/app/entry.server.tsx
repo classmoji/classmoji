@@ -17,31 +17,22 @@ import { PassThrough } from 'node:stream';
 
 import type { EntryContext, HandleErrorFunction, RouterContextProvider } from 'react-router';
 import { createReadableStreamFromReadable } from '@react-router/node';
-import { ServerRouter, isRouteErrorResponse } from 'react-router';
+import { ServerRouter } from 'react-router';
 import { isbot } from 'isbot';
 import type { RenderToPipeableStreamOptions } from 'react-dom/server';
 import { renderToPipeableStream } from 'react-dom/server';
-import { shouldReportRouteError } from '@classmoji/utils/sentry-server';
+import { reportRouteError, shouldReportRouteError } from '@classmoji/utils/sentry-server';
 
 export const streamTimeout = 5_000;
 
 /**
- * React Router calls this for every error a loader, action or render throws.
- * The logging is the default's (react-router's server runtime): nothing in
- * test mode or for an aborted request, a route error response's inner error
- * when it has one. React Router's mode is `NODE_ENV` under react-router-serve.
+ * React Router calls this for every error a loader, action or render throws:
+ * logged as the default logs it, then reported when it is a real failure
+ * (`reportRouteError`). React Router's mode is `NODE_ENV` under
+ * react-router-serve.
  */
-export const handleError: HandleErrorFunction = (error, { request }) => {
-  if (process.env.NODE_ENV !== 'test' && !request.signal.aborted) {
-    // React Router's ErrorResponseImpl carries the error it wraps; the public
-    // ErrorResponse type does not declare it.
-    const inner = isRouteErrorResponse(error) ? (error as { error?: unknown }).error : undefined;
-    console.error(inner ? inner : error);
-  }
-  if (serverSentryEnabled && shouldReportRouteError(error, request)) {
-    captureServerException(error, { surface: 'react_router.handle_error' });
-  }
-};
+export const handleError: HandleErrorFunction = (error, { request }) =>
+  reportRouteError(error, request, { mode: process.env.NODE_ENV });
 
 export default function handleRequest(
   request: Request,

@@ -22,19 +22,13 @@ export const serverSentryEnabled = initServerSentry('webapp');
 export { captureServerException } from '@classmoji/utils/sentry-node';
 
 /**
- * Whether a request's errors may carry its user id. Each request gets its own
- * Sentry scope only when Sentry started before that request arrived. Under
- * react-router-serve it always did. Under the Vite dev server it starts in the
- * middle of the first request, whose user would then be set on the scope every
- * later request copies, so dev servers never tie errors to users.
- */
-const tieUserIds = serverSentryEnabled && !import.meta.env.DEV;
-
-/**
  * Tie this request's errors to the signed-in user by internal id (null for
  * none). Call it inside a request only (a loader or action). No-op while
- * Sentry is off and under the dev server.
+ * Sentry is off, and for a request that has no Sentry scope of its own: under
+ * the Vite dev server Sentry starts in the middle of the first request, and
+ * `setSentryUserId` leaves that one alone rather than set the user on the
+ * scope every later request copies.
  */
 export const setRequestUserId = (userId: string | null | undefined): void => {
-  if (tieUserIds) setSentryUserId(userId ?? null);
+  setSentryUserId(userId ?? null);
 };

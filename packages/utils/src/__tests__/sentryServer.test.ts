@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Breadcrumb, ErrorEvent } from '@sentry/core';
+import { markReported, reportError, setErrorReporter, type ReportContext } from '../errorReport.ts';
 import {
   CREDENTIAL_PATHS,
   captureWithContext,
+  reportRouteError,
   createSentryReporter,
   scrubBreadcrumb,
   scrubEvent,
@@ -438,6 +440,55 @@ describe('scrubEvent', () => {
     // An opaque machine id: kept.
     expect(event.server_name).toBe('e28650dc2d1428');
   });
+
+  it("drops what a Worker's request.cf says about the visitor", () => {
+    // The shape @sentry/cloudflare 11 builds on workerd: cloud_resource and
+    // culture.timezone (from request.cf) on the isolation scope, the request's
+    // headers (Cloudflare adds cf-connecting-ip, cf-ipcountry, cf-ray) in
+    // event.request, and anything an integration might copy from request.cf.
+    const event = scrubEvent({
+      request: {
+        method: 'GET',
+        url: 'https://content.classmoji.io/c/1/theme/t/x/p.v.1.sig/a.css',
+        headers: {
+          'cf-connecting-ip': '203.0.113.9',
+          'cf-ipcountry': 'US',
+          'cf-ray': '8f00-EWR',
+          'user-agent': 'Mozilla/5.0',
+        },
+      },
+      user: {
+        id: 'u1',
+        ip_address: '203.0.113.9',
+        geo: { city: 'Hanover', country_code: 'US', region: 'New Hampshire' },
+      },
+      contexts: {
+        cloud_resource: { 'cloud.provider': 'cloudflare' },
+        culture: { timezone: 'America/New_York' },
+        geo: { city: 'Hanover', country_code: 'US' },
+        cf: {
+          colo: 'EWR',
+          asn: 7922,
+          city: 'Hanover',
+          latitude: '43.7',
+          timezone: 'America/New_York',
+        },
+        response: { status_code: 500 },
+        trace: { trace_id: 'a'.repeat(32), span_id: 'b'.repeat(16) },
+      },
+    } as unknown as ErrorEvent);
+    expect(event.request).toEqual({
+      method: 'GET',
+      url: 'https://content.classmoji.io/c/1/theme/t/x/[sig]/a.css',
+    });
+    expect(event.user).toEqual({ id: 'u1' });
+    expect(event.contexts).toEqual({
+      cloud_resource: { 'cloud.provider': 'cloudflare' },
+      response: { status_code: 500 },
+      trace: { trace_id: 'a'.repeat(32), span_id: 'b'.repeat(16) },
+    });
+    expect(JSON.stringify(event)).not.toMatch(/New_York|Hanover|EWR|7922|203\.0\.113\.9/);
+  });
 });
 
 describe('shouldReportRouteError', () => {
@@ -463,6 +514,113 @@ describe('shouldReportRouteError', () => {
     expect(shouldReportRouteError('a string')).toBe(true);
     expect(shouldReportRouteError({ status: 404 })).toBe(true);
     expect(shouldReportRouteError(null)).toBe(true);
+  });
+});
+
+describe('reportRouteError', () => {
+  type Report = { error: unknown; context: ReportContext };
+  let reports: Report[] = [];
+  const withReporter = () => {
+    reports = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        reports.push({ error, context });
+      },
+      flush: async () => true,
+    });
+  };
+  const request = (aborted = false) => {
+    const controller = new AbortController();
+    if (aborted) controller.abort();
+    return new Request('https://app.test/x', { signal: controller.signal });
+  };
+  const run = (error: unknown, req = request(), mode = 'production') => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportRouteError(error, req, { mode });
+    const logged = log.mock.calls;
+    log.mockRestore();
+    return logged;
+  };
+  // What React Router's ErrorResponseImpl looks like to isRouteErrorResponse.
+  const routeErrorResponse = (status: number, error?: Error) => ({
+    status,
+    statusText: 'x',
+    internal: true,
+    data: 'd',
+    ...(error ? { error } : {}),
+  });
+  const HANDLE_ERROR = { surface: 'react_router.handle_error', handled: false };
+
+  afterEach(() => setErrorReporter(null));
+
+  it('logs the error as the default does and reports it once, as unhandled', () => {
+    withReporter();
+    const error = new Error('loader broke');
+    expect(run(error)).toEqual([[error]]);
+    run(error);
+    expect(reports).toEqual([{ error, context: HANDLE_ERROR }]);
+  });
+
+  it('does not report what a choke point or captureServerException already sent', () => {
+    withReporter();
+    const error = new Error('seen');
+    reportError(error, { surface: 'audit.write' });
+    run(error);
+    const marked = new Error('marked');
+    markReported(marked);
+    run(marked);
+    expect(reports.map(r => r.context.surface)).toEqual(['audit.write']);
+  });
+
+  it("logs a route error response's inner Error, reports 5xx, not 4xx", () => {
+    withReporter();
+    const inner = new Error('inner');
+    const failed = routeErrorResponse(500, inner);
+    expect(run(failed)).toEqual([[inner]]);
+    const notFound = routeErrorResponse(404);
+    expect(run(notFound)).toEqual([[notFound]]);
+    expect(reports).toEqual([{ error: failed, context: HANDLE_ERROR }]);
+  });
+
+  it('reports a thrown 5xx Response as the Error naming its status, once', () => {
+    withReporter();
+    const response = new Response('down', { status: 503, statusText: 'Service Unavailable' });
+    expect(run(response)).toEqual([[response]]);
+    run(response);
+    expect(reports).toHaveLength(1);
+    expect((reports[0].error as Error).message).toBe('Response 503 Service Unavailable');
+    expect(reports[0].context).toEqual(HANDLE_ERROR);
+  });
+
+  it('logs but does not report a thrown 4xx Response or redirect', () => {
+    withReporter();
+    const forbidden = new Response(null, { status: 403 });
+    expect(run(forbidden)).toEqual([[forbidden]]);
+    run(new Response(null, { status: 302, headers: { Location: '/' } }));
+    expect(reports).toEqual([]);
+  });
+
+  it('neither logs nor reports for an aborted request', () => {
+    withReporter();
+    expect(run(new Error('gone'), request(true))).toEqual([]);
+    expect(reports).toEqual([]);
+  });
+
+  it('does not log in test mode (as the default), and still reports', () => {
+    withReporter();
+    expect(run(new Error('quiet'), request(), 'test')).toEqual([]);
+    expect(reports).toHaveLength(1);
+  });
+
+  it('without a reporter only logs, and never throws', () => {
+    const error = new Error('off');
+    expect(run(error)).toEqual([[error]]);
+    const response = new Response(null, { status: 500 });
+    expect(() => run(response)).not.toThrow();
+    // The Response was not marked: a reporter registered later still gets it.
+    withReporter();
+    run(response);
+    expect(reports).toHaveLength(1);
   });
 });
 

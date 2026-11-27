@@ -25,6 +25,7 @@ export const loadClassroomIsPro = async (classroomId: string): Promise<boolean> 
     return isPro === true;
   } catch (error) {
     console.error('[loadClassroomIsPro] Pro state lookup failed', error);
+    reportError(error, { surface: 'subscription.pro_state', tags: { classroom_id: classroomId } });
     return false;
   }
 };

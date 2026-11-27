@@ -56,6 +56,7 @@ import {
   captureException,
   flush as sentryFlush,
   getDefaultIntegrationsWithoutPerformance,
+  getIsolationScope,
   httpIntegration,
   init,
   nativeNodeFetchIntegration,
@@ -66,6 +67,8 @@ import {
   withScope,
   type NodeOptions,
 } from '@sentry/node';
+// Not re-exported by @sentry/node; the same @sentry/core 11.11.0 it depends on.
+import { getDefaultIsolationScope } from '@sentry/core';
 import {
   markReported,
   setErrorReporter,
@@ -160,9 +163,11 @@ export function initServerSentry(
 export const isServerSentryEnabled = (): boolean => state[STATE_KEY]?.enabled === true;
 
 /**
- * Report an error from a top-level hook (React Router's `handleError`, an
- * Express or Fastify error handler) that has already decided it is worth
- * reporting (`shouldReportRouteError`). Shares `reportError`'s once-only set,
+ * Report an error from a top-level hook on Node (a streaming render error
+ * after the shell, an Express or Fastify error handler) that has already
+ * decided it is worth reporting (`shouldReportRouteError`); React Router's
+ * `handleError` uses `reportRouteError` from `./sentryServer.ts` instead,
+ * which works on Workers too. Shares `reportError`'s once-only set,
  * so an error a choke point already reported is not sent again. `handled`
  * defaults to false: the app did not handle it. No-op while Sentry is off.
  */
@@ -189,9 +194,16 @@ export function captureServerException(
  * Tie this request's errors to a signed-in user, by internal id only (null
  * clears it). Call inside the request (httpIntegration gives each request its
  * own isolation scope). No-op while Sentry is off.
+ *
+ * Also a no-op outside a per-request (or `withIsolationScope`) scope: the
+ * process-wide default isolation scope is the parent every later scope
+ * copies, so a user set there (from a WebSocket handler, a timer, module
+ * scope, or a request that arrived before `initServerSentry` ran, as the
+ * first request under a Vite dev server does) would be on every later event.
  */
 export function setSentryUserId(id: string | null | undefined): void {
   if (!isServerSentryEnabled()) return;
+  if (getIsolationScope() === getDefaultIsolationScope()) return;
   setUser(id ? { id } : null);
 }
 
