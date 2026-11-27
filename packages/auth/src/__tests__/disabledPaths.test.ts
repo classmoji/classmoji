@@ -178,6 +178,14 @@ describe('disabled better-auth paths', () => {
     expect(error).toMatchObject({ statusCode: 401 });
   });
 
+  it('lists the account-deletion paths among the ones the router turns off', () => {
+    // They would also refuse while `user.deleteUser` is off; the list is what
+    // keeps them off whatever that option says.
+    expect(auth.options.disabledPaths).toEqual(
+      expect.arrayContaining(['/delete-user', '/delete-user/callback'])
+    );
+  });
+
   it('still serves /get-session', async () => {
     const res = await auth.handler(new Request(`${BASE}/get-session`));
     expect(res.status).toBe(200);
