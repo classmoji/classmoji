@@ -67,6 +67,60 @@ describe('on Node', () => {
     ]);
   });
 
+  it('crash handlers report the error, flush, and still exit 1', async () => {
+    const { setErrorReporter } = await import('@classmoji/utils/error-report');
+    const order: string[] = [];
+    const captured: Array<{ error: unknown; context: unknown }> = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        order.push('capture');
+        captured.push({ error, context });
+      },
+      flush: async () => {
+        order.push('flush');
+        return true;
+      },
+    });
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => {
+      order.push('exit');
+    }) as never);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await import('../index.ts');
+      const handler = (event: string) =>
+        processOn.mock.calls.find((call: unknown[]) => call[0] === event)?.[1] as (
+          ...args: unknown[]
+        ) => void;
+
+      const error = new Error('boom');
+      handler('uncaughtException')(error);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+      expect(order).toEqual(['capture', 'flush', 'exit']);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(captured).toEqual([
+        {
+          error,
+          context: { surface: 'process.uncaught_exception', level: 'fatal', handled: false },
+        },
+      ]);
+
+      // A rejection afterwards is still reported, but the one-shot shutdown
+      // never runs (or exits) twice.
+      const reason = new Error('late');
+      handler('unhandledRejection')(reason, Promise.resolve());
+      expect(captured[1]).toEqual({
+        error: reason,
+        context: { surface: 'process.unhandled_rejection', level: 'fatal', handled: false },
+      });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(exit).toHaveBeenCalledOnce();
+    } finally {
+      setErrorReporter(null);
+      exit.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
   it('refuses runWithPrisma', async () => {
     const db = await import('../index.ts');
     expect(() => db.runWithPrisma({ name: 'x' }, async () => {})).toThrow(/Workers only/);

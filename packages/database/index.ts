@@ -4,6 +4,7 @@ import { createDecipheriv, createHash } from 'node:crypto';
 import { PrismaClient } from '@classmoji/database/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
+import { flushErrorReports, reportError } from '@classmoji/utils/error-report';
 import { workerScope as sharedWorkerScope } from './requestContext.ts';
 import { createPgAdapter } from './pgClient.ts';
 import type { RequestScope, RequestScopeOptions } from './requestScope.ts';
@@ -384,20 +385,32 @@ if (IS_WORKERD) {
   // `async () => { await disconnectPrisma(); process.exit(1); }` violated both:
   // a rejected disconnect spawned a fresh unhandledRejection that re-entered
   // this handler, and a hung disconnect blocked the exit entirely.
+  //
+  // Cleanup first gives the process's error reporter (Sentry, when the app
+  // started it) up to 2 s to send the crash, then disconnects; both inside
+  // the same 5 s budget, after which the process exits regardless. Without a
+  // reporter the flush resolves at once. It never rejects.
   const shutdownWithFailure = createOneShotShutdown(
-    disconnectPrisma,
+    async () => {
+      await flushErrorReports(2000);
+      await disconnectPrisma();
+    },
     // eslint-disable-next-line no-process-exit
     code => process.exit(code),
     { timeoutMs: 5000 }
   );
 
+  // reportError never throws, and an error the SDK's own process integration
+  // already sent (it runs first when Sentry is on) is not sent twice.
   process.on('uncaughtException', (error: Error) => {
     console.error('Uncaught Exception:', error);
+    reportError(error, { surface: 'process.uncaught_exception', level: 'fatal', handled: false });
     shutdownWithFailure(1);
   });
 
   process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    reportError(reason, { surface: 'process.unhandled_rejection', level: 'fatal', handled: false });
     shutdownWithFailure(1);
   });
 }

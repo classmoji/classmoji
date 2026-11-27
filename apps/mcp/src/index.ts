@@ -17,6 +17,7 @@
  */
 
 import Fastify, { type FastifyError } from 'fastify';
+import { flushErrorReports } from '@classmoji/utils/error-report';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
 import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
@@ -35,10 +36,13 @@ const fastify = Fastify(mcpServerOptions());
 // code path that does not await its promise) must not crash the server.
 // unhandledRejection → log + keep serving; uncaughtException → log, best-effort
 // close, exit(1) (state may be corrupt; the process manager restarts clean).
+// Both are reported (when an error reporter is registered); before exiting,
+// the report gets up to 2 s to be sent (flushErrorReports never rejects and
+// resolves at once without a reporter).
 registerProcessSafetyNets(fastify.log, {
   onFatal: code => {
-    fastify
-      .close()
+    flushErrorReports(2000)
+      .then(() => fastify.close())
       .catch(() => {})
       // eslint-disable-next-line no-process-exit
       .finally(() => process.exit(code));
