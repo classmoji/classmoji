@@ -43,6 +43,7 @@ import {
   type DeckOp,
   type SlideBlockInfo,
 } from '@classmoji/services/slides/ops';
+import { viewingAs } from '../mcp/audit.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
 
@@ -196,6 +197,7 @@ export async function writeBlockSources(
         mode: opts.mode,
         ...(op.block_id ? { blockId: op.block_id } : {}),
         surface: 'mcp',
+        ...viewingAs(opts.ctx),
       });
     } catch (error) {
       fileError(error);
@@ -245,6 +247,7 @@ export async function deleteUnusedBlockFiles(
         actorUserId: opts.ctx.viewer.userId,
         src,
         surface: 'mcp',
+        ...viewingAs(opts.ctx),
       });
     } catch (error) {
       console.warn('[deck_apply] Could not delete a replaced html block file:', error);
@@ -267,6 +270,7 @@ export async function deleteUnusedBlockFiles(
         src,
         blockId: String(entry.block_id ?? ''),
         surface: 'mcp',
+        ...viewingAs(opts.ctx),
       });
       Object.assign(entry, { file: src, file_deleted: deleted });
     } catch (error) {

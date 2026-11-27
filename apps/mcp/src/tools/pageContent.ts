@@ -52,7 +52,6 @@ import {
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
-import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -718,7 +717,7 @@ async function applyLive(
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
       ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
-    } as Prisma.InputJsonValue,
+    },
   });
 
   return ok({
@@ -1004,7 +1003,7 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
       committed_to: committedTo,
       ...(hasDestructiveOps ? { prior_block_count: priorCount } : {}),
       ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
-    } as Prisma.InputJsonValue,
+    },
   });
 
   // Open live editors refresh their pending-preview banner.
@@ -1181,7 +1180,7 @@ async function acceptPreviewLive(
         committed_to: 'live',
         conflict_unit_ids: ids,
         theirs_sha: theirs.sha,
-      } as Prisma.InputJsonValue,
+      },
     });
     return ok({
       conflict: true,
@@ -1237,7 +1236,7 @@ async function acceptPreviewLive(
         ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
         : {}),
       ...(previewKept ? { preview_kept: true } : {}),
-    } as unknown as Prisma.InputJsonValue,
+    },
   });
   return ok({
     success: true,
@@ -1353,7 +1352,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
           auto_merged: result.auto_merged,
           new_sha: result.sha,
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
-        } as unknown as Prisma.InputJsonValue,
+        },
       });
       return ok({
         success: true,
@@ -1386,7 +1385,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
           new_sha: result.sha,
           ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
-        } as Prisma.InputJsonValue,
+        },
       });
       return ok({
         success: true,
@@ -1416,7 +1415,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
         auto_merged: result.auto_merged,
         ours_sha: result.ours_sha,
         theirs_sha: result.theirs_sha,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     return ok({
@@ -1465,7 +1464,7 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
       data: {
         tool: 'page_preview_discard',
         existed: result.existed,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     return ok({
@@ -1640,7 +1639,7 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
         path: uploaded.path,
         sha: uploaded.sha,
         size: buffer.length,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     return ok({
@@ -1816,7 +1815,7 @@ async function setCoverLive(
       // Distinct per write: the version this cover set produced.
       value: liveSha(epoch, version),
       committed_to: 'live',
-    } as Prisma.InputJsonValue,
+    },
   });
 
   await ClassmojiService.page.quickUpdate(page.id, { updated_at: new Date() });
@@ -1956,7 +1955,7 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
         // Distinct per write: the version this cover set produced.
         value: saved.commit ?? saved.sha,
         commit_sha: saved.commit,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     // The page row itself is untouched by a content commit, so the list views

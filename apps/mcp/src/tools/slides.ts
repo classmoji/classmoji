@@ -20,7 +20,6 @@
  */
 
 import { slideService } from '@classmoji/services/slides';
-import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';
@@ -152,7 +151,7 @@ export const slideCreateTool: ToolDefinition<SlideCreateArgs> = {
         resource_type: 'SLIDES',
         resource_id: slide.id,
         action: 'CREATE',
-        data: { tool: 'slide_create', title: args.title } as Prisma.InputJsonValue,
+        data: { tool: 'slide_create', title: args.title },
       });
 
       return ok({
@@ -261,7 +260,7 @@ export const slideUpdateTool: ToolDefinition<SlideUpdateArgs> = {
       resource_type: 'SLIDES',
       resource_id: slide.id,
       action: 'UPDATE',
-      data: { tool: 'slide_update', fields } as Prisma.InputJsonValue,
+      data: { tool: 'slide_update', fields },
     });
     // Open live editors of a deck show the new title at once (nobody has a
     // file or link slide open live, so for those it reaches no one).
@@ -324,7 +323,7 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
         tool: 'slide_delete',
         title: slide.title,
         ...(result.themeName ? { shared_theme: result.themeName } : {}),
-      } as Prisma.InputJsonValue,
+      },
     });
 
     return ok({
