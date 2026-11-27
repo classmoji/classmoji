@@ -35,6 +35,8 @@ const resolveRoleUpdate = (
 /** Who is acting on a membership, for the audit row a plan-owner change writes. */
 export interface MembershipActor {
   actorUserId?: string | null;
+  /** The platform admin viewing as the actor ("View as"), for that row. */
+  impersonatedBy?: string | null;
 }
 
 /**
@@ -53,7 +55,7 @@ const leaveOwnership = async <T>(
   classroomId: string,
   userId: string,
   write: (tx: Prisma.TransactionClient) => Promise<T>,
-  { actorUserId }: MembershipActor = {}
+  { actorUserId, impersonatedBy }: MembershipActor = {}
 ): Promise<T> => {
   const { result, change } = await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR UPDATE`;
@@ -62,7 +64,11 @@ const leaveOwnership = async <T>(
     return { result: await write(tx), change };
   });
   if (change) {
-    await planOwnerService.auditPlanOwnerChange(change, { actorUserId, reason: 'owner_left' });
+    await planOwnerService.auditPlanOwnerChange(change, {
+      actorUserId,
+      impersonatedBy,
+      reason: 'owner_left',
+    });
   }
   return result;
 };

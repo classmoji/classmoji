@@ -1331,6 +1331,8 @@ export type ExpiredCloseActor = {
   userId: string;
   role: Role;
   surface: ExpiredCloseSurface;
+  /** The platform admin viewing as the caller ("View as"), for the audit row. */
+  impersonatedBy?: string | null;
 };
 
 /**
@@ -1425,6 +1427,7 @@ export const closeExpiredAttempt = (
           skipped_by_end: record.question_results
             .filter(r => r.skipped_by_end === true)
             .map(r => r.question_num),
+          ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
         }),
       },
     });

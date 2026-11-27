@@ -426,6 +426,101 @@ describe.skipIf(!RUN)('audit writer (integration)', () => {
       );
     });
 
+    it('a refusal while an admin views as the person is a row of its own, naming the admin', async () => {
+      const now = nextDay();
+      const admin = randomUUID();
+      await audit.recordNonMemberRefusal({ userId: userA, classroomId: classX }, { now });
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: admin },
+        { now }
+      );
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: admin },
+        { now }
+      );
+
+      const rows = await refusalRows(now);
+      expect(rows).toHaveLength(2);
+      const own = rows.find(r => !(r.data as Record<string, unknown>).impersonated_by);
+      const viewedAs = rows.find(r => (r.data as Record<string, unknown>).impersonated_by);
+      expect(own).toMatchObject({
+        user_id: userA,
+        count: 1,
+        data: { reason: 'not_classroom_member', tool: 'gate' },
+      });
+      expect(viewedAs).toMatchObject({
+        user_id: userA,
+        role: null,
+        resource_id: classX,
+        count: 2,
+        data: { reason: 'not_classroom_member', tool: 'gate', impersonated_by: admin },
+      });
+      expect(own!.id).not.toBe(viewedAs!.id);
+    });
+
+    it('two different admins viewing as the person are two rows', async () => {
+      const now = nextDay();
+      const [first, second] = [randomUUID(), randomUUID()];
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: first },
+        { now }
+      );
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: second },
+        { now }
+      );
+
+      const rows = await refusalRows(now);
+      expect(
+        rows.map(r => [(r.data as Record<string, unknown>).impersonated_by, r.count]).sort()
+      ).toEqual(
+        [
+          [first, 1],
+          [second, 1],
+        ].sort()
+      );
+    });
+
+    it('parallel refusals under the same admin still land on one row', async () => {
+      const now = nextDay();
+      const admin = randomUUID();
+      await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          audit.recordNonMemberRefusal(
+            { userId: userA, classroomId: classX, impersonatedBy: admin },
+            { now: new Date(now.getTime() + i * 1000) }
+          )
+        )
+      );
+
+      const rows = await refusalRows(now);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].count).toBe(20);
+      expect(rows[0].data).toEqual({
+        reason: 'not_classroom_member',
+        tool: 'gate',
+        impersonated_by: admin,
+      });
+    });
+
+    it('an empty impersonator is the person’s own row', async () => {
+      const now = nextDay();
+      await audit.recordNonMemberRefusal({ userId: userA, classroomId: classX }, { now });
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: '' },
+        { now }
+      );
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX, impersonatedBy: null },
+        { now }
+      );
+
+      const rows = await refusalRows(now);
+      expect(rows.map(r => [r.count, r.data])).toEqual([
+        [3, { reason: 'not_classroom_member', tool: 'gate' }],
+      ]);
+    });
+
     it('a user id that is no user writes no row, logs one audit_miss and does not throw', async () => {
       const now = nextDay();
       const error = vi.spyOn(console, 'error').mockImplementation(() => {});

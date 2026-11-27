@@ -219,7 +219,16 @@ export const claimVacantPlanOwnership = async (
  */
 export const auditPlanOwnerChange = async (
   change: PlanOwnerChange,
-  { actorUserId, reason }: { actorUserId?: string | null; reason: 'owner_left' | 'owner_accepted' }
+  {
+    actorUserId,
+    impersonatedBy,
+    reason,
+  }: {
+    actorUserId?: string | null;
+    /** The platform admin viewing as the actor ("View as"), for the audit row. */
+    impersonatedBy?: string | null;
+    reason: 'owner_left' | 'owner_accepted';
+  }
 ): Promise<void> => {
   if (!actorUserId) {
     console.info('[plan_owner] changed without an actor', { ...change, reason });
@@ -232,7 +241,10 @@ export const auditPlanOwnerChange = async (
     resource_type: 'CLASSROOM',
     resource_id: change.classroomId,
     action: 'UPDATE',
-    data: { tool: 'plan_owner.change', reason, from: change.from, to: change.to },
+    data: auditService.withImpersonator(
+      { tool: 'plan_owner.change', reason, from: change.from, to: change.to },
+      impersonatedBy
+    ),
   });
 };
 

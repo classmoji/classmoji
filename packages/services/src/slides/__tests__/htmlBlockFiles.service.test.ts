@@ -62,8 +62,13 @@ vi.mock('@classmoji/database', () => ({
 vi.mock('../../content/ContentService.ts', () => ({ ContentService: content }));
 vi.mock('../../classmoji/contentAssets.service.ts', () => assets);
 vi.mock('../../classmoji/audit.service.ts', async importOriginal => {
-  const { recordWith } = await importOriginal<typeof import('../../classmoji/audit.service.ts')>();
-  return { create: auditCreate, record: (row: unknown) => recordWith(auditCreate, row) };
+  const { recordWith, withImpersonator } =
+    await importOriginal<typeof import('../../classmoji/audit.service.ts')>();
+  return {
+    withImpersonator,
+    create: auditCreate,
+    record: (row: unknown) => recordWith(auditCreate, row),
+  };
 });
 
 const {
@@ -191,6 +196,23 @@ describe('writeHtmlBlockFile', () => {
     });
     expect(content.put.mock.calls[0][0].createOnly).toBeUndefined();
     expect(auditCreate.mock.calls[0][0].data.tool).toBe('mcp:html_block.save');
+    expect(auditCreate.mock.calls[0][0].data).not.toHaveProperty('impersonated_by');
+  });
+
+  it('names the admin viewing as the author on the save row', async () => {
+    await writeHtmlBlockFile({
+      slideId: 'deck-x',
+      actorUserId: 'teacher-x',
+      html: 'v2',
+      src: 'blocks/0a0b0c0d.html',
+      expectedRev: REV,
+      surface: 'slides',
+      impersonatedBy: 'admin-1',
+    });
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({
+      user_id: 'teacher-x',
+      data: { tool: 'slides:html_block.save', impersonated_by: 'admin-1' },
+    });
   });
 
   it('maps a compare-and-swap conflict to changed (409)', async () => {

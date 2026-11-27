@@ -18,8 +18,10 @@ vi.mock('../subscription.service.ts', () => ({
     !!sub && (sub.ends_at === null || sub.ends_at.getTime() > Date.now()),
 }));
 vi.mock('../audit.service.ts', async importOriginal => {
-  const { recordWith } = await importOriginal<typeof import('../audit.service.ts')>();
+  const { recordWith, withImpersonator } =
+    await importOriginal<typeof import('../audit.service.ts')>();
   return {
+    withImpersonator,
     create: (...a: unknown[]) => auditCreateMock(...a),
     record: (row: unknown) => recordWith(r => auditCreateMock(r), row),
   };
@@ -314,6 +316,27 @@ describe('auditPlanOwnerChange', () => {
         action: 'UPDATE',
         resource_type: 'CLASSROOM',
         data: { tool: 'plan_owner.change', reason: 'owner_left', from: 'alice', to: 'bob' },
+      })
+    );
+  });
+
+  it('names the admin viewing as the actor, and only then', async () => {
+    await planOwner.auditPlanOwnerChange(change, {
+      actorUserId: 'alice',
+      impersonatedBy: 'admin-1',
+      reason: 'owner_left',
+    });
+
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: 'alice',
+        data: {
+          tool: 'plan_owner.change',
+          reason: 'owner_left',
+          from: 'alice',
+          to: 'bob',
+          impersonated_by: 'admin-1',
+        },
       })
     );
   });

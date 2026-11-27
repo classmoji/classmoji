@@ -585,6 +585,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     ]);
     const [audit] = await auditRows(expired);
     expect(audit.data).toMatchObject({ tool: 'quiz_chat.expired_close', surface: 'create_new' });
+    expect(audit.data).not.toHaveProperty('impersonated_by');
     expect(audit.user_id).toBe(studentA);
 
     // The new attempt is open and within its deadline: it is offered to resume.
@@ -640,6 +641,29 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
 
     await prisma.quizAttempt.deleteMany({
       where: { id: { in: [legacyPast, started.attemptId!] } },
+    });
+  });
+
+  it('names the admin viewing as the student on the close row', async () => {
+    const expired = await newAttempt();
+    await halfway(expired);
+    await expire(expired);
+
+    const started = await createNew(quizId, studentA, studentMembership(studentA), {
+      impersonatedBy: studentB,
+    });
+    // The new attempt is not this test's: leave none open for the next.
+    await prisma.quizAttempt.update({
+      where: { id: started.attemptId! },
+      data: { completed_at: new Date() },
+    });
+
+    const [audit] = await auditRows(expired);
+    expect(audit.user_id).toBe(studentA);
+    expect(audit.data).toMatchObject({
+      tool: 'quiz_chat.expired_close',
+      surface: 'create_new',
+      impersonated_by: studentB,
     });
   });
 
