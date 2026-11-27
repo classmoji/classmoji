@@ -6,10 +6,11 @@
    is about, and says what antd 6 does instead. Theme tokens live in each app's
    antd config (apps/webapp/app/config/antd.ts and antdDark.ts).
 
-   These rules are unlayered on purpose: antd's own styles are unlayered too,
-   and every selector here is more specific than antd's (antd wraps its hash
-   in :where()), so they win without !important. The one !important below
-   overrides an inline style.
+   These rules are unlayered on purpose: antd's own styles are unlayered too.
+   antd wraps its hash in :where(), so most selectors here are more specific
+   than antd's; some only tie with antd's and win by source order, because
+   antd's css-in-js prepends its styles to <head> and this file comes after.
+   No rule here uses !important.
    ============================================================================= */
 
 /* An open single Select: antd 6 fades its whole value to 25% opacity, custom
@@ -76,27 +77,16 @@
   --ant-input-number-input-padding-block: 7px;
 }
 
-/* A Select's arrow and clear (×) sit inside the select's horizontal padding in
-   antd 6, 12px from the edge of a default select and 8px from a small one.
-   antd 5 put both 11px from the edge at every size. The arrow is moved with
-   `translate` so the select keeps its width and its value its room. (The
-   doubled class beats antd's small-size clear rule, which has the same
-   specificity.) */
+/* A Select's arrow sits inside the select's horizontal padding in antd 6, 12px
+   from the edge of a default select and 8px from a small one. antd 5 put it
+   11px from the edge at every size. It is moved with `translate` so the select
+   keeps its width and its value its room. (The clear × is left where antd 6
+   puts it, 1px further in.) */
 .ant-select .ant-select-suffix {
   translate: calc(
       var(--ant-select-border-size, 1px) + var(--ant-select-padding-horizontal, 11px) - 11px
     )
     0;
-}
-.ant-select .ant-select-clear.ant-select-clear {
-  inset-inline-end: calc(11px - var(--ant-select-border-size, 1px));
-}
-
-/* An InputNumber's text box inherits its line height in antd 6, so a field
-   given a text-size class (the token modal's large number) takes that class's
-   line height; antd 5 kept the theme's (lineHeight), 0.29px taller there. */
-.ant-input-number:not(.ant-input-number-lg) > .ant-input-number-input {
-  line-height: var(--ant-line-height, 1.5714285714285714);
 }
 
 /* A checked, disabled radio: antd 5 drew its dot at half the radio's size
@@ -123,13 +113,6 @@
 .ant-space-addon {
   /* antd 5's addon text was normal weight; Space.Addon takes the page's (450). */
   font-weight: 400;
-}
-/* In a Space.Compact an addon drops its border on the field's side, yet the
-   compact still overlaps the two by 1px, so the field starts 1px inside the
-   addon (antd 5: the field's border met the addon's edge). */
-.ant-space-compact > .ant-space-addon.ant-space-addon-compact-first-item,
-.ant-space-compact > :has(+ .ant-space-addon.ant-space-addon-compact-last-item) {
-  margin-inline-end: 0;
 }
 .ant-space-addon.ant-space-addon-variant-outlined:not(.ant-space-addon-disabled) {
   background: var(--cm-antd-addon-bg, var(--ant-color-fill-alter));
@@ -163,25 +146,6 @@
   content: none;
 }
 
-/* The active tab's label: antd 5 thickened it with a hairline text-shadow
-   (its `tabsActiveTextShadow`), which antd 6 dropped. */
-.ant-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
-  text-shadow: 0 0 0.25px currentcolor;
-}
-
-/* A bordered table's first right-fixed column (the gradebook's Total): antd 5
-   drew the table's border along its left edge, over any border of the cell's
-   own; antd 6 dropped that line, so the cell's own border shows instead. */
-.ant-table.ant-table-bordered
-  > .ant-table-container
-  > :is(.ant-table-content, .ant-table-header, .ant-table-body, .ant-table-summary)
-  > table
-  > :is(thead, tbody, tfoot)
-  > tr
-  > .ant-table-cell-fix-end-shadow::after {
-  border-inline-end: 1px solid var(--ant-table-border-color);
-}
-
 /* A table wider than its card (horizontal scroll): antd 6 rounds the scroll
    box's top corners, clipping the header cell under the right corner; antd 5
    left the scroll box square, so that cell's corner showed. */
@@ -189,14 +153,6 @@
 .ant-table-wrapper .ant-table-container::before,
 .ant-table-wrapper .ant-table-container::after {
   border-radius: 0;
-}
-
-/* A table that sizes its columns to their content measures each header title
-   in a hidden row. antd 6 sets that copy in bold (700) by an inline style,
-   wider than the 600 the header shows, so such columns come out about 1px
-   wider than antd 5's, which measured in the header's own weight. */
-.ant-table-measure-row > td > div {
-  font-weight: var(--ant-font-weight-strong, 600) !important;
 }
 
 /* Small pagination (every table here): antd 6 puts 4px between the page
