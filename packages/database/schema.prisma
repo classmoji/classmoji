@@ -1752,10 +1752,13 @@ model TokenTransaction {
   @@map("token_transactions")
 }
 
-/// Written only by `ClassmojiService.audit.create`. Every mutation is its own
-/// row; a read-class row (VIEW, ACCESS_DENIED, COLLAB_JOIN, COLLAB_LEAVE)
-/// repeated within 5 s of its first occurrence, with nothing else in between
-/// for that user and resource, bumps `count` instead (and so `updated_at`).
+/// Written only by the audit service (`ClassmojiService.audit`). Through
+/// `create`, every mutation is its own row; a read-class row (VIEW,
+/// ACCESS_DENIED, COLLAB_JOIN, COLLAB_LEAVE) repeated within 5 s of its first
+/// occurrence, with nothing else in between for that user and resource, bumps
+/// `count` instead (and so `updated_at`). Through `recordNonMemberRefusal`, a
+/// refusal of someone who holds no role in the classroom is one row per person
+/// per classroom per UTC day, with `count` the day's refusals.
 /// `role` is null only on ACCESS_DENIED (CHECK audit_logs_role_required_check,
 /// in the migration: Prisma does not model CHECK constraints).
 model AuditLog {

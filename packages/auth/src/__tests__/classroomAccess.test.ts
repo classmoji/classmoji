@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   findBySlug: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
+  recordNonMemberRefusal: vi.fn(),
   getClassroomForUI: vi.fn(),
 }));
 
@@ -69,7 +70,10 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      recordNonMemberRefusal: (...a: unknown[]) => mocks.recordNonMemberRefusal(...a),
+    },
     githubUserToken: { getGitHubTokenForUser: vi.fn() },
   },
 }));
@@ -130,6 +134,7 @@ beforeEach(() => {
   mocks.findBySlug.mockResolvedValue(CLASSROOM);
   mocks.getClassroomForUI.mockImplementation((c: unknown) => c);
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.recordNonMemberRefusal.mockResolvedValue(undefined);
 });
 
 // ─── The single-role case is unchanged ───────────────────────────────────────
@@ -244,7 +249,7 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
     });
   });
 
-  it('still reports no membership, and NONE/false in the audit log, for a true non-member', async () => {
+  it('records a true non-member through recordNonMemberRefusal with only the person and classroom', async () => {
     signedInHolding([]);
 
     const error = await rejection(accessAs(['STUDENT']));
@@ -252,12 +257,158 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
     expect(error.status).toBe(403);
     await expect(error.text()).resolves.toBe('Not a member of this classroom');
 
-    const [entry] = mocks.auditCreate.mock.calls[0];
-    expect(entry.role).toBe('NONE');
-    expect(entry.data).toMatchObject({
-      has_membership: false,
-      denial_reasons: ['not_classroom_member'],
-    });
+    expect(mocks.recordNonMemberRefusal).toHaveBeenCalledTimes(1);
+    expect(mocks.recordNonMemberRefusal.mock.calls[0]).toEqual([
+      { userId: 'user-1', classroomId: CLASSROOM.id },
+    ]);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes nothing from the request for a non-member: no action, roles, owner id or metadata', async () => {
+    signedInHolding([]);
+
+    await assertClassroomAccess({
+      request: request(),
+      classroomSlug: CLASS_SLUG,
+      allowedRoles: ['STUDENT'],
+      resourceType: 'TOKEN_BALANCE',
+      attemptedAction: 'purchase_extension',
+      resourceOwnerId: 'an-id-from-the-request',
+      metadata: { hours_requested: 'anything' },
+    }).catch(() => {});
+
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-1', classroomId: CLASSROOM.id }],
+    ]);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('records a refused member with the full row, request metadata and resource id included', async () => {
+    signedInHolding(['STUDENT']);
+
+    await assertClassroomAccess({
+      request: request(),
+      classroomSlug: CLASS_SLUG,
+      allowedRoles: ['OWNER'],
+      resourceType: 'TOKEN_BALANCE',
+      attemptedAction: 'purchase_extension',
+      resourceOwnerId: 'someone-else',
+      metadata: { hours_requested: 3 },
+    }).catch(() => {});
+
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          classroom_id: CLASSROOM.id,
+          user_id: 'user-1',
+          role: 'STUDENT',
+          resource_id: 'someone-else',
+          resource_type: 'TOKEN_BALANCE',
+          action: 'ACCESS_DENIED',
+          data: {
+            attempted_action: 'purchase_extension',
+            required_roles: ['OWNER'],
+            has_membership: true,
+            denial_reasons: ['insufficient_role', 'not_resource_owner'],
+            is_resource_owner: false,
+            self_access_attempted: true,
+            hours_requested: 3,
+          },
+        },
+      ],
+    ]);
+  });
+
+  it('still answers 403 when writing the refusal fails', async () => {
+    signedInHolding([]);
+    mocks.recordNonMemberRefusal.mockRejectedValue(new Error('database down'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const error = await rejection(accessAs(['STUDENT']));
+
+    expect(mocks.recordNonMemberRefusal).toHaveBeenCalledTimes(1);
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Not a member of this classroom');
+    logged.mockRestore();
+  });
+
+  it('still answers 403 to a member when writing the refusal fails', async () => {
+    signedInHolding(['STUDENT']);
+    mocks.auditCreate.mockRejectedValue(new Error('database down'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const error = await rejection(accessAs(['OWNER']));
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Required role: OWNER');
+    logged.mockRestore();
+  });
+
+  it('writes nothing for a request with no session', async () => {
+    mocks.getSession.mockResolvedValue(null);
+
+    const error = await rejection(accessAs(['STUDENT']));
+
+    expect(error.status).toBe(401);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing for a classroom that does not exist', async () => {
+    signedInHolding([]);
+    mocks.findBySlug.mockResolvedValue(null);
+
+    const error = await rejection(accessAs(['STUDENT']));
+
+    expect(error.status).toBe(404);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
+  });
+
+  it("records user A's refusal in classroom X for X only, whatever A holds in classroom Y", async () => {
+    const CLASS_X = { id: 'class-x', slug: 'class-x', status: 'ACTIVE', settings: {} };
+    const CLASS_Y = { id: 'class-y', slug: 'class-y', status: 'ACTIVE', settings: {} };
+    mocks.getSession.mockResolvedValue({ user: { id: 'user-a', name: 'user-a' } });
+    mocks.findBySlug.mockImplementation((slug: unknown) =>
+      Promise.resolve(slug === CLASS_X.slug ? CLASS_X : slug === CLASS_Y.slug ? CLASS_Y : null)
+    );
+    // User A is an OWNER of Y and nothing in X.
+    mocks.findByClassroomAndUser.mockImplementation(
+      (classroomId: unknown, userId: unknown, requested: unknown) => {
+        const held = classroomId === CLASS_Y.id && userId === 'user-a' ? 'OWNER' : null;
+        const wanted = Array.isArray(requested) ? (requested as Role[]) : null;
+        const match = held && (!wanted || wanted.includes(held)) ? held : null;
+        return Promise.resolve(match ? { id: `m-${match}`, role: match } : null);
+      }
+    );
+
+    const error = await rejection(
+      assertClassroomAccess({
+        request: request(),
+        classroomSlug: CLASS_X.slug,
+        allowedRoles: ['OWNER'],
+        resourceType: 'STUDENT_ROSTER',
+        attemptedAction: 'view_roster',
+      })
+    );
+
+    expect(error.status).toBe(403);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-a', classroomId: CLASS_X.id }],
+    ]);
+  });
+
+  it("records user B's refusal as B's, not as anyone else's", async () => {
+    signedInHolding([], 'user-b');
+
+    await accessAs(['STUDENT']).catch(() => {});
+
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-b', classroomId: CLASSROOM.id }],
+    ]);
   });
 });
 

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   findByClassroomAndUser: vi.fn(),
   membershipFindMany: vi.fn(),
   auditCreate: vi.fn(),
+  recordNonMemberRefusal: vi.fn(),
   getClassroomForUI: vi.fn(),
 }));
 
@@ -55,7 +56,10 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      recordNonMemberRefusal: (...a: unknown[]) => mocks.recordNonMemberRefusal(...a),
+    },
     githubUserToken: { getGitHubTokenForUser: vi.fn() },
   },
 }));
@@ -104,6 +108,7 @@ beforeEach(() => {
   mocks.findBySlug.mockResolvedValue(CLASSROOM);
   mocks.getClassroomForUI.mockImplementation((c: unknown) => c);
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.recordNonMemberRefusal.mockResolvedValue(undefined);
 });
 
 describe('assertAskMojiAccess', () => {
@@ -157,17 +162,14 @@ describe('assertAskMojiAccess', () => {
     });
   });
 
-  it('refuses a non-member, audited as ASK_MOJI', async () => {
+  it("refuses a non-member, recorded as the classroom's non-member refusal", async () => {
     signedIn([]);
     const refused = await rejection(assertAskMojiAccess(request(), SLUG));
     expect(refused.status).toBe(403);
-    expect(mocks.auditCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'ACCESS_DENIED',
-        resource_type: 'ASK_MOJI',
-        classroom_id: 'class-1',
-      })
-    );
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-1', classroomId: 'class-1' }],
+    ]);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a signed-out caller and an unknown classroom', async () => {

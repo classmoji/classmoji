@@ -88,6 +88,22 @@ describe('purchaseExtensionHours action', () => {
     });
   });
 
+  it('records the hours asked for only as a number, whatever the body sent', async () => {
+    for (const [sent, recorded] of [
+      [3, 3],
+      ['a long piece of text', null],
+      [{ nested: true }, null],
+      [undefined, null],
+    ] as const) {
+      assertAccessMock.mockClear();
+      await post({ ...BASE, hours_purchased: sent, assignment_id: 'asg-q' }).catch(() => {});
+      expect(assertAccessMock.mock.calls[0][0].metadata).toEqual({
+        hours_requested: recorded,
+        assignment_id: 'asg-q',
+      });
+    }
+  });
+
   it('refuses a body naming both targets, or neither', async () => {
     await expect(
       post({ ...BASE, git_repo_assignment_id: 'gra-1', assignment_id: 'asg-q' })

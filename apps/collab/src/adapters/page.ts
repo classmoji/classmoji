@@ -298,8 +298,9 @@ export function createPageAdapter(
       const page = await deps.findPage(docId);
       if (!page) return { ok: false, reason: 'not-found' };
       const role = await deps.findRole(userId, page.classroom_id);
-      // A member's refusal is audited (classroomId + role); a non-member's isn't.
-      const member = role ? { classroomId: page.classroom_id, role } : {};
+      // A refusal is audited in the page's classroom: a member's with their
+      // role, someone who holds none there as the classroom's non-member row.
+      const member = { classroomId: page.classroom_id, role: role ?? null };
       if (!page.classroom.collab_enabled)
         return { ok: false, reason: 'collab-disabled', ...member };
       if (!canEditPages(role)) return { ok: false, reason: 'forbidden', ...member };

@@ -150,7 +150,7 @@ Auth helpers are in `~/utils/routeAuth.server.js` (re-exported from `@classmoji/
 - `requireStudentAccess()` — student-only routes
 - `assertClassroomAccess({...})` — custom role/ownership checks (API routes, self-access patterns with `resourceOwnerId`/`selfAccessRoles`/`requireOwnership`)
 
-All return `{ userId, classroom, membership, ... }`. Denied attempts are auto-logged.
+All return `{ userId, classroom, membership, ... }`. Denied attempts by a signed-in user are auto-logged as ACCESS_DENIED in the classroom: a member's with their role and the call's details; someone who holds no role there as ONE row per person, classroom and UTC day (`audit.recordNonMemberRefusal`: null role, resource `CLASSROOM`, `data: { reason: 'not_classroom_member', tool: 'gate' }`, nothing from the request; later refusals that day raise `count`). The same holds for `assertSlideAccess` (`recordNonMemberRefusal: false` for a check the person did not ask for, e.g. the content route's deck rows of other classrooms) and a refused live-editing join. An anonymous request or an unknown classroom writes nothing.
 
 ### The MCP server's OAuth (better-auth 1.7)
 - The webapp is the authorization server: better-auth's oauth-provider through `@better-auth/mcp`, `@better-auth/cimd` and the jwt plugin (`packages/auth/src/server.ts`). Clients connect by client metadata document (Claude Code) or open dynamic registration (claude.ai and most others). Every connection goes through the consent page (`oauth.consent`), refused while viewing as someone; an approval that issues a code writes a PlatformAuditLog row (`oauth.consent.grant`). One resource and issuer for both sides, `@classmoji/auth/mcp-resource`: `MCP_RESOURCE` (`<MCP_PUBLIC_URL>/mcp`) and `AUTH_ISSUER` (the webapp's origin).
