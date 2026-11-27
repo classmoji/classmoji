@@ -1,4 +1,5 @@
 import { createEvent, createEvents, type DateArray, type EventAttributes } from 'ics';
+import { localDateParts } from '@classmoji/utils';
 import * as calendarService from './calendar.service.ts';
 import { hasPlainHost, isMeetingLinkUrl } from './calendarPolicy.ts';
 
@@ -194,9 +195,23 @@ export const feedUrl = (meetingLink: string): string | null => {
 };
 
 /**
+ * The date a deadline falls on in the classroom's time zone. A deadline is an
+ * all-day event, so it has a date and no time; the UTC date put an 11:59 PM
+ * US Eastern deadline on the next day.
+ */
+const deadlineDate = (start: Date | string, timeZone: string | null | undefined): DateArray => {
+  const { year, month, day } = localDateParts(new Date(start), timeZone);
+  return [year, month, day];
+};
+
+/**
  * Convert a calendar event to ICS event format
  */
-const convertEventToICS = (event: CalendarEventInput, _classroomSlug: string): EventAttributes => {
+const convertEventToICS = (
+  event: CalendarEventInput,
+  _classroomSlug: string,
+  timeZone: string | null | undefined
+): EventAttributes => {
   const startArray = dateToArray(event.start_time);
   const endArray = dateToArray(event.end_time);
   const baseEvent = {
@@ -210,7 +225,7 @@ const convertEventToICS = (event: CalendarEventInput, _classroomSlug: string): E
     event.is_deadline || event.event_type === 'DEADLINE'
       ? {
           ...baseEvent,
-          start: [startArray[0], startArray[1], startArray[2]],
+          start: deadlineDate(event.start_time, timeZone),
           duration: { days: 1 },
         }
       : {
@@ -279,11 +294,13 @@ const withCalendarName = (ics: string, classroomSlug: string): string =>
  * Generate an ICS calendar feed for a classroom
  * @param {string} classroomId - The classroom ID
  * @param {string} classroomSlug - The classroom slug (for UID generation)
+ * @param {string | null} timeZone - The classroom's time zone, which dates deadlines; UTC when unset
  * @returns {Promise<string>} The ICS file content
  */
 export const generateCalendarFeed = async (
   classroomId: string,
-  classroomSlug: string = 'classroom'
+  classroomSlug: string = 'classroom',
+  timeZone?: string | null
 ): Promise<string> => {
   // Get date range: 30 days past to 365 days future
   const now = new Date();
@@ -304,7 +321,7 @@ export const generateCalendarFeed = async (
   const converted = events.flatMap(event => {
     const input = event as CalendarEventInput;
     try {
-      return [{ id: input.id, icsEvent: convertEventToICS(input, classroomSlug) }];
+      return [{ id: input.id, icsEvent: convertEventToICS(input, classroomSlug, timeZone) }];
     } catch {
       logSkipped(input.id);
       return [];
