@@ -1,42 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The content-delivery switch writes its platform audit row FIRST and changes
- * the classroom only once that row is written: in apps/admin an action that
- * cannot be recorded does not happen (utils/audit.server.ts). Both places the
- * switch lives: the rollout screen (one classroom, or every one in the list)
- * and the classroom page.
+ * The content-delivery switch saves the classroom change and its platform
+ * audit row in ONE transaction (Prisma's array form): both are saved or
+ * neither is, so in apps/admin an action that cannot be recorded does not
+ * happen (utils/audit.server.ts). Both places the switch lives: the rollout
+ * screen (one classroom, or every one in the list) and the classroom page.
+ *
+ * The query builders return tagged descriptors here, so a test can see which
+ * queries went into the batch; `$transaction` stands in for the database.
  */
+
+type Query = { query: string; args: unknown };
 
 const mocks = vi.hoisted(() => ({
   requirePlatformAdmin: vi.fn(),
-  auditCreate: vi.fn(),
   findUnique: vi.fn(),
-  update: vi.fn(),
-  updateMany: vi.fn(),
   count: vi.fn(),
-  order: [] as string[],
+  transaction: vi.fn(),
 }));
 
 vi.mock('~/utils/db.server', () => ({
   requirePlatformAdmin: (...a: unknown[]) => mocks.requirePlatformAdmin(...a),
   prisma: {
+    $transaction: (...a: unknown[]) => mocks.transaction(...a),
     platformAuditLog: {
-      create: (...a: unknown[]) => {
-        mocks.order.push('audit');
-        return mocks.auditCreate(...a);
-      },
+      create: (args: unknown): Query => ({ query: 'audit', args }),
     },
     classroom: {
       findUnique: (...a: unknown[]) => mocks.findUnique(...a),
-      update: (...a: unknown[]) => {
-        mocks.order.push('update');
-        return mocks.update(...a);
-      },
-      updateMany: (...a: unknown[]) => {
-        mocks.order.push('update');
-        return mocks.updateMany(...a);
-      },
+      update: (args: unknown): Query => ({ query: 'update', args }),
+      updateMany: (args: unknown): Query => ({ query: 'updateMany', args }),
       count: (...a: unknown[]) => mocks.count(...a),
     },
   },
@@ -52,42 +46,73 @@ const post = (url: string, fields: Record<string, string>) => {
 };
 
 const DELIVERY = 'http://admin.test/ops/delivery';
+const CLASSROOM = 'http://admin.test/classrooms/cs52';
+
+/** The one batch the action handed to `$transaction`. */
+const batch = (): Query[] => {
+  expect(mocks.transaction).toHaveBeenCalledTimes(1);
+  const [queries] = mocks.transaction.mock.calls[0];
+  expect(Array.isArray(queries)).toBe(true);
+  return queries as Query[];
+};
+
+const auditRow = (queries: Query[]) =>
+  (queries.find(q => q.query === 'audit')?.args as { data: Record<string, unknown> } | undefined)
+    ?.data;
 
 beforeEach(() => {
-  for (const m of Object.values(mocks)) if (typeof m === 'function') m.mockReset();
-  mocks.order.length = 0;
+  for (const m of Object.values(mocks)) m.mockReset();
   mocks.requirePlatformAdmin.mockResolvedValue({ user: { id: 'admin-1' } });
   mocks.findUnique.mockResolvedValue({ id: 'class-1', name: 'CS 52' });
-  mocks.update.mockResolvedValue({ id: 'class-1' });
-  mocks.updateMany.mockResolvedValue({ count: 3 });
   mocks.count.mockResolvedValue(3);
-  mocks.auditCreate.mockResolvedValue({ id: 'row-1' });
+  mocks.transaction.mockImplementation(async (queries: Query[]) =>
+    queries.map(q =>
+      q.query === 'updateMany'
+        ? { count: 2 }
+        : q.query === 'update'
+          ? { id: 'class-1' }
+          : { id: 'row-1' }
+    )
+  );
 });
 
 describe('the rollout screen’s switch for one classroom', () => {
-  it('writes the row, then changes the classroom', async () => {
+  it('saves the change and its row in one transaction', async () => {
     const result = await contentDeliveryAction(
       post(DELIVERY, { intent: 'toggle', classroomId: 'class-1', enabled: 'true' })
     );
     expect(result).toEqual({ ok: true, changed: 1 });
-    expect(mocks.order).toEqual(['audit', 'update']);
-    expect(mocks.auditCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        action: 'delivery.toggle',
-        target_id: 'class-1',
-        data: { enabled: true, classroomName: 'CS 52' },
-      }),
+    const queries = batch();
+    expect(queries.map(q => q.query)).toEqual(['update', 'audit']);
+    expect(queries[0].args).toMatchObject({
+      where: { id: 'class-1' },
+      data: { content_delivery_enabled: true },
+    });
+    expect(auditRow(queries)).toEqual({
+      actor_id: 'admin-1',
+      action: 'delivery.toggle',
+      target_type: 'classroom',
+      target_id: 'class-1',
+      classroom_id: 'class-1',
+      data: { enabled: true, classroomName: 'CS 52' },
     });
   });
 
-  it('does not change the classroom when the row cannot be written', async () => {
-    mocks.auditCreate.mockRejectedValue(new Error('database away'));
+  it('reports nothing changed when the transaction fails', async () => {
+    mocks.transaction.mockRejectedValue(new Error('database away'));
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const result = await contentDeliveryAction(
       post(DELIVERY, { intent: 'toggle', classroomId: 'class-1', enabled: 'true' })
     );
     expect(result).toEqual({ error: 'Could not change that classroom. Try again.' });
-    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('answers a classroom deleted before the switch', async () => {
+    mocks.transaction.mockRejectedValue(Object.assign(new Error('gone'), { code: 'P2025' }));
+    const result = await contentDeliveryAction(
+      post(DELIVERY, { intent: 'toggle', classroomId: 'class-1', enabled: 'true' })
+    );
+    expect(result).toEqual({ error: 'That classroom no longer exists — the list is out of date.' });
   });
 
   it('answers a classroom that is gone without writing anything', async () => {
@@ -96,49 +121,79 @@ describe('the rollout screen’s switch for one classroom', () => {
       post(DELIVERY, { intent: 'toggle', classroomId: 'gone', enabled: 'true' })
     );
     expect(result).toEqual({ error: 'That classroom no longer exists — the list is out of date.' });
-    expect(mocks.order).toEqual([]);
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });
 
 describe('the rollout screen’s switch for every classroom in the list', () => {
-  it('writes the row with the count it is about to change, then changes them', async () => {
+  it('saves the change and its row in one transaction', async () => {
     const result = await contentDeliveryAction(post(DELIVERY, { intent: 'enable-all' }));
-    expect(result).toEqual({ ok: true, changed: 3 });
-    expect(mocks.order).toEqual(['audit', 'update']);
-    expect(mocks.count.mock.calls[0][0]).toEqual({
-      where: mocks.updateMany.mock.calls[0][0].where,
-    });
-    expect(mocks.auditCreate.mock.calls[0][0].data.data).toMatchObject({
-      enabled: true,
-      changed: 3,
+    // The admin is told what the update changed; the row keeps the count
+    // taken just before the switch.
+    expect(result).toEqual({ ok: true, changed: 2 });
+    const queries = batch();
+    expect(queries.map(q => q.query)).toEqual(['updateMany', 'audit']);
+    const updateArgs = queries[0].args as { where: unknown; data: unknown };
+    expect(updateArgs.data).toEqual({ content_delivery_enabled: true });
+    expect(mocks.count.mock.calls[0][0]).toEqual({ where: updateArgs.where });
+    expect(mocks.count.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.transaction.mock.invocationCallOrder[0]
+    );
+    expect(auditRow(queries)).toEqual({
+      actor_id: 'admin-1',
+      action: 'delivery.bulk',
+      target_type: 'classrooms',
+      target_id: null,
+      classroom_id: null,
+      data: { enabled: true, changed: 3, filter: { q: '', state: '', scope: 'active' } },
     });
   });
 
-  it('changes nothing when the row cannot be written', async () => {
-    mocks.auditCreate.mockRejectedValue(new Error('database away'));
+  it('reports nothing changed when the transaction fails', async () => {
+    mocks.transaction.mockRejectedValue(new Error('database away'));
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const result = await contentDeliveryAction(post(DELIVERY, { intent: 'disable-all' }));
     expect(result).toEqual({ error: 'Could not apply that change. Try again.' });
-    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 });
 
 describe('the classroom page’s switch', () => {
-  it('writes the row, then changes the classroom', async () => {
-    const result = await classroomAction(
-      post('http://admin.test/classrooms/cs52', { intent: 'delivery', enabled: 'false' })
-    );
+  it('saves the change and its row in one transaction', async () => {
+    const result = await classroomAction(post(CLASSROOM, { intent: 'delivery', enabled: 'false' }));
     expect(result).toEqual({ ok: true });
-    expect(mocks.order).toEqual(['audit', 'update']);
+    const queries = batch();
+    expect(queries.map(q => q.query)).toEqual(['update', 'audit']);
+    expect(queries[0].args).toMatchObject({
+      where: { id: 'class-1' },
+      data: { content_delivery_enabled: false },
+    });
+    expect(auditRow(queries)).toEqual({
+      actor_id: 'admin-1',
+      action: 'delivery.toggle',
+      target_type: 'classroom',
+      target_id: 'class-1',
+      classroom_id: 'class-1',
+      data: { enabled: false, classroomName: 'CS 52' },
+    });
   });
 
-  it('does not change the classroom when the row cannot be written', async () => {
-    mocks.auditCreate.mockRejectedValue(new Error('database away'));
-    await expect(
-      classroomAction(
-        post('http://admin.test/classrooms/cs52', { intent: 'delivery', enabled: 'false' })
-      )
-    ).rejects.toThrow('database away');
-    expect(mocks.update).not.toHaveBeenCalled();
+  it('answers the admin, not a 500, when the transaction fails', async () => {
+    mocks.transaction.mockRejectedValue(new Error('database away'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await classroomAction(post(CLASSROOM, { intent: 'delivery', enabled: 'false' }));
+    expect(result).toEqual({ error: 'Could not change that classroom. Try again.' });
+  });
+
+  it('answers a classroom deleted before the switch', async () => {
+    mocks.transaction.mockRejectedValue(Object.assign(new Error('gone'), { code: 'P2025' }));
+    const result = await classroomAction(post(CLASSROOM, { intent: 'delivery', enabled: 'false' }));
+    expect(result).toEqual({ error: 'That classroom no longer exists.' });
+  });
+
+  it('answers a classroom that is gone without writing anything', async () => {
+    mocks.findUnique.mockResolvedValue(null);
+    const result = await classroomAction(post(CLASSROOM, { intent: 'delivery', enabled: 'false' }));
+    expect(result).toEqual({ error: 'That classroom no longer exists.' });
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });

@@ -3,8 +3,10 @@ import { prisma } from '~/utils/db.server';
 
 /**
  * Writes one platform audit row (see PlatformAuditLog). Awaited by callers:
- * an action that cannot be recorded does not happen. Feedback actions never
- * come through here (decided for #739).
+ * an action that cannot be recorded does not happen. It returns the Prisma
+ * query itself, so an action that changes data passes it, with that change,
+ * to `prisma.$transaction([...])`: both are saved or neither is. Feedback
+ * actions never come through here (decided for #739).
  */
 export const platformAudit = (entry: {
   actorId: string;
