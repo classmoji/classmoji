@@ -209,13 +209,21 @@ export class MemoryStore implements CollabDocStore {
 export class FakeSessions implements SessionResolver {
   revoked = new Set<string>();
   names = new Map<string, string>();
+  /** userId → the platform admin viewing as them ("View as"). */
+  viewedAs = new Map<string, string>();
 
   async resolve(cookieHeader: string): Promise<CollabSession | null> {
     const match = /(?:^|;\s*)session=([^;]+)/.exec(cookieHeader);
     if (!match) return null;
     const userId = match[1];
     if (this.revoked.has(userId)) return null;
-    return { userId, name: this.names.get(userId) ?? userId, sessionToken: `tok-${userId}` };
+    const impersonatedBy = this.viewedAs.get(userId);
+    return {
+      userId,
+      name: this.names.get(userId) ?? userId,
+      sessionToken: `tok-${userId}`,
+      ...(impersonatedBy ? { impersonatedBy } : {}),
+    };
   }
 }
 

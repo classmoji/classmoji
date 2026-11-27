@@ -4,7 +4,10 @@
  * moved), and ACCESS_DENIED for a refused join to a doc that exists, in the
  * doc's classroom: a member's with their role, and a signed-in person who
  * holds no role there as that classroom's one non-member row for the day
- * (`recordNonMemberRefusal`, counted).
+ * (`recordNonMemberRefusal`, counted). Every row names its surface in
+ * `data.tool` (`collab`, or `live_editor` for an edit) and, when a platform
+ * admin is viewing as the user ("View as", read from the session at join),
+ * carries `impersonated_by`.
  *
  * Fire and forget: an audit failure never blocks or fails a connection. The
  * real sink writes through the audit service's `record`, which tries a failed
@@ -17,13 +20,18 @@ export interface AuditEntry {
   action: 'COLLAB_JOIN' | 'COLLAB_LEAVE' | 'ACCESS_DENIED' | 'UPDATE';
   resourceType: string;
   resourceId: string;
-  data?: Record<string, unknown>;
+  /** `tool` names the surface: `collab` (joins, leaves, refusals), `live_editor` (edits). */
+  data: { tool: string } & Record<string, unknown>;
+  /** The platform admin viewing as the user ("View as"): `impersonated_by` on the row. */
+  impersonatedBy?: string | null;
 }
 
 /** A refused join by someone who holds no role in the doc's classroom. */
 export interface NonMemberRefusal {
   userId: string;
   classroomId: string;
+  /** The platform admin viewing as them ("View as"): a daily row of its own. */
+  impersonatedBy?: string | null;
 }
 
 export interface AuditSink {
@@ -66,7 +74,7 @@ export function createServiceAuditSink(
     action: AuditEntry['action'];
     resource_type: string;
     resource_id: string;
-    data?: Record<string, unknown>;
+    data: Record<string, unknown>;
   }) => Promise<unknown>,
   nonMemberRefusal: (refusal: NonMemberRefusal) => Promise<unknown>
 ): AuditSink {
@@ -79,9 +87,15 @@ export function createServiceAuditSink(
         action: entry.action,
         resource_type: entry.resourceType,
         resource_id: entry.resourceId,
-        ...(entry.data ? { data: entry.data } : {}),
+        data: entry.impersonatedBy
+          ? { ...entry.data, impersonated_by: entry.impersonatedBy }
+          : entry.data,
       }),
     recordNonMemberRefusal: refusal =>
-      nonMemberRefusal({ userId: refusal.userId, classroomId: refusal.classroomId }),
+      nonMemberRefusal({
+        userId: refusal.userId,
+        classroomId: refusal.classroomId,
+        ...(refusal.impersonatedBy ? { impersonatedBy: refusal.impersonatedBy } : {}),
+      }),
   };
 }
