@@ -30,6 +30,7 @@ import getPrisma from '@classmoji/database';
 import { canonicalTimeZone, defaultContentRepoName } from '@classmoji/utils';
 import { createWithUniqueClassroomSlug } from './classroomSlug.ts';
 import { purgeClassroomMedia } from '../media/index.ts';
+import { recordPlatformAudit } from './audit.service.ts';
 
 const EXAMPLE_ORG = {
   provider: 'GITHUB' as const,
@@ -505,6 +506,11 @@ export interface ExampleCleanupReport {
  * installation. A sandbox holding media goes through `purgeClassroomMedia`
  * first, as `classroom.deleteById` does, so no R2 object is left unnamed; one
  * whose purge fails stays until the next run.
+ *
+ * A run that deletes at least one sandbox leaves one `platform_audit_logs`
+ * row, `classroom.delete_sandboxes` (no actor: the schedule), with how many
+ * classrooms went and how many audit rows they held (counted just before each
+ * delete). A failure writing it is logged (`audit_miss`), never thrown.
  */
 export async function deleteAbandonedExampleClassrooms(
   options: { olderThanDays?: number; now?: Date } = {}
@@ -520,25 +526,43 @@ export async function deleteAbandonedExampleClassrooms(
   });
 
   const plain = candidates.filter(c => (c._count.media_objects ?? 0) === 0).map(c => c.id);
+  const auditRowsOf = (ids: string[]) =>
+    prisma.auditLog.count({ where: { classroom_id: { in: ids } } });
   let deleted = 0;
+  let auditRows = 0;
   if (plain.length > 0) {
+    const rows = await auditRowsOf(plain);
     const result = await prisma.classroom.deleteMany({
       where: { id: { in: plain }, is_example: true },
     });
     deleted += result.count;
+    if (result.count > 0) auditRows += rows;
   }
 
   for (const c of candidates.filter(c => (c._count.media_objects ?? 0) > 0)) {
     try {
       await purgeClassroomMedia(c.id);
-      await prisma.classroom.deleteMany({ where: { id: c.id, is_example: true } });
-      deleted += 1;
+      const rows = await auditRowsOf([c.id]);
+      const result = await prisma.classroom.deleteMany({ where: { id: c.id, is_example: true } });
+      deleted += result.count;
+      if (result.count > 0) auditRows += rows;
     } catch (error: unknown) {
       console.error('[exampleClassroom] media purge failed; kept until next run', {
         classroomId: c.id,
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  if (deleted > 0) {
+    await recordPlatformAudit({
+      actor_id: null,
+      action: 'classroom.delete_sandboxes',
+      target_type: 'classrooms',
+      target_id: null,
+      classroom_id: null,
+      data: { classrooms: deleted, audit_rows: auditRows },
+    });
   }
 
   return { candidates: candidates.length, deleted, kept: candidates.length - deleted };

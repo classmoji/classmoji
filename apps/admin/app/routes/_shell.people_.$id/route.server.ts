@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { auditView } from '~/utils/audit.server';
-import { describeAdminAction } from '~/utils/metrics.server';
+import { adminReason, describeAdminAction } from '~/utils/metrics.server';
 import { distinctClassrooms, emailDomain, highestRole } from '~/utils/people';
 import { safeReturn } from '~/utils/url';
 
@@ -157,10 +157,7 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
           : null,
     })),
     ...adminRows.map(r => {
-      const reason =
-        r.data && typeof r.data === 'object' && 'reason' in r.data
-          ? String((r.data as { reason?: unknown }).reason)
-          : null;
+      const reason = adminReason(r.action, r.data);
       return {
         at: r.created_at.toISOString(),
         kind: 'admin' as const,

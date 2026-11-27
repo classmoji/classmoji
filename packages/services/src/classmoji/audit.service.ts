@@ -61,6 +61,32 @@ export function logAuditMiss(reason: string, row: unknown): void {
   console.error('audit_miss', line);
 }
 
+/** One `platform_audit_logs` row, as `recordPlatformAudit` takes it. */
+export interface PlatformAuditRow {
+  actor_id: string | null;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  classroom_id: string | null;
+  data: Prisma.InputJsonValue;
+}
+
+/**
+ * Record one platform audit row for something that has ALREADY happened (a
+ * classroom deleted, say): a failed write never throws and never turns the
+ * action into a failure; it leaves one `audit_miss` line with the row instead.
+ */
+export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> {
+  try {
+    await getPrisma().platformAuditLog.create({ data: row });
+  } catch (error) {
+    logAuditMiss(
+      `platform audit write failed: ${error instanceof Error ? error.message : String(error)}`,
+      row
+    );
+  }
+}
+
 /**
  * Invalid input: outside production a bug to fix now, so it throws; in
  * production the caller's action has already happened, so the miss is logged

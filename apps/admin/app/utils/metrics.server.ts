@@ -346,7 +346,10 @@ export async function loadLatestActivity(limit = 10): Promise<ActivityEntry[]> {
     ...adminRows.map(r => ({
       at: r.created_at.toISOString(),
       kind: 'admin' as const,
-      actor: { id: r.actor?.id ?? null, name: r.actor?.name ?? 'An admin' },
+      actor: {
+        id: r.actor?.id ?? null,
+        name: r.actor?.name ?? systemActorName(r.action) ?? 'An admin',
+      },
       text: describeAdminAction(r.action, r.data),
       href: r.target_type === 'user' && r.target_id ? `/people/${r.target_id}` : '/ops/activity',
     })),
@@ -397,9 +400,42 @@ export const describeAdminAction = (action: string, data: unknown): string => {
       return `exported ${d.rows ?? 0} ${d.list ?? 'rows'} as CSV`;
     case 'classroom.view':
       return `opened ${d.classroomName ?? 'a classroom'}`;
+    // Written by the classroom service when a classroom is deleted.
+    case 'classroom.delete': {
+      const named = d.slug ?? d.name;
+      const which = named ? `classroom ${named}` : 'a classroom';
+      return d.reason === 'create_rollback'
+        ? `removed ${which} when creating it did not finish`
+        : `deleted ${which}`;
+    }
+    // Written by the daily sandbox sweep.
+    case 'classroom.delete_sandboxes': {
+      const n = typeof d.classrooms === 'number' ? d.classrooms : 0;
+      return `removed ${n} sandbox classroom${n === 1 ? '' : 's'}`;
+    }
     default:
       return action;
   }
+};
+
+/**
+ * Who a platform audit row with no actor stands for, when the action is one
+ * a schedule writes (null: the actor is a person, or was one before their
+ * account was deleted).
+ */
+export const systemActorName = (action: string): string | null =>
+  action === 'classroom.delete_sandboxes' ? 'Daily cleanup' : null;
+
+/**
+ * The reason an admin typed for a platform audit row, shown in quotes beside
+ * it. `classroom.delete` keeps a reason code in `data.reason` instead, which
+ * `describeAdminAction` words itself.
+ */
+export const adminReason = (action: string, data: unknown): string | null => {
+  if (action === 'classroom.delete') return null;
+  const reason =
+    data && typeof data === 'object' ? (data as { reason?: unknown }).reason : undefined;
+  return typeof reason === 'string' ? reason : null;
 };
 
 // ───────── Insights ─────────

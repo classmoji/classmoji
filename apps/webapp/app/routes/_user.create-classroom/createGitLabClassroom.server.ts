@@ -178,9 +178,15 @@ export async function createGitLabClassroom(
       data: { git_namespace: subgroup.full_path, git_namespace_created: true },
     });
   } catch (error: unknown) {
-    await getPrisma()
-      .classroom.delete({ where: { id: classroom.id } })
-      .catch(() => {});
+    // Recorded like any classroom delete, marked as a create that did not finish.
+    await ClassmojiService.classroom
+      .deleteById(classroom.id, { actorId: userId, reason: 'create_rollback' })
+      .catch((rollbackError: unknown) => {
+        console.error(
+          '[create-classroom] Could not remove the unfinished classroom',
+          rollbackError
+        );
+      });
     if ((error as { status?: number }).status === 422) {
       return {
         error: `A subgroup named '${classroom.slug}' already exists in ${group.full_path} on Gitlab. Pick a different classroom name, or rename or remove that subgroup.`,
