@@ -178,8 +178,9 @@ export async function createGitLabClassroom(
       data: { git_namespace: subgroup.full_path, git_namespace_created: true },
     });
   } catch (error: unknown) {
-    await getPrisma()
-      .classroom.delete({ where: { id: classroom.id } })
+    // Recorded like any classroom delete, marked as a create that did not finish.
+    await ClassmojiService.classroom
+      .deleteById(classroom.id, { actorId: userId, reason: 'create_rollback' })
       .catch(() => {});
     if ((error as { status?: number }).status === 422) {
       return {
