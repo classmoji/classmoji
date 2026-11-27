@@ -184,7 +184,7 @@ const GitHubStatsPanel = ({
           type="error"
           showIcon
           className="mb-4"
-          message="Failed to refresh analytics"
+          title="Failed to refresh analytics"
           description={error}
           data-testid="snapshot-error"
         />

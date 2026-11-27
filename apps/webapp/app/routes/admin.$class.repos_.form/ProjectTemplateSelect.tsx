@@ -49,7 +49,7 @@ const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSel
   }, [classSlug]);
 
   if (error) {
-    return <Alert type="warning" message={error} className="mb-2" />;
+    return <Alert type="warning" title={error} className="mb-2" />;
   }
 
   return (
@@ -71,8 +71,7 @@ const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSel
         ),
         title: p.title, // Store title for later use
       }))}
-      optionFilterProp="title"
-      showSearch
+      showSearch={{ optionFilterProp: 'title' }}
     />
   );
 };

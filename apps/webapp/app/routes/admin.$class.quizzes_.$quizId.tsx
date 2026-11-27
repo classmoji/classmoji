@@ -846,10 +846,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
-            showSearch
-            filterOption={(input, option) =>
-              option!.label.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                option!.label.toLowerCase().includes(input.toLowerCase()),
+            }}
             options={repos.map((r: Record<string, unknown>) => ({
               value: ((r.ref as string | undefined) ?? r.name) as string,
               label: r.name as string,

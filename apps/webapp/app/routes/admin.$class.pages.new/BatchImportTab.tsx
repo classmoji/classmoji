@@ -173,7 +173,11 @@ export default function BatchImportTab({ onPagesChange }: BatchImportTabProps) {
       </div>
 
       {extractError && (
-        <Alert message={extractError} type="error" closable onClose={() => setExtractError(null)} />
+        <Alert
+          title={extractError}
+          type="error"
+          closable={{ onClose: () => setExtractError(null) }}
+        />
       )}
 
       {/* Pages Table */}

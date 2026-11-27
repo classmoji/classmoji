@@ -1,4 +1,5 @@
 import { BRAND, BRAND_LIGHT, BRAND_TEXT, PRIMARY } from './theme.ts';
+import { ANTD_V5_BOX_SHADOW_TERTIARY } from './antd.ts';
 
 // Keep in sync with --font-sans (see config/antd.ts). Ant components otherwise
 // fall back to the default system font stack instead of Mona Sans.
@@ -29,6 +30,14 @@ const darkTheme = {
     colorWarning: '#f59e0b',
     colorError: '#ef4444',
     colorInfo: '#3b82f6',
+    // antd 6's dark algorithm derives its shadows from a white colorShadow (a
+    // faint glow); black gives back antd 5's shadows. See config/antd.ts.
+    colorShadow: '#000',
+    boxShadowTertiary: ANTD_V5_BOX_SHADOW_TERTIARY,
+    // antd 6 borders disabled inputs with this (#686868 on dark), where
+    // antd 5 kept colorBorder: a disabled select stood out more than an
+    // enabled one. Buttons set their own below.
+    colorBorderDisabled: '#404040',
   },
   components: {
     Button: {
@@ -50,6 +59,9 @@ const darkTheme = {
       defaultColor: '#e5e5e5',
       defaultHoverBg: '#404040',
       defaultHoverBorderColor: '#525252',
+      // A disabled button keeps colorBorder (green), as in antd 5; antd 6
+      // borders it with colorBorderDisabled, which `algorithm` re-derives grey.
+      colorBorderDisabled: BRAND,
       // `type="text"` buttons take their colour from colorText, which is
       // BRAND_TEXT (black, for text on the green fill) above. Without these
       // they render black on the dark surface.
@@ -94,7 +106,6 @@ const darkTheme = {
       cardBg: '#262626',
     },
     Tag: {
-      bordered: false,
       defaultBg: '#262626',
       defaultColor: '#e5e5e5',
     },
@@ -107,6 +118,8 @@ const darkTheme = {
     Select: {
       optionSelectedBg: '#404040',
       optionActiveBg: '#262626',
+      // See config/antd.ts: antd 6 paints a hovered selected option with this.
+      controlItemBgActiveHover: '#404040',
       optionSelectedFontWeight: 600,
       optionSelectedColor: BRAND,
       selectorBg: '#262626',
@@ -130,6 +143,13 @@ const darkTheme = {
       hoverBorderColor: '#525252',
       activeBorderColor: '#737373',
       activeShadow: 'none',
+    },
+    // Space.Addon (antd 6's input addon): antd 5's padding. Its background, the
+    // addonBg above, is --cm-antd-addon-bg in styles/global.css.
+    Addon: {
+      paddingSM: 11,
+      paddingXS: 11,
+      fontSizeSM: 14,
     },
     Modal: {
       contentBg: '#262626',
@@ -397,14 +417,6 @@ const darkTheme = {
       linkHoverColor: BRAND,
       separatorColor: '#737373',
     },
-    List: {
-      colorText: '#e5e5e5',
-      colorTextDescription: '#a3a3a3',
-      colorTextDisabled: '#737373',
-      itemPaddingLG: '16px 24px',
-      colorSplit: '#404040',
-      itemHoverBg: '#262626',
-    },
     Descriptions: {
       colorText: '#e5e5e5',
       colorTextSecondary: '#a3a3a3',
@@ -440,11 +452,6 @@ const darkTheme = {
       authorTimeColor: '#a3a3a3',
       avatarBg: '#404040',
       contentBg: '#262626',
-    },
-    BackTop: {
-      colorText: '#e5e5e5',
-      colorTextLightSolid: BRAND_TEXT,
-      colorBgElevated: BRAND,
     },
     Image: {
       colorBgMask: 'rgba(0, 0, 0, 0.85)',

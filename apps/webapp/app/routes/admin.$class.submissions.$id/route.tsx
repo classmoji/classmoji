@@ -120,7 +120,7 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
         </h1>
       </div>
 
-      {refreshError ? <Alert type="error" message={refreshError} closable /> : null}
+      {refreshError ? <Alert type="error" title={refreshError} closable /> : null}
 
       <GitHubStatsPanel
         snapshot={snapshot}

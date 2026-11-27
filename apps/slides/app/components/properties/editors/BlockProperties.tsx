@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { Input, InputNumber, Tooltip } from 'antd';
+import { Input, InputNumber, Space, Tooltip } from 'antd';
 import PropertySection, { PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import TextProperties from './TextProperties';
@@ -221,23 +221,27 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <span className="text-xs text-gray-400 block mb-1">X</span>
-              <InputNumber
-                value={position.left}
-                onChange={v => handlePositionChange('left', v)}
-                size="small"
-                className="w-full"
-                addonAfter="px"
-              />
+              <Space.Compact block size="small">
+                <InputNumber
+                  value={position.left}
+                  onChange={v => handlePositionChange('left', v)}
+                  size="small"
+                  style={{ width: '100%', minWidth: 0 }}
+                />
+                <Space.Addon>px</Space.Addon>
+              </Space.Compact>
             </div>
             <div>
               <span className="text-xs text-gray-400 block mb-1">Y</span>
-              <InputNumber
-                value={position.top}
-                onChange={v => handlePositionChange('top', v)}
-                size="small"
-                className="w-full"
-                addonAfter="px"
-              />
+              <Space.Compact block size="small">
+                <InputNumber
+                  value={position.top}
+                  onChange={v => handlePositionChange('top', v)}
+                  size="small"
+                  style={{ width: '100%', minWidth: 0 }}
+                />
+                <Space.Addon>px</Space.Addon>
+              </Space.Compact>
             </div>
           </div>
         </div>
@@ -248,25 +252,29 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <span className="text-xs text-gray-400 block mb-1">W</span>
-              <InputNumber
-                value={size.width}
-                onChange={v => handleSizeChange('width', v)}
-                size="small"
-                min={10}
-                className="w-full"
-                addonAfter="px"
-              />
+              <Space.Compact block size="small">
+                <InputNumber
+                  value={size.width}
+                  onChange={v => handleSizeChange('width', v)}
+                  size="small"
+                  min={10}
+                  style={{ width: '100%', minWidth: 0 }}
+                />
+                <Space.Addon>px</Space.Addon>
+              </Space.Compact>
             </div>
             <div>
               <span className="text-xs text-gray-400 block mb-1">H</span>
-              <InputNumber
-                value={size.height}
-                onChange={v => handleSizeChange('height', v)}
-                size="small"
-                min={10}
-                className="w-full"
-                addonAfter="px"
-              />
+              <Space.Compact block size="small">
+                <InputNumber
+                  value={size.height}
+                  onChange={v => handleSizeChange('height', v)}
+                  size="small"
+                  min={10}
+                  style={{ width: '100%', minWidth: 0 }}
+                />
+                <Space.Addon>px</Space.Addon>
+              </Space.Compact>
             </div>
           </div>
         </div>

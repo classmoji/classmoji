@@ -358,7 +358,7 @@ const FormModule = ({
         <div>
           <Alert
             type="error"
-            message="Please check the highlighted fields and correct any issues."
+            title="Please check the highlighted fields and correct any issues."
             showIcon
             className="mb-4"
           />
@@ -659,7 +659,7 @@ const FormModule = ({
                   className="mb-4"
                   showIcon
                   type={gitlabRunner === 'unknown' ? 'info' : 'warning'}
-                  message={
+                  title={
                     gitlabRunner === 'none'
                       ? 'No CI runner is available to this class on your Gitlab, so the tests will not run.'
                       : gitlabRunner === 'offline'
@@ -700,7 +700,7 @@ const FormModule = ({
                 value={linkedPageIds}
                 onChange={setLinkedPageIds}
                 style={{ width: '100%' }}
-                optionFilterProp="label"
+                showSearch={{ optionFilterProp: 'label' }}
                 disabled={pages.length === 0}
                 options={pages.map((page: PageRef) => ({
                   value: page.id,
@@ -717,7 +717,7 @@ const FormModule = ({
                 value={linkedSlideIds}
                 onChange={setLinkedSlideIds}
                 style={{ width: '100%' }}
-                optionFilterProp="label"
+                showSearch={{ optionFilterProp: 'label' }}
                 disabled={slides.length === 0}
                 options={slides.map((slide: SlideRef) => ({
                   value: slide.id,
@@ -737,10 +737,10 @@ const FormModule = ({
           width={600}
           centered
           closable={false}
-          maskClosable={false}
+          mask={{ closable: false }}
           styles={{
             mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
-            content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+            container: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
           }}
         >
           <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">

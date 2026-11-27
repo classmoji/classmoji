@@ -7,6 +7,33 @@ import { BRAND, BRAND_LIGHT, BRAND_BG, PRIMARY, PRIMARY_600 } from './theme.ts';
 const FONT_SANS =
   "'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 
+/**
+ * antd 5's shadows. antd 6 deepened boxShadowTertiary (both modes), and its
+ * dark algorithm derives every shadow from a white `colorShadow`, a faint
+ * glow; with `colorShadow: '#000'` (antdDark.ts) the rest come out exactly as
+ * antd 5's. Popover and tooltip shapes are restored in
+ * @classmoji/ui-components/styles/antd.css.
+ */
+export const ANTD_V5_BOX_SHADOW_TERTIARY =
+  '0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02)';
+
+/**
+ * antd 6 draws Tags filled (no border) and without the trailing 8px margin
+ * antd 5 gave them. Neither is a theme token, so this is the root
+ * ConfigProvider's `tag` config: outlined by default (a Tag that asks for
+ * `variant="filled"` stays filled) and antd 5's margin back.
+ */
+export const TAG_CONFIG = {
+  variant: 'outlined',
+  styles: { root: { marginInlineEnd: 8 } },
+} as const;
+
+/**
+ * The root App's message config. antd 6 draws toasts 8px higher than antd 5
+ * (its list sits at `top - 16px` inside 24px of padding); top 16 is antd 5's.
+ */
+export const MESSAGE_CONFIG = { top: 16 } as const;
+
 const theme = {
   token: {
     colorPrimary: PRIMARY,
@@ -24,6 +51,7 @@ const theme = {
     colorLinkHover: '#14151a', // --ink-0
     colorLinkActive: '#14151a',
     fontFamily: FONT_SANS,
+    boxShadowTertiary: ANTD_V5_BOX_SHADOW_TERTIARY,
   },
   components: {
     Button: {
@@ -59,22 +87,38 @@ const theme = {
       itemSelectedColor: PRIMARY,
       itemHoverColor: PRIMARY,
     },
-    Tag: {
-      bordered: false,
-    },
     Progress: {
       defaultColor: BRAND_LIGHT,
       colorSuccess: BRAND,
     },
+    Tag: {
+      // antd 6 derives the default Tag fill from colorFillTertiary (#f6f6f6);
+      // antd 5's was #fafafa.
+      defaultBg: '#fafafa',
+    },
     Select: {
       optionSelectedBg: '#f3f4f6',
       optionActiveBg: '#f9fafb',
+      // antd 6 paints a selected option under the pointer with this token
+      // (antd 5 kept optionSelectedBg there).
+      controlItemBgActiveHover: '#f3f4f6',
       optionSelectedFontWeight: 600,
     },
+    // antd 6 rings a keyboard-focused borderless control and a focused clear
+    // (×) button, which antd 5 did not. Kept on purpose: they are keyboard
+    // focus indicators (no lineWidthFocus pin here).
     Input: {
       hoverBorderColor: '#d1d5db',
       activeBorderColor: '#9ca3af',
       activeShadow: 'none',
+    },
+    // Space.Addon, antd 6's replacement for input addons: antd 5's 11px
+    // padding and 14px text, small size included. Its background is set back
+    // in ui-components/styles/antd.css.
+    Addon: {
+      paddingSM: 11,
+      paddingXS: 11,
+      fontSizeSM: 14,
     },
     FloatButton: {
       colorPrimary: BRAND,

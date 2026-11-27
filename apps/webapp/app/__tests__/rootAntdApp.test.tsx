@@ -40,7 +40,6 @@ vi.mock('@classmoji/database', async () => ({
 vi.mock('@classmoji/auth/server', () => ({ auth: { api: {} }, getAuthSession: vi.fn() }));
 vi.mock('@classmoji/auth/secret', () => ({ COOKIE_DOMAIN: null }));
 vi.mock('@classmoji/services', () => ({ GitHubProvider: {}, ClassmojiService: {} }));
-vi.mock('@ant-design/v5-patch-for-react-19', () => ({}));
 vi.mock('@classmoji/ui-components', () => ({
   CalloutProvider: ({ children }: { children: React.ReactNode }) => children,
   CalloutSlot: () => null,

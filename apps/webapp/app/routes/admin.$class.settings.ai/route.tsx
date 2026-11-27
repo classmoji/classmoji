@@ -360,7 +360,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     <div className="">
       {aiUnavailable && (
         <Alert
-          message="AI features aren't available on this server"
+          title="AI features aren't available on this server"
           type="warning"
           showIcon={true}
           style={{ marginBottom: '16px' }}

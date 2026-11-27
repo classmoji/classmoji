@@ -144,7 +144,7 @@ const GitLabClassroomForm = ({
       {providerSwitch}
 
       {outcome && (
-        <Alert type={outcome.type} showIcon message={outcome.text} style={{ marginBottom: 16 }} />
+        <Alert type={outcome.type} showIcon title={outcome.text} style={{ marginBottom: 16 }} />
       )}
 
       {!gitlab.connection ? (
@@ -183,7 +183,7 @@ const GitLabClassroomForm = ({
             <Alert
               type="error"
               showIcon
-              message="Gitlab refused the connection"
+              title="Gitlab refused the connection"
               description={`${gitlab.error} Reconnect Gitlab to continue.`}
               action={
                 <Button size="small" href={CONNECT_URL}>
@@ -195,7 +195,7 @@ const GitLabClassroomForm = ({
             <Alert
               type="warning"
               showIcon
-              message="No Gitlab groups available"
+              title="No Gitlab groups available"
               description="You need to be an Owner or Maintainer of a Gitlab group. Create one on Gitlab, then reload this page."
             />
           ) : (
@@ -257,7 +257,7 @@ const GitLabClassroomForm = ({
               )}
 
               {data?.error && (
-                <Alert type="error" showIcon message={data.error} style={{ marginBottom: 16 }} />
+                <Alert type="error" showIcon title={data.error} style={{ marginBottom: 16 }} />
               )}
 
               <div className="flex justify-end gap-3">

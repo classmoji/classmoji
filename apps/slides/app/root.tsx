@@ -9,8 +9,10 @@ import {
   useRouteLoaderData,
 } from 'react-router';
 import React, { useEffect } from 'react';
+import { ConfigProvider } from 'antd';
 
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
+import { SLIDES_ANTD_THEME } from '~/config/antdTheme';
 import {
   SENTRY_CONFIG_ELEMENT_ID,
   serializeSentryConfig,
@@ -123,7 +125,10 @@ const App = () => {
             ignores the theme entirely. */}
         <CalloutProvider>
           <CalloutSlot />
-          <Outlet />
+          {/* antd 5's look where antd 6 changed a default (config/antdTheme.ts). */}
+          <ConfigProvider theme={SLIDES_ANTD_THEME}>
+            <Outlet />
+          </ConfigProvider>
         </CalloutProvider>
         <ScrollRestoration nonce={nonce} />
         <Scripts nonce={nonce} />

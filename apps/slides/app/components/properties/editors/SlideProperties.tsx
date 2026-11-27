@@ -746,11 +746,15 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
         onCancel={handleCloseModal}
         okText={editingSnippetId ? 'Update' : 'Create'}
         okButtonProps={{ disabled: !snippetName.trim() || !snippetHtml.trim() }}
+        // Remount on each open so the name field's autoFocus runs every time
+        // (antd 6 would otherwise start focus on the Close button).
+        destroyOnHidden
       >
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">Snippet Name</label>
             <Input
+              autoFocus
               value={snippetName}
               onChange={e => setSnippetName(e.target.value)}
               placeholder="e.g., Header with Logo"
@@ -778,12 +782,15 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
         okText={editingThemeId ? 'Update' : 'Create'}
         okButtonProps={{ disabled: !themeName.trim() || !themeCss.trim() }}
         width={600}
+        // Remount on each open so the name field's autoFocus runs every time.
+        destroyOnHidden
       >
         <div className="space-y-4">
           <div className="flex gap-4">
             <div className="flex-1">
               <label className="block text-sm font-medium mb-1">Theme Name</label>
               <Input
+                autoFocus
                 value={themeName}
                 onChange={e => setThemeName(e.target.value)}
                 placeholder="e.g., Company Brand"

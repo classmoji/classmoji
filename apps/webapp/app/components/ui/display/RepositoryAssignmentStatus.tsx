@@ -47,7 +47,7 @@ const RepositoryAssignmentStatus = ({
       <div className="flex flex-wrap gap-1">
         {repositoryAssignment?.status === 'CLOSED' && (
           <Tooltip title={submittedTip}>
-            <Tag color="green" bordered={false}>
+            <Tag color="green" variant="filled">
               Submitted
             </Tag>
           </Tooltip>
@@ -55,26 +55,26 @@ const RepositoryAssignmentStatus = ({
 
         {repositoryAssignment?.status === 'OPEN' && (
           <Tooltip title={isPushMode ? `No push to the ${web.terms.repo} yet` : undefined}>
-            <Tag color="red" bordered={false}>
+            <Tag color="red" variant="filled">
               Not submitted
             </Tag>
           </Tooltip>
         )}
 
         {isLate && (
-          <Tag color="orange" bordered={false}>
+          <Tag color="orange" variant="filled">
             Late
           </Tag>
         )}
 
         {hasLateHours && isLateOverride && (
-          <Tag color="green" bordered={false}>
+          <Tag color="green" variant="filled">
             Late Excused
           </Tag>
         )}
 
         {isDropped && (
-          <Tag color="blue" bordered={false}>
+          <Tag color="blue" variant="filled">
             Dropped
           </Tag>
         )}

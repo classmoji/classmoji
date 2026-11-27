@@ -199,7 +199,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} width="50%">
+    <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} size="50%">
       {canRenameTeam && (
         <>
           <p className="pb-2 font-semibold text-base">Rename team</p>
@@ -311,19 +311,21 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
               placeholder="Search by student name"
               value={membersToAdd}
               onChange={setMembersToAdd}
-              filterOption={(input, option) => {
-                const allMembers = membersToAdd.concat(teamMembers.map(m => m.login ?? ''));
-                return (
-                  (option!.label as string).toLowerCase().includes(input.toLowerCase()) &&
-                  allMembers.includes(option!.value as string) == false
-                );
+              showSearch={{
+                filterOption: (input, option) => {
+                  const allMembers = membersToAdd.concat(teamMembers.map(m => m.login ?? ''));
+                  return (
+                    (option!.label as string).toLowerCase().includes(input.toLowerCase()) &&
+                    allMembers.includes(option!.value as string) == false
+                  );
+                },
+                filterSort: (a, b) => (a.label as string).localeCompare(b.label as string),
               }}
               options={Object.values(students)
                 .map(student => {
                   return { label: student!.name ?? '', value: student!.login ?? '' };
                 })
                 .filter(option => !teamMembers.map(m => m.login).includes(option.value))}
-              filterSort={(a, b) => (a.label as string).localeCompare(b.label as string)}
             />
           </div>
           <Button className="w-[10%]" onClick={onAddStudents}>

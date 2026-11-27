@@ -999,6 +999,9 @@ export default function SlidesIndex() {
         }}
         okText="Rename"
         confirmLoading={isSubmitting}
+        // Remount on each open so the field's autoFocus runs every time (antd 6
+        // would otherwise start focus on the Close button).
+        destroyOnHidden
       >
         <div className="py-4">
           <Input

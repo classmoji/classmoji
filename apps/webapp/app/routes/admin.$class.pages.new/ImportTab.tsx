@@ -276,7 +276,7 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
       {/* Missing images warning */}
       {missingImages.length > 0 && markdownFile && (
         <Alert
-          message="Missing Images"
+          title="Missing Images"
           description={
             <div>
               <p className="mb-1">The following images are referenced but not found:</p>

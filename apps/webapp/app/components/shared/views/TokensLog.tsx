@@ -78,7 +78,7 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
         const type = record.type as string;
         return (
           <div className="flex items-center gap-2">
-            <Tag color={colors[type]} bordered={false}>
+            <Tag color={colors[type]} variant="filled">
               {type.charAt(0).toUpperCase() + type.slice(1).toLowerCase()}
             </Tag>
             {record.is_cancelled && <span className="text-red-500 text-xs">Cancelled</span>}

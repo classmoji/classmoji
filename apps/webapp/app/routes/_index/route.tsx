@@ -97,7 +97,7 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   const setupBanner = setupComplete && (
     <Alert
       type="success"
-      message="Github App configured successfully."
+      title="Github App configured successfully."
       description="Stop the server (Ctrl+C) and restart it, then sign in."
     />
   );
