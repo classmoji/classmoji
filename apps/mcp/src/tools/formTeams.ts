@@ -2159,14 +2159,15 @@ export const formTeamsRunTool: ToolDefinition<FormTeamsRunArgs> = {
     );
 
     if (!run) {
-      // After the save: recorded like the save, a failed write flagged.
+      // After a saved patch: recorded like the save, a failed write flagged.
+      // With nothing saved in this call it is a plain read, recorded first.
       await auditIssuesRead(
         ctx,
         form,
         saved.id,
         issues,
         `checks:${patchFingerprint(patch)}`,
-        writeAudit
+        patched.length > 0 ? writeAudit : writeAuditOrFail
       );
       return ok({
         team_set: setRef(saved),
