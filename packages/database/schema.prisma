@@ -1779,9 +1779,6 @@ model AuditLog {
   @@index([classroom_id])
   @@index([user_id])
   @@index([timestamp])
-  /// The admin app's newest-first lists of one classroom's and one person's rows.
-  @@index([classroom_id, timestamp])
-  @@index([user_id, timestamp])
   @@map("audit_logs")
 }
 
