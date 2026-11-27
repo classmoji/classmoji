@@ -42,7 +42,6 @@ export async function startContributionsCalculation(args: {
     resourceType: 'REPOSITORIES',
     resourceId: args.repositoryId,
     metadata: { tool: 'web:repos.contributions.calculate', repos: numRepos },
-    dedupe: false,
   });
 
   if (numRepos === 0) {

@@ -156,8 +156,7 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
 
     // Audit right after the service call: the row is already committed, so
     // nothing downstream may leave the mutation un-audited (plan §5.1).
-    // resource_id is the LINK id — it is also what keeps back-to-back links
-    // from collapsing into one audit row inside the dedup window.
+    // resource_id is the LINK id.
     await writeAudit(ctx, {
       resource_type: AUDIT_RESOURCE_TYPE,
       resource_id: link.id,

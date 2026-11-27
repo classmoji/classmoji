@@ -815,8 +815,7 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
         tool: 'module_reorder',
         kind,
         ordered_ids: ordered,
-        // The dedup key: a different order inside audit's 5s window is a
-        // different row; the same order re-sent still dedups.
+        // `value`: the order written.
         value: `${kind}:${ordered.join(',')}`,
       },
     });

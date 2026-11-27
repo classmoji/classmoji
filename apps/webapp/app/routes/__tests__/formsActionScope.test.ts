@@ -18,8 +18,7 @@
  *
  * 3. The two successful paths each record one audit row, shaped like the MCP
  *    form tools' rows: resource_type 'FORMS', the form id, and a `tool` naming
- *    the surface — `tool` is load-bearing, because the audit service dedups
- *    inside a 5-second window on everything else.
+ *    the surface.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';

@@ -17,7 +17,7 @@
  * unusable one `findOrCreate` closed without a create: UPDATE with
  * `reason: 'unusable'`), and a
  * rating set, changed or cleared (CREATE / UPDATE / DELETE `ASK_MOJI_FEEDBACK`,
- * `resource_id` = the feedback row, `dedupe: false`, `data.value` = the
+ * `resource_id` = the feedback row, `data.value` = the
  * rating or null). Reading one's own conversation is not audited. A failed
  * audit write is logged and the action stands.
  *
@@ -167,21 +167,18 @@ const writeAudit = async (
   }
 ) => {
   try {
-    await audit.create(
-      {
-        user_id: a.userId,
-        classroom_id: a.classroom.id,
-        role: a.highestRole,
-        resource_type: row.resourceType,
-        resource_id: row.resourceId,
-        action: row.action,
-        data: {
-          ...row.data,
-          ...(a.impersonation ? { impersonated_by: a.impersonation.by } : {}),
-        } as never,
-      },
-      { dedupe: false }
-    );
+    await audit.create({
+      user_id: a.userId,
+      classroom_id: a.classroom.id,
+      role: a.highestRole,
+      resource_type: row.resourceType,
+      resource_id: row.resourceId,
+      action: row.action,
+      data: {
+        ...row.data,
+        ...(a.impersonation ? { impersonated_by: a.impersonation.by } : {}),
+      } as never,
+    });
   } catch (error) {
     console.error('[askMojiSession] audit write failed', error);
   }

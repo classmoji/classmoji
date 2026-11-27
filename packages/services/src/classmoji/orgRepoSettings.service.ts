@@ -203,8 +203,7 @@ export interface OrgRepoSettingsResult {
   /**
    * Scalar digest of the new values, e.g.
    * "default_repository_permission=read;members_can_create_repositories=false".
-   * Audit rows carry it as `data.value`, which joins the audit service's 5s
-   * dedup key, so two different edits in quick succession both get recorded.
+   * Audit rows carry it as `data.value`.
    */
   value: string;
 }

@@ -271,6 +271,7 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
         resource_type: true,
         timestamp: true,
         data: true,
+        count: true,
         user: { select: { id: true, name: true } },
       },
     }),
@@ -296,6 +297,8 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
         r.data && typeof r.data === 'object' && 'tool' in r.data
           ? String((r.data as { tool?: unknown }).tool)
           : null,
+      // A repeated read (or refusal) counted on one row, within seconds.
+      count: r.count,
     })),
     ...adminRows.map(r => ({
       at: r.created_at.toISOString(),
@@ -303,6 +306,7 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
       actor: r.actor,
       text: describeAdminAction(r.action, r.data),
       tool: null,
+      count: 1,
     })),
   ].sort((a, b) => b.at.localeCompare(a.at));
   return { ...base, activity };

@@ -713,7 +713,7 @@ async function applyLive(
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
       new_sha: liveSha(epoch, version),
-      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      // Distinct per write: the version this apply produced.
       value: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
@@ -998,7 +998,7 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
       ops: applied,
       expected_sha: args.expected_sha,
       new_sha: saved.sha,
-      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      // Distinct per write: the version this apply produced.
       value: saved.commit ?? saved.sha,
       commit_sha: saved.commit,
       committed_to: committedTo,
@@ -1813,7 +1813,7 @@ async function setCoverLive(
       ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
       ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
       new_sha: liveSha(epoch, version),
-      // Distinct per write: two cover sets inside the audit's 5 s window both stay.
+      // Distinct per write: the version this cover set produced.
       value: liveSha(epoch, version),
       committed_to: 'live',
     } as Prisma.InputJsonValue,
@@ -1953,7 +1953,7 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
           : { removed: true }),
         ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
         new_sha: saved.sha,
-        // Distinct per write: two cover sets inside the audit's 5 s window both stay.
+        // Distinct per write: the version this cover set produced.
         value: saved.commit ?? saved.sha,
         commit_sha: saved.commit,
       } as Prisma.InputJsonValue,

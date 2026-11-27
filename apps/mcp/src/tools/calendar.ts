@@ -740,10 +740,6 @@ export const calendarEventLinksSetTool: ToolDefinition<CalendarEventLinksSetArgs
         linked: saved.linked,
         featured: featured ? { kind: featured.kind, id: featured.id } : null,
       },
-      // The dedup window keys on the event and the tool, not the date or the
-      // lists, and filling in a term's lectures is many calls on one event a
-      // second or two apart: deduped, only the first date would be on record.
-      dedupe: false,
     });
 
     const listed = (kind: FeaturedLinkKind) =>

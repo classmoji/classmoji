@@ -845,7 +845,6 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
     // Never coalesced: check → uncheck → check is three events.
     if (changed) {
       await auditQuietly(ctx, actingRole, {
-        dedupe: false,
         resource_type: 'PAGES',
         resource_id: page.id,
         action: args.checked ? 'CREATE' : 'DELETE',

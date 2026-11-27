@@ -1752,15 +1752,24 @@ model TokenTransaction {
   @@map("token_transactions")
 }
 
+/// Written only by `ClassmojiService.audit.create`. Every mutation is its own
+/// row; a read-class row (VIEW, ACCESS_DENIED, COLLAB_JOIN, COLLAB_LEAVE)
+/// repeated within 5 s of its first occurrence, with nothing else in between
+/// for that user and resource, bumps `count` instead (and so `updated_at`).
+/// `role` is null only on ACCESS_DENIED (CHECK audit_logs_role_required_check,
+/// in the migration: Prisma does not model CHECK constraints).
 model AuditLog {
   id            String         @id @default(uuid())
   classroom_id  String
   user_id       String
-  role          Role
+  role          Role?
   action        AuditLogAction
   resource_type String
   resource_id   String?
   data          Json?
+  /// How many identical reads this row stands for (always 1 for a mutation).
+  count         Int            @default(1)
+  /// The first occurrence; `updated_at` is the last one merged into it.
   timestamp     DateTime       @default(now())
   updated_at    DateTime       @default(now()) @updatedAt
 

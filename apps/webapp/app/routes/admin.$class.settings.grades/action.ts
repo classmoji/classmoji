@@ -89,7 +89,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       resourceType: 'SETTINGS',
       ...(resourceId ? { resourceId } : {}),
       metadata: { ...metadata, ...(await impersonationAuditFields(request)) },
-      dedupe: false,
     });
 
   return namedAction(request, {
@@ -235,7 +234,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           regrade_previous_grades: result.regradePreviousGrades,
           ...(await impersonationAuditFields(request)),
         },
-        dedupe: false,
       });
       return {
         action: 'REMAP_ORPHANED_EMOJIS',

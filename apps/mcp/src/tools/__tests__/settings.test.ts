@@ -329,8 +329,7 @@ describe('classroom_settings_update', () => {
           resource_type: 'SETTINGS',
           action: 'UPDATE',
           data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
-        }),
-        { dedupe: false }
+        })
       );
     }
   });
@@ -343,9 +342,6 @@ describe('classroom_settings_update', () => {
       );
     }
     expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
-    for (const call of mocks.auditCreate.mock.calls) {
-      expect(call[1]).toEqual({ dedupe: false });
-    }
   });
 
   it('is an owner-only, non-destructive write, as the web Settings page is', () => {

@@ -119,7 +119,7 @@ export const action = async ({
       kind,
       count: exportable.length,
       selection: allowed ? allowed.size : null,
-      // Joins the dedup key: two different exports inside the window are two rows.
+      // What the export covered: two different exports are two rows.
       value: exportAuditValue(kind, allowed),
       ...identityAudit(context, false),
     },

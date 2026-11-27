@@ -1052,8 +1052,6 @@ describe('repo_sync', () => {
       action: 'UPDATE',
       data: { tool: 'repo_sync', repos_to_create: 2, assignments_to_add: 3 },
     });
-    // Two syncs a few seconds apart are two rows.
-    expect(mocks.auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it('says so when nothing was missing (still audited)', async () => {
@@ -1125,7 +1123,6 @@ describe('repo_sync', () => {
       action: 'UPDATE',
       data: { tool: 'repo_sync', partial: true, repos_to_create: 4, assignments_to_add: 0 },
     });
-    expect(mocks.auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it("maps the helper's scope refusal to not found", async () => {

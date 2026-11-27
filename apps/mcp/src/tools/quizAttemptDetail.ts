@@ -842,8 +842,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         : null;
 
     // Reading one's own attempt (a preview) is not logged, as on the web. A
-    // transcript read is always its own row: the audit service's 5-second
-    // window would otherwise fold it into a plain read just before it.
+    // transcript read is told apart from a plain read by include_transcript.
     if (!ownsAttempt)
       await writeAudit(ctx, {
         resource_type: 'QUIZ_ATTEMPT',
@@ -855,7 +854,6 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
           student_id: userId,
           include_transcript: includeTranscript,
         },
-        ...(includeTranscript ? { dedupe: false } : {}),
       });
 
     return ok({

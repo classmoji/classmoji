@@ -1,27 +1,29 @@
 /**
- * audit.service dedup semantics: the 5s window must key on the acting TOOL
- * (data.tool) and on the role the payload ACTS ON (data.role) when present, so
- * distinct tools — and distinct roles granted or removed for the same person —
- * hitting the same resource in quick succession are never coalesced into one
- * row, while payloads carrying neither keep the original dedup key.
+ * audit.service input handling, with the database mocked: which input is
+ * refused (a throw outside production, one `audit_miss` line in production),
+ * which is skipped quietly, and that a change never looks for a row to merge
+ * into. What is written and merged against a real database is in
+ * audit.service.integration.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const findFirstMock = vi.fn();
+const findManyMock = vi.fn();
 const createMock = vi.fn();
+const updateMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     auditLog: {
-      findFirst: (...args: unknown[]) => findFirstMock(...args),
+      findMany: (...args: unknown[]) => findManyMock(...args),
       create: (...args: unknown[]) => createMock(...args),
+      update: (...args: unknown[]) => updateMock(...args),
     },
   }),
 }));
 
 vi.mock('@classmoji/database/client', () => ({
-  Prisma: { JsonNull: Symbol('JsonNull') },
+  Prisma: { JsonNull: Symbol('JsonNull'), PrismaClientKnownRequestError: class extends Error {} },
 }));
 
 const audit = await import('../audit.service.ts');
@@ -29,454 +31,125 @@ const audit = await import('../audit.service.ts');
 const baseEntry = {
   user_id: 'user-1',
   classroom_id: 'class-1',
-  role: 'TEACHER',
+  role: 'TEACHER' as string | null,
   resource_type: 'SLIDES',
   resource_id: 'slide-1',
   action: 'UPDATE' as const,
 };
 
-type WhereArg = { where: Record<string, unknown> };
-
 beforeEach(() => {
   vi.clearAllMocks();
-  findFirstMock.mockResolvedValue(null);
+  findManyMock.mockResolvedValue([]);
   createMock.mockImplementation(({ data }: { data: unknown }) => Promise.resolve(data));
 });
 
-describe('audit.create dedup key', () => {
-  it('includes data.tool in the dedup lookup when the payload names a tool', async () => {
-    await audit.create({ ...baseEntry, data: { tool: 'deck_apply', new_sha: 'abc' } });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
-    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
-    expect(where).toMatchObject({
-      user_id: 'user-1',
-      classroom_id: 'class-1',
-      resource_type: 'SLIDES',
-      resource_id: 'slide-1',
-      action: 'UPDATE',
-      data: { path: ['tool'], equals: 'deck_apply' },
-    });
-    expect(createMock).toHaveBeenCalledTimes(1);
-  });
+const invalid = [
+  ['no classroom', { ...baseEntry, classroom_id: '' }, 'missing classroom_id'],
+  ['no user', { ...baseEntry, user_id: '' }, 'missing user_id'],
+  ['an unknown role', { ...baseEntry, role: 'ADMIN' }, 'invalid role "ADMIN"'],
+  ['no role on a change', { ...baseEntry, role: null }, 'missing role on UPDATE'],
+  ['an undefined role', { ...baseEntry, role: undefined as unknown as string }, 'missing role'],
+  ['an empty role', { ...baseEntry, role: '' }, 'missing role'],
+  [
+    'an unknown action',
+    { ...baseEntry, action: 'EXPORT' as unknown as 'UPDATE' },
+    'invalid action "EXPORT"',
+  ],
+] as const;
 
-  it('two DIFFERENT tools within the window query different keys (never coalesced)', async () => {
-    await audit.create({ ...baseEntry, data: { tool: 'deck_apply' } });
-    await audit.create({ ...baseEntry, data: { tool: 'deck_preview_accept' } });
-
-    const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.data;
-    const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.data;
-    expect(first).toEqual({ path: ['tool'], equals: 'deck_apply' });
-    expect(second).toEqual({ path: ['tool'], equals: 'deck_preview_accept' });
-    expect(createMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('the SAME tool within the window still dedups (recent row found → skip)', async () => {
-    findFirstMock.mockResolvedValue({ id: 'existing-row' });
-
-    const result = await audit.create({ ...baseEntry, data: { tool: 'deck_apply' } });
-
-    expect(result).toBeNull();
+describe('audit.create refuses invalid input', () => {
+  it.each(invalid)('throws outside production for %s', async (_label, entry, reason) => {
+    vi.stubEnv('NODE_ENV', 'development');
+    await expect(audit.create(entry)).rejects.toThrow(reason);
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it('omits the data filter entirely when the payload has no tool (unchanged behavior)', async () => {
-    await audit.create({ ...baseEntry, data: { note: 'no tool key' } });
-    await audit.create(baseEntry); // no data at all
-
-    for (const call of findFirstMock.mock.calls) {
-      expect((call[0] as WhereArg).where).not.toHaveProperty('data');
-      expect((call[0] as WhereArg).where).not.toHaveProperty('AND');
+  it.each(invalid)(
+    'in production, logs one audit_miss line for %s and returns null',
+    async (_label, entry, reason) => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await audit.create(entry)).toBeNull();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith('audit_miss', JSON.stringify({ reason, row: entry }));
+      expect(createMock).not.toHaveBeenCalled();
     }
-  });
+  );
 
-  it('a non-string tool value does not join the key', async () => {
-    await audit.create({ ...baseEntry, data: { tool: 42 } });
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('data');
-  });
-
-  it('includes data.role in the dedup lookup when the payload names a role', async () => {
-    await audit.create({
-      ...baseEntry,
-      resource_type: 'STAFF',
-      action: 'CREATE',
-      data: { tool: 'staff_add', role: 'TEACHER' },
-    });
-
-    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
-    // The role the payload acts on rides under AND: a second `data` filter
-    // cannot share the object with the tool filter.
-    expect(where).toMatchObject({
-      data: { path: ['tool'], equals: 'staff_add' },
-      AND: [{ data: { path: ['role'], equals: 'TEACHER' } }],
-    });
-    expect(createMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('two DIFFERENT granted roles within the window are never coalesced', async () => {
-    // Same person, same tool, same resource — only the granted role differs, so
-    // these are two distinct records and both must be written.
-    const entry = { ...baseEntry, resource_type: 'STAFF', action: 'CREATE' as const };
-    await audit.create({ ...entry, data: { tool: 'staff_add', role: 'TEACHER' } });
-    await audit.create({ ...entry, data: { tool: 'staff_add', role: 'OWNER' } });
-
-    const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
-    const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
-    expect(first).toEqual([{ data: { path: ['role'], equals: 'TEACHER' } }]);
-    expect(second).toEqual([{ data: { path: ['role'], equals: 'OWNER' } }]);
-    expect(createMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('the SAME role within the window still dedups (recent row found → skip)', async () => {
-    findFirstMock.mockResolvedValue({ id: 'existing-row' });
-
-    const result = await audit.create({
-      ...baseEntry,
-      data: { tool: 'staff_add', role: 'TEACHER' },
-    });
-
-    expect(result).toBeNull();
+  it('skips the role NONE quietly, in every environment', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const env of ['development', 'production']) {
+      vi.stubEnv('NODE_ENV', env);
+      expect(
+        await audit.create({ ...baseEntry, role: 'NONE', action: 'ACCESS_DENIED' })
+      ).toBeNull();
+    }
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it('a non-string role value does not join the key', async () => {
-    await audit.create({ ...baseEntry, data: { tool: 'staff_add', role: 42 } });
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
-  });
-
-  it('a role without a tool joins the key on its own', async () => {
-    await audit.create({ ...baseEntry, data: { role: 'OWNER' } });
-
-    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
-    expect(where).not.toHaveProperty('data');
-    expect(where.AND).toEqual([{ data: { path: ['role'], equals: 'OWNER' } }]);
-  });
-
-  /**
-   * The tool alone is not enough to tell repeated edits of the SAME field
-   * apart. Route-originated writes name the field and the value they wrote, and
-   * the value is what distinguishes them — without it, a page flipped
-   * public → draft → public inside the window records only the first row, and
-   * the log then asserts a state the page is no longer in.
-   */
-  describe('the written value joins the key, so same-tool repeats stay distinct', () => {
-    const pageStatus = (value: string) => ({
-      ...baseEntry,
-      resource_type: 'PAGES',
-      data: { tool: 'web:pages.status', field: 'status', value },
-    });
-
-    it('records every step of a public → draft → public sequence', async () => {
-      await audit.create(pageStatus('public'));
-      await audit.create(pageStatus('draft'));
-      await audit.create(pageStatus('public'));
-
-      const values = findFirstMock.mock.calls.map(
-        call => ((call[0] as WhereArg).where.AND as Array<{ data: { equals: unknown } }>)[0].data
-      );
-      expect(values).toEqual([
-        { path: ['value'], equals: 'public' },
-        { path: ['value'], equals: 'draft' },
-        { path: ['value'], equals: 'public' },
-      ]);
-      expect(createMock).toHaveBeenCalledTimes(3);
-    });
-
-    it('still dedups a genuine double-submit of the same value', async () => {
-      // The case the window exists for: one intent, two deliveries.
-      findFirstMock.mockResolvedValue({ id: 'existing-row' });
-
-      expect(await audit.create(pageStatus('draft'))).toBeNull();
-      expect(createMock).not.toHaveBeenCalled();
-    });
-
-    it('keys on a boolean value too, so a toggle flipped back is not lost', async () => {
-      const toggle = (value: boolean) => ({
-        ...baseEntry,
-        resource_type: 'PAGES',
-        data: { tool: 'web:pages.show_in_student_menu', value },
-      });
-
-      await audit.create(toggle(false));
-      await audit.create(toggle(true));
-
-      const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
-      const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
-      expect(first).toEqual([{ data: { path: ['value'], equals: false } }]);
-      expect(second).toEqual([{ data: { path: ['value'], equals: true } }]);
-      expect(createMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('carries both the acted-on role and the value when a payload has both', async () => {
-      await audit.create({
-        ...baseEntry,
-        data: { tool: 'staff_add', role: 'TEACHER', value: 'x' },
-      });
-
-      expect((findFirstMock.mock.calls[0][0] as WhereArg).where.AND).toEqual([
-        { data: { path: ['role'], equals: 'TEACHER' } },
-        { data: { path: ['value'], equals: 'x' } },
-      ]);
-    });
-
-    it('leaves payloads with no value on the original key', async () => {
-      // Calendar and quiz-weight rows carry no `value`; their behaviour is
-      // unchanged.
-      await audit.create({ ...baseEntry, data: { tool: 'web:calendar.update_event' } });
-
-      const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
-      expect(where).not.toHaveProperty('AND');
-      expect(where.data).toEqual({ path: ['tool'], equals: 'web:calendar.update_event' });
-    });
-
-    it('a non-scalar value does not join the key', async () => {
-      await audit.create({ ...baseEntry, data: { tool: 't', value: { nested: true } } });
-      expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
-    });
-  });
-
-  /**
-   * A responses view with identity answers hidden, followed inside the window
-   * by the same view with them shown, is a reveal. It has to be its own row.
-   */
-  describe('whether identity answers were disclosed joins the key', () => {
-    const responsesView = (identity_answers: boolean) => ({
-      ...baseEntry,
-      resource_type: 'FORMS',
-      data: {
-        tool: 'forms.responses.view',
-        identity_answers,
-        ...(identity_answers ? { identity_field_ids: ['f-1'] } : {}),
-      },
-    });
-
-    it('records a reveal that follows a hidden view', async () => {
-      await audit.create(responsesView(false));
-      await audit.create(responsesView(true));
-
-      const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
-      const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
-      expect(first).toEqual([{ data: { path: ['identity_answers'], equals: false } }]);
-      expect(second).toEqual([{ data: { path: ['identity_answers'], equals: true } }]);
-      expect(createMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('still dedups the same state twice', async () => {
-      findFirstMock.mockResolvedValue({ id: 'existing-row' });
-
-      expect(await audit.create(responsesView(true))).toBeNull();
-      expect(createMock).not.toHaveBeenCalled();
-    });
-
-    it('a non-boolean identity_answers does not join the key', async () => {
-      await audit.create({ ...baseEntry, data: { tool: 't', identity_answers: 'yes' } });
-      expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  it('accepts a null role on ACCESS_DENIED', async () => {
+    await audit.create({ ...baseEntry, role: null, action: 'ACCESS_DENIED' });
+    expect(createMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({ role: null, action: 'ACCESS_DENIED' }),
     });
   });
 });
 
-describe('audit.create dedup: the targeted page block joins the key', () => {
-  const sectionRow = (block_id: string | number) => ({
-    ...baseEntry,
-    resource_type: 'PAGES',
-    resource_id: 'page-1',
-    action: 'CREATE' as const,
-    data: { tool: 'page_section_check', block_id, checked: true },
-  });
-
-  it('keys on data.block_id, so two blocks of one page get two rows', async () => {
-    await audit.create(sectionRow('block-a'));
-    await audit.create(sectionRow('block-b'));
-
-    const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
-    const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
-    expect(first).toEqual([{ data: { path: ['block_id'], equals: 'block-a' } }]);
-    expect(second).toEqual([{ data: { path: ['block_id'], equals: 'block-b' } }]);
-    expect(createMock).toHaveBeenCalledTimes(2);
-    expect(createMock.mock.calls.map(c => (c[0] as { data: { data: unknown } }).data.data)).toEqual(
-      [
-        { tool: 'page_section_check', block_id: 'block-a', checked: true },
-        { tool: 'page_section_check', block_id: 'block-b', checked: true },
-      ]
+describe('logAuditMiss', () => {
+  it('writes exactly one structured line', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    audit.logAuditMiss('missing user_id', { a: 1 });
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      'audit_miss',
+      '{"reason":"missing user_id","row":{"a":1}}'
     );
   });
 
-  it('two rows differing only in block_id both get created when the lookup is keyed on it', async () => {
-    // Emulate the database: a recent row exists for block-a only.
-    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
-      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
-      const blockFilter = filters.find(f => f.data.path[0] === 'block_id');
-      return blockFilter?.data.equals === 'block-a' ? { id: 'recent-a' } : null;
-    });
-
-    expect(await audit.create(sectionRow('block-a'))).toBeNull(); // same block: deduped
-    expect(await audit.create(sectionRow('block-b'))).not.toBeNull(); // other block: written
-    expect(createMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('still dedups a repeat on the same block', async () => {
-    findFirstMock.mockResolvedValue({ id: 'existing-row' });
-    expect(await audit.create(sectionRow('block-a'))).toBeNull();
-    expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it('a non-string block_id does not join the key', async () => {
-    await audit.create(sectionRow(42));
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  it('still writes its line for a row that cannot be serialized', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    audit.logAuditMiss('x', { big: 1n });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(error.mock.calls[0][1] as string).reason).toBe('x');
   });
 });
 
-describe('audit.create dedup key: client_id', () => {
-  const readRow = (clientId: string | number) => ({
-    ...baseEntry,
-    resource_type: 'ROSTER',
-    resource_id: 'class-1',
-    action: 'VIEW' as const,
-    data: { tool: 'get_roster', client_id: clientId },
-  });
-
-  it('includes data.client_id in the dedup lookup when the payload names a client', async () => {
-    await audit.create(readRow('ask-moji'));
-    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
-    expect(where).toMatchObject({
-      data: { path: ['tool'], equals: 'get_roster' },
-      AND: [{ data: { path: ['client_id'], equals: 'ask-moji' } }],
-    });
-  });
-
-  it('the same read through two clients within the window is two rows', async () => {
-    // Emulate the database: a recent row exists for the assistant client only.
-    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
-      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
-      const client = filters.find(f => f.data.path[0] === 'client_id');
-      return client?.data.equals === 'ask-moji' ? { id: 'recent' } : null;
-    });
-    expect(await audit.create(readRow('ask-moji'))).toBeNull(); // same client: deduped
-    expect(await audit.create(readRow('personal-client'))).not.toBeNull(); // other client
-    expect(createMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('a non-string client_id does not join the key', async () => {
-    await audit.create(readRow(7));
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
-  });
-});
-
-describe('audit.create dedup: impersonated_by', () => {
-  const row = (impersonatedBy?: string) => ({
-    ...baseEntry,
-    resource_type: 'ROSTER',
-    resource_id: 'class-1',
-    action: 'VIEW' as const,
-    data: { tool: 'get_roster', ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}) },
-  });
-
-  it('a direct read never folds into a recent impersonated one', async () => {
-    findFirstMock.mockResolvedValue({
-      id: 'recent',
-      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
-    });
-    expect(await audit.create(row())).not.toBeNull();
-  });
-
-  it('an impersonated read never folds into a recent direct one', async () => {
-    findFirstMock.mockResolvedValue({ id: 'recent', data: { tool: 'get_roster' } });
-    expect(await audit.create(row('admin-1'))).not.toBeNull();
-  });
-
-  it('the same impersonator within the window still dedups', async () => {
-    findFirstMock.mockResolvedValue({
-      id: 'recent',
-      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
-    });
-    expect(await audit.create(row('admin-1'))).toBeNull();
-  });
-});
-
-describe.each([
-  ['rating', 'DOWN', 'UP'],
-  ['filter_key', 'feedback:f1', 'feedback:f2'],
-] as const)('audit.create dedup key: %s', (key, one, other) => {
-  const readRow = (value: string | number) => ({
-    ...baseEntry,
-    resource_type: 'ASK_MOJI_FEEDBACK',
-    resource_id: 'class-1',
-    action: 'VIEW' as const,
-    data: { tool: 'web:ask_moji.feedback_review', [key]: value } as Record<string, string | number>,
-  });
-
-  it(`includes data.${key} in the dedup lookup when it is a string`, async () => {
-    await audit.create(readRow(one));
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).toMatchObject({
-      data: { path: ['tool'], equals: 'web:ask_moji.feedback_review' },
-      AND: [{ data: { path: [key], equals: one } }],
-    });
-  });
-
-  it('two rows differing only in it are two records; the same value twice dedups', async () => {
-    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
-      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
-      const match = filters.find(f => f.data.path[0] === key);
-      return match?.data.equals === one ? { id: 'recent' } : null;
-    });
-    expect(await audit.create(readRow(one))).toBeNull();
-    expect(await audit.create(readRow(other))).not.toBeNull();
-    expect(createMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('a non-string value does not join the key', async () => {
-    await audit.create(readRow(3));
-    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
-  });
-});
-
-describe('audit.service live-editing actions', () => {
-  it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
-    'records %s (not skipped as an unknown action)',
+describe('audit.create: changes are never merged', () => {
+  it.each(['CREATE', 'UPDATE', 'DELETE', 'COLLAB_CHECKPOINT'] as const)(
+    '%s inserts without looking for an earlier row',
     async action => {
-      findFirstMock.mockResolvedValue(null);
-      createMock.mockResolvedValue({ id: 'a' });
-      await audit.create({ ...baseEntry, resource_type: 'page', action });
-      expect(createMock).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ action }) })
-      );
+      await audit.create({ ...baseEntry, action });
+      await audit.create({ ...baseEntry, action });
+      expect(findManyMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+      expect(createMock).toHaveBeenCalledTimes(2);
     }
   );
-});
 
-describe('audit.create with dedupe: false', () => {
-  const toggle = (checked: boolean) => ({
-    ...baseEntry,
-    resource_type: 'PAGES',
-    resource_id: 'page-1',
-    action: checked ? ('CREATE' as const) : ('DELETE' as const),
-    data: { tool: 'page_section_check', via: 'web', page_id: 'page-1', block_id: 'h', checked },
-  });
-
-  it('never looks for a recent row and always writes', async () => {
-    // A recent identical row exists: with the window on this would be skipped.
-    findFirstMock.mockResolvedValue({ id: 'existing-row' });
-
-    for (const checked of [true, false, true]) {
-      expect(await audit.create(toggle(checked), { dedupe: false })).not.toBeNull();
+  it.each(['VIEW', 'ACCESS_DENIED', 'COLLAB_JOIN', 'COLLAB_LEAVE'] as const)(
+    '%s looks only at the newest rows of its own user, classroom and resource',
+    async action => {
+      await audit.create({ ...baseEntry, action, resource_id: null });
+      const query = findManyMock.mock.calls[0][0] as {
+        where: Record<string, unknown>;
+        take: number;
+      };
+      expect(query.where).toMatchObject({
+        user_id: 'user-1',
+        classroom_id: 'class-1',
+        resource_type: 'SLIDES',
+        resource_id: null,
+      });
+      expect(query.where).not.toHaveProperty('action');
+      expect(query.where).not.toHaveProperty('role');
+      expect(query.take).toBe(2);
     }
-    expect(findFirstMock).not.toHaveBeenCalled();
-    expect(createMock).toHaveBeenCalledTimes(3);
-    expect(
-      createMock.mock.calls.map(c => (c[0] as { data: { action: string } }).data.action)
-    ).toEqual(['CREATE', 'DELETE', 'CREATE']);
-  });
-
-  it('still skips rows without a valid role, action or ids', async () => {
-    expect(await audit.create({ ...toggle(true), role: 'NONE' }, { dedupe: false })).toBeNull();
-    expect(await audit.create({ ...toggle(true), user_id: '' }, { dedupe: false })).toBeNull();
-    expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it('keeps the window by default', async () => {
-    findFirstMock.mockResolvedValue({ id: 'existing-row' });
-    expect(await audit.create(toggle(true))).toBeNull();
-    expect(await audit.create(toggle(true), {})).toBeNull();
-    expect(findFirstMock).toHaveBeenCalledTimes(2);
-    expect(createMock).not.toHaveBeenCalled();
-  });
+  );
 });

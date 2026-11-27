@@ -28,7 +28,7 @@
  * only (cleared on revert); `comment_by_id` / `comment_at` record who last
  * wrote the comment to the student (kept on revert).
  *
- * AUDIT through `ClassmojiService.audit` (`dedupe: false`), resource
+ * AUDIT through `ClassmojiService.audit`, resource
  * `QUIZ_ATTEMPT`, action UPDATE, `data.tool` = the caller's surface,
  * `data.event` = `quiz_attempt_adjust` (old/new emoji and %, comment set y/n)
  * or `quiz_attempt_adjust_revert`. Written after the change commits; a failed
@@ -423,31 +423,28 @@ export const auditAdjustment = async (
   extra: Record<string, unknown> = {}
 ) => {
   try {
-    await audit.create(
-      {
-        user_id: actor.actorUserId,
-        classroom_id: change.classroomId,
-        role: change.actorRole,
-        resource_type: 'QUIZ_ATTEMPT',
-        resource_id: change.attemptId,
-        action: 'UPDATE',
-        data: {
-          tool: actor.tool,
-          event: change.event,
-          quiz_id: change.quizId,
-          student_id: change.studentId,
-          old_emoji: change.oldEmoji,
-          new_emoji: change.newEmoji,
-          old_percentage: change.oldPercentage,
-          new_percentage: change.newPercentage,
-          comment_set: change.commentSet,
-          comment_changed: change.commentChanged,
-          ...extra,
-          ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
-        },
+    await audit.create({
+      user_id: actor.actorUserId,
+      classroom_id: change.classroomId,
+      role: change.actorRole,
+      resource_type: 'QUIZ_ATTEMPT',
+      resource_id: change.attemptId,
+      action: 'UPDATE',
+      data: {
+        tool: actor.tool,
+        event: change.event,
+        quiz_id: change.quizId,
+        student_id: change.studentId,
+        old_emoji: change.oldEmoji,
+        new_emoji: change.newEmoji,
+        old_percentage: change.oldPercentage,
+        new_percentage: change.newPercentage,
+        comment_set: change.commentSet,
+        comment_changed: change.commentChanged,
+        ...extra,
+        ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
       },
-      { dedupe: false }
-    );
+    });
   } catch (error) {
     console.error('[quizGradeAdjust] audit write failed', { attemptId: change.attemptId, error });
   }

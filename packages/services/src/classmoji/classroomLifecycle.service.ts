@@ -175,18 +175,15 @@ const auditLifecycle = async (
   to: Lifecycle
 ): Promise<void> => {
   if (from.status === to.status && from.is_archived === to.is_archived) return;
-  await auditService.create(
-    {
-      user_id: actorUserId,
-      classroom_id: classroomId,
-      role: 'OWNER',
-      resource_type: 'CLASSROOM',
-      resource_id: classroomId,
-      action: 'UPDATE',
-      data: { tool, from: { ...from }, to: { ...to } },
-    },
-    { dedupe: false }
-  );
+  await auditService.create({
+    user_id: actorUserId,
+    classroom_id: classroomId,
+    role: 'OWNER',
+    resource_type: 'CLASSROOM',
+    resource_id: classroomId,
+    action: 'UPDATE',
+    data: { tool, from: { ...from }, to: { ...to } },
+  });
 };
 
 const auditRepair = async (repair: PlanOwnerChange | null, actorUserId: string) => {

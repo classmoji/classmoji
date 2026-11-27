@@ -498,47 +498,23 @@ describe('the real roster read', () => {
 
 // ─── Filtered reads ─────────────────────────────────────────────────────────
 
-/**
- * The audit service's 5-second merge, reduced to the fields these rows vary
- * in (packages/services audit.service.ts keys on them, filter_key included).
- */
-function mergedRows() {
-  const kept: Array<Record<string, unknown>> = [];
-  const key = (row: Record<string, unknown>) => {
-    const data = (row.data ?? {}) as Record<string, unknown>;
-    return JSON.stringify([
-      row.user_id,
-      row.classroom_id,
-      row.role,
-      row.resource_type,
-      row.resource_id,
-      row.action,
-      data.tool,
-      data.client_id,
-      data.filter_key,
-    ]);
-  };
-  const seen = new Set<string>();
-  for (const row of rows()) {
-    if (seen.has(key(row))) continue;
-    seen.add(key(row));
-    kept.push(row);
-  }
-  return kept;
-}
-
 describe('filter_key', () => {
-  it('two different filters inside the window are two rows; the same filter twice is one', async () => {
+  it('a read’s filters are in its data, so two different filters are never the same read', async () => {
     await call(viewer('ta-a'), 't_filtered_read', { classroom: 'org/x', grader_id: 'g-1' });
     await call(viewer('ta-a'), 't_filtered_read', { classroom: 'org/x', grader_id: 'g-2' });
     await call(viewer('ta-a'), 't_filtered_read', { classroom: 'org/x' });
     await call(viewer('ta-a'), 't_filtered_read', { classroom: 'org/x', grader_id: 'g-1' });
     expect(rows()).toHaveLength(4);
-    expect(mergedRows().map(r => (r.data as { filter_key: string }).filter_key)).toEqual([
+    expect(rows().map(r => (r.data as { filter_key: string }).filter_key)).toEqual([
       '{"grader_id":"g-1"}',
       '{"grader_id":"g-2"}',
       '{}',
+      '{"grader_id":"g-1"}',
     ]);
+    // The audit service counts a read on an earlier row only when the whole
+    // `data` is equal: the same filter twice is, a different one never is.
+    expect(rows()[3].data).toEqual(rows()[0].data);
+    expect(rows()[1].data).not.toEqual(rows()[0].data);
     // The classroom is the row's resource.
     expect(new Set(rows().map(r => r.resource_id))).toEqual(new Set(['class-x']));
   });

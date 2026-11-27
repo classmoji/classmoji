@@ -75,19 +75,16 @@ const deps: PageSectionsDeps<SectionsPageRow> = {
 
   sectionActivity: args => ClassmojiService.pageSections.sectionActivity(args),
 
-  audit: ({ userId, classroomId, role, pageId, action, data, dedupe }) =>
-    ClassmojiService.audit.create(
-      {
-        user_id: userId,
-        classroom_id: classroomId,
-        role,
-        resource_type: 'PAGES',
-        resource_id: pageId,
-        action,
-        data,
-      },
-      { dedupe: dedupe ?? true }
-    ),
+  audit: ({ userId, classroomId, role, pageId, action, data }) =>
+    ClassmojiService.audit.create({
+      user_id: userId,
+      classroom_id: classroomId,
+      role,
+      resource_type: 'PAGES',
+      resource_id: pageId,
+      action,
+      data,
+    }),
 
   isValidationError: error =>
     error instanceof ClassmojiService.pageSections.PageSectionsValidationError,

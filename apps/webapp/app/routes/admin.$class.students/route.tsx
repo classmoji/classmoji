@@ -323,18 +323,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           reset,
         });
         // The code itself stays out of the row: it is a credential.
-        await ClassmojiService.audit.create(
-          {
-            user_id: userId,
-            classroom_id: classroom.id,
-            role: membership!.role,
-            action: 'UPDATE',
-            resource_type: 'CLASSROOM_JOIN_LINK',
-            resource_id: classroom.id,
-            data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
-          },
-          { dedupe: false }
-        );
+        await ClassmojiService.audit.create({
+          user_id: userId,
+          classroom_id: classroom.id,
+          role: membership!.role,
+          action: 'UPDATE',
+          resource_type: 'CLASSROOM_JOIN_LINK',
+          resource_id: classroom.id,
+          data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
+        });
         return { joinLink };
       } catch (error: unknown) {
         console.error('updateJoinLink failed:', error);
@@ -365,18 +362,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // The invite is gone either way: a failed audit write is logged, not
       // reported as a failed revoke.
       try {
-        await ClassmojiService.audit.create(
-          {
-            user_id: userId,
-            classroom_id: classroom.id,
-            role: membership!.role,
-            action: 'DELETE',
-            resource_type: 'STUDENT_ROSTER',
-            resource_id: String(data.inviteId),
-            data: { tool: 'web:roster.revoke_invite' },
-          },
-          { dedupe: false }
-        );
+        await ClassmojiService.audit.create({
+          user_id: userId,
+          classroom_id: classroom.id,
+          role: membership!.role,
+          action: 'DELETE',
+          resource_type: 'STUDENT_ROSTER',
+          resource_id: String(data.inviteId),
+          data: { tool: 'web:roster.revoke_invite' },
+        });
       } catch (error: unknown) {
         console.error('revokeInvite: audit row not written:', error);
       }

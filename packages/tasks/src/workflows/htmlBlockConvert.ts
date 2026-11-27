@@ -447,18 +447,15 @@ export function liveConvertDeps(): ConvertDeps {
     audit: async (deck, data) => {
       const actor = await auditActor(deck);
       if (!actor) return;
-      await ClassmojiService.audit.create(
-        {
-          classroom_id: deck.classroom_id,
-          user_id: actor.userId,
-          role: actor.role,
-          resource_type: 'SLIDES',
-          resource_id: deck.id,
-          action: 'UPDATE',
-          data: data as never,
-        },
-        { dedupe: false }
-      );
+      await ClassmojiService.audit.create({
+        classroom_id: deck.classroom_id,
+        user_id: actor.userId,
+        role: actor.role,
+        resource_type: 'SLIDES',
+        resource_id: deck.id,
+        action: 'UPDATE',
+        data: data as never,
+      });
     },
     log: (message, detail) => logger.info(message, detail ?? {}),
   };

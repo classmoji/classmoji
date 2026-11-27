@@ -205,20 +205,10 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     );
   });
 
-  it('dedupe: false reaches audit.create as its options argument', async () => {
-    await addClassroomAuditLog({ ...entry, dedupe: false });
-
-    expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ resource_id: 'page-9' }),
-      { dedupe: false }
-    );
-  });
-
-  it('without dedupe (or dedupe: true) the service keeps its default window', async () => {
+  it('passes audit.create the row and nothing else', async () => {
     await addClassroomAuditLog(entry);
-    await addClassroomAuditLog({ ...entry, dedupe: true });
 
-    for (const call of mocks.auditCreate.mock.calls) expect(call).toHaveLength(1);
+    expect(mocks.auditCreate.mock.calls[0]).toHaveLength(1);
   });
 
   it('does not reject when the audit write itself fails', async () => {

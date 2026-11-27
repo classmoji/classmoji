@@ -41,11 +41,9 @@
  *
  * Audit (the web action writes none): ONE row per submission actually changed,
  * resource GIT_REPO_ASSIGNMENT/<id>, with the value under `data.value`. A
- * single row per call would need a resource_id, and list mode has none — so two
- * different lists set to the same value within the audit service's 5-second
- * dedup window would collapse and the second call would go unrecorded.
- * Per-submission rows have distinct resource ids, so they cannot collide with
- * each other and can be written in parallel chunks. The rows are written AFTER
+ * single row per call would need a resource_id, and list mode has none, so it
+ * would not say which submissions changed. Per-submission rows name each one
+ * and can be written in parallel chunks. The rows are written AFTER
  * the committed update, so an audit failure cannot undo it: the call still
  * reports what it changed, flags `audit_incomplete` with the ids whose row
  * failed, and logs the error server-side (never to the client).
@@ -57,7 +55,7 @@
  * QUIZ of this classroom and the student as an accepted STUDENT of it, so a
  * foreign or unknown id is not_found), and the same audit row: resource
  * QUIZ_LATE_WAIVER/<assignment id>, `data.kind: 'quiz'`, the student, the
- * quiz and the value, never deduped, written only when the call changed
+ * quiz and the value, written only when the call changed
  * something. The waiver is per (quiz, student), so:
  *   - `student_id` is required; an assignment_id of a QUIZ without one is
  *     refused, never read as "the whole class" (a class-wide waiver is not a
@@ -210,7 +208,6 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
           quiz_id: result.quizId,
           student_id: args.student_id,
         },
-        dedupe: false,
       });
     } catch (error) {
       auditFailed = true;

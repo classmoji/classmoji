@@ -1161,8 +1161,7 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
         form_id: form.id,
         form_slug: form.slug,
         response_id: row.id,
-        // The response id as the value keeps reveals of different responses
-        // apart in the audit service's dedup window.
+        // The response id as the value: which response was revealed.
         ...(identity.revealed ? { value: row.id } : {}),
         ...identity.audit,
       },
