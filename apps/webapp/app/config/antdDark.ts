@@ -120,9 +120,6 @@ const darkTheme = {
       optionActiveBg: '#262626',
       // See config/antd.ts: antd 6 paints a hovered selected option with this.
       controlItemBgActiveHover: '#404040',
-      // See config/antd.ts: no ring on focused borderless controls or clear
-      // buttons, as in antd 5.
-      lineWidthFocus: 0,
       optionSelectedFontWeight: 600,
       optionSelectedColor: BRAND,
       selectorBg: '#262626',
@@ -146,10 +143,6 @@ const darkTheme = {
       hoverBorderColor: '#525252',
       activeBorderColor: '#737373',
       activeShadow: 'none',
-      lineWidthFocus: 0,
-    },
-    InputNumber: {
-      lineWidthFocus: 0,
     },
     // Space.Addon (antd 6's input addon): antd 5's padding. Its background, the
     // addonBg above, is --cm-antd-addon-bg in styles/global.css.
@@ -194,7 +187,6 @@ const darkTheme = {
       cellRangeBorderColor: 'transparent',
       cellBgDisabled: '#171717',
       cellRangeHoverBg: '#525252',
-      lineWidthFocus: 0,
     },
     Checkbox: {
       colorBgContainer: '#262626',

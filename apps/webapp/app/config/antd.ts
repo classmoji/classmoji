@@ -103,23 +103,14 @@ const theme = {
       // (antd 5 kept optionSelectedBg there).
       controlItemBgActiveHover: '#f3f4f6',
       optionSelectedFontWeight: 600,
-      // antd 6 rings a keyboard-focused borderless control and a focused clear
-      // (×) button; antd 5 drew neither. These four components read this token
-      // only for those two rings, so 0 removes them and nothing else. It is an
-      // accessibility trade: the rings are new keyboard focus indicators.
-      lineWidthFocus: 0,
     },
+    // antd 6 rings a keyboard-focused borderless control and a focused clear
+    // (×) button, which antd 5 did not. Kept on purpose: they are keyboard
+    // focus indicators (no lineWidthFocus pin here).
     Input: {
       hoverBorderColor: '#d1d5db',
       activeBorderColor: '#9ca3af',
       activeShadow: 'none',
-      lineWidthFocus: 0,
-    },
-    InputNumber: {
-      lineWidthFocus: 0,
-    },
-    DatePicker: {
-      lineWidthFocus: 0,
     },
     // Space.Addon, antd 6's replacement for input addons: antd 5's 11px
     // padding and 14px text, small size included. Its background is set back
