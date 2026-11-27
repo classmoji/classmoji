@@ -88,10 +88,12 @@ interface ClassroomAuditParams {
  * already-resolved gate result) funnel through here, so there is exactly one
  * place that builds an audit row.
  *
- * Never throws. A mutation that has already been committed must not be turned
- * into a 500 because the row describing it could not be written — the write is
- * awaited so the failure is observable in logs (and so tests can assert
- * deterministically), but a rejection is reported and swallowed.
+ * Written through the audit service's `record`: a change that is already saved
+ * is never turned into a 500 because the row describing it could not be
+ * written. A failed write is tried once more, then reported as one
+ * `audit_miss` line, and the caller answers as it would have. Callers await it
+ * (so the row is written before the response, and tests can assert it).
+ * Invalid input still throws outside production: that is a bug to fix.
  */
 const writeAuditRow = async ({
   classroomId,
@@ -127,13 +129,9 @@ const writeAuditRow = async ({
     auditData.data = dataPayload;
   }
 
-  try {
-    await ClassmojiService.audit.create(
-      auditData as Parameters<typeof ClassmojiService.audit.create>[0]
-    );
-  } catch (error: unknown) {
-    console.error('[audit] Failed to write audit log', error);
-  }
+  await ClassmojiService.audit.record(
+    auditData as Parameters<typeof ClassmojiService.audit.record>[0]
+  );
 };
 
 /**
@@ -175,25 +173,24 @@ export const addAuditLog = async ({
   resourceId = null,
   metadata = null,
 }: AuditLogParams) => {
-  const authData = await getAuthSession(request);
-  if (!authData) {
-    console.error('Unable to add audit log: No auth session found');
-    return;
-  }
-  const { userId } = authData;
-
-  // Every existing caller invokes this without awaiting, so a rejection here
-  // would surface as an unhandled rejection rather than as a failed request.
-  // Resolution failures are reported and dropped, exactly like write failures.
+  // Re-resolving the caller and classroom can fail too (the session or the
+  // database away). That is reported and the request goes on, as a failed
+  // write is: nothing before the write may reject out of here.
+  let row: ClassroomAuditParams;
   try {
+    const authData = await getAuthSession(request);
+    if (!authData) {
+      console.error('Unable to add audit log: No auth session found');
+      return;
+    }
+    const { userId } = authData;
     const classroom = await ClassmojiService.classroom.findBySlug(params.class!);
     // `null` roles = consider every role, so this is the caller's highest
     // membership overall rather than the highest among some allowed subset.
     const membership = classroom
       ? await resolveHighestMembership(classroom.id, userId, null)
       : null;
-
-    await writeAuditRow({
+    row = {
       classroomId: classroom?.id,
       userId,
       role: membership?.role,
@@ -201,10 +198,12 @@ export const addAuditLog = async ({
       resourceType,
       resourceId,
       metadata,
-    });
+    };
   } catch (error: unknown) {
     console.error('[audit] Failed to resolve audit context', error);
+    return;
   }
+  await writeAuditRow(row);
 };
 
 // Re-export from shared auth package for backward compatibility

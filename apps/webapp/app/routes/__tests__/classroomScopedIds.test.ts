@@ -33,7 +33,13 @@ vi.mock('@classmoji/services', () => ({
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
       findByClassroomId: vi.fn(),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     classroomMembership: {
       studentsInClassroomByIds: (...a: unknown[]) => mocks.studentsInClassroomByIds(...a),
       findUsersByRole: vi.fn(),

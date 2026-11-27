@@ -29,7 +29,13 @@ vi.mock('@classmoji/services', () => ({
     quizAttempt: { findById: (...a: unknown[]) => attemptFindByIdMock(...a) },
     quizChat: { readRuntimeState: (...a: unknown[]) => readRuntimeStateMock(...a) },
     quizGrading: { closeExpiredAttempt: (...a: unknown[]) => closeExpiredMock(...a) },
-    audit: { create: (...a: unknown[]) => auditCreateMock(...a) },
+    audit: {
+      create: (...a: unknown[]) => auditCreateMock(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => auditCreateMock(r))(row)
+        ),
+    },
   },
 }));
 
@@ -403,6 +409,20 @@ describe('api.quiz-chat.session — refusals', () => {
       );
       expectNothingStarted();
     }
+  });
+
+  it("refuses another member's attempt with the 403 even when its audit row cannot be written", async () => {
+    signInAs(OTHER, { role: 'TEACHER' });
+    attemptFindByIdMock.mockResolvedValue(attemptRow());
+    auditCreateMock.mockRejectedValue(new Error('audit down'));
+    quizzesVisibleMock.mockResolvedValue(true);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await post({ attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(403);
+    expect(auditCreateMock).toHaveBeenCalledTimes(2);
+    expectNothingStarted();
   });
 
   it('refuses a "View As" session on an attempt the viewed student does not own', async () => {

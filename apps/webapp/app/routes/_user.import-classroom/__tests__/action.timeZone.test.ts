@@ -31,7 +31,10 @@ vi.mock('@classmoji/services', () => ({
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
     },
     emojiMapping: { ensureDefaultScale: vi.fn().mockResolvedValue(undefined) },
-    audit: { create: vi.fn().mockResolvedValue(undefined) },
+    audit: {
+      create: vi.fn().mockResolvedValue(undefined),
+      record: vi.fn().mockResolvedValue({ written: true }),
+    },
   },
 }));
 

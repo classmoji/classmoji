@@ -70,32 +70,29 @@ export const action = checkAuth(async ({ request, user }) => {
     } catch (error: unknown) {
       console.error('Default grading scale seeding failed:', error);
     }
-    try {
-      await ClassmojiService.audit.create({
-        user_id: user.id,
-        classroom_id: r.classroomId,
-        role: 'OWNER',
-        action: 'CREATE',
-        resource_type: 'GITHUB_CLASSROOM_IMPORT',
-        resource_id: r.classroomSlug,
-        data: {
-          classroomName: r.classroomName,
-          organizationLogin: r.organizationLogin,
-          appInstalled: r.appInstalled,
-          repositoriesImported: r.repositoriesImported,
-          assignmentsImported: r.assignmentsImported,
-          studentsEnrolled: r.studentsEnrolled,
-          reposLinked: r.reposLinked,
-          gradesRecorded: r.gradesRecorded,
-          teamsImported: r.teamsImported,
-          teamMembershipsImported: r.teamMembershipsImported,
-          groupReposLinked: r.groupReposLinked,
-          warnings: r.warnings,
-        },
-      });
-    } catch (auditError: unknown) {
-      console.error('audit log (classroom import) failed:', auditError);
-    }
+    // After the import: a failed write is reported (`audit_miss`), not thrown.
+    await ClassmojiService.audit.record({
+      user_id: user.id,
+      classroom_id: r.classroomId,
+      role: 'OWNER',
+      action: 'CREATE',
+      resource_type: 'GITHUB_CLASSROOM_IMPORT',
+      resource_id: r.classroomSlug,
+      data: {
+        classroomName: r.classroomName,
+        organizationLogin: r.organizationLogin,
+        appInstalled: r.appInstalled,
+        repositoriesImported: r.repositoriesImported,
+        assignmentsImported: r.assignmentsImported,
+        studentsEnrolled: r.studentsEnrolled,
+        reposLinked: r.reposLinked,
+        gradesRecorded: r.gradesRecorded,
+        teamsImported: r.teamsImported,
+        teamMembershipsImported: r.teamMembershipsImported,
+        groupReposLinked: r.groupReposLinked,
+        warnings: r.warnings,
+      },
+    });
   }
 
   if (results.length === 0) {

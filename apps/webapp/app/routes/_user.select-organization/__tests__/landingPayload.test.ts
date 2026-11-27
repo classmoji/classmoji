@@ -110,7 +110,7 @@ vi.mock('@classmoji/services', () => ({
       claimPendingInvites: vi.fn(async () => ({ claimed: 0 })),
       claimInviteByToken: vi.fn(async () => ({ claimed: false })),
     },
-    audit: { create: vi.fn(async () => null) },
+    audit: { record: vi.fn(async () => ({ written: true })) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
   getGitProvider: vi.fn(),
@@ -313,7 +313,7 @@ describe('select-organization with an invite link for another address', () => {
       'user-1',
       TOKEN
     );
-    expect(ClassmojiService.audit.create).toHaveBeenCalledWith({
+    expect(ClassmojiService.audit.record).toHaveBeenCalledWith({
       user_id: 'user-1',
       classroom_id: 'class-x',
       role: 'STUDENT',
@@ -323,7 +323,7 @@ describe('select-organization with an invite link for another address', () => {
       data: { tool: 'web:roster.invite_token' },
     });
     // No address in the audit row.
-    expect(JSON.stringify(vi.mocked(ClassmojiService.audit.create).mock.calls)).not.toContain(
+    expect(JSON.stringify(vi.mocked(ClassmojiService.audit.record).mock.calls)).not.toContain(
       'ada@school.edu'
     );
     expect(data.memberships).toHaveLength(2);
@@ -335,7 +335,7 @@ describe('select-organization with an invite link for another address', () => {
 
     const data = await runWithInvite();
 
-    expect(ClassmojiService.audit.create).not.toHaveBeenCalled();
+    expect(ClassmojiService.audit.record).not.toHaveBeenCalled();
     expect(data.inviteEmailMismatch).toBe('ada@school.edu');
   });
 

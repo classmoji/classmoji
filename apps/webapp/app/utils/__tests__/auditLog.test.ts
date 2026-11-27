@@ -44,7 +44,13 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     subscription: { getProStateForClassroomId: vi.fn() },
   },
 }));
@@ -215,7 +221,47 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     // The mutation is already committed by the time this runs. Turning a failed
     // audit row into a 500 would report a successful delete as a failure.
     mocks.auditCreate.mockRejectedValue(new Error('audit table gone'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(addClassroomAuditLog(entry)).resolves.toBeUndefined();
+    // Tried once more, then reported as one audit_miss line.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    expect(error.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(1);
+    error.mockRestore();
+  });
+});
+
+describe('addAuditLog — nothing before the write rejects', () => {
+  it('reports a session lookup that throws and resolves', async () => {
+    mocks.getAuthSession.mockRejectedValue(new Error('session store away'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAuditLog({
+        request: request(),
+        params: { class: 'cs52-26f' },
+        action: 'VIEW',
+        resourceType: 'CLASS_GRADES_SCREEN',
+      })
+    ).resolves.toBeUndefined();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('reports a classroom lookup that throws and resolves', async () => {
+    mocks.findBySlug.mockRejectedValue(new Error('database away'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAuditLog({
+        request: request(),
+        params: { class: 'cs52-26f' },
+        action: 'VIEW',
+        resourceType: 'CLASS_GRADES_SCREEN',
+      })
+    ).resolves.toBeUndefined();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });

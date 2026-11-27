@@ -33,7 +33,13 @@ vi.mock('@classmoji/services', () => ({
       joinByCode: (...a: unknown[]) => mocks.joinByCode(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
 }));
 
@@ -177,6 +183,30 @@ describe('action', () => {
         tool: 'web:roster.join_link',
       })
     );
+    expect(location(result)).toBe('https://github.com/orgs/cs10-org/invitation');
+  });
+
+  it('a saved join whose audit row cannot be written still goes on to the git step', async () => {
+    mocks.getAuthSession.mockResolvedValue({ userId: 'user-a' });
+    mocks.joinByCode.mockResolvedValue({
+      status: 'joined',
+      classroom: CLASS_X,
+      membershipId: 'mem-a',
+      matchedRosterInvite: false,
+    });
+    mocks.joinGitOrganization.mockResolvedValue({
+      ok: true,
+      outcome: 'invited',
+      message: 'sent',
+      invitationUrl: 'https://github.com/orgs/cs10-org/invitation',
+    });
+    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await action(args('POST'));
+
+    expect(mocks.joinByCode).toHaveBeenCalledTimes(1);
+    expect(mocks.joinGitOrganization).toHaveBeenCalledTimes(1);
     expect(location(result)).toBe('https://github.com/orgs/cs10-org/invitation');
   });
 
