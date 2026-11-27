@@ -175,15 +175,25 @@ export const addAuditLog = async ({
 }: AuditLogParams) => {
   // Re-resolving the caller and classroom can fail too (the session or the
   // database away). That is reported and the request goes on, as a failed
-  // write is: nothing before the write may reject out of here.
+  // write is: nothing before the write may reject out of here. Either way it
+  // leaves the standard `audit_miss` line with the fields already known.
+  const known = {
+    classroom_slug: params.class ?? null,
+    resource_id: normalizeAuditResourceId(resourceId),
+    resource_type: resourceType,
+    action,
+    ...(metadata && Object.keys(metadata).length > 0 ? { data: metadata } : {}),
+  };
+  let userId: string | undefined;
   let row: ClassroomAuditParams;
   try {
     const authData = await getAuthSession(request);
     if (!authData) {
       console.error('Unable to add audit log: No auth session found');
+      ClassmojiService.audit.logAuditMiss('no auth session', known);
       return;
     }
-    const { userId } = authData;
+    userId = authData.userId;
     const classroom = await ClassmojiService.classroom.findBySlug(params.class!);
     // `null` roles = consider every role, so this is the caller's highest
     // membership overall rather than the highest among some allowed subset.
@@ -201,6 +211,10 @@ export const addAuditLog = async ({
     };
   } catch (error: unknown) {
     console.error('[audit] Failed to resolve audit context', error);
+    ClassmojiService.audit.logAuditMiss(
+      `audit context lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+      { ...known, user_id: userId ?? null }
+    );
     return;
   }
   await writeAuditRow(row);

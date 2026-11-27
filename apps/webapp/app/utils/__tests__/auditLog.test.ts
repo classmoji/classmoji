@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   findBySlug: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
+  logAuditMiss: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -46,6 +47,7 @@ vi.mock('@classmoji/services', () => ({
     },
     audit: {
       create: (...a: unknown[]) => mocks.auditCreate(...a),
+      logAuditMiss: (...a: unknown[]) => mocks.logAuditMiss(...a),
       record: (row: unknown) =>
         import('../../__tests__/support/auditRecord.ts').then(m =>
           m.recordThrough(r => mocks.auditCreate(r))(row)
@@ -130,23 +132,35 @@ describe('addAuditLog — actor attribution', () => {
     expect(mocks.findByClassroomAndUser).not.toHaveBeenCalled();
   });
 
-  it('writes nothing when there is no session', async () => {
+  it('writes nothing when there is no session, and leaves one audit_miss', async () => {
     mocks.getAuthSession.mockResolvedValue(null);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await addAuditLog({
       request: request(),
       params: { class: 'cs52-26f' },
       action: 'VIEW',
       resourceType: 'PAGES',
+      resourceId: 'page-1',
+      metadata: { tool: 'web:pages.view' },
     });
 
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.logAuditMiss).toHaveBeenCalledExactlyOnceWith('no auth session', {
+      classroom_slug: 'cs52-26f',
+      resource_id: 'page-1',
+      resource_type: 'PAGES',
+      action: 'VIEW',
+      data: { tool: 'web:pages.view' },
+    });
+    error.mockRestore();
   });
 
   it('swallows a resolution failure instead of rejecting', async () => {
     // Existing callers invoke this without awaiting, so a rejection would
     // surface as an unhandled rejection rather than a failed request.
     mocks.findBySlug.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(
       addAuditLog({
@@ -246,6 +260,16 @@ describe('addAuditLog — nothing before the write rejects', () => {
     ).resolves.toBeUndefined();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalled();
+    expect(mocks.logAuditMiss).toHaveBeenCalledExactlyOnceWith(
+      'audit context lookup failed: session store away',
+      {
+        classroom_slug: 'cs52-26f',
+        resource_id: null,
+        resource_type: 'CLASS_GRADES_SCREEN',
+        action: 'VIEW',
+        user_id: null,
+      }
+    );
     error.mockRestore();
   });
 
@@ -262,6 +286,31 @@ describe('addAuditLog — nothing before the write rejects', () => {
       })
     ).resolves.toBeUndefined();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+    // The session was resolved before the lookup failed: the line names the user.
+    expect(mocks.logAuditMiss).toHaveBeenCalledExactlyOnceWith(
+      'audit context lookup failed: database away',
+      {
+        classroom_slug: 'cs52-26f',
+        resource_id: null,
+        resource_type: 'CLASS_GRADES_SCREEN',
+        action: 'VIEW',
+        user_id: 'user-1',
+      }
+    );
     error.mockRestore();
+  });
+
+  it('leaves no audit_miss of its own when the caller resolves', async () => {
+    mocks.resolveHighestMembership.mockResolvedValue({ role: 'OWNER' });
+
+    await addAuditLog({
+      request: request(),
+      params: { class: 'cs52-26f' },
+      action: 'VIEW',
+      resourceType: 'CLASS_GRADES_SCREEN',
+    });
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.logAuditMiss).not.toHaveBeenCalled();
   });
 });
