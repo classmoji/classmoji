@@ -32,9 +32,13 @@ vi.mock('../planOwner.service.ts', () => ({
 vi.mock('../subscription.service.ts', () => ({
   getProStateForClassroomId: (...a: unknown[]) => mocks.getProState(...a),
 }));
-vi.mock('../audit.service.ts', () => ({
-  create: (...a: unknown[]) => mocks.auditCreate(...a),
-}));
+vi.mock('../audit.service.ts', async importOriginal => {
+  const { recordWith } = await importOriginal<typeof import('../audit.service.ts')>();
+  return {
+    create: (...a: unknown[]) => mocks.auditCreate(...a),
+    record: (row: unknown) => recordWith(r => mocks.auditCreate(r), row),
+  };
+});
 
 // The rule is tested switched on (a limit of 1); the shipped constant is
 // unlimited, which planLimits.test.ts pins.

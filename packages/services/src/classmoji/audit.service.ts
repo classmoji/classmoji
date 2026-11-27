@@ -162,6 +162,32 @@ export async function recordNonMemberRefusal(
   }
 }
 
+/** `code` of the error `create` throws for invalid input outside production. */
+export const AUDIT_INPUT_INVALID = 'AUDIT_INPUT_INVALID';
+
+/**
+ * The row `create` was given is not a valid row (no classroom or user, an
+ * unknown role or action): a bug in the caller, not a failed write. Thrown
+ * only outside production.
+ */
+export class AuditInputError extends Error {
+  readonly code = AUDIT_INPUT_INVALID;
+  constructor(reason: string) {
+    super(`Audit row not written: ${reason}`);
+    this.name = 'AuditInputError';
+  }
+}
+
+/** Whether `error` is `create`'s input refusal (by its code, so any copy of this module counts). */
+export function isAuditInputError(error: unknown): error is AuditInputError {
+  return (
+    error instanceof AuditInputError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      (error as { code?: unknown }).code === AUDIT_INPUT_INVALID)
+  );
+}
+
 /**
  * Invalid input: outside production a bug to fix now, so it throws; in
  * production the caller's action has already happened, so the miss is logged
@@ -169,7 +195,7 @@ export async function recordNonMemberRefusal(
  */
 function refuse(reason: string, row: AuditLogData): null {
   if (process.env.NODE_ENV !== 'production') {
-    throw new Error(`Audit row not written: ${reason}`);
+    throw new AuditInputError(reason);
   }
   logAuditMiss(reason, row);
   return null;
@@ -302,3 +328,54 @@ export const create = async (data: AuditLogData) => {
 
   return prisma.auditLog.create({ data: auditData });
 };
+
+/** What `record` did: the row is in the log, or it is not (and a line says why). */
+export type AuditRecordResult = { written: true } | { written: false; reason: string };
+
+/**
+ * `record` over any writer with `create`'s contract (a row, or null when the
+ * input was refused and already logged; a throw on a database error). The
+ * writer is a parameter so tests can run the real rule over a fake `create`.
+ */
+export async function recordWith<Row>(
+  write: (row: Row) => Promise<unknown>,
+  row: Row
+): Promise<AuditRecordResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const written = await write(row);
+      // null: `create` refused the input in production and logged the miss.
+      if (written === null) return { written: false, reason: 'invalid input' };
+      return { written: true };
+    } catch (error) {
+      if (isAuditInputError(error)) {
+        // A bug in the caller: the developer hears about it.
+        if (process.env.NODE_ENV !== 'production') throw error;
+        logAuditMiss(error.message, row);
+        return { written: false, reason: error.message };
+      }
+      lastError = error;
+    }
+  }
+  const reason = `audit write failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`;
+  logAuditMiss(reason, row);
+  return { written: false, reason };
+}
+
+/**
+ * Record one audit row for something that has ALREADY happened: the way every
+ * caller writes a row after its change. A database error is tried once more;
+ * if that fails too, one `audit_miss` line names the reason and the row, and
+ * the result says `{ written: false }`. It never throws for a failed write, so
+ * the caller answers as it would have: the change stands and the person is
+ * told what happened to it, not that the log line failed.
+ *
+ * Invalid input is a bug in the caller, not a failed write: outside production
+ * it throws (`AuditInputError`); in production `create` has already logged it
+ * and the result is `{ written: false }`.
+ *
+ * Use `create` only where a failed write must stop what follows (a read that
+ * is recorded before its data is handed over).
+ */
+export const record = (data: AuditLogData): Promise<AuditRecordResult> => recordWith(create, data);

@@ -17,9 +17,13 @@ vi.mock('../subscription.service.ts', () => ({
   isSubscriptionActive: (sub: { ends_at: Date | null } | null) =>
     !!sub && (sub.ends_at === null || sub.ends_at.getTime() > Date.now()),
 }));
-vi.mock('../audit.service.ts', () => ({
-  create: (...a: unknown[]) => auditCreateMock(...a),
-}));
+vi.mock('../audit.service.ts', async importOriginal => {
+  const { recordWith } = await importOriginal<typeof import('../audit.service.ts')>();
+  return {
+    create: (...a: unknown[]) => auditCreateMock(...a),
+    record: (row: unknown) => recordWith(r => auditCreateMock(r), row),
+  };
+});
 vi.mock('@classmoji/database', () => ({ default: () => db }));
 
 // The rule is tested switched on (a limit of 1); the shipped constant is
