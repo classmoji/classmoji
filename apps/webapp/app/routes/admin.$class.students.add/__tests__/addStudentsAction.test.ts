@@ -106,7 +106,6 @@ describe('add students action', () => {
         already_enrolled: 1,
         invalid: 0,
       },
-      dedupe: false,
     });
     expect(order).toEqual(['audit', 'emails']);
   });

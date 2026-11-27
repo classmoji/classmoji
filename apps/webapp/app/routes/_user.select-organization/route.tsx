@@ -178,18 +178,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           invite
         );
         if (result.claimed) {
-          await ClassmojiService.audit.create(
-            {
-              user_id: typedUser.id,
-              classroom_id: result.classroomId,
-              role: 'STUDENT',
-              action: 'CREATE',
-              resource_type: 'CLASSROOM_MEMBERSHIP',
-              resource_id: result.membershipId,
-              data: { tool: 'web:roster.invite_token' },
-            },
-            { dedupe: false }
-          );
+          await ClassmojiService.audit.create({
+            user_id: typedUser.id,
+            classroom_id: result.classroomId,
+            role: 'STUDENT',
+            action: 'CREATE',
+            resource_type: 'CLASSROOM_MEMBERSHIP',
+            resource_id: result.membershipId,
+            data: { tool: 'web:roster.invite_token' },
+          });
           const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
             includeMemberships: true,
           });

@@ -966,9 +966,7 @@ describe('page_section_check', () => {
           block_id: 'h1',
           checked: true,
         }),
-      }),
-      // Every real change is its own row (never coalesced by the 5 s window).
-      { dedupe: false }
+      })
     );
 
     const off = await check(ctx, 'h1', false);
@@ -981,8 +979,7 @@ describe('page_section_check', () => {
           block_id: 'h1',
           checked: false,
         }),
-      }),
-      { dedupe: false }
+      })
     );
     // Only A's row went; B's check on the same heading is untouched.
     expect(checks).toEqual([expect.objectContaining({ user_id: STUDENT_B, block_id: 'h1' })]);
@@ -1392,7 +1389,6 @@ describe('parity with the page: the shared reader rule', () => {
       'DELETE',
       'CREATE',
     ]);
-    for (const c of mocks.auditCreate.mock.calls) expect(c[1]).toEqual({ dedupe: false });
   });
 
   it('a failed audit write after the act is not a tool error (check, unlock, status)', async () => {
@@ -1521,8 +1517,7 @@ describe('student check lists', () => {
           block_id: 'item1',
           checked: true,
         }),
-      }),
-      { dedupe: false }
+      })
     );
 
     // A's read shows A's tick; B's own tick is still B's alone.

@@ -299,19 +299,12 @@ describe('grader_assign — who can be a grader (the web rule)', () => {
     expect(auditCreates()).toHaveLength(0);
   });
 
-  it('keys the audit dedup on the grader, so two graders on one submission leave two rows', async () => {
+  it('two graders on one submission leave two rows', async () => {
     await graderAssignTool.handler(assignArgs(NUMERIC_SUB, U.taGrader), ownerCtx);
     await graderAssignTool.handler(assignArgs(NUMERIC_SUB, U.teacherGrader), ownerCtx);
 
-    // The dedup lookup filters on data.value, so the second call does not
-    // match the first row.
-    const dedupWheres = prismaCallsFor('auditLog', 'findFirst').map(
-      c => (c.args as { where: { AND?: unknown[] } }).where.AND
-    );
-    expect(dedupWheres).toEqual([
-      [{ data: { path: ['value'], equals: U.taGrader } }],
-      [{ data: { path: ['value'], equals: U.teacherGrader } }],
-    ]);
+    // Every change is its own row: no lookup for an earlier one.
+    expect(prismaCallsFor('auditLog', 'findMany')).toHaveLength(0);
     expect(auditCreates().map(d => (d.data as { value: string }).value)).toEqual([
       U.taGrader,
       U.teacherGrader,

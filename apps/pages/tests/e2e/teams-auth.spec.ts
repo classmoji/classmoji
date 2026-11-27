@@ -420,11 +420,9 @@ test('teacher: every owner intent is a 403 owner_only on a direct POST, audited'
     expect(data?.required_roles).toEqual(['OWNER']);
   }
 
-  // One row per intent: the intent is in the audit's dedup key (`tool`), so
-  // three refusals inside the dedup window are three rows, not one. Counted
-  // on the first set posted to, which no earlier row can absorb (the second
-  // set's refusals of the same intents may merge into these: the set isn't in
-  // the key).
+  // One row per intent: each refusal names its intent (`tool`), so three
+  // refusals within seconds are three rows, not one counted three times.
+  // Counted on the first set posted to.
   const onMain = rows.filter(data => data?.team_set === main.name);
   expect(onMain.map(data => data?.tool).sort()).toEqual(
     OWNER_INTENTS.map(intent => `teams.set.${intent}`).sort()

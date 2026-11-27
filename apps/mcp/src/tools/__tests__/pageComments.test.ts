@@ -1136,8 +1136,7 @@ describe('writes and audit rows', () => {
       resolved: false,
     });
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    const [row, options] = mocks.auditCreate.mock.calls[0];
-    expect(options).toEqual({ dedupe: false });
+    const [row] = mocks.auditCreate.mock.calls[0];
     expect(row).toMatchObject({
       user_id: STUDENT_A,
       classroom_id: CLASS_X,

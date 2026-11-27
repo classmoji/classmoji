@@ -88,7 +88,7 @@ const deps: PageCommentsDeps<CommentsPageRow> = {
 
   rules: ClassmojiService.pageComments,
 
-  audit: row => ClassmojiService.audit.create(row, { dedupe: false }),
+  audit: row => ClassmojiService.audit.create(row),
 
   rateLimit,
 };

@@ -115,18 +115,15 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   let membershipId: string;
   if (result.status === 'joined') {
     membershipId = result.membershipId;
-    await ClassmojiService.audit.create(
-      {
-        user_id: userId,
-        classroom_id: classroom.id,
-        role: 'STUDENT',
-        action: 'CREATE',
-        resource_type: 'CLASSROOM_MEMBERSHIP',
-        resource_id: membershipId,
-        data: { tool: 'web:roster.join_link', matched_roster_invite: result.matchedRosterInvite },
-      },
-      { dedupe: false }
-    );
+    await ClassmojiService.audit.create({
+      user_id: userId,
+      classroom_id: classroom.id,
+      role: 'STUDENT',
+      action: 'CREATE',
+      resource_type: 'CLASSROOM_MEMBERSHIP',
+      resource_id: membershipId,
+      data: { tool: 'web:roster.join_link', matched_roster_invite: result.matchedRosterInvite },
+    });
   } else {
     // Already here. Only a pending student goes on to the git step again.
     const pending = await getPrisma().classroomMembership.findFirst({

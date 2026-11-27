@@ -189,8 +189,7 @@ describe('team_create', () => {
     expect(audit.action).toBe('CREATE');
     expect(audit.classroom_id).toBe('class-1');
     expect(audit.resource_type).toBe('TEAMS');
-    // resource_id names the team; it is part of the audit dedup key, so two
-    // creates inside the dedup window stay two rows.
+    // resource_id names the team.
     expect(audit.resource_id).toBe('team-1');
     expect(audit.data).toMatchObject({ tool: 'team_create', team_id: 'team-1' });
   });
@@ -521,7 +520,7 @@ describe('team_members_add', () => {
     expect(audit.action).toBe('UPDATE');
     expect(audit.classroom_id).toBe('class-1');
     // addTeamMembers returns no team id, so the team is resolved first purely
-    // to keep the audit row (and its dedup key) team-specific.
+    // to keep the audit row team-specific.
     expect(audit.resource_id).toBe('team-1');
     expect(audit.data).toMatchObject({ tool: 'team_members_add', succeeded: ['ada'] });
   });

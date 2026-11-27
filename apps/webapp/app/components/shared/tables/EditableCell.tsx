@@ -43,11 +43,15 @@ const EditableCell = ({
 
   if (!record) return null;
 
+  // Saves only a value that differs from the record's: leaving the cell
+  // without an edit writes nothing.
+  const commit = () => {
+    setEditing(false);
+    if (inputValue !== record[dataIndex]) onUpdate(record.id, inputValue);
+  };
+
   const handleKeyPress = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key === 'Enter') {
-      setEditing(false);
-      onUpdate(record.id, inputValue);
-    }
+    if (event.key === 'Enter') commit();
   };
 
   if (!editing) {
@@ -71,13 +75,7 @@ const EditableCell = ({
   }
 
   return (
-    <div
-      ref={ref}
-      onMouseLeave={() => {
-        setEditing(false);
-        onUpdate(record.id, inputValue);
-      }}
-    >
+    <div ref={ref} onMouseLeave={commit}>
       {format === 'number' ? (
         <InputNumber
           className="w-full"

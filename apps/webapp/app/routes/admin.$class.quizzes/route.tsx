@@ -258,8 +258,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // Each branch audits once its write has landed, under the MCP quiz tools'
   // resource_type ('QUIZ') and keyed on the quiz id. The AuditLogAction enum
   // has no PUBLISH, so publish and weight changes are UPDATE with the intent
-  // carried in `tool` — which is also what stops the audit service's 5-second
-  // dedup from folding a publish and a weight change into one row.
+  // carried in `tool`.
   const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
     addClassroomAuditLog({
       classroomId: classroom.id,

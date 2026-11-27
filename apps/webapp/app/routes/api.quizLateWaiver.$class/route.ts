@@ -42,9 +42,9 @@ export const QUIZ_LATE_WAIVER_TOOL = 'web:quiz_late_waiver';
  * (`impersonated_by` on the audit row), and as the repo shield (which records
  * nothing) does not refuse either.
  *
- * Audit: one row per actual change (`changed`), never deduped, since the
- * resource id names the assignment and not the student: two students waived
- * on one quiz within seconds are two rows. The MCP writes the same row shape.
+ * Audit: one row per actual change (`changed`); the resource id names the
+ * assignment and not the student, so two students waived on one quiz are
+ * two rows. The MCP writes the same row shape.
  */
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -125,7 +125,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         student_id: studentId,
         ...(await impersonationAuditFields(request)),
       },
-      dedupe: false,
     });
   }
 

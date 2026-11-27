@@ -42,7 +42,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       repos: result.repoCount,
       commits: result.rows.length,
     },
-    dedupe: false,
   });
 
   const date = new Date().toISOString().slice(0, 10);

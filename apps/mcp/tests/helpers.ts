@@ -592,10 +592,9 @@ export interface AuditExpectation {
 }
 
 /**
- * Assert an audit row exists for a successful write. NOTE the audit service's
- * 5-second same-shape dedup window: rows are deduped on (user, classroom,
- * role, resource_type, resource_id, action) — assertions here always pin the
- * distinguishing fields so a deduped sibling can't satisfy the wrong test.
+ * Assert an audit row exists for a successful write (every write is its own
+ * row). Assertions pin the distinguishing fields and take the newest match,
+ * so a sibling row from another call can't satisfy the wrong test.
  */
 export async function expectAuditRow(expected: AuditExpectation): Promise<void> {
   const row = await getPrisma().auditLog.findFirst({

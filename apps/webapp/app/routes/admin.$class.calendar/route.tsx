@@ -168,9 +168,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Every branch below records an audit row once its write has landed, using
   // the classroom and role this request was authorized with. Events use the
   // MCP calendar tools' resource_type ('CALENDAR'); the deadline branch mutates
-  // an Assignment, so it uses theirs ('ASSIGNMENT'). `tool` names the intent —
-  // the audit service dedups on it, so editing an event and then deleting it
-  // inside the same few seconds stays two rows.
+  // an Assignment, so it uses theirs ('ASSIGNMENT'). `tool` names the intent.
   const audit = (
     action: string,
     resourceType: string,

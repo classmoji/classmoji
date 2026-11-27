@@ -10,10 +10,8 @@
  * identities are distinct single-role users (modeled on
  * apps/webapp/tests/auth.setup.ts:122-149).
  *
- * Audit: each successful write is asserted against audit_logs. The audit
- * service dedups same-shape rows ((user, classroom, role, type, id, action))
- * within 5s — sequences below either vary one of those fields or space the
- * writes past the window.
+ * Audit: each successful write is asserted against audit_logs (every write is
+ * its own row).
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -1075,9 +1073,8 @@ describe('module tools', () => {
       since: suiteStart,
     });
 
-    // module_publish audits (MODULES, id, UPDATE) — the SAME dedup shape as
-    // module_update above, so wait out the 5s window to prove the row lands.
-    await new Promise(r => setTimeout(r, 5_200));
+    // module_publish audits (MODULES, id, UPDATE), the same shape as
+    // module_update above: its own row all the same.
     const publishedAt = new Date();
     const published = await callTool(owner, 'module_publish', {
       classroom: DEV_REF,

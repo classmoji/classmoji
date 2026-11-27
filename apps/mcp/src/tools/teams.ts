@@ -270,8 +270,7 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
 
     // Audit right after the service call: the GitHub team and the local row are
     // already committed, so nothing downstream may leave the mutation
-    // un-audited. resource_id names the team — it is also part of the audit
-    // dedup key, so two creates in the same window stay two rows.
+    // un-audited. resource_id names the team.
     await writeAudit(ctx, {
       resource_type: 'TEAMS',
       resource_id: result.team.id,
@@ -730,8 +729,7 @@ export const tagCreateTool: ToolDefinition<TagCreateArgs> = {
     );
 
     // A tag that already existed is not a mutation, so it writes no audit row.
-    // `value` keeps two different names created inside the audit dedup window
-    // from collapsing into one row.
+    // `value` is the name created.
     if (created) {
       await writeAudit(ctx, {
         resource_type: 'TEAMS',

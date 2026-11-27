@@ -270,14 +270,13 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       await ClassmojiService.classroom.update(classroom.classroomId, { name: args.name });
     }
 
-    // Every call is its own row: switching a setting on and off again inside
-    // the audit service's 5-second window must record both changes.
+    // Every call is its own row: switching a setting on and off again records
+    // both changes.
     await writeAudit(ctx, {
       resource_type: 'SETTINGS',
       resource_id: classroom.classroomId,
       action: 'UPDATE',
       data: { tool: 'classroom_settings_update', fields: changed },
-      dedupe: false,
     });
 
     // Echo the validated values we just wrote — never the service return, which

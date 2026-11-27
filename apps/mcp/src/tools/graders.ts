@@ -123,8 +123,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
       action: 'CREATE',
       data: {
         tool: 'grader_assign',
-        // `value` joins the audit service's 5s dedup key: assigning two
-        // different graders to one submission must leave two rows.
+        // `value`: the grader assigned.
         value: args.grader_id,
         grader_id: args.grader_id,
         grader_login: result.graderLogin,

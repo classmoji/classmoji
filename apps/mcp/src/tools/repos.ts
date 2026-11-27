@@ -378,7 +378,7 @@ interface RepoSyncArgs {
  * still writes the row, `partial: true` with the counts queued so far, and asks
  * for another run, which adds only what is still missing once the student
  * repositories exist. Not idempotent: a second call while repos are still being
- * created queues them again. Every call is its own row (`dedupe: false`).
+ * created queues them again. Every call is its own row.
  */
 export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
   name: 'repo_sync',
@@ -432,7 +432,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
             repos_to_create: error.reposToCreate,
             assignments_to_add: error.assignmentsToAdd,
           },
-          dedupe: false,
         });
         throw new ToolError(
           'internal',
@@ -447,7 +446,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
     }
 
     const { reposToCreate, assignmentsToAdd } = result;
-    // Two syncs a few seconds apart are two actions: never folded into one row.
     await writeAudit(ctx, {
       resource_type: 'REPOSITORIES',
       resource_id: repository.id,
@@ -457,7 +455,6 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
         repos_to_create: reposToCreate,
         assignments_to_add: assignmentsToAdd,
       },
-      dedupe: false,
     });
 
     const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -948,8 +945,7 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
       resource_type: 'REPOSITORIES',
       resource_id: repository.id,
       action: 'UPDATE',
-      // `value` is what keeps two different edits inside audit's 5s dedup window
-      // from collapsing into one row; an identical re-send still dedups.
+      // `value`: a digest of what was written, to tell edits apart in the log.
       data: { tool: 'repo_update', fields, values, value: JSON.stringify(values) },
     });
 

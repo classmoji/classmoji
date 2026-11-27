@@ -28,7 +28,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       students: gradebook.studentCount,
       assignments: gradebook.assignmentCount,
     },
-    dedupe: false,
   });
 
   const date = new Date().toISOString().slice(0, 10);

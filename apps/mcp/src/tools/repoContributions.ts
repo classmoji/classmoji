@@ -188,7 +188,6 @@ export const repoContributionsCalculateTool: ToolDefinition<RepoContributionsArg
       resource_id: repository.id,
       action: 'UPDATE',
       data: { tool: 'repo_contributions_calculate', repos: numRepos },
-      dedupe: false,
     });
 
     return ok({

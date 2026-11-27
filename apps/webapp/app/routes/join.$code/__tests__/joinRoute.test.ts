@@ -168,8 +168,7 @@ describe('action', () => {
         action: 'CREATE',
         resource_id: 'mem-a',
         data: { tool: 'web:roster.join_link', matched_roster_invite: true },
-      }),
-      { dedupe: false }
+      })
     );
     expect(mocks.joinGitOrganization).toHaveBeenCalledWith(
       expect.objectContaining({

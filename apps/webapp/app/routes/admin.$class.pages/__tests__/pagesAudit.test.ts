@@ -6,9 +6,8 @@
  * 1. Every mutation records an audit row. This surface wrote none, while the
  *    MCP page tools have always audited theirs; the rows here are shaped to
  *    match — resource_type 'PAGES', the page id, CREATE/UPDATE/DELETE — so both
- *    surfaces can be queried together. `tool` distinguishes the intents, which
- *    is also what stops the audit service's 5-second dedup from folding a
- *    status change and a menu toggle on the same page into a single row.
+ *    surfaces can be queried together. `tool` distinguishes the intents (a
+ *    status change and a menu toggle on the same page).
  *
  * 2. Each write is bound to `{ id, classroom_id }` and only counts when it
  *    matched one row. Authorization binds to the classroom in the URL but
@@ -179,7 +178,7 @@ describe('pages action — audit rows', () => {
     );
   });
 
-  it('gives the two update intents distinct tool names so neither is deduped away', async () => {
+  it('gives the two update intents distinct tool names', async () => {
     await route.action(actionArgs({ pageId: OWN_PAGE, field: 'status', value: 'draft' }));
     await route.action(
       actionArgs({ pageId: OWN_PAGE, field: 'show_in_student_menu', value: 'true' })

@@ -242,7 +242,7 @@ describe('api.quizLateWaiver — scope', () => {
 });
 
 describe('api.quizLateWaiver — audit', () => {
-  it('writes one row per change, in the MCP shape, never deduped', async () => {
+  it('writes one row per change, in the MCP shape', async () => {
     await post(BODY);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-x',
@@ -260,7 +260,6 @@ describe('api.quizLateWaiver — audit', () => {
         quiz_id: 'quiz-1',
         student_id: 'student-a',
       },
-      dedupe: false,
     });
   });
 

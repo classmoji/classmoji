@@ -454,8 +454,8 @@ export async function requireTeamSet(
 // ─── Audit ──────────────────────────────────────────────────────────────────
 
 /**
- * One audit row on this surface. `data.tool` names the act (the audit
- * service's five-second dedup keys on it, and on `value` when there is one).
+ * One audit row on this surface. `data.tool` names the act (and `value`, when
+ * there is one, what it was about).
  */
 export async function auditTeamSets(
   context: TeamsFormContext,
@@ -484,8 +484,7 @@ export async function auditTeamSets(
 
 /**
  * A short, stable fingerprint of what a row is about (a patch, a refusal's
- * check lines), as its audit `value`: two different ones inside the dedup
- * window are two rows, not one.
+ * check lines), as its audit `value`.
  */
 const fingerprintOf = (value: unknown): string =>
   createHash('sha256')
@@ -1614,8 +1613,7 @@ export async function setAction({ params, request, url }: TeamsRouteArgs) {
         resource_id: access.classroom.id,
         action: 'ACCESS_DENIED',
         data: {
-          // The tool joins the audit dedup key, so refusals of different
-          // intents inside the window each get their own row.
+          // The tool names the intent refused.
           tool: `teams.set.${intent}`,
           attempted_action: `team_set_${intent}`,
           required_roles: ['OWNER'],

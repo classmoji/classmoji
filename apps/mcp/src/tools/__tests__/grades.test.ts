@@ -89,6 +89,8 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(true);
+    // Nothing changed, so nothing is recorded.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports deduplicated:false on the regrade-replace path (stale row cleared, fresh row minted)', async () => {
@@ -102,6 +104,7 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(false);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
   });
 
   it('reports deduplicated:false on a plain first-time grade', async () => {
@@ -112,6 +115,33 @@ describe('grade_add deduplicated flag (U4)', () => {
 
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(false);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a change when another grade went although the emoji was already there', async () => {
+    // The caller's old score was replaced while another grader's equal score
+    // stayed: `deduplicated`, but the grades changed, so it is recorded.
+    mocks.findById.mockResolvedValue(
+      gra([
+        { id: 'g-other', emoji: '🟢' },
+        { id: 'g-mine', emoji: '🔴' },
+      ])
+    );
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g-other', emoji: '🟢', grader: { login: 'ta2' } },
+    ]);
+
+    const payload = parse(await gradeAddTool.handler(ARGS, CTX));
+    expect(payload.deduplicated).toBe(true);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the grade when reading the grades back fails', async () => {
+    mocks.findById.mockResolvedValue(gra([]));
+    mocks.findByAssignmentId.mockRejectedValue(new Error('db down'));
+
+    await expect(gradeAddTool.handler(ARGS, CTX)).rejects.toThrow('db down');
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
   });
 });
 

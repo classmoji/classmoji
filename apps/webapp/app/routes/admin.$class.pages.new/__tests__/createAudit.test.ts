@@ -10,8 +10,7 @@
  *   than through the form action above.
  *
  * All three write the same 'PAGES'/'CREATE' shape the MCP page_create tool
- * writes, differing only in `tool` — which names the flow and, because the
- * audit service dedups on it, keeps two quick creates from collapsing.
+ * writes, differing only in `tool`, which names the flow.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';

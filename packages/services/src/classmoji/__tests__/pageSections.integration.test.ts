@@ -185,28 +185,25 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
     });
   });
 
-  it('logs every check toggle when dedupe is off (check, uncheck, check within 5s)', async () => {
+  it('logs every check toggle (check, uncheck, check within 5s)', async () => {
     const blockId = `audit-toggle-${suite}`;
     try {
       for (const checked of [true, false, true]) {
-        await audit.create(
-          {
-            user_id: X.studentA,
-            classroom_id: X.classroomId,
-            role: 'STUDENT',
-            resource_type: 'PAGES',
-            resource_id: X.pageId,
-            action: checked ? 'CREATE' : 'DELETE',
-            data: {
-              tool: 'page_section_check',
-              via: 'web',
-              page_id: X.pageId,
-              block_id: blockId,
-              checked,
-            },
+        await audit.create({
+          user_id: X.studentA,
+          classroom_id: X.classroomId,
+          role: 'STUDENT',
+          resource_type: 'PAGES',
+          resource_id: X.pageId,
+          action: checked ? 'CREATE' : 'DELETE',
+          data: {
+            tool: 'page_section_check',
+            via: 'web',
+            page_id: X.pageId,
+            block_id: blockId,
+            checked,
           },
-          { dedupe: false }
-        );
+        });
       }
       const rows = await prisma.auditLog.findMany({
         where: { user_id: X.studentA, data: { path: ['block_id'], equals: blockId } },
@@ -214,7 +211,7 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
       });
       expect(rows.map(row => row.action)).toEqual(['CREATE', 'DELETE', 'CREATE']);
 
-      // The default window still coalesces a genuine double-submit.
+      // A repeated read is counted on its row, not written again.
       const repeat = {
         user_id: X.studentA,
         classroom_id: X.classroomId,
@@ -224,8 +221,10 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
         action: 'VIEW' as const,
         data: { tool: 'page_section_unlocks', page_id: X.pageId, block_id: blockId },
       };
-      expect(await audit.create(repeat)).not.toBeNull();
-      expect(await audit.create(repeat)).toBeNull();
+      const first = await audit.create(repeat);
+      const second = await audit.create(repeat);
+      expect(second?.id).toBe(first?.id);
+      expect(second?.count).toBe(2);
     } finally {
       await prisma.auditLog.deleteMany({
         where: { user_id: X.studentA, data: { path: ['block_id'], equals: blockId } },

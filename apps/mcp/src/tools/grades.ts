@@ -97,14 +97,28 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       teamId: gra.git_repo.team_id ?? undefined,
     });
 
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT',
-      resource_id: gra.id,
-      action: 'CREATE',
-      data: { tool: 'grade_add', emoji: args.emoji },
-    });
+    const audit = () =>
+      writeAudit(ctx, {
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        resource_id: gra.id,
+        action: 'CREATE',
+        data: { tool: 'grade_add', emoji: args.emoji },
+      });
+    let grades: Awaited<ReturnType<typeof ClassmojiService.assignmentGrade.findByAssignmentId>>;
+    try {
+      grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    } catch (error) {
+      await audit(); // the grade may have changed: never leave it unrecorded
+      throw error;
+    }
 
-    const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    // A grade already given (the same rows before and after) changed nothing,
+    // so it records nothing. Any other outcome (a new row, a replaced score, a
+    // cleared regrade) is a change and gets its row.
+    const before = new Set(gra.grades.map(g => g.id));
+    const unchanged = grades.length === before.size && grades.every(g => before.has(g.id));
+    if (!unchanged) await audit();
+
     // The orchestrator dedups silently — but on the regrade-replace path it
     // CLEARS the pre-request grade and mints a fresh row for the same emoji,
     // which is a real mutation, not a no-op. Report deduplicated only when the

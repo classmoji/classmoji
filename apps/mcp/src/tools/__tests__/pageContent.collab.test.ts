@@ -475,7 +475,6 @@ describe('live apply', () => {
     expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
       committed_to: 'live',
       new_sha: 'live:1.8',
-      // Distinct per write, so the audit's 5 s dedupe never merges two applies.
       value: 'live:1.8',
     });
   });

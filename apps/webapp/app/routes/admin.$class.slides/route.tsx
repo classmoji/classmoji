@@ -156,9 +156,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
    *
    * On success it records an audit row, matching the MCP slide tools' shape
    * (resource_type 'SLIDES', the deck id, action UPDATE). `tool` names the
-   * specific toggle: the audit service dedups UPDATEs on the same deck inside a
-   * 5-second window, so flipping two switches in quick succession would
-   * otherwise leave only the first one recorded.
+   * specific toggle.
    */
   const updateSlideInClassroom = async (
     data: Record<string, boolean>,

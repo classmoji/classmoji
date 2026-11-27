@@ -562,11 +562,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   // Every save is audited once it has been written: the field names only
   // (never a value: the key is a secret, the instructions are owner-only), and
-  // for the instructions their length. One row per save (`dedupe: false`):
-  // two saves inside the service's dedup window are two changes.
+  // for the instructions their length. One row per save.
   const audit = async (fields: string[], extra: Record<string, unknown> = {}) =>
     addClassroomAuditLog({
-      dedupe: false,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

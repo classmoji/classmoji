@@ -225,18 +225,15 @@ export const auditPlanOwnerChange = async (
     console.info('[plan_owner] changed without an actor', { ...change, reason });
     return;
   }
-  await auditService.create(
-    {
-      user_id: actorUserId,
-      classroom_id: change.classroomId,
-      role: 'OWNER',
-      resource_type: 'CLASSROOM',
-      resource_id: change.classroomId,
-      action: 'UPDATE',
-      data: { tool: 'plan_owner.change', reason, from: change.from, to: change.to },
-    },
-    { dedupe: false }
-  );
+  await auditService.create({
+    user_id: actorUserId,
+    classroom_id: change.classroomId,
+    role: 'OWNER',
+    resource_type: 'CLASSROOM',
+    resource_id: change.classroomId,
+    action: 'UPDATE',
+    data: { tool: 'plan_owner.change', reason, from: change.from, to: change.to },
+  });
 };
 
 /**

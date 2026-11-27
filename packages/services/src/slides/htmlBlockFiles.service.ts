@@ -208,18 +208,15 @@ async function audit(
   data: Record<string, string>
 ): Promise<void> {
   try {
-    await createAudit(
-      {
-        classroom_id: target.classroomId,
-        user_id: actorUserId,
-        role: target.role,
-        resource_type: 'SLIDES',
-        resource_id: target.slideId,
-        action,
-        data,
-      },
-      { dedupe: false }
-    );
+    await createAudit({
+      classroom_id: target.classroomId,
+      user_id: actorUserId,
+      role: target.role,
+      resource_type: 'SLIDES',
+      resource_id: target.slideId,
+      action,
+      data,
+    });
   } catch (error: unknown) {
     // The commit already landed; the row is reported, not the write undone.
     console.error('[htmlBlockFiles] Failed to write audit row', error);

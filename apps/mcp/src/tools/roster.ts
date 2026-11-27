@@ -99,8 +99,6 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
         already_enrolled: result.alreadyEnrolled.length,
         invalid: result.invalid.length,
       },
-      // Two batches added a few seconds apart are two roster changes.
-      dedupe: false,
     });
 
     if (result.emails.length > 0) {

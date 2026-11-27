@@ -140,8 +140,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // row, on either runtime, naming the classroom the gate authorized and the
   // role it enforced. Steps 2 and 3 bind the attempt to that classroom. A
   // student or staff member reading their own attempt is not logged; a
-  // refused or 404 read never gets here. Repeated loads within the audit
-  // service's dedup window fold into one row.
+  // refused or 404 read never gets here. Repeated loads within seconds are
+  // counted on one row.
   if (isInstructor && !viewerOwnsAttempt) {
     await addClassroomAuditLog({
       classroomId: classroom.id,
