@@ -134,7 +134,8 @@ describe('classroom removal as yourself', () => {
     expect(mocks.deleteGitHubArtifacts).toHaveBeenCalledWith('class-1', USER_TOKEN, {
       requesterUserId: 'owner-1',
     });
-    expect(mocks.deleteById).toHaveBeenCalledWith('class-1');
+    // The requester is the deletion's actor in the platform audit log.
+    expect(mocks.deleteById).toHaveBeenCalledWith('class-1', { actorId: 'owner-1' });
     expect(result.status).toBe(302);
   });
 
@@ -142,7 +143,7 @@ describe('classroom removal as yourself', () => {
     await remove(false);
 
     expect(mocks.deleteGitHubArtifacts).not.toHaveBeenCalled();
-    expect(mocks.deleteById).toHaveBeenCalledWith('class-1');
+    expect(mocks.deleteById).toHaveBeenCalledWith('class-1', { actorId: 'owner-1' });
   });
 
   it('reports the page as usable', async () => {

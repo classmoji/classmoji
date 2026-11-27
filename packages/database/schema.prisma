@@ -1806,7 +1806,9 @@ model UserActivityDay {
 model PlatformAuditLog {
   id           String   @id @default(uuid())
   actor_id     String?
-  /// Dotted name, e.g. `impersonate`, `delivery.toggle`, `delivery.bulk`, `user.view`.
+  /// Dotted name, e.g. `impersonate`, `delivery.toggle`, `delivery.bulk`, `user.view`,
+  /// `classroom.delete` (the record a deleted classroom leaves; its audit_logs rows
+  /// cascade away with it), `classroom.delete_sandboxes` (the daily sandbox sweep).
   action       String
   /// `user` | `classroom` | `classrooms`
   target_type  String

@@ -7,6 +7,7 @@ import {
 import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
+import { recordPlatformAudit } from './audit.service.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
 // classroom is actually deleted.
 import { purgeClassroomMedia } from '../media/index.ts';
@@ -262,6 +263,12 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
   });
 };
 
+/** Who is deleting a classroom (`deleteById`), and why when it is not their choice. */
+export interface ClassroomDeleteActor {
+  actorId: string;
+  reason?: 'create_rollback';
+}
+
 /**
  * Delete a Classroom by ID.
  *
@@ -273,14 +280,57 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
  * store skips it, and so does a classroom that has never had a media row, so
  * an R2 outage cannot block deleting a classroom with nothing in the bucket.
  *
+ * The delete cascades through the classroom's rows, its `audit_logs` among
+ * them. What is left of it is one `platform_audit_logs` row, `classroom.delete`,
+ * written after the delete: who deleted it (`by.actorId`), its slug, name, git
+ * organization and provider, and how many audit rows, memberships and
+ * assignments it had (counted just before the delete). `by.reason` marks a
+ * delete that is not a person's choice (`create_rollback`: a create that did
+ * not finish). The classroom is gone either way, so a failure writing that row
+ * is logged (`audit_miss`) and never makes the delete fail.
+ *
  * @param {string} id - UUID of the Classroom
+ * @param by - who is deleting it, and why when it is not their choice
  * @returns {Promise<Object>}
  */
-export const deleteById = async (id: string) => {
+export const deleteById = async (id: string, by: ClassroomDeleteActor) => {
   await purgeClassroomMedia(id);
-  return getPrisma().classroom.delete({
+  const prisma = getPrisma();
+  const [facts, assignments] = await Promise.all([
+    prisma.classroom.findUnique({
+      where: { id },
+      select: {
+        slug: true,
+        name: true,
+        git_organization: { select: { login: true, provider: true } },
+        _count: { select: { audit_logs: true, memberships: true } },
+      },
+    }),
+    prisma.assignment.count({ where: { module: { classroom_id: id } } }),
+  ]);
+  const deleted = await prisma.classroom.delete({
     where: { id },
   });
+  await recordPlatformAudit({
+    actor_id: by.actorId,
+    action: 'classroom.delete',
+    target_type: 'classroom',
+    target_id: id,
+    classroom_id: id,
+    data: {
+      slug: facts?.slug ?? deleted.slug,
+      name: facts?.name ?? deleted.name,
+      git_organization: facts?.git_organization?.login ?? null,
+      provider: facts?.git_organization?.provider ?? null,
+      counts: {
+        audit_rows: facts?._count.audit_logs ?? 0,
+        members: facts?._count.memberships ?? 0,
+        assignments,
+      },
+      ...(by.reason ? { reason: by.reason } : {}),
+    },
+  });
+  return deleted;
 };
 
 /** One GitHub artifact the optional delete-cleanup will remove. */

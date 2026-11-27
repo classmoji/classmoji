@@ -362,9 +362,11 @@ const removeClassroomHandler = async (
   // `deleteById` removes the classroom's stored media first and refuses to
   // delete the classroom when that fails: with the rows gone nothing would name
   // the files any more. Same answer as a failed GitHub cleanup — nothing
-  // deleted from the classroom, try again.
+  // deleted from the classroom, try again. The delete cascades the classroom's
+  // audit rows with it; `deleteById` records the deletion itself, with the
+  // requester as its actor, in the platform audit log.
   try {
-    await ClassmojiService.classroom.deleteById(classroom.id);
+    await ClassmojiService.classroom.deleteById(classroom.id, { actorId: requesterUserId });
   } catch (error: unknown) {
     console.error('Classroom delete failed:', error);
     return {

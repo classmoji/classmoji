@@ -119,14 +119,18 @@ describe('disabled better-auth paths', () => {
     expect(res.status).toBe(404);
   });
 
-  // better-auth 1.7's session edit and the email-OTP email change.
-  it.each([['/update-session'], ['/email-otp/request-email-change'], ['/email-otp/change-email']])(
-    'answers %s with 404',
-    async path => {
-      expect(methodOf(path)).toBeDefined();
-      expect((await routed(path)).status).toBe(404);
-    }
-  );
+  // better-auth 1.7's session edit, the email-OTP email change, and deleting
+  // one's own account (nothing in the product deletes a person).
+  it.each([
+    ['/update-session'],
+    ['/email-otp/request-email-change'],
+    ['/email-otp/change-email'],
+    ['/delete-user'],
+    ['/delete-user/callback'],
+  ])('answers %s with 404', async path => {
+    expect(methodOf(path)).toBeDefined();
+    expect((await routed(path)).status).toBe(404);
+  });
 
   it.each([['/sign-in/email-otp'], ['/email-otp/check-verification-otp']])(
     'answers POST %s with 404',
@@ -172,6 +176,14 @@ describe('disabled better-auth paths', () => {
       );
     // No session in this call: the endpoint's own 401, not the router's 404.
     expect(error).toMatchObject({ statusCode: 401 });
+  });
+
+  it('lists the account-deletion paths among the ones the router turns off', () => {
+    // They would also refuse while `user.deleteUser` is off; the list is what
+    // keeps them off whatever that option says.
+    expect(auth.options.disabledPaths).toEqual(
+      expect.arrayContaining(['/delete-user', '/delete-user/callback'])
+    );
   });
 
   it('still serves /get-session', async () => {

@@ -18,6 +18,8 @@ const ACTION_CHIP: Record<string, { label: string; className: string }> = {
   'user.view': { label: 'Opened person', className: 'chip chip-ghost' },
   'classroom.view': { label: 'Opened class', className: 'chip chip-ghost' },
   export: { label: 'Export', className: 'chip chip-submitted' },
+  'classroom.delete': { label: 'Classroom deleted', className: 'chip chip-late' },
+  'classroom.delete_sandboxes': { label: 'Sandboxes removed', className: 'chip chip-ghost' },
 };
 
 const ActivityLog = () => {
@@ -89,6 +91,8 @@ const ActivityLog = () => {
                         <Link to={`/people/${r.actor.id}`} className="text-ink-1 hover:underline">
                           {r.actor.name ?? 'Unnamed'}
                         </Link>
+                      ) : r.system ? (
+                        <span className="text-ink-3">{r.system}</span>
                       ) : (
                         <span className="text-ink-4">deleted user</span>
                       )}

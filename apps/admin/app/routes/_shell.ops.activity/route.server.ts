@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import type { Prisma } from '@classmoji/database/client';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
-import { describeAdminAction } from '~/utils/metrics.server';
+import { adminReason, describeAdminAction, systemActorName } from '~/utils/metrics.server';
 
 const PAGE_SIZE = 50;
 
@@ -101,9 +101,10 @@ export async function loadActivity({ request }: LoaderFunctionArgs) {
         at: r.created_at.toISOString(),
         action: r.action,
         actor: r.actor,
+        system: r.actor ? null : systemActorName(r.action),
         text: describeAdminAction(r.action, r.data),
         href,
-        reason: typeof data.reason === 'string' ? data.reason : null,
+        reason: adminReason(r.action, r.data),
         filter: filter
           ? [
               filter.q ? `search “${filter.q}”` : null,
