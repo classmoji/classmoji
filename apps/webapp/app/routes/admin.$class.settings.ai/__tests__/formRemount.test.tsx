@@ -153,10 +153,15 @@ const render = async (hasKey: boolean) => {
   });
 };
 
+// A single select's shown value and placeholder: antd 5 names them
+// -selection-item and -selection-placeholder, antd 6 -content-has-value (the
+// value's text beside the search input) and -placeholder.
 const selected = () =>
-  [...container.querySelectorAll('.ant-select-selection-item')].map(node => node.textContent);
+  [...container.querySelectorAll('.ant-select-selection-item, .ant-select-content-has-value')].map(
+    node => node.textContent
+  );
 const placeholders = () =>
-  [...container.querySelectorAll('.ant-select-selection-placeholder')].map(
+  [...container.querySelectorAll('.ant-select-selection-placeholder, .ant-select-placeholder')].map(
     node => node.textContent
   );
 const saveButtons = () =>
@@ -222,9 +227,11 @@ describe('AI settings form: Save buttons', () => {
 
 /** Open the nth model/effort select (page order) and read the options it lists. */
 const optionsOf = async (index: number) => {
-  const selector = container.querySelectorAll('.ant-select-selector')[index];
+  // A mousedown on the search input opens the list in antd 5 and 6 alike
+  // (antd 6 has no -selector wrapper).
+  const input = container.querySelectorAll('.ant-select [role="combobox"]')[index];
   await act(async () => {
-    selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   });
   const dropdowns = document.querySelectorAll('.ant-select-dropdown');
   const dropdown = dropdowns[dropdowns.length - 1];

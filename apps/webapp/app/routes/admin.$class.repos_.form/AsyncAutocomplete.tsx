@@ -93,9 +93,7 @@ const AsyncAutocomplete = ({
                 setValue(v);
                 setTemplate(v);
               }}
-              onSearch={setQuery}
-              showSearch
-              filterOption={false}
+              showSearch={{ filterOption: false, onSearch: setQuery }}
               notFoundContent={
                 loading ? (
                   <div className="text-center py-4">

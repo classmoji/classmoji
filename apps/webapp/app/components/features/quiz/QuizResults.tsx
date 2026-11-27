@@ -112,14 +112,14 @@ function QuizResults({
       {submittedAtLimit && (
         <Alert
           data-testid="quiz-results-limit"
-          message={QUIZ_MESSAGE_LIMIT_COPY.submittedAtLimit}
+          title={QUIZ_MESSAGE_LIMIT_COPY.submittedAtLimit}
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
         />
       )}
       <Alert
-        message="Quiz Complete!"
+        title="Quiz Complete!"
         description="Your responses have been evaluated. Here are your results:"
         type="success"
         showIcon
@@ -193,7 +193,7 @@ function QuizResults({
 
         {feedback?.feedback_effort_note && (
           <Alert
-            message="Learning Journey"
+            title="Learning Journey"
             description={feedback.feedback_effort_note}
             type="info"
             showIcon={false}

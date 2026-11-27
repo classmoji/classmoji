@@ -263,7 +263,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
         }}
         onClose={close}
         open={opened}
-        width={width}
+        size={width}
         closeIcon={<IconX className="text-ink-1" size={18} />}
         footer={
           <div className="flex justify-end py-2">
@@ -322,6 +322,9 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
               percent={Math.round(stats.progress)}
               size={60}
               strokeColor={getProgressColor(stats.progress)}
+              // antd 6's circle is inline-flex on the text baseline, which adds
+              // 6px of line box under it; middle keeps antd 5's card height.
+              style={{ verticalAlign: 'middle' }}
             />
           </Card>
         </div>

@@ -14,6 +14,8 @@
 /* The shared video upload options (`@classmoji/ui-components/media-options`)
  * ship their own stylesheet; the video upload dialog renders them. */
 @import '@classmoji/ui-components/styles/media-options.css';
+/* antd 6 defaults that no token restores to antd 5's look. */
+@import '@classmoji/ui-components/styles/antd.css';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

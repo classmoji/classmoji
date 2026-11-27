@@ -343,7 +343,9 @@ describe('slide_create', () => {
   });
 
   it("maps the free plan's slide limit to forbidden, with the shared sentence", async () => {
-    const sentence = 'Free classes can have up to 10 slides. Upgrade to Pro for unlimited slides.';
+    const sentence =
+      "Free classes can have up to 10 slide decks. Uploaded files and links don't count. " +
+      'Upgrade to Pro for unlimited slide decks.';
     mocks.createSlide.mockRejectedValue(
       Object.assign(new Error(sentence), { code: 'PLAN_CONTENT_LIMIT' })
     );

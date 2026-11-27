@@ -448,7 +448,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         }
         open={opened}
         onClose={close}
-        width="100%"
+        size="100%"
         styles={{
           header: {
             backgroundColor: isDarkMode ? '#1f2937' : '#f9f9f9',
@@ -508,7 +508,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
               }}
             >
               {saveError && (
-                <Alert type="error" showIcon message={saveError} style={{ marginBottom: 16 }} />
+                <Alert type="error" showIcon title={saveError} style={{ marginBottom: 16 }} />
               )}
               <Form
                 form={form}
@@ -583,9 +583,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     >
                       <Select
                         mode="multiple"
-                        showSearch
+                        showSearch={{ optionFilterProp: 'label' }}
                         allowClear
-                        optionFilterProp="label"
                         placeholder="Pick the pages and slide decks this quiz is about"
                         options={sourceMaterialSelectOptions}
                       />

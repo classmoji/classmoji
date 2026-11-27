@@ -62,7 +62,43 @@ export const AskMojiViewingRefSchema = z
   .object({ kind: z.enum(VIEWING_KINDS), id: z.string().min(1).max(128).nullable() })
   .strict();
 
-/** One turn's model usage, summed over its calls (the summarizer's included). */
+/** The most model calls one usage itemizes in `steps`; later calls count in the totals only. */
+export const MAX_USAGE_STEPS = 16;
+/** The most tool names one step lists. */
+export const MAX_USAGE_STEP_TOOLS = 10;
+/** The longest tool name a step keeps. */
+export const MAX_USAGE_TOOL_NAME_CHARS = 64;
+
+/** The prompt-cache TTLs a turn's breakpoints use (one per turn). */
+export const USAGE_CACHE_TTLS = ['5m', '1h'] as const;
+export type UsageCacheTtl = (typeof USAGE_CACHE_TTLS)[number];
+
+/**
+ * One model call of a turn: `answer` (a step of the reply) or `summary` (the
+ * summarizer). `input` is the call's total input, cache reads and writes
+ * included (as the usage's `input`). Counts and tool NAMES only: never a tool
+ * input, any text, or anything a person wrote.
+ */
+export const AskMojiUsageStepSchema = z
+  .object({
+    kind: z.enum(['answer', 'summary']),
+    input: z.number().int().min(0),
+    cacheRead: z.number().int().min(0),
+    cacheWrite: z.number().int().min(0),
+    output: z.number().int().min(0),
+    reasoning: z.number().int().min(0),
+    tools: z.array(z.string().min(1).max(MAX_USAGE_TOOL_NAME_CHARS)).max(MAX_USAGE_STEP_TOOLS),
+  })
+  .strict();
+
+export type AskMojiUsageStep = z.infer<typeof AskMojiUsageStepSchema>;
+
+/**
+ * One turn's model usage, summed over its calls (the summarizer's included).
+ * `cacheTtl` and `steps` (the first `MAX_USAGE_STEPS` calls, one each) are
+ * optional: rows written before them parse as they are. The quiz stores the
+ * same shape on its replies.
+ */
 export const AskMojiUsageSchema = z
   .object({
     input: z.number().int().min(0),
@@ -72,10 +108,34 @@ export const AskMojiUsageSchema = z
     reasoning: z.number().int().min(0),
     calls: z.number().int().min(0),
     model: z.string().max(200).nullable(),
+    cacheTtl: z.enum(USAGE_CACHE_TTLS).optional(),
+    steps: z.array(AskMojiUsageStepSchema).max(MAX_USAGE_STEPS).optional(),
   })
   .strict();
 
 export type AskMojiUsage = z.infer<typeof AskMojiUsageSchema>;
+
+/**
+ * Two usages of one turn as one: every count summed, `model` and `cacheTtl`
+ * the first one's unless it had none, `steps` the first's then the second's,
+ * capped at `MAX_USAGE_STEPS` (kept only when there is one). Both are
+ * expected to be valid usages.
+ */
+export function mergeUsage(a: AskMojiUsage, b: AskMojiUsage): AskMojiUsage {
+  const steps = [...(a.steps ?? []), ...(b.steps ?? [])].slice(0, MAX_USAGE_STEPS);
+  const cacheTtl = a.cacheTtl ?? b.cacheTtl;
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+    reasoning: a.reasoning + b.reasoning,
+    calls: a.calls + b.calls,
+    model: a.model ?? b.model,
+    ...(cacheTtl ? { cacheTtl } : {}),
+    ...(steps.length > 0 ? { steps } : {}),
+  };
+}
 
 /** A citation the server resolved (an ok `cite_content` result), as stored for insights. */
 export type AskMojiCiteRef = {

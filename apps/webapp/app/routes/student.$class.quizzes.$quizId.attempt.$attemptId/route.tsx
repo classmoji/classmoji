@@ -493,8 +493,8 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
         }
         open={opened}
         onClose={handleClose}
-        maskClosable={false}
-        width="90%"
+        mask={{ closable: false }}
+        size="90%"
         styles={{
           header: {
             backgroundColor: isDarkMode ? '#1f2937' : '#f9f9f9',

@@ -88,7 +88,7 @@ export function VideoUploadDialog({
         open={file !== null}
         title="Upload video"
         onCancel={close}
-        maskClosable={!upload.uploading}
+        mask={{ closable: !upload.uploading }}
         destroyOnHidden
         footer={
           upload.uploading

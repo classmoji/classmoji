@@ -54,7 +54,7 @@ export default function InstallAppBanner({ orgLogin, githubAppName, classSlug }:
     <Alert
       type="info"
       showIcon
-      message="Connect this classroom to GitHub"
+      title="Connect this classroom to GitHub"
       description={
         <div className="flex flex-col gap-2">
           <span>

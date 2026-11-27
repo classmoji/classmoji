@@ -738,7 +738,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       // of its module keeps the attempts already made.
       render: (_: unknown, record: AdminQuiz) =>
         record.attemptsCount > 0 ? (
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <Text>{record.attemptsCount} attempts</Text>
             {record.avgEmoji && (
               <Text type="secondary" style={{ fontSize: 12 }}>

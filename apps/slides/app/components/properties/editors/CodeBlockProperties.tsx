@@ -141,10 +141,10 @@ export default function CodeBlockProperties({ element }: { element: HTMLElement 
             options={LANGUAGES}
             className="w-full"
             size="small"
-            showSearch
-            filterOption={(input: string, option) =>
-              (option?.label as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
-            }
+            showSearch={{
+              filterOption: (input: string, option) =>
+                (option?.label as string)?.toLowerCase().includes(input.toLowerCase()) ?? false,
+            }}
           />
         </div>
 

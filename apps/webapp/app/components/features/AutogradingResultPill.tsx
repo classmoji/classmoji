@@ -38,7 +38,7 @@ const AutogradingResultPill = ({ result, org, repoName }: AutogradingResultPillP
         title={null}
         width={420}
         centered
-        styles={{ content: { borderRadius: 16, padding: 20 } }}
+        styles={{ container: { borderRadius: 16, padding: 20 } }}
       >
         <AutogradingResultCard result={result} org={org} repoName={repoName} embedded />
       </Modal>

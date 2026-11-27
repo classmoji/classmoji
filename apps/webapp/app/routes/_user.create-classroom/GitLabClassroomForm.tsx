@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GITLAB_ANTD_BUTTON, GITLAB_BUTTON_LOGO } from '~/components/ui/gitlabButton';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Alert, Button, Card, Form, Input, Select, message } from 'antd';
+import { Alert, App, Button, Card, Form, Input, Select } from 'antd';
 
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
@@ -52,6 +52,7 @@ const GitLabClassroomForm = ({
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { fetcher, notify } = useGlobalFetcher();
+  const { message } = App.useApp();
   const [groupId, setGroupId] = useState<number | null>(gitlab.groups[0]?.id ?? null);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -89,7 +90,7 @@ const GitLabClassroomForm = ({
     if (!data?.classroomSlug) return;
     if (data.activation_warning) message.warning(data.activation_warning, 10);
     navigate(`/admin/${data.classroomSlug}/dashboard`);
-  }, [data, navigate]);
+  }, [data, navigate, message]);
 
   const submit = () => {
     let importConfig = null;
@@ -143,7 +144,7 @@ const GitLabClassroomForm = ({
       {providerSwitch}
 
       {outcome && (
-        <Alert type={outcome.type} showIcon message={outcome.text} style={{ marginBottom: 16 }} />
+        <Alert type={outcome.type} showIcon title={outcome.text} style={{ marginBottom: 16 }} />
       )}
 
       {!gitlab.connection ? (
@@ -182,7 +183,7 @@ const GitLabClassroomForm = ({
             <Alert
               type="error"
               showIcon
-              message="Gitlab refused the connection"
+              title="Gitlab refused the connection"
               description={`${gitlab.error} Reconnect Gitlab to continue.`}
               action={
                 <Button size="small" href={CONNECT_URL}>
@@ -194,7 +195,7 @@ const GitLabClassroomForm = ({
             <Alert
               type="warning"
               showIcon
-              message="No Gitlab groups available"
+              title="No Gitlab groups available"
               description="You need to be an Owner or Maintainer of a Gitlab group. Create one on Gitlab, then reload this page."
             />
           ) : (
@@ -256,7 +257,7 @@ const GitLabClassroomForm = ({
               )}
 
               {data?.error && (
-                <Alert type="error" showIcon message={data.error} style={{ marginBottom: 16 }} />
+                <Alert type="error" showIcon title={data.error} style={{ marginBottom: 16 }} />
               )}
 
               <div className="flex justify-end gap-3">

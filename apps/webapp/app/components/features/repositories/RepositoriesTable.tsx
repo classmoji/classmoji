@@ -101,6 +101,39 @@ interface RepositoriesTableProps {
 
 const prettyType = (type?: string) => (type ? type.charAt(0) + type.slice(1).toLowerCase() : '');
 
+/**
+ * The tree's disclosure: a chevron, not antd's plus/minus box, the same
+ * disclosure the module cards use. Leaf rows keep the spacer so names stay
+ * aligned. antd 6 takes it as `components.ExpandIcon`.
+ */
+const TreeExpandIcon = ({
+  expanded,
+  expandable,
+  onClick,
+  record,
+}: {
+  expanded: boolean;
+  expandable: boolean;
+  onClick: React.MouseEventHandler<HTMLElement>;
+  record?: TreeNode;
+}) =>
+  expandable ? (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={`${expanded ? 'Collapse' : 'Expand'} ${record?.name ?? ''}`}
+      onClick={e => {
+        e.stopPropagation();
+        onClick(e);
+      }}
+      className="float-left mr-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded align-middle text-ink-3 transition-colors hover:bg-stone-100 hover:text-ink-1 dark:hover:bg-neutral-800"
+    >
+      {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+    </button>
+  ) : (
+    <span className="float-left mr-2 inline-block h-5 w-5 shrink-0" />
+  );
+
 // forwardRef + prop spread so antd overlays that clone the trigger child (and
 // attach a ref to anchor a popover/tooltip) keep working if one ever wraps it.
 const ActionLink = forwardRef<
@@ -468,27 +501,9 @@ const RepositoriesTable = ({
         rowKey="key"
         rowHoverable={false}
         size="middle"
+        components={{ ExpandIcon: TreeExpandIcon }}
         expandable={{
           expandedRowKeys,
-          // A chevron, not antd's plus/minus box: the same disclosure the
-          // module cards use. Leaf rows keep the spacer so names stay aligned.
-          expandIcon: ({ expanded, onExpand, record, expandable }) =>
-            expandable ? (
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${record.name}`}
-                onClick={e => {
-                  e.stopPropagation();
-                  onExpand(record, e);
-                }}
-                className="float-left mr-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded align-middle text-ink-3 transition-colors hover:bg-stone-100 hover:text-ink-1 dark:hover:bg-neutral-800"
-              >
-                {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
-              </button>
-            ) : (
-              <span className="float-left mr-2 inline-block h-5 w-5 shrink-0" />
-            ),
           onExpand: (expanded, record) =>
             setCollapsed(prev => {
               const next = new Set(prev);

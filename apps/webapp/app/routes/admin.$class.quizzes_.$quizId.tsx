@@ -1,7 +1,7 @@
 import { useLocation, useNavigate, useParams, Outlet, useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 import type { Route } from './+types/admin.$class.quizzes_.$quizId';
-import { Table, Button, Tag, Tooltip, Badge, Space, Modal, Select, Spin } from 'antd';
+import { App, Table, Button, Tag, Tooltip, Badge, Space, Modal, Select, Spin } from 'antd';
 import { useCallout } from '@classmoji/ui-components';
 import { IconEye, IconArrowLeft, IconClock, IconTrophy } from '@tabler/icons-react';
 import { IconChartBar } from '~/components/ui/display/tablerIcons';
@@ -317,6 +317,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
+  const { modal } = App.useApp();
   const { quiz, students, stats, adminAttempt, lateWaiver } = loaderData;
   const waivable = new Set(lateWaiver?.studentIds ?? []);
   useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
@@ -385,7 +386,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       const result = await response.json().catch(() => null);
 
       if (!result?.success) {
-        Modal.error({
+        modal.error({
           title: 'Cannot Start Preview',
           content:
             typeof result?.message === 'string' && result.message
@@ -399,7 +400,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${result.attemptId}`);
     } catch (error: unknown) {
       console.error('[Preview] Error creating attempt:', error);
-      Modal.error({
+      modal.error({
         title: 'Error',
         content: 'Failed to create preview attempt. Please try again.',
       });
@@ -419,7 +420,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       // Check for existing in-progress attempt to determine action. An
       // unfinished one from the retired ai-agent runtime can't be resumed.
       if (adminAttempt?.open) {
-        Modal.confirm({
+        modal.confirm({
           title: 'Resume or Start New?',
           content:
             'You have an in-progress preview attempt. Would you like to resume or start fresh?',
@@ -445,7 +446,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     } else {
       // Non-code-aware quiz - proceed without repo selection
       if (adminAttempt?.open) {
-        Modal.confirm({
+        modal.confirm({
           title: 'Resume or Start New?',
           content:
             'You have an in-progress preview attempt. Would you like to resume or start fresh?',
@@ -482,12 +483,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleClearMyAttempts = () => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Clear Your Preview Attempts',
       content:
         'This will delete all your preview attempts for this quiz. This action cannot be undone.',
       okText: 'Clear',
-      okType: 'danger',
+      okButtonProps: { danger: true },
       onOk: () => {
         fetcher.submit(
           { _action: 'clearMyAttempts' },
@@ -845,10 +846,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
-            showSearch
-            filterOption={(input, option) =>
-              option!.label.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                option!.label.toLowerCase().includes(input.toLowerCase()),
+            }}
             options={repos.map((r: Record<string, unknown>) => ({
               value: ((r.ref as string | undefined) ?? r.name) as string,
               label: r.name as string,

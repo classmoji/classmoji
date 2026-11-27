@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './antd-v5.css';
 
 /* `dark:` styles apply under a `.dark` class on <html>, which Layout.astro sets
    from the OS setting (and keeps in sync when it changes). */

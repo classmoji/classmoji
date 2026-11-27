@@ -49,7 +49,7 @@ test.describe('Assistant Navigation', () => {
     authenticatedPage: page,
   }) => {
     // The role label lives in the dropdown option, not the selected label.
-    const orgSelect = page.locator('.ant-select-selector').first();
+    const orgSelect = page.locator('.ant-select').first();
     await orgSelect.click();
     await expect(page.getByText('Assistant', { exact: true }).first()).toBeVisible({
       timeout: 10000,

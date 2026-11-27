@@ -768,8 +768,7 @@ export async function importPageRows({
 
   if (overLimit > 0 && limit !== null) {
     warnings.push(
-      `pages: skipped ${overLimit} page(s). ` +
-        ClassmojiService.planLimits.contentLimitMessage('pages', limit)
+      `pages: ${ClassmojiService.planLimits.skippedOverLimitText('pages', overLimit, limit)}`
     );
   }
 
@@ -848,7 +847,9 @@ export async function importSlideRows({
   const total = sourceSlides.length;
   writer.patch({ phase: 'slides', status: 'running', done: already.size, total });
 
-  // Same plan limit as importPageRows: oldest first, the rest skipped.
+  // Same plan limit as importPageRows, on decks only: the oldest decks up to the
+  // room, the rest skipped; every file and link comes across.
+  const { countsTowardSlideLimit } = ClassmojiService.planLimits;
   const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
     job.classroom_id,
     'slides'
@@ -868,7 +869,8 @@ export async function importSlideRows({
   );
   for (const slide of sourceSlides) {
     if (already.has(slide.id)) continue;
-    if (room !== null && room <= 0) {
+    const counted = countsTowardSlideLimit(slide.kind);
+    if (counted && room !== null && room <= 0) {
       overLimit++;
       done++;
       writer.patch({ phase: 'slides', status: 'running', done, total });
@@ -925,7 +927,7 @@ export async function importSlideRows({
       });
       writer.mergeIdMaps({ slides: { [slide.id]: row.id } });
       created++;
-      if (room !== null) room--;
+      if (counted && room !== null) room--;
     } catch (error: unknown) {
       warnings.push(`slides: DB row failed for "${slide.title}": ${errText(error)}`);
     } finally {
@@ -936,8 +938,7 @@ export async function importSlideRows({
 
   if (overLimit > 0 && limit !== null) {
     warnings.push(
-      `slides: skipped ${overLimit} slide(s). ` +
-        ClassmojiService.planLimits.contentLimitMessage('slides', limit)
+      `slides: ${ClassmojiService.planLimits.skippedOverLimitText('slides', overLimit, limit)}`
     );
   }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
-import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
+import { App, Form, Switch, Input, Select, Button, Badge, Alert, Divider } from 'antd';
 import { IconInfoCircle } from '@tabler/icons-react';
 
 import { namedAction } from '~/utils/namedAction.server';
@@ -238,6 +238,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     selectValues,
   } = loaderData;
   const { class: classSlug } = useParams();
+  const { modal } = App.useApp();
 
   const { fetcher } = useGlobalFetcher();
 
@@ -277,12 +278,12 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleClearSettings = () => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Clear all AI settings',
       content:
         "Removes the classroom's Anthropic API key and every model and effort choice on this page.",
       okText: 'Clear',
-      okType: 'danger',
+      okButtonProps: { danger: true },
       onOk: () => {
         submit({ _action: 'clearLLMSettings' });
       },
@@ -359,7 +360,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     <div className="">
       {aiUnavailable && (
         <Alert
-          message="AI features aren't available on this server"
+          title="AI features aren't available on this server"
           type="warning"
           showIcon={true}
           style={{ marginBottom: '16px' }}

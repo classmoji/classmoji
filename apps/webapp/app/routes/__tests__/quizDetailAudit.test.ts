@@ -65,15 +65,19 @@ vi.mock('~/utils/quizUtils', () => ({
   formatDuration: () => '',
   checkForCompletion: () => null,
 }));
+// What the route imports from antd. Dialogs come from App.useApp(); Modal is
+// only rendered as a component.
 vi.mock('antd', () => ({
+  App: Object.assign(() => null, {
+    useApp: () => ({ modal: { confirm: vi.fn(), error: vi.fn() } }),
+  }),
   Table: () => null,
   Button: () => null,
   Tag: () => null,
   Tooltip: () => null,
   Badge: () => null,
   Space: () => null,
-  Modal: { confirm: vi.fn() },
-  message: { success: vi.fn(), error: vi.fn() },
+  Modal: () => null,
   Select: () => null,
   Spin: () => null,
 }));

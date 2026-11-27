@@ -6,7 +6,6 @@ import {
   createFileBlockConfig,
   fileParse,
 } from '@blocknote/core';
-import { pageStyleSpecs } from '@classmoji/page-schema';
 import {
   AudioBlock,
   AudioToExternalHTML,
@@ -98,7 +97,6 @@ type SchemaOptions = NonNullable<Parameters<typeof BlockNoteSchema.create>[0]>;
  * the documents, block types and props are the same — only the render differs.
  */
 export const editingSchema = BlockNoteSchema.create({
-  styleSpecs: pageStyleSpecs,
   blockSpecs: {
     ...pageBlockSpecs,
     file: EditorFileBlock(),

@@ -1,4 +1,4 @@
-import { Modal, Radio, Button, message } from 'antd';
+import { App, Radio, Button } from 'antd';
 import { SettingSection } from '~/components';
 
 type Status = 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
@@ -28,6 +28,7 @@ const STATUS_OPTIONS: { value: Status; label: string; desc: string }[] = [
 ];
 
 const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) => {
+  const { modal, message } = App.useApp();
   const setStatus = async (next: Status) => {
     const response = await fetch(`/api/classrooms/${classroomId}/status`, {
       method: 'PATCH',
@@ -45,7 +46,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
   };
 
   const setArchived = (next: boolean) => {
-    Modal.confirm({
+    modal.confirm({
       title: next ? 'Archive class?' : 'Unarchive class?',
       content: next
         ? 'The class will be moved to the Archived section on the landing page and its public class site goes offline. Access is not changed, and it still counts as your active class on the Free plan: set the status to Locked to free that.'

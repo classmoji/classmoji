@@ -299,7 +299,7 @@ function Results() {
   return (
     <div className="flex flex-col gap-2.5">
       <Alert
-        message="Quiz Complete!"
+        title="Quiz Complete!"
         description="Your responses have been evaluated. Here are your results:"
         type="success"
         showIcon

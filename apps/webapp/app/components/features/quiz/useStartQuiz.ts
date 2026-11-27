@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useLocation, useNavigate, useRevalidator } from 'react-router';
-import { Modal } from 'antd';
+import { App } from 'antd';
 
 /** What /api/quiz's restartQuiz (and a failed startQuiz) answers with. */
 interface RestartQuizBody {
@@ -49,6 +49,7 @@ export const useStartQuiz = (classSlug: string) => {
   const navigate = useNavigate();
   const location = useLocation();
   const revalidator = useRevalidator();
+  const { modal } = App.useApp();
   const [startingQuizId, setStartingQuizId] = useState<string | null>(null);
 
   const rolePrefix = location.pathname.split('/')[1];
@@ -78,7 +79,7 @@ export const useStartQuiz = (classSlug: string) => {
           // An attempt already in progress: offer to resume it.
           if (result?.reason === 'incomplete_attempt_exists' && result.existingAttemptId) {
             const existingAttemptId = result.existingAttemptId;
-            Modal.confirm({
+            modal.confirm({
               title: 'Resume or Start New?',
               content: 'You have an in-progress attempt. Would you like to resume it?',
               okText: 'Resume',
@@ -89,7 +90,7 @@ export const useStartQuiz = (classSlug: string) => {
             });
             return;
           }
-          Modal.error({ title: 'Cannot Start Quiz', content: restartFailureCopy(result) });
+          modal.error({ title: 'Cannot Start Quiz', content: restartFailureCopy(result) });
           return;
         }
 
@@ -103,7 +104,7 @@ export const useStartQuiz = (classSlug: string) => {
           // The new attempt may still exist though it didn't start, so the page
           // shows it. (One refused for its source material has been removed.)
           revalidator.revalidate();
-          Modal.error({
+          modal.error({
             title: 'Cannot Start Quiz',
             content: restartFailureCopy(await readJsonBody(startResponse)),
           });
@@ -114,12 +115,12 @@ export const useStartQuiz = (classSlug: string) => {
       } catch (error: unknown) {
         // The raw error stays in the console; the page only ever shows fixed copy.
         console.error('Error creating new attempt:', error);
-        Modal.error({ title: 'Cannot Start Quiz', content: RESTART_FAILED });
+        modal.error({ title: 'Cannot Start Quiz', content: RESTART_FAILED });
       } finally {
         setStartingQuizId(null);
       }
     },
-    [attemptPath, navigate, revalidator]
+    [attemptPath, navigate, revalidator, modal]
   );
 
   /** Open an attempt that is already running. */

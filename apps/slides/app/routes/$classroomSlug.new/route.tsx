@@ -155,20 +155,21 @@ export const loader = async ({
   // action re-derives it from the uploaded row; this is only what the form says.
   const uploadCapability = await loadUploadCapability(classroom, 'new slide');
 
-  // At the Free plan's slide limit the picker is not shown at all: the page
-  // says so up front instead of refusing after the form was filled in.
+  // The Free plan's slide limit counts decks only. At the limit the "Start
+  // blank" choice says so up front instead of refusing after the form was
+  // filled in; uploading a file and linking a URL stay open.
   const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
     classroom.id,
     'slides'
   );
-  const limitMessage =
+  const deckLimitMessage =
     limit !== null && remaining === 0
       ? ClassmojiService.planLimits.contentLimitMessage('slides', limit)
       : null;
   const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
 
   return {
-    limitMessage,
+    deckLimitMessage,
     // Only an owner can upgrade; other staff are told who can.
     upgradeUrl: membership?.role === 'OWNER' ? `${webappUrl}/settings/billing` : null,
     classroomSlug,
@@ -555,15 +556,15 @@ function SourceOption({
 }
 
 export default function NewSlidePage() {
-  const { limitMessage, upgradeUrl, slidesListUrl } = useLoaderData<typeof loader>();
-  return limitMessage ? (
-    <SlideLimitReached message={limitMessage} upgradeUrl={upgradeUrl} backUrl={slidesListUrl} />
-  ) : (
-    <NewSlideForm />
-  );
+  return <NewSlideForm />;
 }
 
-function SlideLimitReached({
+/**
+ * What the "Start blank" choice shows in place of its form when the class is
+ * at the Free plan's deck limit. Only decks count, so it links to the two
+ * choices that still work, the same way their cards above do.
+ */
+function DeckLimitReached({
   message,
   upgradeUrl,
   backUrl,
@@ -573,25 +574,31 @@ function SlideLimitReached({
   backUrl: string;
 }) {
   return (
-    <div className="min-h-screen bg-[var(--bg-page)] px-4 py-10">
-      <div className="mx-auto w-full max-w-lg card p-6">
-        <h1 className="text-lg font-semibold text-[var(--ink-0)]">Free plan limit reached</h1>
-        <p className="mt-2 text-sm text-[var(--ink-2)]">{message}</p>
-        <div className="mt-5 flex items-center justify-end gap-2">
-          {!upgradeUrl && (
-            <span className="mr-auto text-sm text-[var(--ink-3)]">
-              Ask the class owner to upgrade.
-            </span>
-          )}
-          <a href={backUrl} className="btn">
-            Back to slides
+    <div>
+      <h2 className="text-base font-semibold text-[var(--ink-0)]">Free plan limit reached</h2>
+      <p className="mt-2 text-sm text-[var(--ink-2)]">{message}</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Link to="?source=file" replace preventScrollReset className="btn">
+          Upload a file
+        </Link>
+        <Link to="?source=link" replace preventScrollReset className="btn">
+          Link a URL
+        </Link>
+      </div>
+      <div className="mt-5 flex items-center justify-end gap-2">
+        {!upgradeUrl && (
+          <span className="mr-auto text-sm text-[var(--ink-3)]">
+            Ask the class owner to upgrade.
+          </span>
+        )}
+        <a href={backUrl} className="btn">
+          Back to slides
+        </a>
+        {upgradeUrl && (
+          <a href={upgradeUrl} className="btn btn-primary">
+            Upgrade to Pro
           </a>
-          {upgradeUrl && (
-            <a href={upgradeUrl} className="btn btn-primary">
-              Upgrade to Pro
-            </a>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );
@@ -599,6 +606,8 @@ function SlideLimitReached({
 
 function NewSlideForm() {
   const {
+    deckLimitMessage,
+    upgradeUrl,
     classroomSlug,
     classroomId,
     uploadCapability,
@@ -643,6 +652,11 @@ function NewSlideForm() {
   // navigation clears `useActionData` — so an error that is here was produced
   // by the form that is here.
   const serverError = actionData?.error ?? media.state.error ?? null;
+  // The deck limit gates the blank (deck) choice and nothing else.
+  const deckNotice = source === 'blank' ? deckLimitMessage : null;
+  // A deck refused at the limit comes back with the same sentence the notice
+  // already shows; say it once.
+  const alertError = serverError && serverError !== deckNotice ? serverError : null;
 
   const extensionList = useMemo(
     () => upload.extensions.map(ext => `.${ext}`).join(', '),
@@ -767,16 +781,24 @@ function NewSlideForm() {
 
         {/* The chosen form */}
         <div className="card mt-4 p-5 sm:p-6">
-          {serverError && (
+          {alertError && (
             <div
               role="alert"
               className="mb-5 rounded-[10px] border border-[var(--rose-bord)] bg-[var(--rose-bg)] px-4 py-3 text-sm text-[var(--rose-ink)]"
             >
-              {serverError}
+              {alertError}
             </div>
           )}
 
-          {source === 'blank' && (
+          {deckNotice && (
+            <DeckLimitReached
+              message={deckNotice}
+              upgradeUrl={upgradeUrl}
+              backUrl={slidesListUrl}
+            />
+          )}
+
+          {source === 'blank' && !deckNotice && (
             <Form method="post">
               <input type="hidden" name="source" value="blank" />
 

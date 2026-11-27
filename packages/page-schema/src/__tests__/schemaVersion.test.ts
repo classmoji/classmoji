@@ -8,12 +8,14 @@
  * editors share a room.
  *
  * So the schema's shape — every block type's content kind and props (types,
- * defaults, allowed values), every inline content type and every style — is
+ * defaults, allowed values), every inline content type, every style, and
+ * which marks each mark excludes (the marks a run may carry together) — is
  * fingerprinted here and pinned per version. Changing a config fails this
  * test until SCHEMA_VERSION is bumped and the new fingerprint is recorded
  * below (never edit an existing entry).
  */
 import { createHash } from 'node:crypto';
+import { BlockNoteEditor } from '@blocknote/core';
 import { describe, expect, it } from 'vitest';
 
 import { SCHEMA_VERSION } from '../constants.ts';
@@ -33,6 +35,11 @@ const RECORDED_FINGERPRINTS: Record<number, string> = {
   4: 'c03cb77ae791cce772cdbcfb87424d72b0b9a33eaea8fb3ef264c958e20e364d',
   // codeBlock gains `collapsible` (no default): long code shows its first lines.
   5: 'a0e014fd58ca64ff7b68f21b9fb7e4f54f860c3d8ab55500edcfa1b19d20687e',
+  // The fingerprint now includes each mark's exclusions (v5 shipped with
+  // inline code excluding only itself, a change the fingerprint could not
+  // see); the code mark goes back to BlockNote's: it excludes every other
+  // formatting mark and the link.
+  6: '8295da221de0e30063f0fc83b5c8823828ab400a5d6d436fadf220e9a6729233',
 };
 
 /** Sorted-key JSON; functions and undefined are left out (they are not shape). */
@@ -76,7 +83,14 @@ function schemaShape(schema = createPageSchema()) {
       ([type, config]) => [type, config.propSchema]
     )
   );
-  return { blocks, inline, styles };
+  // Which marks each mark excludes: a run one schema accepts and another
+  // refuses is a document one editor opens and another throws on.
+  const pm = BlockNoteEditor.create({ schema: schema as never }).pmSchema;
+  const names = Object.keys(pm.marks).sort();
+  const markExcludes = Object.fromEntries(
+    names.map(name => [name, names.filter(other => pm.marks[name].excludes(pm.marks[other]))])
+  );
+  return { blocks, inline, styles, markExcludes };
 }
 
 function schemaFingerprint(schema = createPageSchema()): string {
@@ -113,8 +127,18 @@ describe('SCHEMA_VERSION', () => {
     (extraBlock.blocks as Record<string, unknown>).quizEmbed = { content: 'none', propSchema: {} };
     expect(fp(extraBlock)).not.toBe(original);
 
+    // A mark's exclusions (v5 relaxed inline code and the fingerprint missed it).
+    const relaxedCode = structuredClone(base);
+    relaxedCode.markExcludes.code = ['code'];
+    expect(fp(relaxedCode)).not.toBe(original);
+
     // Key order alone is not a change.
-    const reordered = { styles: base.styles, inline: base.inline, blocks: base.blocks };
+    const reordered = {
+      markExcludes: base.markExcludes,
+      styles: base.styles,
+      inline: base.inline,
+      blocks: base.blocks,
+    };
     expect(fp(reordered)).toBe(original);
   });
 

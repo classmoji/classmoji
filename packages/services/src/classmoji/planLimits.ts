@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import type { SlideKind } from '@classmoji/database/client';
 import * as subscriptionService from './subscription.service.ts';
 
 /**
@@ -11,8 +12,9 @@ import * as subscriptionService from './subscription.service.ts';
  *
  * Counted per classroom, the unit Pro is resolved for
  * (`getProStateForClassroomId`). Drafts count; there is no soft delete, so a
- * deleted row frees its slot. A slide of any kind (deck, file, link) is one
- * slide.
+ * deleted row frees its slot. The slide limit counts slide DECKS only
+ * (`countsTowardSlideLimit`): an uploaded file and a link are never counted and
+ * never refused.
  *
  * A free classroom already over a limit keeps everything it has: the limit only
  * refuses NEW rows. Nothing is hidden or deleted when a plan lapses, and
@@ -45,15 +47,41 @@ export const PLAN_ACTIVE_CLASSROOM_LIMITS: Record<'FREE' | 'PRO', number | null>
   PRO: null,
 };
 
-/** `code` on the Error `assertCanCreateContent` throws. */
+/** `code` on the Error `assertCanCreateContent` and `assertCanCreateSlide` throw. */
 export const PLAN_CONTENT_LIMIT = 'PLAN_CONTENT_LIMIT';
+
+/**
+ * The one slide kind the slide limit counts. Uploaded files (`FILE`) and links
+ * (`LINK`) are never counted and never refused (decided 2026-11-25).
+ */
+export const countsTowardSlideLimit = (kind: SlideKind): boolean => kind === 'DECK';
+
+/** What the limit counts, in words (a slide limit is a limit on decks), singular and plural. */
+const LIMITED_NOUNS: Record<LimitedContent, readonly [one: string, many: string]> = {
+  pages: ['page', 'pages'],
+  slides: ['slide deck', 'slide decks'],
+};
+
+const limitedContentNoun = (kind: LimitedContent, count = 2): string =>
+  LIMITED_NOUNS[kind][count === 1 ? 0 : 1];
 
 /**
  * What every surface says when the limit refuses (webapp, pages, slides, MCP),
  * so a teacher reads the same sentence wherever they hit it.
  */
 export function contentLimitMessage(kind: LimitedContent, limit: number): string {
-  return `Free classes can have up to ${limit} ${kind}. Upgrade to Pro for unlimited ${kind}.`;
+  const noun = limitedContentNoun(kind);
+  const uncounted = kind === 'slides' ? " Uploaded files and links don't count." : '';
+  return `Free classes can have up to ${limit} ${noun}.${uncounted} Upgrade to Pro for unlimited ${noun}.`;
+}
+
+/**
+ * What an import says about the rows it left out for the limit, the same on
+ * both import paths (class-to-class and the classroom-import workflow):
+ * "skipped 1 slide deck. Free classes can …", "skipped 3 pages. Free classes …".
+ */
+export function skippedOverLimitText(kind: LimitedContent, skipped: number, limit: number): string {
+  return `skipped ${skipped} ${limitedContentNoun(kind, skipped)}. ${contentLimitMessage(kind, limit)}`;
 }
 
 export interface ContentAllowance {
@@ -67,11 +95,11 @@ export interface ContentAllowance {
 const countFor = (classroomId: string, kind: LimitedContent): Promise<number> =>
   kind === 'pages'
     ? getPrisma().page.count({ where: { classroom_id: classroomId } })
-    : getPrisma().slide.count({ where: { classroom_id: classroomId } });
+    : getPrisma().slide.count({ where: { classroom_id: classroomId, kind: 'DECK' } });
 
 /**
- * The classroom's limit for `kind` and how much of it is used. A Pro classroom
- * is not counted at all.
+ * The classroom's limit for `kind` and how much of it is used (for 'slides',
+ * decks only). A Pro classroom is not counted at all.
  */
 export const contentAllowance = async (
   classroomId: string,
@@ -85,20 +113,10 @@ export const contentAllowance = async (
   return { limit, used, remaining: Math.max(0, limit - used) };
 };
 
-/**
- * Refuse unless `count` more of `kind` fit. Call it BEFORE any git write, so a
- * refused create leaves nothing behind in the content repo.
- *
- * A check, not a reservation: two creates racing at the last slot can both
- * pass. That costs a free class at most a page or two over, which is not worth
- * a lock around a create that commits to Github in the middle.
- *
- * @throws an Error with `code = PLAN_CONTENT_LIMIT` and `limit`, `used`.
- */
-export const assertCanCreateContent = async (
+const assertRoom = async (
   classroomId: string,
   kind: LimitedContent,
-  count = 1
+  count: number
 ): Promise<void> => {
   const { limit, used, remaining } = await contentAllowance(classroomId, kind);
   if (limit === null || remaining === null || remaining >= count) return;
@@ -110,6 +128,65 @@ export const assertCanCreateContent = async (
     used,
   });
 };
+
+/**
+ * Refuse unless `count` more pages fit. Call it BEFORE any git write, so a
+ * refused create leaves nothing behind in the content repo.
+ *
+ * A check, not a reservation: two creates racing at the last slot can both
+ * pass. That costs a free class at most a page or two over, which is not worth
+ * a lock around a create that commits to Github in the middle.
+ *
+ * Pages only: a slide create goes through `assertCanCreateSlide`, which has to
+ * be told the kind, so no slide path can count a file or a link by mistake.
+ *
+ * @throws an Error with `code = PLAN_CONTENT_LIMIT` and `limit`, `used`.
+ */
+export const assertCanCreateContent = (
+  classroomId: string,
+  kind: 'pages',
+  count = 1
+): Promise<void> => assertRoom(classroomId, kind, count);
+
+/**
+ * Refuse a new slide of `slideKind` when it counts toward the limit and the
+ * class has no room for `count` more decks; a file or a link always passes.
+ * Same timing and race as `assertCanCreateContent`.
+ *
+ * @throws an Error with `code = PLAN_CONTENT_LIMIT` and `limit`, `used`.
+ */
+export const assertCanCreateSlide = async (
+  classroomId: string,
+  slideKind: SlideKind,
+  count = 1
+): Promise<void> => {
+  if (!countsTowardSlideLimit(slideKind)) return;
+  await assertRoom(classroomId, 'slides', count);
+};
+
+/**
+ * The slides a target with room for `remaining` more decks takes from `rows`:
+ * every file and link, and the first `remaining` decks, in the order given.
+ * `skipped` is how many decks were left out. `remaining` null = unlimited.
+ */
+export function slidesWithinAllowance<T extends { kind: SlideKind }>(
+  rows: T[],
+  remaining: number | null
+): { kept: T[]; skipped: number } {
+  if (remaining === null) return { kept: rows, skipped: 0 };
+  let room = remaining;
+  let skipped = 0;
+  const kept = rows.filter(row => {
+    if (!countsTowardSlideLimit(row.kind)) return true;
+    if (room > 0) {
+      room--;
+      return true;
+    }
+    skipped++;
+    return false;
+  });
+  return { kept, skipped };
+}
 
 export const isContentLimitError = (error: unknown): error is Error & { code: string } =>
   error instanceof Error && (error as { code?: unknown }).code === PLAN_CONTENT_LIMIT;

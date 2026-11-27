@@ -1,6 +1,18 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import { useEffect, useState } from 'react';
-import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
+import {
+  App,
+  Table,
+  Badge,
+  Typography,
+  Button,
+  Modal,
+  Tag,
+  Tooltip,
+  Space,
+  Select,
+  Spin,
+} from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
@@ -288,6 +300,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { startQuiz } = useStartQuiz(org ?? '');
+  const { modal } = App.useApp();
 
   // `?quiz=<id>` (from the Assignments page and Up next) opens the tab that
   // holds that quiz, on the page that holds it, and highlights its row.
@@ -325,7 +338,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       setRepos(data);
     } catch (error: unknown) {
       console.error('[Quiz] Error fetching repos:', error);
-      Modal.error({
+      modal.error({
         title: 'Error',
         content: `Failed to fetch ${terms.repos}. Please try again.`,
       });
@@ -356,7 +369,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
     const { canCreateNew, maxAttempts } = quiz!.attemptsSummary;
 
     if (!canCreateNew) {
-      Modal.error({
+      modal.error({
         title: 'Maximum Attempts Reached',
         content: `You have reached the maximum number of attempts (${maxAttempts}) for this quiz.`,
       });
@@ -369,7 +382,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   const handleRepoSelected = () => {
     if (!selectedRepo) {
-      Modal.warning({
+      modal.warning({
         title: `No ${terms.Repo} Selected`,
         content: `Please select a ${terms.repo} to continue.`,
       });
@@ -809,10 +822,10 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
             placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
-            showSearch
-            filterOption={(input, option) =>
-              option!.label.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                option!.label.toLowerCase().includes(input.toLowerCase()),
+            }}
             options={repos.map(r => ({ value: r.name, label: r.name }))}
           />
         )}

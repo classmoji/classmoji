@@ -157,7 +157,7 @@ function AssignmentPage() {
       width: 90,
       className: 'border-l border-line',
       render: () => (
-        <Tag color="red" bordered={false} className="m-0">
+        <Tag color="red" variant="filled" className="m-0">
           Not submitted
         </Tag>
       ),

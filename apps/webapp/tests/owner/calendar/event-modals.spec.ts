@@ -151,7 +151,8 @@ test.describe('Edit Event Modal redesign', () => {
     const modal = page.locator('.ant-modal');
 
     await expect(modal.getByText('Edit event', { exact: true })).toBeVisible();
-    await expect(page.locator('.ant-drawer-content')).toHaveCount(0);
+    // The drawer's panel: -content in antd 5, -section in antd 6.
+    await expect(page.locator('.ant-drawer-content, .ant-drawer-section')).toHaveCount(0);
     await expect(modal.getByRole('button', { name: /Delete/ })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Save changes' })).toBeVisible();
   });

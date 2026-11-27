@@ -9,7 +9,7 @@ import { BlockNoteEditor } from '@blocknote/core';
 import { describe, expect, it } from 'vitest';
 
 import { CODE_EXCLUDED_STYLES, cleanPageBlocks } from '../cleanContent.ts';
-import { createStrictPageSchema } from '../schema.ts';
+import { createPageSchema } from '../schema.ts';
 import { strictPmSchema, validatePageBlocks } from '../validateContent.ts';
 
 const text = (t: string, styles: Record<string, unknown> = {}) => ({
@@ -58,7 +58,7 @@ const hrefStyle = () => [
 function opensInStockEditor(blocks: unknown[]): boolean {
   try {
     BlockNoteEditor.create({
-      schema: createStrictPageSchema(),
+      schema: createPageSchema(),
       initialContent: blocks as never,
     });
     return true;
@@ -427,20 +427,5 @@ describe('cleanPageBlocks', () => {
 
   it('takes anything: a non-array comes back as it is', () => {
     expect(cleanPageBlocks(null)).toEqual({ blocks: null, changes: [] });
-  });
-
-  it('keepCodeMarks (what the app schemas still draw): code marks stay, the rest is cleaned', () => {
-    const bold = boldCode();
-    expect(cleanPageBlocks(bold, { keepCodeMarks: true }).blocks).toBe(bold);
-    const link = linkCode();
-    expect(cleanPageBlocks(link, { keepCodeMarks: true }).blocks).toBe(link);
-    const { blocks } = cleanPageBlocks(
-      [para('p1', [text('x', { href: 'https://a.dev', code: true }), text('y', { glow: true })])],
-      { keepCodeMarks: true }
-    );
-    expect(blocks[0].content).toEqual([
-      { type: 'link', href: 'https://a.dev', content: [text('x', { code: true })] },
-      text('y', {}),
-    ]);
   });
 });

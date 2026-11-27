@@ -78,7 +78,10 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
       <Form layout="vertical">
         <Form.Item label="How would you like to assign graders?">
           <Radio.Group value={method} onChange={e => setMethod(e.target.value)}>
-            <Radio value="RANDOM">Randomly</Radio>
+            {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
+            <Radio value="RANDOM" autoFocus>
+              Randomly
+            </Radio>
             <Radio value="EXISTING" disabled={siblings.length === 0}>
               Same graders as another assignment on this {web.terms.repo}
             </Radio>

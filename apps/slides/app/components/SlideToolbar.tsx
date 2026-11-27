@@ -1154,7 +1154,7 @@ document.querySelector('h1').addEventListener('click', () => {
             placement="bottomRight"
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
-            overlayClassName="slides-toolbar-popover"
+            classNames={{ root: 'slides-toolbar-popover' }}
             arrow={false}
           >
             <button

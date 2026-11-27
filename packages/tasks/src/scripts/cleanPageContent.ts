@@ -3,8 +3,9 @@
  * is also bold/italic/underlined/struck/coloured keeps only the code, code
  * inside a link keeps only the link, a link stored as a text style (`href`)
  * becomes a real link, unknown text styles go (`cleanPageBlocks`,
- * `@classmoji/page-schema`). An operator tool, run once before the page
- * schemas drop the relaxed `code` mark.
+ * `@classmoji/page-schema`). An operator tool: run before the page schemas
+ * went back to BlockNote's stock `code` mark, and safe to run again (a clean
+ * page is left alone).
  *
  * Which copy of each page is read and how it is written back (the live
  * service for live classrooms, so open editors and git stay in step; git

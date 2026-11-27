@@ -210,8 +210,11 @@ const editablePanel = () => byTestId('quiz-assignment-panel');
 const readOnlyPanel = () => byTestId('quiz-assignment-panel-readonly');
 const deleteButton = () =>
   [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Delete');
+// The module select's shown value: -selection-item in antd 5,
+// -content-has-value in antd 6.
 const chosenModule = () =>
-  editablePanel()?.querySelector('.ant-select-selection-item')?.textContent ?? null;
+  editablePanel()?.querySelector('.ant-select-selection-item, .ant-select-content-has-value')
+    ?.textContent ?? null;
 const chips = () =>
   [...(byTestId('quiz-students-see-it-in')?.querySelectorAll('span') ?? [])].map(
     s => s.textContent

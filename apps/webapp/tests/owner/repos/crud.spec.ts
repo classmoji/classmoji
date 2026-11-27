@@ -105,7 +105,7 @@ test.describe('Repository Create', () => {
     await page.getByRole('button', { name: /New repository/i }).click();
     await page.waitForURL(/\/repos\/form/, { timeout: 10000 });
 
-    const modal = page.locator('.ant-modal-content');
+    const modal = page.locator('.ant-modal');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     await expect(modal.getByText('New repository', { exact: true })).toBeVisible();
@@ -120,7 +120,7 @@ test.describe('Repository Create', () => {
     await page.getByRole('button', { name: /New repository/i }).click();
     await page.waitForURL(/\/repos\/form/, { timeout: 10000 });
 
-    const modal = page.locator('.ant-modal-content');
+    const modal = page.locator('.ant-modal');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     await expect(modal.getByText('Type', { exact: true })).toBeVisible();
@@ -185,7 +185,7 @@ test.describe('Repository Actions', () => {
 
     await page.waitForURL(new RegExp(`/repos/form\\?title=${SEED_REPO}`), { timeout: 10000 });
     await expect(
-      page.locator('.ant-modal-content').getByText('Edit repository', { exact: true })
+      page.locator('.ant-modal').getByText('Edit repository', { exact: true })
     ).toBeVisible();
   });
 
@@ -264,7 +264,7 @@ test.describe('Assignment Management (within Repository form modal)', () => {
   test('edit form modal smoke: assignments section, columns, rows and row actions', async ({
     authenticatedPage: page,
   }) => {
-    const modal = page.locator('.ant-modal-content');
+    const modal = page.locator('.ant-modal');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     // Modal title + Assignments section + Add control.
@@ -292,7 +292,7 @@ test.describe('Assignment form (nested modal)', () => {
   });
 
   const openAdd = async (page: import('@playwright/test').Page) => {
-    const repoModal = page.locator('.ant-modal-content').first();
+    const repoModal = page.locator('.ant-modal').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
     await repoModal.getByRole('button', { name: /Add issue/i }).click();
     await expect(page.getByText('New issue').first()).toBeVisible({ timeout: 5000 });
@@ -312,7 +312,7 @@ test.describe('Assignment form (nested modal)', () => {
 
   test('add assignment modal has deadline fields', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    const modal = page.locator('.ant-modal-content');
+    const modal = page.locator('.ant-modal');
     await expect(modal.getByText('Schedule & Deadlines')).toBeVisible({ timeout: 10000 });
     // "Student Deadline" / "Grader Deadline" appear both as a field label (span)
     // and as a table column header; scope to the field label to stay unambiguous.
@@ -322,20 +322,20 @@ test.describe('Assignment form (nested modal)', () => {
 
   test('add assignment modal has save and discard buttons', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    const nested = page.locator('.ant-modal-content').last();
+    const nested = page.locator('.ant-modal').last();
     await expect(nested.getByRole('button', { name: 'Add issue' })).toBeVisible();
     await expect(nested.getByRole('button', { name: 'Discard' })).toBeVisible();
   });
 
   test('can discard the add assignment modal', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    const nested = page.locator('.ant-modal-content').last();
+    const nested = page.locator('.ant-modal').last();
     await nested.getByRole('button', { name: 'Discard' }).click();
     await expect(page.getByText('New issue').first()).not.toBeVisible({ timeout: 5000 });
   });
 
   test('can open the edit assignment modal', async ({ authenticatedPage: page }) => {
-    const repoModal = page.locator('.ant-modal-content').first();
+    const repoModal = page.locator('.ant-modal').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
 
     const row = repoModal.getByRole('row').filter({ hasText: 'Hello World Part 1' }).first();
@@ -348,7 +348,7 @@ test.describe('Assignment form (nested modal)', () => {
   });
 
   test('edit assignment modal shows pre-filled title', async ({ authenticatedPage: page }) => {
-    const repoModal = page.locator('.ant-modal-content').first();
+    const repoModal = page.locator('.ant-modal').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
 
     const row = repoModal.getByRole('row').filter({ hasText: 'Hello World Part 1' }).first();
@@ -364,7 +364,7 @@ test.describe('Assignment form (nested modal)', () => {
   test('repository form modal has Update and Discard buttons', async ({
     authenticatedPage: page,
   }) => {
-    const repoModal = page.locator('.ant-modal-content').first();
+    const repoModal = page.locator('.ant-modal').first();
     await expect(repoModal).toBeVisible({ timeout: 5000 });
     await expect(repoModal.getByRole('button', { name: /Update repository/i })).toBeVisible();
     await expect(repoModal.getByRole('button', { name: /Discard/i }).first()).toBeVisible();

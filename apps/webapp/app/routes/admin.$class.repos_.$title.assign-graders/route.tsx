@@ -92,7 +92,9 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
     >
       <Form layout="vertical">
         <Form.Item label="Assignment title">
+          {/* Starting focus: antd 6's modal would otherwise focus its Close button. */}
           <Select
+            autoFocus
             placeholder="Select assignment"
             options={repository!.assignments.map((assignment: { title: string; id: string }) => ({
               label: assignment.title,

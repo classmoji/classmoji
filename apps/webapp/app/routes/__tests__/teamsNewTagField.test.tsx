@@ -109,9 +109,11 @@ const click = async (el: Element) => {
 };
 
 const openTagList = async () => {
-  const selector = document.querySelector('[data-tour="teams-new-tags"] .ant-select-selector')!;
+  // A mousedown on the search input opens the list in antd 5 and 6 alike
+  // (antd 6 has no -selector wrapper).
+  const input = document.querySelector('[data-tour="teams-new-tags"] [role="combobox"]')!;
   await act(async () => {
-    selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   });
   return document.querySelector<HTMLInputElement>('input[aria-label="New team tag name"]')!;
 };

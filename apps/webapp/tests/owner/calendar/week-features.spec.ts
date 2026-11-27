@@ -192,7 +192,7 @@ test.describe('Owner Week View — linked resources', () => {
     // The press never reached the block underneath, which for an owner would
     // have opened the edit modal. dnd-kit's 3px sensor is listening on an
     // ancestor, so a wobbly click has to be stopped at the chip.
-    await expect(page.locator('.ant-modal-content')).toHaveCount(0);
+    await expect(page.locator('.ant-modal')).toHaveCount(0);
     if (deckTab) await deckTab.close();
   });
 });

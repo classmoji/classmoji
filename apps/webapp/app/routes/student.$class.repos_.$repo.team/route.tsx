@@ -1,4 +1,4 @@
-import { Button, Card, Input, List, Avatar, Tag, Empty } from 'antd';
+import { Button, Card, Input, Avatar, Tag, Empty } from 'antd';
 import { IconUsers, IconUserPlus, IconLogout, IconPlus } from '@tabler/icons-react';
 import { useState, useEffect, useContext } from 'react';
 import { useFetcher, Link } from 'react-router';
@@ -342,6 +342,37 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 };
 
+/**
+ * One team in a list. antd 6 deprecates `List`, so this is the markup and the
+ * spacing antd 5's `List.Item` + `List.Item.Meta` drew: a 12px row padding, a
+ * hairline between rows, a 32px avatar 16px from the text, and the action
+ * 48px clear of it with antd's trailing 8px.
+ */
+const TeamRow = ({
+  title,
+  description,
+  action,
+}: {
+  title: React.ReactNode;
+  description: React.ReactNode;
+  action?: React.ReactNode;
+}) => (
+  // Pixel values, not the spacing scale: the root font size is 17px here, so
+  // `py-3` would be 12.75px rather than antd's 12px.
+  <li className="flex items-center justify-between py-[12px] border-b border-[rgba(5,5,5,0.06)] dark:border-[#404040] last:border-b-0 text-[14px] leading-[1.5714]">
+    <div className="flex flex-1 items-start max-w-full">
+      <div className="me-[16px]">
+        <Avatar icon={<IconUsers size={16} />} />
+      </div>
+      <div className="flex-[1_0] w-0">
+        <div className="mb-[4px] text-[rgba(20,21,26,0.88)] dark:text-[#e5e5e5]">{title}</div>
+        <div className="text-[rgba(20,21,26,0.45)] dark:text-[#a3a3a3]">{description}</div>
+      </div>
+    </div>
+    {action && <div className="flex-none ms-[48px] pe-[8px]">{action}</div>}
+  </li>
+);
+
 const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   const { repository, teams, userTeam, maxTeamSize, deadlinePassed, deadline, classSlug } =
     loaderData;
@@ -525,45 +556,40 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                 <div className="text-sm">Create a new team to get started!</div>
               </div>
             ) : (
-              <List
-                dataSource={availableTeams}
-                renderItem={team => (
-                  <List.Item
-                    actions={[
+              <ul className="m-0 p-0 list-none">
+                {availableTeams.map(team => (
+                  <TeamRow
+                    key={team.id}
+                    title={team.name}
+                    action={
                       <Button
-                        key="join"
                         type="primary"
                         onClick={() => handleJoinTeam(team.id)}
                         loading={isSubmitting}
                         disabled={isFull(team)}
                       >
                         {isFull(team) ? 'Full' : 'Join'}
-                      </Button>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      avatar={<Avatar icon={<IconUsers size={16} />} />}
-                      title={team.name}
-                      description={
-                        <div className="flex items-center gap-3">
-                          <Tag color={isFull(team) ? 'red' : 'blue'}>
-                            {team.memberships.length}
-                            {maxTeamSize ? `/${maxTeamSize}` : ''} members
-                            {isFull(team) && ' (Full)'}
-                          </Tag>
-                          <div className="flex items-center gap-2">
-                            {team.memberships.map(m => (
-                              <Avatar key={m.user_id} src={m.user.image ?? undefined} size={24}>
-                                {m.user.name?.[0] || m.user.login?.[0]}
-                              </Avatar>
-                            ))}
-                          </div>
+                      </Button>
+                    }
+                    description={
+                      <div className="flex items-center gap-3">
+                        <Tag color={isFull(team) ? 'red' : 'blue'}>
+                          {team.memberships.length}
+                          {maxTeamSize ? `/${maxTeamSize}` : ''} members
+                          {isFull(team) && ' (Full)'}
+                        </Tag>
+                        <div className="flex items-center gap-2">
+                          {team.memberships.map(m => (
+                            <Avatar key={m.user_id} src={m.user.image ?? undefined} size={24}>
+                              {m.user.name?.[0] || m.user.login?.[0]}
+                            </Avatar>
+                          ))}
                         </div>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
+                      </div>
+                    }
+                  />
+                ))}
+              </ul>
             )}
           </Card>
         </>
@@ -584,18 +610,18 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
 
       {/* All Teams (for reference) */}
       {userTeam && teams.length > 1 && (
-        // The gap lives on this wrapper, not on the Card's own className: antd
-        // v5 injects `.ant-card` styles at runtime, after the Tailwind sheet, so
-        // a same-specificity `mt-*` utility on the Card loses the cascade and
-        // the two cards render flush against each other.
+        // The gap lives on this wrapper, not on the Card's own className: antd's
+        // `.ant-card` styles are unlayered and Tailwind's utilities sit in a
+        // cascade layer, so an `mt-*` utility on the Card loses to antd's margin
+        // and the two cards render flush against each other.
         <div className="mt-6">
           <Card title="All Teams">
-            <List
-              dataSource={teams.filter(t => t.id !== userTeam.id)}
-              renderItem={team => (
-                <List.Item>
-                  <List.Item.Meta
-                    avatar={<Avatar icon={<IconUsers size={16} />} />}
+            <ul className="m-0 p-0 list-none">
+              {teams
+                .filter(t => t.id !== userTeam.id)
+                .map(team => (
+                  <TeamRow
+                    key={team.id}
                     title={team.name}
                     description={
                       <Tag
@@ -609,9 +635,8 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                       </Tag>
                     }
                   />
-                </List.Item>
-              )}
-            />
+                ))}
+            </ul>
           </Card>
         </div>
       )}
