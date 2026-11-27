@@ -1786,9 +1786,17 @@ export const auth = betterAuth({
    * And the authorization server's endpoints no client or page uses
    * (OAUTH_PATHS_NOT_USED). It keeps authorize, consent, token, register and
    * revoke, its discovery documents and the jwt plugin's `/jwks`.
+   *
+   * `/delete-user` and `/delete-user/callback` are off as well. They would
+   * refuse anyway while `user.deleteUser` is not enabled, but nothing in the
+   * product deletes a person, and deleting one would take their audit rows in
+   * every classroom with them; turning the paths off keeps that true if the
+   * option is ever enabled.
    */
   disabledPaths: [
     '/list-sessions',
+    '/delete-user',
+    '/delete-user/callback',
     '/get-access-token',
     '/refresh-token',
     '/verify-password',
