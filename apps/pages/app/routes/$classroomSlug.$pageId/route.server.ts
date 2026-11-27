@@ -643,28 +643,25 @@ export const loader = async ({
   // member). One VIEW row per load that got this far (a document load, and
   // each revalidation, which loads the state again), as `/api/page-reader`
   // writes on the class site; a user loading their own page writes nothing.
-  // A HEAD shows no one anything. A failed log line must not fail the page.
+  // A HEAD shows no one anything. A failed log line must not fail the page:
+  // it is reported (`audit_miss`) and the page loads.
   const viewingAsUserId = isImpersonatedSession(authData) ? authData?.userId : null;
   if (viewingAsUserId && readerSections.member && request.method !== 'HEAD') {
     const impersonatedBy = impersonatorOf(authData);
-    try {
-      await ClassmojiService.audit.create({
-        user_id: viewingAsUserId,
-        classroom_id: page.classroom.id,
-        role: sectionViewer.acceptedRole as string,
-        resource_type: 'PAGES',
-        resource_id: page.id,
-        action: 'VIEW',
-        data: {
-          tool: 'page_reader',
-          via: 'web',
-          page_id: page.id,
-          ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
-        },
-      });
-    } catch (error) {
-      console.warn('[pages] view-as audit failed:', error);
-    }
+    await ClassmojiService.audit.record({
+      user_id: viewingAsUserId,
+      classroom_id: page.classroom.id,
+      role: sectionViewer.acceptedRole as string,
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'VIEW',
+      data: {
+        tool: 'page_reader',
+        via: 'web',
+        page_id: page.id,
+        ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
+      },
+    });
   }
 
   return {

@@ -57,21 +57,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
       if (!deleted) return { error: 'That tag was not found in this class.' };
 
-      // The tag is gone either way: a failed audit write is logged, not
-      // reported as a failed delete.
-      try {
-        await ClassmojiService.audit.create({
-          user_id: userId,
-          classroom_id: classroom.id,
-          role: membership!.role,
-          action: 'DELETE',
-          resource_type: 'TEAMS',
-          resource_id: deleted.id,
-          data: { tool: 'web:settings.team.delete_tag', name: deleted.name },
-        });
-      } catch (error: unknown) {
-        console.error('deleteTag: audit row not written:', error);
-      }
+      // The tag is gone either way: a failed audit write is reported
+      // (`audit_miss`), not as a failed delete.
+      await ClassmojiService.audit.record({
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership!.role,
+        action: 'DELETE',
+        resource_type: 'TEAMS',
+        resource_id: deleted.id,
+        data: { tool: 'web:settings.team.delete_tag', name: deleted.name },
+      });
       return { deleted: deleted.id };
     },
   });

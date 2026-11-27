@@ -166,22 +166,19 @@ const writeAudit = async (
     data: Record<string, unknown>;
   }
 ) => {
-  try {
-    await audit.create({
-      user_id: a.userId,
-      classroom_id: a.classroom.id,
-      role: a.highestRole,
-      resource_type: row.resourceType,
-      resource_id: row.resourceId,
-      action: row.action,
-      data: {
-        ...row.data,
-        ...(a.impersonation ? { impersonated_by: a.impersonation.by } : {}),
-      } as never,
-    });
-  } catch (error) {
-    console.error('[askMojiSession] audit write failed', error);
-  }
+  // After the change: a failed write is reported (`audit_miss`), never thrown.
+  await audit.record({
+    user_id: a.userId,
+    classroom_id: a.classroom.id,
+    role: a.highestRole,
+    resource_type: row.resourceType,
+    resource_id: row.resourceId,
+    action: row.action,
+    data: {
+      ...row.data,
+      ...(a.impersonation ? { impersonated_by: a.impersonation.by } : {}),
+    } as never,
+  });
 };
 
 // ─── Start ──────────────────────────────────────────────────────────────────

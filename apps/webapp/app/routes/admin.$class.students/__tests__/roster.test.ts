@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   waitForRunCompletion: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   userFindUnique: vi.fn(),
+  updateJoinLink: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -48,9 +49,16 @@ vi.mock('@classmoji/services', async () => ({
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
       deleteInviteInClassroom: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     joinLink: {
       getJoinLink: async () => ({ enabled: true, code: 'secretcode123456' }),
+      updateJoinLink: (...a: unknown[]) => mocks.updateJoinLink(...a),
     },
     user: { findRegisteredEmails: (...a: unknown[]) => mocks.findRegisteredEmails(...a) },
   },
@@ -502,6 +510,40 @@ describe('students action — mutations stay owner-only', () => {
     const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
 
     expect(result).toMatchObject({ action: 'REVOKE_INVITE', success: 'Invite revoked' });
+  });
+
+  it('answers an invite-link change normally even when its audit row cannot be written', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+    mocks.updateJoinLink.mockResolvedValue({ enabled: false, code: 'secretcode123456' });
+    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await action(actionArgs({ enabled: false }, 'updateJoinLink'));
+
+    expect(result).toEqual({ joinLink: { enabled: false, code: 'secretcode123456' } });
+    expect(mocks.updateJoinLink).toHaveBeenCalledTimes(1);
+    // The row was attempted (and once more), without the code in it.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('secretcode123456');
+  });
+
+  it('still says so when the invite link itself could not be changed', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+    mocks.updateJoinLink.mockRejectedValue(new Error('database away'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await action(actionArgs({ enabled: false }, 'updateJoinLink'));
+
+    expect(result).toEqual({ error: 'Could not update the invite link. Please try again.' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it("revokes only this classroom's invites: another classroom's invite id is not found and nothing is audited", async () => {

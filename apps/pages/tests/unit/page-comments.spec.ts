@@ -1260,7 +1260,11 @@ test.describe('audit rows', () => {
     });
     expect(calls.audit).toEqual([]);
 
-    const failing = { ...deps, audit: async () => Promise.reject(new Error('audit down')) };
+    // The audit service's `record` answers a failed write; it does not throw.
+    const failing = {
+      ...deps,
+      audit: async () => ({ written: false, reason: 'audit write failed: audit down' }),
+    };
     const res = await send(failing, 'student-a', {
       pageId: 'page-x',
       intent: 'reply',

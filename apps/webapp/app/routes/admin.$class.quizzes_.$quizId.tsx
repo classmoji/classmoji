@@ -179,7 +179,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         }
       : null;
 
-  addAuditLog({
+  await addAuditLog({
     request,
     params,
     action: 'VIEW',

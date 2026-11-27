@@ -176,7 +176,8 @@ export async function action({ request }: Route.ActionArgs) {
 
     // 5. Strict ownership.
     if (String(attempt.user_id) !== String(userId)) {
-      await ClassmojiService.audit.create({
+      // The refusal stands whether or not its row is written.
+      await ClassmojiService.audit.record({
         classroom_id: classroomId,
         user_id: String(userId),
         role: access.membership!.role,

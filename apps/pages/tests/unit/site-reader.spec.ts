@@ -333,7 +333,8 @@ export const ClassmojiService = {
     tierFor: ({ isPublic }) => (isPublic ? 'month' : 'week'),
     resolveAssetUrl: async (ctx, ref) => ref,
   },
-  audit: { create: async row => { if (f().auditThrows) throw new Error('audit down'); f().audits.push(row); return row; } },
+  // The audit service's record: a failed write is answered, never thrown.
+  audit: { record: async row => { if (f().auditThrows) return { written: false, reason: 'audit down' }; f().audits.push(row); return { written: true }; } },
 };
 `),
   '/app/site/content.server.ts': CONTENT_STUB,

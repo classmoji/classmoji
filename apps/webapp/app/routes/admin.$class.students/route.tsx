@@ -317,26 +317,29 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (enabled === undefined && !reset) {
         return { error: 'Nothing to change.' };
       }
+      let joinLink: Awaited<ReturnType<typeof ClassmojiService.joinLink.updateJoinLink>>;
       try {
-        const joinLink = await ClassmojiService.joinLink.updateJoinLink(classroom.id, {
+        joinLink = await ClassmojiService.joinLink.updateJoinLink(classroom.id, {
           enabled,
           reset,
         });
-        // The code itself stays out of the row: it is a credential.
-        await ClassmojiService.audit.create({
-          user_id: userId,
-          classroom_id: classroom.id,
-          role: membership!.role,
-          action: 'UPDATE',
-          resource_type: 'CLASSROOM_JOIN_LINK',
-          resource_id: classroom.id,
-          data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
-        });
-        return { joinLink };
       } catch (error: unknown) {
         console.error('updateJoinLink failed:', error);
         return { error: 'Could not update the invite link. Please try again.' };
       }
+      // The link is changed either way: a failed audit write is reported
+      // (`audit_miss`), not as a failed change. The code itself stays out of
+      // the row: it is a credential.
+      await ClassmojiService.audit.record({
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership!.role,
+        action: 'UPDATE',
+        resource_type: 'CLASSROOM_JOIN_LINK',
+        resource_id: classroom.id,
+        data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
+      });
+      return { joinLink };
     },
 
     async revokeInvite() {
@@ -359,21 +362,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { action: 'REVOKE_INVITE', error: 'That invite was not found in this class.' };
       }
 
-      // The invite is gone either way: a failed audit write is logged, not
-      // reported as a failed revoke.
-      try {
-        await ClassmojiService.audit.create({
-          user_id: userId,
-          classroom_id: classroom.id,
-          role: membership!.role,
-          action: 'DELETE',
-          resource_type: 'STUDENT_ROSTER',
-          resource_id: String(data.inviteId),
-          data: { tool: 'web:roster.revoke_invite' },
-        });
-      } catch (error: unknown) {
-        console.error('revokeInvite: audit row not written:', error);
-      }
+      // The invite is gone either way: a failed audit write is reported
+      // (`audit_miss`), not as a failed revoke.
+      await ClassmojiService.audit.record({
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership!.role,
+        action: 'DELETE',
+        resource_type: 'STUDENT_ROSTER',
+        resource_id: String(data.inviteId),
+        data: { tool: 'web:roster.revoke_invite' },
+      });
 
       return {
         success: 'Invite revoked',

@@ -507,17 +507,15 @@ export interface SectionAuditEntry {
 
 /**
  * Write an audit row without letting a logging failure undo or fail what the
- * user just did (the write has already happened; the list is theirs to see).
+ * user just did (the write has already happened; the list is theirs to see):
+ * `deps.audit` is the audit service's `record`, which reports a failed write
+ * (`audit_miss`) instead of throwing.
  */
 async function auditQuietly(
   deps: Pick<PageSectionsDeps, 'audit'>,
   entry: SectionAuditEntry
 ): Promise<void> {
-  try {
-    await deps.audit(entry);
-  } catch (error) {
-    console.warn(`[page-sections] audit (${entry.data.tool}) failed:`, error);
-  }
+  await deps.audit(entry);
 }
 
 /** The biggest POST this route reads. The real body is ~150 bytes. */

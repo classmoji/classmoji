@@ -77,6 +77,7 @@ import {
   requireClassroomCtx,
   scopedNotFound,
   writeAudit,
+  writeAuditOrFail,
 } from './shared.ts';
 
 /** Audit vocabulary, shared with the pages routes and the webapp redirect. */
@@ -1076,7 +1077,7 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
 
     // Reading other people's submissions is itself an act worth recording —
     // the same reason the web's responses loader audits its own VIEW.
-    await writeAudit(ctx, {
+    await writeAuditOrFail(ctx, {
       resource_type: FORMS_RESOURCE,
       resource_id: form.id,
       action: 'VIEW',
@@ -1150,7 +1151,7 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
     const identity = identityDisclosure(identityIds, args.include_identity_answers);
     const names = await namesFor([row], identityIds);
 
-    await writeAudit(ctx, {
+    await writeAuditOrFail(ctx, {
       resource_type: FORMS_RESOURCE,
       resource_id: row.id,
       action: 'VIEW',
@@ -1400,7 +1401,7 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
      */
     const dryRun = report.outcome === 'dry_run';
     if (dryRun || (report.outcome === 'committed' && report.counts.created === 0)) {
-      await writeAudit(ctx, {
+      await writeAuditOrFail(ctx, {
         resource_type: FORMS_RESOURCE,
         resource_id: form.id,
         action: 'VIEW',

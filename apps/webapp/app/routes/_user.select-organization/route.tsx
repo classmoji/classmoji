@@ -178,7 +178,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           invite
         );
         if (result.claimed) {
-          await ClassmojiService.audit.create({
+          // The claim is saved: a failed write is reported (`audit_miss`), and
+          // the list below still shows the new class.
+          await ClassmojiService.audit.record({
             user_id: typedUser.id,
             classroom_id: result.classroomId,
             role: 'STUDENT',

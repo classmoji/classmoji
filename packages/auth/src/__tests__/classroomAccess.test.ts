@@ -72,6 +72,10 @@ vi.mock('@classmoji/services', () => ({
     },
     audit: {
       create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('./support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
       recordNonMemberRefusal: (...a: unknown[]) => mocks.recordNonMemberRefusal(...a),
     },
     githubUserToken: { getGitHubTokenForUser: vi.fn() },
@@ -340,7 +344,9 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
 
     const error = await rejection(accessAs(['OWNER']));
 
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    // Tried once more, then reported as one audit_miss line.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(1);
     expect(error.status).toBe(403);
     await expect(error.text()).resolves.toBe('Required role: OWNER');
     logged.mockRestore();

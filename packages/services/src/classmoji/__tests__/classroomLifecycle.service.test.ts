@@ -32,9 +32,13 @@ vi.mock('../planOwner.service.ts', () => ({
 vi.mock('../subscription.service.ts', () => ({
   getProStateForClassroomId: (...a: unknown[]) => mocks.getProState(...a),
 }));
-vi.mock('../audit.service.ts', () => ({
-  create: (...a: unknown[]) => mocks.auditCreate(...a),
-}));
+vi.mock('../audit.service.ts', async importOriginal => {
+  const { recordWith } = await importOriginal<typeof import('../audit.service.ts')>();
+  return {
+    create: (...a: unknown[]) => mocks.auditCreate(...a),
+    record: (row: unknown) => recordWith(r => mocks.auditCreate(r), row),
+  };
+});
 
 // The rule is tested switched on (a limit of 1); the shipped constant is
 // unlimited, which planLimits.test.ts pins.
@@ -186,6 +190,27 @@ describe('setLifecycle', () => {
       { classroomId: 'cs52', from: 'deleted-user', to: 'alice' },
       expect.objectContaining({ actorUserId: 'alice' })
     );
+  });
+
+  it('answers the saved change when its audit row cannot be written', async () => {
+    rows(row('cs52', 'LOCKED'));
+    // A database error on the write and on its one retry.
+    mocks.auditCreate
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockRejectedValueOnce(new Error('connection lost'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(activate()).resolves.toEqual({ status: 'ACTIVE', is_archived: false });
+
+    expect(mocks.classroomUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'cs52' },
+        data: { status: 'ACTIVE', is_archived: false },
+      })
+    );
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    expect(error.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(1);
+    error.mockRestore();
   });
 
   it('locks the row, then the plan owner, then counts', async () => {

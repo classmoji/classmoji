@@ -66,6 +66,10 @@ vi.mock('@classmoji/services', () => ({
     },
     audit: {
       create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('./support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
       recordNonMemberRefusal: (...a: unknown[]) => mocks.recordNonMemberRefusal(...a),
     },
     githubUserToken: {

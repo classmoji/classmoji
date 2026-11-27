@@ -344,7 +344,8 @@ export async function loadSitePageView(
  * writes (`data.tool: 'page_reader'`, `via: 'site'`, `impersonated_by`). A
  * user loading their own page, and any load that ships no reader state (a
  * non-member, a pending member), writes nothing; a HEAD shows no one
- * anything. A failed log line must not fail the page.
+ * anything. A failed log line must not fail the page: it is reported
+ * (`audit_miss`) and the page loads.
  */
 async function auditViewAsLoad(
   request: Request,
@@ -355,24 +356,20 @@ async function auditViewAsLoad(
   const { viewer } = context;
   if (!viewer.impersonated || !viewer.userId || viewer.role === null) return;
   if (!payload.readerSections.member || request.method === 'HEAD') return;
-  try {
-    await ClassmojiService.audit.create({
-      user_id: viewer.userId,
-      classroom_id: context.site.classroom_id,
-      role: viewer.role,
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'VIEW',
-      data: {
-        tool: 'page_reader',
-        via: 'site',
-        page_id: page.id,
-        ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
-      },
-    });
-  } catch (error) {
-    console.warn('[site] view-as audit failed:', error);
-  }
+  await ClassmojiService.audit.record({
+    user_id: viewer.userId,
+    classroom_id: context.site.classroom_id,
+    role: viewer.role,
+    resource_type: 'PAGES',
+    resource_id: page.id,
+    action: 'VIEW',
+    data: {
+      tool: 'page_reader',
+      via: 'site',
+      page_id: page.id,
+      ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+    },
+  });
 }
 
 /**

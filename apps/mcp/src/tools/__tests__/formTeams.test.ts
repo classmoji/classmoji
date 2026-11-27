@@ -80,7 +80,13 @@ vi.mock('@classmoji/services', async () => {
     TeamSetConfigPatchSchema,
     ClassmojiService: {
       form: { findById: (...a: unknown[]) => mocks.formFindById(...a) },
-      audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+      audit: {
+        create: (...a: unknown[]) => mocks.auditCreate(...a),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
       classroom: {
         findAll: (...a: unknown[]) => mocks.classroomFindAll(...a),
         getClassroomForUI: (c: unknown) => c,

@@ -53,7 +53,13 @@ import type { ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider, sanitizedSettings } from '../resources/shape.ts';
 import getPrisma from '@classmoji/database';
 import { emojiFor, loadQuizEmojiScale } from './quizGradeEmoji.ts';
-import { loadQuizInClassroom, ok, QUIZ_STAFF, requireClassroomCtx, writeAudit } from './shared.ts';
+import {
+  loadQuizInClassroom,
+  ok,
+  QUIZ_STAFF,
+  requireClassroomCtx,
+  writeAuditOrFail,
+} from './shared.ts';
 
 interface ListQuizAttemptsArgs {
   classroom: string;
@@ -292,7 +298,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     const withStatus = (status: ReturnType<typeof statusOf>) =>
       students.filter(row => statusOf(row) === status).length;
 
-    await writeAudit(ctx, {
+    await writeAuditOrFail(ctx, {
       resource_type: 'QUIZ_DETAILS',
       resource_id: quiz.id,
       action: 'VIEW',

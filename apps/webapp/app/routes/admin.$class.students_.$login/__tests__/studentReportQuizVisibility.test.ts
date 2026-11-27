@@ -20,13 +20,17 @@ const mocks = vi.hoisted(() => ({
   // No settings row unless a test sets one.
   getClassroomSettingsForServer: vi.fn(),
   findTeamsForStudentInClassroom: vi.fn(),
+  addAuditLog: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomStaff: (...a: unknown[]) => mocks.requireClassroomStaff(...a),
   assertClassroomMutationAllowed: vi.fn(),
 }));
-vi.mock('~/utils/helpers', () => ({ addAuditLog: vi.fn(), addClassroomAuditLog: vi.fn() }));
+vi.mock('~/utils/helpers', () => ({
+  addAuditLog: (...a: unknown[]) => mocks.addAuditLog(...a),
+  addClassroomAuditLog: vi.fn(),
+}));
 vi.mock('~/components', () => ({
   LateOverrideButton: () => null,
   QuizLateWaiverButton: () => null,
@@ -84,6 +88,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const { loader } = await import('../route');
+const { expectAwaitsWrite } = await import('../../../__tests__/support/awaitedWrite.ts');
 
 const load = () =>
   loader({
@@ -139,6 +144,13 @@ describe('student report loader — quiz visibility', () => {
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
     mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
     mocks.findTeamsForStudentInClassroom.mockResolvedValue([]);
+  });
+
+  it('waits for its VIEW row before answering', async () => {
+    await expectAwaitsWrite(mocks.addAuditLog, load);
+    expect(mocks.addAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'VIEW', resourceType: 'STUDENT_GRADES_SCREEN' })
+    );
   });
 
   it('lists the quiz assignment with its attempt when quizzes are visible', async () => {

@@ -41,7 +41,13 @@ vi.mock('@classmoji/services', () => ({
       save: (...a: unknown[]) => mocks.saveLetterGrade(...a),
       delete: (...a: unknown[]) => mocks.deleteLetterGrade(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
 }));
 

@@ -416,38 +416,37 @@ export const applyAdjustmentInTx = async (
   };
 };
 
-/** The audit row for an adjust/revert. A failed write is logged; the change stands. */
+/**
+ * The audit row for an adjust/revert. A failed write is reported (`audit_miss`)
+ * and the change stands.
+ */
 export const auditAdjustment = async (
   change: AdjustmentChange,
   actor: QuizGradeActor,
   extra: Record<string, unknown> = {}
 ) => {
-  try {
-    await audit.create({
-      user_id: actor.actorUserId,
-      classroom_id: change.classroomId,
-      role: change.actorRole,
-      resource_type: 'QUIZ_ATTEMPT',
-      resource_id: change.attemptId,
-      action: 'UPDATE',
-      data: {
-        tool: actor.tool,
-        event: change.event,
-        quiz_id: change.quizId,
-        student_id: change.studentId,
-        old_emoji: change.oldEmoji,
-        new_emoji: change.newEmoji,
-        old_percentage: change.oldPercentage,
-        new_percentage: change.newPercentage,
-        comment_set: change.commentSet,
-        comment_changed: change.commentChanged,
-        ...extra,
-        ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
-      },
-    });
-  } catch (error) {
-    console.error('[quizGradeAdjust] audit write failed', { attemptId: change.attemptId, error });
-  }
+  await audit.record({
+    user_id: actor.actorUserId,
+    classroom_id: change.classroomId,
+    role: change.actorRole,
+    resource_type: 'QUIZ_ATTEMPT',
+    resource_id: change.attemptId,
+    action: 'UPDATE',
+    data: {
+      tool: actor.tool,
+      event: change.event,
+      quiz_id: change.quizId,
+      student_id: change.studentId,
+      old_emoji: change.oldEmoji,
+      new_emoji: change.newEmoji,
+      old_percentage: change.oldPercentage,
+      new_percentage: change.newPercentage,
+      comment_set: change.commentSet,
+      comment_changed: change.commentChanged,
+      ...extra,
+      ...(actor.impersonatedBy ? { impersonated_by: actor.impersonatedBy } : {}),
+    },
+  });
 };
 
 const TX_OPTIONS = { timeout: 15_000 } as const;
