@@ -610,10 +610,10 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
 
       {/* All Teams (for reference) */}
       {userTeam && teams.length > 1 && (
-        // The gap lives on this wrapper, not on the Card's own className: antd
-        // v5 injects `.ant-card` styles at runtime, after the Tailwind sheet, so
-        // a same-specificity `mt-*` utility on the Card loses the cascade and
-        // the two cards render flush against each other.
+        // The gap lives on this wrapper, not on the Card's own className: antd's
+        // `.ant-card` styles are unlayered and Tailwind's utilities sit in a
+        // cascade layer, so an `mt-*` utility on the Card loses to antd's margin
+        // and the two cards render flush against each other.
         <div className="mt-6">
           <Card title="All Teams">
             <ul className="m-0 p-0 list-none">
