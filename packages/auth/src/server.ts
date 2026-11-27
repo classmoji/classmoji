@@ -687,6 +687,11 @@ interface ClassroomAccessResult {
   membership: ClassroomMembershipRecord;
   isResourceOwner: boolean;
   accessGrantedVia: 'role' | 'ownership' | null;
+  /**
+   * The platform admin viewing as `userId` ("View as"), else null: for the
+   * `impersonated_by` of the audit rows the caller writes.
+   */
+  impersonatedBy: string | null;
 }
 
 /** Privilege order for deterministic multi-role resolution (highest first). */
@@ -1923,6 +1928,18 @@ async function githubUsernameFor(userId: string): Promise<string> {
   return username;
 }
 
+/**
+ * The platform admin behind a "View as" session (`session.impersonatedBy`,
+ * the admin's user id), from a `getAuthSession` result; null when the session
+ * is the user's own (or there is none). For the `impersonated_by` of audit
+ * rows: the row's `user_id` stays the viewed user.
+ */
+export function sessionImpersonator(authData: unknown): string | null {
+  const by = (authData as { session?: { session?: { impersonatedBy?: unknown } | null } } | null)
+    ?.session?.session?.impersonatedBy;
+  return typeof by === 'string' && by !== '' ? by : null;
+}
+
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
   // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
   // ./secret.ts for why this must never be a hardcoded `classmoji.`.
@@ -2176,6 +2193,7 @@ export const assertClassroomAccess = async ({
       headers: { 'Content-Type': 'text/plain' },
     });
   }
+  const impersonatedBy = sessionImpersonator(authData);
 
   // Resolving by id is what makes the authorization bind to the record the
   // caller is acting on. The 404 body is identical either way, so an id probe
@@ -2279,23 +2297,30 @@ export const assertClassroomAccess = async ({
         resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
         resource_type: resourceType,
         action: 'ACCESS_DENIED',
-        data: {
-          attempted_action: attemptedAction,
-          required_roles: rolesArray,
-          has_membership: Boolean(actualMembership),
-          denial_reasons: denialReasons,
-          is_resource_owner: isResourceOwner,
-          self_access_attempted: Boolean(resourceOwnerId),
-          ...metadata,
-        },
+        data: auditService.withImpersonator(
+          {
+            // A caller's own `metadata.tool` names the surface more closely.
+            tool: 'gate',
+            attempted_action: attemptedAction,
+            required_roles: rolesArray,
+            has_membership: Boolean(actualMembership),
+            denial_reasons: denialReasons,
+            is_resource_owner: isResourceOwner,
+            self_access_attempted: Boolean(resourceOwnerId),
+            ...metadata,
+          },
+          impersonatedBy
+        ),
       });
     } else {
       // Someone who holds no role here: one fixed-shape row per person,
-      // classroom and UTC day, counted (nothing from the request).
+      // classroom and UTC day, counted (nothing from the request); under
+      // View as, one per person, classroom, day and admin.
       try {
         await auditService.recordNonMemberRefusal({
           userId: authData.userId,
           classroomId: classroom.id,
+          ...(impersonatedBy ? { impersonatedBy } : {}),
         });
       } catch (error: unknown) {
         console.error('[assertClassroomAccess] Failed to write audit log', error);
@@ -2335,6 +2360,7 @@ export const assertClassroomAccess = async ({
     membership,
     isResourceOwner,
     accessGrantedVia,
+    impersonatedBy,
   };
 };
 
@@ -2794,17 +2820,26 @@ export async function assertSlideAccess({
         resource_id: slideId,
         resource_type: 'SLIDE',
         action: 'ACCESS_DENIED',
-        data: {
-          attempted_action: accessType,
-          is_draft: slide.is_draft,
-          is_public: slide.is_public,
-          is_creator: isCreator,
-          allow_team_edit: slide.allow_team_edit,
-        },
+        data: auditService.withImpersonator(
+          {
+            tool: 'gate',
+            attempted_action: accessType,
+            is_draft: slide.is_draft,
+            is_public: slide.is_public,
+            is_creator: isCreator,
+            allow_team_edit: slide.allow_team_edit,
+          },
+          sessionImpersonator(authData)
+        ),
       });
     } else if (userId && recordNonMemberRefusal) {
+      const impersonatedBy = sessionImpersonator(authData);
       try {
-        await auditService.recordNonMemberRefusal({ userId, classroomId: slide.classroom_id });
+        await auditService.recordNonMemberRefusal({
+          userId,
+          classroomId: slide.classroom_id,
+          ...(impersonatedBy ? { impersonatedBy } : {}),
+        });
       } catch (error: unknown) {
         console.error('[assertSlideAccess] Failed to write audit log', error);
       }

@@ -166,6 +166,7 @@ describe('draft deck — who may VIEW', () => {
           resource_type: 'SLIDE',
           action: 'ACCESS_DENIED',
           data: {
+            tool: 'gate',
             attempted_action: 'view',
             is_draft: true,
             is_public: false,
@@ -174,6 +175,29 @@ describe('draft deck — who may VIEW', () => {
           },
         },
       ],
+    ]);
+  });
+
+  it('names the admin viewing as a refused member, and passes them for a non-member', async () => {
+    signedInAs('STUDENT', 'student-1');
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'student-1', name: 'student-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+    await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      user_id: 'student-1',
+      data: { tool: 'gate', impersonated_by: 'admin-1' },
+    });
+
+    signedInAs(null, 'outsider-1');
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'outsider-1', name: 'outsider-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+    await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'outsider-1', classroomId: 'class-1', impersonatedBy: 'admin-1' }],
     ]);
   });
 

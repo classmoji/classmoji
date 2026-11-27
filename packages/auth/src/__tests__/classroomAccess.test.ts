@@ -311,6 +311,7 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
           resource_type: 'TOKEN_BALANCE',
           action: 'ACCESS_DENIED',
           data: {
+            tool: 'gate',
             attempted_action: 'purchase_extension',
             required_roles: ['OWNER'],
             has_membership: true,
@@ -322,6 +323,65 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
         },
       ],
     ]);
+  });
+
+  it('names the admin viewing as a refused member on their row', async () => {
+    signedInHolding(['STUDENT']);
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+
+    await accessAs(['OWNER']).catch(() => {});
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      user_id: 'user-1',
+      role: 'STUDENT',
+      action: 'ACCESS_DENIED',
+      data: { tool: 'gate', impersonated_by: 'admin-1' },
+    });
+  });
+
+  it('keeps a caller-named tool on a refused member row', async () => {
+    signedInHolding(['STUDENT']);
+
+    await assertClassroomAccess({
+      request: request(),
+      classroomSlug: CLASS_SLUG,
+      allowedRoles: ['OWNER'],
+      resourceType: 'FORMS',
+      attemptedAction: 'mutate_form',
+      metadata: { tool: 'forms.list' },
+    }).catch(() => {});
+
+    expect(mocks.auditCreate.mock.calls[0][0].data.tool).toBe('forms.list');
+    expect(mocks.auditCreate.mock.calls[0][0].data).not.toHaveProperty('impersonated_by');
+  });
+
+  it('hands a refused non-member under View as to recordNonMemberRefusal with the admin', async () => {
+    signedInHolding([]);
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+
+    await accessAs(['STUDENT']).catch(() => {});
+
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-1', classroomId: CLASSROOM.id, impersonatedBy: 'admin-1' }],
+    ]);
+  });
+
+  it('returns the admin viewing as the caller, and null for their own session', async () => {
+    signedInHolding(['OWNER']);
+    await expect(accessAs(['OWNER'])).resolves.toMatchObject({ impersonatedBy: null });
+
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+    await expect(accessAs(['OWNER'])).resolves.toMatchObject({ impersonatedBy: 'admin-1' });
   });
 
   it('still answers 403 when writing the refusal fails', async () => {
