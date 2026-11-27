@@ -326,3 +326,22 @@ describe('auditPlanOwnerChange', () => {
     info.mockRestore();
   });
 });
+
+describe('onOwnerAccepted', () => {
+  it('keeps the claim and resolves when its audit row cannot be written', async () => {
+    classrooms = [room('vacant', null)];
+    memberships = [owner('vacant', 'bob')];
+    // A database error on the write and on its one retry.
+    auditCreateMock
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockRejectedValueOnce(new Error('connection lost'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(planOwner.onOwnerAccepted('bob')).resolves.toBeUndefined();
+
+    expect(classrooms.map(c => c.plan_owner_id)).toEqual(['bob']);
+    expect(auditCreateMock).toHaveBeenCalledTimes(2);
+    expect(error.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(1);
+    error.mockRestore();
+  });
+});
