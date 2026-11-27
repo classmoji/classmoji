@@ -2269,35 +2269,37 @@ export const assertClassroomAccess = async ({
       }
     }
 
-    try {
-      if (actualMembership) {
-        await auditService.create({
-          classroom_id: classroom.id,
-          user_id: authData.userId,
-          role: actualMembership.role,
-          resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
-          resource_type: resourceType,
-          action: 'ACCESS_DENIED',
-          data: {
-            attempted_action: attemptedAction,
-            required_roles: rolesArray,
-            has_membership: Boolean(actualMembership),
-            denial_reasons: denialReasons,
-            is_resource_owner: isResourceOwner,
-            self_access_attempted: Boolean(resourceOwnerId),
-            ...metadata,
-          },
-        });
-      } else {
-        // Someone who holds no role here: one fixed-shape row per person,
-        // classroom and UTC day, counted (nothing from the request).
+    // The refusal stands whether or not its row is written: `record` does not
+    // throw for a failed write (it leaves an `audit_miss` line).
+    if (actualMembership) {
+      await auditService.record({
+        classroom_id: classroom.id,
+        user_id: authData.userId,
+        role: actualMembership.role,
+        resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
+        resource_type: resourceType,
+        action: 'ACCESS_DENIED',
+        data: {
+          attempted_action: attemptedAction,
+          required_roles: rolesArray,
+          has_membership: Boolean(actualMembership),
+          denial_reasons: denialReasons,
+          is_resource_owner: isResourceOwner,
+          self_access_attempted: Boolean(resourceOwnerId),
+          ...metadata,
+        },
+      });
+    } else {
+      // Someone who holds no role here: one fixed-shape row per person,
+      // classroom and UTC day, counted (nothing from the request).
+      try {
         await auditService.recordNonMemberRefusal({
           userId: authData.userId,
           classroomId: classroom.id,
         });
+      } catch (error: unknown) {
+        console.error('[assertClassroomAccess] Failed to write audit log', error);
       }
-    } catch (error: unknown) {
-      console.error('[assertClassroomAccess] Failed to write audit log', error);
     }
 
     // Provide specific error messages
@@ -2782,26 +2784,24 @@ export async function assertSlideAccess({
     // holds no role in the slide's classroom gets the classroom's one
     // non-member row for the day (unless the caller turned that off). An
     // anonymous visitor has no user to record.
+    // The refusal stands whether or not its row is written: `record` does not
+    // throw for a failed write (it leaves an `audit_miss` line).
     if (membership) {
-      try {
-        await auditService.create({
-          classroom_id: slide.classroom_id,
-          user_id: userId!,
-          role: role ?? membership.role,
-          resource_id: slideId,
-          resource_type: 'SLIDE',
-          action: 'ACCESS_DENIED',
-          data: {
-            attempted_action: accessType,
-            is_draft: slide.is_draft,
-            is_public: slide.is_public,
-            is_creator: isCreator,
-            allow_team_edit: slide.allow_team_edit,
-          },
-        });
-      } catch (error: unknown) {
-        console.error('[assertSlideAccess] Failed to write audit log', error);
-      }
+      await auditService.record({
+        classroom_id: slide.classroom_id,
+        user_id: userId!,
+        role: role ?? membership.role,
+        resource_id: slideId,
+        resource_type: 'SLIDE',
+        action: 'ACCESS_DENIED',
+        data: {
+          attempted_action: accessType,
+          is_draft: slide.is_draft,
+          is_public: slide.is_public,
+          is_creator: isCreator,
+          allow_team_edit: slide.allow_team_edit,
+        },
+      });
     } else if (userId && recordNonMemberRefusal) {
       try {
         await auditService.recordNonMemberRefusal({ userId, classroomId: slide.classroom_id });
