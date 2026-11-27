@@ -155,18 +155,27 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     if (!classroomId) return { error: 'No classroom named.' };
     const enabled = form.get('enabled') === 'true';
     try {
-      const updated = await prisma.classroom.update({
+      // The row first, the switch only once it is written: an action that
+      // cannot be recorded does not happen (utils/audit.server.ts).
+      const classroom = await prisma.classroom.findUnique({
         where: { id: classroomId },
-        data: { content_delivery_enabled: enabled },
         select: { id: true, name: true },
       });
+      if (!classroom) {
+        return { error: 'That classroom no longer exists — the list is out of date.' };
+      }
       await platformAudit({
         actorId: admin.id,
         action: 'delivery.toggle',
         targetType: 'classroom',
-        targetId: updated.id,
-        classroomId: updated.id,
-        data: { enabled, classroomName: updated.name },
+        targetId: classroom.id,
+        classroomId: classroom.id,
+        data: { enabled, classroomName: classroom.name },
+      });
+      await prisma.classroom.update({
+        where: { id: classroom.id },
+        data: { content_delivery_enabled: enabled },
+        select: { id: true },
       });
     } catch (error) {
       // P2025 — the row is gone. An admin list is a snapshot, and a classroom
@@ -189,15 +198,20 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     // and clicked "Enable for all" must not switch on the whole platform.
     const { where, q, state, scope } = searchFilter(request);
     try {
-      const { count } = await prisma.classroom.updateMany({
-        where: { ...where, content_delivery_enabled: !enabled },
-        data: { content_delivery_enabled: enabled },
-      });
+      // The row first, the switch only once it is written (as for one
+      // classroom). It names how many classrooms the switch is about to
+      // change, counted with the same filter the update uses.
+      const toChange = { ...where, content_delivery_enabled: !enabled };
+      const changing = await prisma.classroom.count({ where: toChange });
       await platformAudit({
         actorId: admin.id,
         action: 'delivery.bulk',
         targetType: 'classrooms',
-        data: { enabled, changed: count, filter: { q, state, scope } },
+        data: { enabled, changed: changing, filter: { q, state, scope } },
+      });
+      const { count } = await prisma.classroom.updateMany({
+        where: toChange,
+        data: { content_delivery_enabled: enabled },
       });
       return { ok: true, changed: count };
     } catch (error) {

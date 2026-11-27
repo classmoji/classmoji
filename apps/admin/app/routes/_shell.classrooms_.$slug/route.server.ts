@@ -315,7 +315,8 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
 
 /**
  * The classroom's content-delivery switch. Re-runs the admin gate (a layout
- * loader runs after an action, never before) and writes an audit row.
+ * loader runs after an action, never before) and writes an audit row FIRST:
+ * the switch changes only once the row is written (utils/audit.server.ts).
  */
 export async function classroomAction({ request, params }: ActionFunctionArgs) {
   const { user: admin } = await requirePlatformAdmin(request);
@@ -327,10 +328,6 @@ export async function classroomAction({ request, params }: ActionFunctionArgs) {
     select: { id: true, name: true },
   });
   if (!classroom) return { error: 'That classroom no longer exists.' };
-  await prisma.classroom.update({
-    where: { id: classroom.id },
-    data: { content_delivery_enabled: enabled },
-  });
   await platformAudit({
     actorId: admin.id,
     action: 'delivery.toggle',
@@ -338,6 +335,10 @@ export async function classroomAction({ request, params }: ActionFunctionArgs) {
     targetId: classroom.id,
     classroomId: classroom.id,
     data: { enabled, classroomName: classroom.name },
+  });
+  await prisma.classroom.update({
+    where: { id: classroom.id },
+    data: { content_delivery_enabled: enabled },
   });
   return { ok: true };
 }
