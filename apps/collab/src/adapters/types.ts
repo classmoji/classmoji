@@ -65,12 +65,12 @@ export type AuthorizeResult =
       reason: AuthorizeRefusal;
       message?: string;
       /**
-       * Set when the user IS a member of the doc's classroom: the refusal is
-       * audited as ACCESS_DENIED (non-members cannot be, the audit row needs a
-       * classroom role).
+       * Set whenever the doc exists: the refusal is audited in this
+       * classroom. `role` is the user's role there (a member's ACCESS_DENIED
+       * row), null when they hold none (the classroom's non-member row).
        */
       classroomId?: string;
-      role?: string;
+      role?: string | null;
     };
 
 // ─── Seeding ───────────────────────────────────────────────────────────────

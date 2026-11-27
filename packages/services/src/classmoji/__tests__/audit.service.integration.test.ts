@@ -10,7 +10,7 @@
  * integration tests here.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
 import getPrisma from '@classmoji/database';
@@ -306,6 +306,155 @@ describe.skipIf(!RUN)('audit writer (integration)', () => {
           },
         })
       ).resolves.toMatchObject({ role: null, count: 1 });
+    });
+  });
+
+  describe('a non-member refusal (recordNonMemberRefusal)', () => {
+    // Each test refuses on a day of its own: the row id is derived from the
+    // person, the classroom and the UTC day, so a shared day would share rows.
+    let dayIndex = 0;
+    const nextDay = () => {
+      dayIndex += 1;
+      return new Date(Date.UTC(2031, 0, dayIndex, 12, 0, 0, 123));
+    };
+    const refusalRows = (from: Date, days = 1) =>
+      prisma.auditLog.findMany({
+        where: {
+          classroom_id: { in: [classX, classY] },
+          resource_type: 'CLASSROOM',
+          timestamp: {
+            gte: new Date(from.getTime() - 12 * 3600_000),
+            lt: new Date(from.getTime() + days * 86_400_000),
+          },
+        },
+        orderBy: [{ timestamp: 'asc' }, { user_id: 'asc' }, { classroom_id: 'asc' }],
+      });
+
+    it('one refusal is one row with the fixed fields', async () => {
+      const now = nextDay();
+      await audit.recordNonMemberRefusal({ userId: userA, classroomId: classX }, { now });
+
+      const rows = await refusalRows(now);
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row).toEqual({
+        id: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+        ),
+        classroom_id: classX,
+        user_id: userA,
+        role: null,
+        action: 'ACCESS_DENIED',
+        resource_type: 'CLASSROOM',
+        resource_id: classX,
+        data: { reason: 'not_classroom_member', tool: 'gate' },
+        count: 1,
+        timestamp: now,
+        updated_at: now,
+      });
+    });
+
+    it('25 refusals at once are one row with count 25', async () => {
+      const now = nextDay();
+      await Promise.all(
+        Array.from({ length: 25 }, (_, i) =>
+          audit.recordNonMemberRefusal(
+            { userId: userA, classroomId: classX },
+            { now: new Date(now.getTime() + i * 1000) }
+          )
+        )
+      );
+
+      const rows = await refusalRows(now);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].count).toBe(25);
+      // The first refusal's time stays; updated_at is the latest one's.
+      expect(rows[0].timestamp.getTime()).toBeGreaterThanOrEqual(now.getTime());
+      expect(rows[0].updated_at).toEqual(new Date(now.getTime() + 24 * 1000));
+    });
+
+    it('a later refusal the same day raises count and updated_at, not timestamp', async () => {
+      const now = nextDay();
+      const later = new Date(now.getTime() + 5 * 3600_000);
+      await audit.recordNonMemberRefusal({ userId: userA, classroomId: classX }, { now });
+      await audit.recordNonMemberRefusal({ userId: userA, classroomId: classX }, { now: later });
+
+      const rows = await refusalRows(now);
+      expect(rows.map(r => [r.count, r.timestamp, r.updated_at])).toEqual([[2, now, later]]);
+    });
+
+    it('the next UTC day is a row of its own', async () => {
+      const now = nextDay();
+      nextDay(); // keep the following day to this test
+      const lastMinute = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999)
+      );
+      const nextMorning = new Date(lastMinute.getTime() + 1);
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX },
+        { now: lastMinute }
+      );
+      await audit.recordNonMemberRefusal(
+        { userId: userA, classroomId: classX },
+        { now: nextMorning }
+      );
+
+      const rows = await refusalRows(now, 2);
+      expect(rows.map(r => [r.timestamp, r.count])).toEqual([
+        [lastMinute, 1],
+        [nextMorning, 1],
+      ]);
+      expect(rows[0].id).not.toBe(rows[1].id);
+    });
+
+    it('person A and B, classroom X and Y, are separate rows', async () => {
+      const now = nextDay();
+      const refuse = (userId: string, classroomId: string) =>
+        audit.recordNonMemberRefusal({ userId, classroomId }, { now });
+      await refuse(userA, classX);
+      await refuse(userA, classX);
+      await refuse(userB, classX);
+      await refuse(userA, classY);
+
+      const rows = await refusalRows(now);
+      expect(rows.map(r => [r.user_id, r.classroom_id, r.resource_id, r.count]).sort()).toEqual(
+        [
+          [userA, classX, classX, 2],
+          [userA, classY, classY, 1],
+          [userB, classX, classX, 1],
+        ].sort()
+      );
+    });
+
+    it('a user id that is no user writes no row, logs one audit_miss and does not throw', async () => {
+      const now = nextDay();
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await expect(
+          audit.recordNonMemberRefusal({ userId: randomUUID(), classroomId: classX }, { now })
+        ).resolves.toBeUndefined();
+        const misses = error.mock.calls.filter(([first]) => first === 'audit_miss');
+        expect(misses).toHaveLength(1);
+        expect(JSON.parse(misses[0][1] as string)).toMatchObject({
+          reason: expect.stringContaining('non-member refusal write failed'),
+          row: { classroom_id: classX, action: 'ACCESS_DENIED', resource_type: 'CLASSROOM' },
+        });
+      } finally {
+        error.mockRestore();
+      }
+      expect(await refusalRows(now)).toEqual([]);
+    });
+
+    it('writes nothing without a user id or a classroom id', async () => {
+      const now = nextDay();
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await audit.recordNonMemberRefusal({ userId: '', classroomId: classX }, { now });
+        await audit.recordNonMemberRefusal({ userId: userA, classroomId: '' }, { now });
+      } finally {
+        error.mockRestore();
+      }
+      expect(await refusalRows(now)).toEqual([]);
     });
   });
 });

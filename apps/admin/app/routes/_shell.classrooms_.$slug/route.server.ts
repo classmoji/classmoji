@@ -297,7 +297,8 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
         r.data && typeof r.data === 'object' && 'tool' in r.data
           ? String((r.data as { tool?: unknown }).tool)
           : null,
-      // A repeated read (or refusal) counted on one row, within seconds.
+      // A repeated read (or a member's refusal) counted on one row, within
+      // seconds; a non-member's refusals counted on one row per UTC day.
       count: r.count,
     })),
     ...adminRows.map(r => ({

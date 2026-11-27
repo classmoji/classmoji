@@ -167,16 +167,20 @@ describe('authorize', () => {
     expect(await ok('student')).toBe(false);
     expect(await ok('stranger')).toBe(false);
     expect(canEditDeck('ASSISTANT', { created_by: 'x', allow_team_edit: true }, 'y')).toBe(true);
-    // Refusals of members carry their role (audited); strangers' do not.
+    // Every refusal carries the deck's classroom (audited there): a member's
+    // with their role, a stranger's with none.
     expect(await adapter.authorize({ userId: 'student', docId: SLIDE.id })).toMatchObject({
       ok: false,
       reason: 'forbidden',
       classroomId: 'class-1',
       role: 'STUDENT',
     });
-    expect(await adapter.authorize({ userId: 'stranger', docId: SLIDE.id })).not.toHaveProperty(
-      'role'
-    );
+    expect(await adapter.authorize({ userId: 'stranger', docId: SLIDE.id })).toEqual({
+      ok: false,
+      reason: 'forbidden',
+      classroomId: 'class-1',
+      role: null,
+    });
     expect(await adapter.authorize({ userId: 'teacher', docId: SLIDE.id })).toMatchObject({
       ok: true,
       role: 'TEACHER',
@@ -218,7 +222,8 @@ describe('authorize', () => {
     const fileSlide = createDeckAdapter(
       makeDeps({ findSlide: async () => ({ ...SLIDE, kind: 'FILE' }) }, roles)
     );
-    expect(await fileSlide.authorize({ userId: 'owner', docId: SLIDE.id })).toMatchObject({
+    // No deck, no classroom: nothing to audit the refusal in.
+    expect(await fileSlide.authorize({ userId: 'owner', docId: SLIDE.id })).toEqual({
       ok: false,
       reason: 'not-found',
     });

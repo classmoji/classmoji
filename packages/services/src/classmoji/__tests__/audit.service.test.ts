@@ -56,6 +56,11 @@ const invalid = [
   ['an undefined role', { ...baseEntry, role: undefined as unknown as string }, 'missing role'],
   ['an empty role', { ...baseEntry, role: '' }, 'missing role'],
   [
+    'the role NONE on a refusal',
+    { ...baseEntry, role: 'NONE', action: 'ACCESS_DENIED' as const },
+    'invalid role "NONE"',
+  ],
+  [
     'an unknown action',
     { ...baseEntry, action: 'EXPORT' as unknown as 'UPDATE' },
     'invalid action "EXPORT"',
@@ -80,20 +85,6 @@ describe('audit.create refuses invalid input', () => {
       expect(createMock).not.toHaveBeenCalled();
     }
   );
-
-  it('skips the role NONE quietly, in every environment', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    for (const env of ['development', 'production']) {
-      vi.stubEnv('NODE_ENV', env);
-      expect(
-        await audit.create({ ...baseEntry, role: 'NONE', action: 'ACCESS_DENIED' })
-      ).toBeNull();
-    }
-    expect(error).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-    expect(createMock).not.toHaveBeenCalled();
-  });
 
   it('accepts a null role on ACCESS_DENIED', async () => {
     await audit.create({ ...baseEntry, role: null, action: 'ACCESS_DENIED' });

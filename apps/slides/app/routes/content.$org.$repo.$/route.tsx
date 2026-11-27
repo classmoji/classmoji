@@ -443,11 +443,15 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
       return decks.filter(deck => expectedContentRepo(deck.classroom) === repo);
     },
     rightsFor: async deck => {
+      // Every deck row on the folder is asked, other classrooms' included, so
+      // a refusal here is not one the person asked for: a member's refusal is
+      // still recorded, a non-member's is not.
       const access = await assertSlideAccess({
         request,
         slideId: deck.id,
         slide: deck,
         accessType: 'view',
+        recordNonMemberRefusal: false,
       });
       return {
         canEdit: Boolean(access.canEdit),
