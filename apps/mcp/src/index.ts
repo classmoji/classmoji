@@ -16,9 +16,12 @@
  *   POST /dev/mint-token                        — dev-only, double-gated (S8)
  */
 
-import Fastify, { type FastifyError } from 'fastify';
+// First: Sentry is set up before Fastify or anything else is loaded.
+import './sentry.ts';
+import Fastify from 'fastify';
 import { flushErrorReports } from '@classmoji/utils/error-report';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
+import { mcpErrorHandler } from './httpErrorHandler.ts';
 import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
 import mcpRoutes from './routes/mcp.ts';
@@ -71,18 +74,9 @@ if (!DEV_MINT_ENABLED && fastify.hasRoute({ method: 'POST', url: '/dev/mint-toke
 }
 
 // S5 final error hook: anything that escapes route handlers becomes a clean
-// JSON response — never a hung request or a crashed process. Fastify's own
-// 4xx errors (e.g. malformed JSON body → 400 parse error) pass through.
-fastify.setErrorHandler((error: FastifyError, request, reply) => {
-  const statusCode = error.statusCode && error.statusCode < 500 ? error.statusCode : 500;
-  if (statusCode >= 500) {
-    request.log.error(error, '[mcp] unhandled error');
-    return reply.status(500).send({ error: 'internal_error', message: 'Internal server error' });
-  }
-  return reply
-    .status(statusCode)
-    .send({ error: error.code ?? 'bad_request', message: error.message });
-});
+// JSON response — never a hung request or a crashed process. A 5xx is also
+// reported; Fastify's own 4xx errors pass through (see httpErrorHandler.ts).
+fastify.setErrorHandler(mcpErrorHandler);
 
 try {
   await fastify.listen({ port: MCP_PORT, host: '0.0.0.0' });

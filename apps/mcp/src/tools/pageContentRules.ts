@@ -34,7 +34,9 @@ async function validator(): Promise<Validate> {
     throw new ToolError(
       'internal',
       'Nothing was written: the page content check is unavailable right now. Retry shortly.',
-      'CONTENT_CHECK_UNAVAILABLE'
+      'CONTENT_CHECK_UNAVAILABLE',
+      undefined,
+      { cause: error }
     );
   }
 }

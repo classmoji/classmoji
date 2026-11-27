@@ -6,10 +6,16 @@
  * entry.server of its own. A test diffs it against the installed default and
  * fails when React Router's changes: re-copy it then.
  *
+ * One addition, every line of it ending in `// classmoji`: a rendering error
+ * after the shell (logged, never seen by `handleError`) also goes to
+ * `reportError`, which does nothing unless the process registered a reporter
+ * (Sentry). The test drops those lines before comparing.
+ *
  * Workers builds resolve the `workerd` export condition to
  * ./entry-server.workerd.tsx instead.
  */
 /* eslint-disable -- kept verbatim; see above. */
+import { reportError } from "@classmoji/utils/error-report"; // classmoji
 import { PassThrough } from "node:stream";
 
 import type { EntryContext, RouterContextProvider } from "react-router";
@@ -90,6 +96,7 @@ export default function handleRequest(
           // reject and get logged in handleDocumentRequest.
           if (shellRendered) {
             console.error(error);
+            reportError(error, { surface: "react_router.render" }); // classmoji
           }
         },
       },

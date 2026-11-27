@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import type { BillingEventAction, Prisma } from '@classmoji/database/client';
 import type Stripe from 'stripe';
@@ -158,6 +159,7 @@ export const getStatus = async (userId: string): Promise<BillingStatus> => {
       );
     } catch (err) {
       console.error('[billing] could not load the Stripe subscription', err);
+      reportError(err, { surface: 'billing.stripe_read', tags: { object: 'subscription' } });
     }
   }
 
@@ -167,6 +169,7 @@ export const getStatus = async (userId: string): Promise<BillingStatus> => {
       proPriceCents = (await StripeService.findPrice(checkoutPriceId())).unit_amount ?? null;
     } catch (err) {
       console.error('[billing] could not load the Pro price', err);
+      reportError(err, { surface: 'billing.stripe_read', tags: { object: 'price' } });
     }
   }
 
@@ -210,5 +213,9 @@ export const recordEvent = async (input: BillingEventInput): Promise<void> => {
     });
   } catch (err) {
     console.error('[billing] could not record a billing event', { action: input.action, err });
+    reportError(err, {
+      surface: 'billing.event_write',
+      tags: { action: input.action, source: input.source },
+    });
   }
 };

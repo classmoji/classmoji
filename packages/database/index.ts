@@ -95,6 +95,8 @@ export function decryptToken(value: string | null): string | null {
     // Wrong key (BETTER_AUTH_SECRET rotated) or damaged: no token, so callers
     // refresh or ask the person to reconnect instead of sending garbage.
     console.error('[database] could not decrypt a stored OAuth token');
+    // The crypto error names what failed, never the value it was given.
+    reportError(error, { surface: 'db.token.decrypt' });
     return null;
   }
 }

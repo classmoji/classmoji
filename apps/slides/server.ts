@@ -1,3 +1,6 @@
+// First: starts server-side error tracking before anything else loads.
+import { sentryEnabled } from './server/sentry.ts';
+
 import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
@@ -11,6 +14,8 @@ import { auth } from '@classmoji/auth/server';
 // is the same module apps/pages reads the prefix from).
 import { sessionTokenFromCookieHeader } from '@classmoji/auth/secret';
 import { RoomStateStore, withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
+import { setupExpressErrorHandler } from '@classmoji/utils/sentry-node';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -118,6 +123,9 @@ io.use(async (socket, next) => {
     return next();
   } catch (err) {
     console.error('[socket] Auth error:', err);
+    // A session or database failure, answered as "signed out": reported, or
+    // an outage would look like everyone losing their session.
+    reportError(err, { surface: 'auth.session_read', tags: { via: 'socket' } });
     return next(new Error('UNAUTHENTICATED'));
   }
 });
@@ -152,6 +160,7 @@ multiplex.use(async (socket, next) => {
     return next();
   } catch (err) {
     console.error('[multiplex] Auth error:', err);
+    reportError(err, { surface: 'auth.session_read', tags: { via: 'multiplex' } });
     return next(new Error('UNAUTHENTICATED'));
   }
 });
@@ -231,6 +240,8 @@ multiplex.on('connection', socket => {
       multiplex.to(slideId).emit('viewercount', { count: viewerCount });
     } catch (err) {
       console.error('[multiplex] Join error:', err);
+      // Socket.IO events run outside any HTTP request: nothing else reports them.
+      reportError(err, { surface: 'slides.multiplex.join' });
     }
   });
 
@@ -347,6 +358,11 @@ if (isDev) {
   const build = await import('./build/server/index.js');
   app.use(createRequestHandler({ build }));
 }
+
+// After every route: reports an error that reaches Express (one the React
+// Router handler did not answer itself) and passes it on with next(error), so
+// Express's own handler still sends the response it always did.
+if (sentryEnabled) setupExpressErrorHandler(app);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Start Server

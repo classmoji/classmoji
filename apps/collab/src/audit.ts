@@ -1,3 +1,5 @@
+import { reportError } from '@classmoji/utils/error-report';
+
 /**
  * Audit rows for live editing: COLLAB_JOIN / COLLAB_LEAVE per socket,
  * UPDATE for a person's structural edit of a deck (slides inserted, deleted,
@@ -24,6 +26,11 @@ export function recordAudit(sink: AuditSink | undefined, entry: AuditEntry): voi
   if (!sink) return;
   sink.record(entry).catch(err => {
     console.error(`[collab] audit ${entry.action} for ${entry.userId} failed:`, err);
+    // Once per error object: one the audit service already reported is not sent again.
+    reportError(err, {
+      surface: 'collab.audit',
+      tags: { action: entry.action, classroom_id: entry.classroomId },
+    });
   });
 }
 

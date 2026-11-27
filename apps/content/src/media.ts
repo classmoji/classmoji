@@ -17,6 +17,7 @@
  * That is why this is its own file rather than a branch inside `blob.ts`: the
  * two paths share their POLICY (range.ts, cache.ts) and share nothing else.
  */
+import { reportError } from '@classmoji/utils/error-report';
 import { asDownload, blobHeaders, errorResponse } from './cache.ts';
 import { hasMediaBinding, type Env } from './env.ts';
 import { MediaOrigin, type MediaObjectRef } from './origins/media.ts';
@@ -99,6 +100,18 @@ function rangeOutcome(request: Request, etag: string, total: number): RangeOutco
  * (`signMediaUrl` refuses it), but the tier is what decides cacheability, and a
  * per-viewer filename must never end up on a reply a shared cache may keep.
  */
+/**
+ * Reported when the media route finds no MEDIA binding. One module-level
+ * object, because `reportError` sends an object once: the isolate reports it
+ * on its first media request rather than on every one.
+ */
+let mediaBindingMissing = new Error('MEDIA bucket binding is missing');
+
+/** Test hook: let the next media request without a binding report again. */
+export function resetMediaBindingReport(): void {
+  mediaBindingMissing = new Error(mediaBindingMissing.message);
+}
+
 export async function serveMedia(
   env: Env,
   request: Request,
@@ -111,6 +124,7 @@ export async function serveMedia(
   // fix is the deploy rather than a hunt through the signing code.
   if (!hasMediaBinding(env)) {
     console.warn('[content] media binding missing');
+    reportError(mediaBindingMissing, { surface: 'content.media_binding' });
     return errorResponse(503, 'media not configured');
   }
 

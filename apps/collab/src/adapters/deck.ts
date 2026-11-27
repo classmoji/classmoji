@@ -77,6 +77,7 @@ import {
 import { LOCK_TAKEOVER_IDLE_MS } from '@classmoji/collab';
 
 import { deckView, itemHash, type ItemView } from '@classmoji/collab/hash';
+import { reportError } from '@classmoji/utils/error-report';
 import { parseOpsPayload } from './parseOps.ts';
 
 import {
@@ -677,10 +678,16 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     if (!base) {
       // Merging against a made-up base would read every live-only change as
       // "the push deleted it". Refuse and keep the live doc.
-      throw new CollabHttpError(409, {
+      const refusal = new CollabHttpError(409, {
         error: 'no-merge-base',
         message: `deck ${ctx.ref.docId}: no readable base for the outside push`,
       });
+      // The outside change stays out of the live deck until someone acts.
+      reportError(refusal, {
+        surface: 'collab.external_merge',
+        tags: { kind: 'deck', doc_id: ctx.ref.docId },
+      });
+      throw refusal;
     }
     const mergeBase = base;
     let conflicts = 0;

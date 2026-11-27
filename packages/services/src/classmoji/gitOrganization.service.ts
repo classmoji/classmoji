@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import type { GitOrganization, GitProvider, Prisma } from '@classmoji/database/client';
 import type { Octokit } from 'octokit';
@@ -827,6 +828,7 @@ const performRepair = async (
       message
     );
     logRepair(orgId, login, 'error');
+    reportError(error, { surface: 'git_org.repair', extra: { orgId } });
     return { status: 'error', message };
   }
 };

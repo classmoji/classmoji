@@ -19,6 +19,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
@@ -136,10 +137,11 @@ export async function auditRead(
 ): Promise<void> {
   const classroom = ctx.classroom;
   if (!classroom) return;
+  let entry: AuditEntry;
   try {
     if (audit.when && !audit.when(classroom)) return;
     const ids = audit.ids?.(input, classroom) ?? {};
-    await writeAudit(ctx, {
+    entry = {
       resource_type: audit.resourceType,
       resource_id: ids.resourceId ?? null,
       action: 'VIEW',
@@ -150,7 +152,16 @@ export async function auditRead(
         ...(ids.data ?? {}),
         ...(ids.data ? { filter_key: filterKey(ids.data) } : {}),
       },
-    });
+    };
+  } catch (error) {
+    // The surface's own `when`/`ids` failed, so the row never reached the
+    // audit service (which reports its own failures): reported here.
+    console.warn(`[mcp] read audit (${surface}) failed:`, error);
+    reportError(error, { surface: 'mcp.audit_read', tags: { tool: surface } });
+    return;
+  }
+  try {
+    await writeAudit(ctx, entry);
   } catch (error) {
     console.warn(`[mcp] read audit (${surface}) failed:`, error);
   }

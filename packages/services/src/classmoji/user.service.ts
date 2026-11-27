@@ -1,4 +1,5 @@
 import _ from 'lodash';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, {
   GIT_IDENTITY,
   gitScopeProvider,
@@ -158,6 +159,7 @@ export const update = async (userId: string, updates: Prisma.UserUpdateInput) =>
       await claimPendingInvites(userId);
     } catch (error) {
       console.error('Failed to claim pending invites after email change:', error);
+      reportError(error, { surface: 'user.claim_invites' });
     }
   }
 

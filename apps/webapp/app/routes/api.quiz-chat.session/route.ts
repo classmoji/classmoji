@@ -36,6 +36,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import {
   isTriggerConfigured,
@@ -251,6 +252,7 @@ export async function action({ request }: Route.ActionArgs) {
     if (error instanceof Response) return error;
     // The error itself stays in the server log; the caller gets fixed copy.
     console.error('[api.quiz-chat.session] failed:', error);
+    reportError(error, { surface: 'quiz_chat.session' });
     return refuse(SESSION_REFUSALS.failed);
   }
 }

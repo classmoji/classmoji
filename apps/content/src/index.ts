@@ -18,6 +18,22 @@
  * The media route is the one shape with no origin behind it: those bytes are
  * only ever in R2, so a miss there is a 404 rather than a pull.
  */
+import { reportError, setErrorReporter } from '@classmoji/utils/error-report';
+import {
+  createSentryReporter,
+  sentryOffOptions,
+  sentryServerOptions,
+  workerIntegrations,
+} from '@classmoji/utils/sentry-server';
+import {
+  captureException,
+  fetchIntegration,
+  flush,
+  httpServerIntegration,
+  withScope,
+  withSentry,
+  type CloudflareOptions,
+} from '@sentry/cloudflare';
 import { serveBlob } from './blob.ts';
 import { previewFrameResponse } from './box.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
@@ -42,6 +58,19 @@ import { isClassroomId, parseContentUrl, parseFilesUrl, verifyContentUrl } from 
  * what a classroom id is.
  */
 const MISSING_PATH = /^\/c\/([^/]+)\/missing\/(.+)$/;
+
+/**
+ * Reported when a content request finds the Worker without its secrets. One
+ * module-level object, because `reportError` sends an object once: a
+ * misconfigured isolate reports it on its first request rather than on every
+ * one.
+ */
+let notConfigured = new Error('content worker is missing its signing or token secrets');
+
+/** Test hook: let the next unconfigured request report again. */
+export function resetNotConfiguredReport(): void {
+  notConfigured = new Error(notConfigured.message);
+}
 
 /** A repo path is the app's own string, but it arrives from the network. */
 const MAX_LOGGED_PATH = 512;
@@ -168,7 +197,10 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 
   // One definition of "configured", shared with /healthz — the verifier below
   // needs no narrowed local now that it takes the whole list of secrets.
-  if (!isConfigured(env)) return errorResponse(503, 'not configured');
+  if (!isConfigured(env)) {
+    reportError(notConfigured, { surface: 'content.not_configured' });
+    return errorResponse(503, 'not configured');
+  }
 
   const verified = await verifyContentUrl(signingSecrets(env), request.url);
   if (!verified.ok) {
@@ -216,19 +248,60 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     if (verified.kind === 'files') return await serveFiles(env, ctx, verified, request);
     return await serveTheme(env, ctx, verified, request);
   } catch (error) {
+    const tags = { kind: verified.kind, classroom: verified.classroomId };
     if (error instanceof OriginError) {
       console.warn('[content] origin error:', error.message);
+      // A 404 is a tree, repo or classroom that is gone, which the app falls
+      // back from; anything else (unreachable, rate limited, rejected
+      // credentials, a 5xx) is the origin failing.
+      if (error.status !== 404) {
+        reportError(error, {
+          surface: 'content.origin',
+          level: 'warning',
+          tags: { ...tags, status: error.status },
+        });
+      }
       return errorResponse(502, 'origin unavailable');
     }
     console.error('[content] unhandled error:', error);
+    reportError(error, { surface: 'content.unhandled', tags });
     return errorResponse(500, 'internal error');
   }
 }
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const response = await handle(request, env, ctx);
     // One place decides that a HEAD carries no body — every route included.
     return request.method === 'HEAD' ? withoutBody(response) : response;
   },
 } satisfies ExportedHandler<Env>;
+
+// `reportError` from anywhere in this Worker reaches Sentry. With SENTRY_DSN
+// unset the SDK's client is disabled and drops what it is given. Named parts
+// rather than the SDK namespace, so the bundler can leave out the rest of it.
+setErrorReporter(createSentryReporter({ withScope, captureException, flush }));
+
+/**
+ * The SDK would otherwise treat some bodies (`text/plain` with no length) as
+ * streaming and hand the client a re-wrapped copy. Set on and off alike: the
+ * SDK builds a client, and wraps the request, even when disabled.
+ */
+const notStreaming = () => false;
+
+/**
+ * Errors only, and fully off without SENTRY_DSN (see sentryServer.ts in
+ * @classmoji/utils for what is collected and scrubbed). Every response is
+ * classified as not streaming, so blobs, media and ranges reach the client
+ * exactly as this Worker built them.
+ */
+export default withSentry((env: Env): CloudflareOptions => {
+  const options = sentryServerOptions(env, { app: 'content', runtime: 'worker' });
+  return options
+    ? {
+        ...options,
+        integrations: workerIntegrations({ fetchIntegration, httpServerIntegration }),
+        isStreamingResponse: notStreaming,
+      }
+    : { ...sentryOffOptions(), isStreamingResponse: notStreaming };
+}, worker);

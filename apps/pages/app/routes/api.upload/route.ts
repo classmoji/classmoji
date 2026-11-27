@@ -5,6 +5,7 @@ import {
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
 import { uploadRefusalStatus } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertPageAccess, pageMutationBlocked } from '~/utils/auth.server.ts';
 import { uploadPageAsset } from '~/utils/content.server.ts';
@@ -109,6 +110,7 @@ async function receiveUpload(
       return Response.json({ error: (error as Error).message }, { status: refused });
     }
     console.error('[upload] Failed:', error);
+    reportError(error, { surface: 'pages.upload' });
     return Response.json(
       { error: error instanceof Error ? error.message : 'Upload failed' },
       { status: 500 }

@@ -3,6 +3,7 @@ import { redirect } from 'react-router';
 
 import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 
 export const sleep = async (ms: number) => {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -204,6 +205,7 @@ export const addAuditLog = async ({
     });
   } catch (error: unknown) {
     console.error('[audit] Failed to resolve audit context', error);
+    reportError(error, { surface: 'audit.context' });
   }
 };
 

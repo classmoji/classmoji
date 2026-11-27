@@ -24,6 +24,7 @@ import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 import type { PageSnapshotContent } from '@classmoji/collab';
 import { itemHash, pageView } from '@classmoji/collab/hash';
 import { AGENT_TOUCHED_MAX } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 
 import {
   CollabHttpError,
@@ -498,10 +499,16 @@ export function createPageAdapter(
         console.error(
           `[collab] OUTSIDE PUSH NOT MERGED: page ${page.id} has no readable merge base (before=${before ?? '-'}, source_sha=${baseSha ?? '-'}); live doc kept`
         );
-        throw new CollabHttpError(409, {
+        const refusal = new CollabHttpError(409, {
           error: 'no-merge-base',
           message: 'No readable merge base for the outside push; the live page was kept',
         });
+        // The outside change stays out of the live page until someone acts.
+        reportError(refusal, {
+          surface: 'collab.external_merge',
+          tags: { kind: 'page', doc_id: page.id },
+        });
+        throw refusal;
       }
 
       const base = throughSchema(baseRaw.blocks, normalize, 'merge base');

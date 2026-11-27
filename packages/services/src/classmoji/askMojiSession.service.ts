@@ -43,6 +43,7 @@ import {
   type AskMojiSuggestion,
   type AskMojiUIMessage,
 } from '@classmoji/utils/ask-moji';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import * as askMojiChat from './askMojiChat.service.ts';
 import * as askMojiFeedback from './askMojiFeedback.service.ts';
@@ -109,6 +110,7 @@ export const askMojiAvailable = async (i: {
     pro = (await canUseSyllabusBot(i.classroomId)).allowed;
   } catch (error) {
     console.error('[askMojiSession] Pro lookup failed', error);
+    reportError(error, { surface: 'ask_moji.pro_lookup', extra: { classroomId: i.classroomId } });
   }
   if (!pro) return { available: false, reason: 'PRO_REQUIRED' };
   if (!settings?.syllabus_bot_enabled) return { available: false, reason: 'NOT_ENABLED' };

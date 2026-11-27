@@ -30,6 +30,7 @@
  */
 import { tasks } from '@trigger.dev/sdk';
 
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, {
   GIT_IDENTITY,
   gitScopeProvider,
@@ -334,6 +335,13 @@ export const addStaff = async ({
       await gitProvider.inviteToOrganization(gitOrganization.login, String(gitUser.id), [team.id]);
     } catch (error: unknown) {
       console.error('Error inviting staff member to organization:', error);
+      const status = (error as { status?: unknown } | null)?.status;
+      reportError(error, {
+        surface: 'staff.org_invite',
+        // A 4xx is the provider saying no (an invite already pending, say).
+        level: typeof status === 'number' && status < 500 ? 'warning' : 'error',
+        tags: { status: typeof status === 'number' ? status : undefined },
+      });
     }
   }
 

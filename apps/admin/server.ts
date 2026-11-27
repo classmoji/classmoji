@@ -1,7 +1,10 @@
+// First: Sentry starts before Express exists (a no-op without SENTRY_DSN).
+import { sentryEnabled } from './server/sentry.ts';
 import express from 'express';
 import { createRequestHandler } from '@react-router/express';
 import compression from 'compression';
 import morgan from 'morgan';
+import { setupExpressErrorHandler } from '@classmoji/utils/sentry-node';
 
 const app = express();
 
@@ -60,6 +63,10 @@ if (isDev) {
   const build = await import('./build/server/index.js');
   app.use(createRequestHandler({ build }));
 }
+
+// After the routes: errors passed to next() (the dev loader above, Express
+// itself) go to Sentry, then on to Express's default handler as before.
+if (sentryEnabled) setupExpressErrorHandler(app);
 
 const PORT = process.env.PORT || 7500;
 

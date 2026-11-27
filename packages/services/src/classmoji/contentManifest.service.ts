@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 
@@ -124,6 +125,7 @@ export async function saveManifest(classroomId: string): Promise<boolean> {
       'Failed to save content manifest:',
       error instanceof Error ? error.message : String(error)
     );
+    reportError(error, { surface: 'content.manifest_save', extra: { classroomId } });
     return false;
   }
 

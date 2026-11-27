@@ -18,6 +18,7 @@ import * as githubUserTokenService from '@classmoji/services/github-user-token';
 import * as subscriptionService from '@classmoji/services/subscription';
 import { clientIpHeader } from '@classmoji/utils';
 import { noteSeen } from './lastSeen.ts';
+import { onAuthApiError } from './apiErrorHook.ts';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
 // which only need to sign something (./siteReturnToken.ts) can share them
@@ -1410,6 +1411,9 @@ export const auth = betterAuth({
     Boolean(o)
   ),
   secret: AUTH_SECRET,
+  // Logs an endpoint's error as better-auth does by default and reports the
+  // faults among them; the response is the router's either way.
+  onAPIError: { onError: onAuthApiError },
   database: prismaAdapter(getPrisma(), {
     provider: 'postgresql',
   }),

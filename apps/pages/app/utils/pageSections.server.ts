@@ -46,6 +46,7 @@ import {
 import { canEnterClassroom } from '@classmoji/auth/predicates';
 import type { ClassroomStatus, Role } from '@classmoji/database/client';
 
+import { reportError } from '@classmoji/utils/error-report';
 import { checkOrigin, readCappedBody } from './originCheck.server.ts';
 
 // ── Shared shapes ──────────────────────────────────────────────────────────
@@ -517,6 +518,7 @@ async function auditQuietly(
     await deps.audit(entry);
   } catch (error) {
     console.warn(`[page-sections] audit (${entry.data.tool}) failed:`, error);
+    reportError(error, { surface: 'audit.write', tags: { tool: entry.data.tool } });
   }
 }
 
@@ -546,6 +548,7 @@ async function guarded(label: string, run: () => Promise<Response>): Promise<Res
     return await run();
   } catch (error) {
     console.error(`[page-sections] ${label} failed:`, error);
+    reportError(error, { surface: 'pages.page_sections', tags: { op: label } });
     return fail(500, 'Something went wrong');
   }
 }

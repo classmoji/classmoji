@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { getGitProvider } from '../git/index.ts';
 import { owned, type GitLabOrgRecord } from '../content/gitlabContent.ts';
@@ -860,6 +861,11 @@ export async function recordContentAssets(
         'the next sync will pick them up:',
       error
     );
+    reportError(error, {
+      surface: 'content_assets.record',
+      level: 'warning',
+      extra: { classroomId, paths: entries.length },
+    });
     return false;
   }
 }
@@ -912,6 +918,11 @@ export async function recordContentAsset(
         'the next sync will pick it up:',
       error
     );
+    reportError(error, {
+      surface: 'content_assets.record',
+      level: 'warning',
+      extra: { classroomId, paths: 1 },
+    });
     return false;
   }
 }

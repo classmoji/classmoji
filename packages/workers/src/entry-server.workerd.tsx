@@ -10,11 +10,14 @@
  *   still flush;
  * - an error after the shell sets 500 and is logged; a shell error rejects
  *   (React Router turns it into its error response).
+ * Like the Node entry, an error after the shell also goes to `reportError`
+ * (a no-op unless the Worker registered a reporter).
  */
 import type { EntryContext, RouterContextProvider } from 'react-router';
 import { ServerRouter } from 'react-router';
 import { isbot } from 'isbot';
 import { renderToReadableStream } from 'react-dom/server';
+import { reportError } from '@classmoji/utils/error-report';
 
 export const streamTimeout = 5_000;
 
@@ -46,6 +49,7 @@ export default async function handleRequest(
         // React Router's handleDocumentRequest; log only the later ones.
         if (shellRendered) {
           console.error(error);
+          reportError(error, { surface: 'react_router.render' });
         }
       },
     }

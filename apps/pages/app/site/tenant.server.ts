@@ -2,6 +2,7 @@ import { redirect, type RouterContextProvider } from 'react-router';
 import type { Role } from '@classmoji/database/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
 import { highestRole } from '~/utils/classroomRole.ts';
 import { impersonatorOf, isImpersonatedSession } from '~/utils/pageSections.server.ts';
 import { siteHeaders } from './headers.server.ts';
@@ -210,8 +211,9 @@ export async function resolveSiteViewer(
   request: Request,
   classroomId: string
 ): Promise<SiteViewer> {
-  // A failed/absent session is the normal case on a public site, not an error.
-  const authData = await getAuthSession(request).catch(() => null);
+  // An absent session is the normal case on a public site; a failed read is
+  // served the same way (and reported).
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
   if (!authData?.userId) return ANONYMOUS;
 
   const [user, memberships] = await Promise.all([

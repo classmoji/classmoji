@@ -33,6 +33,7 @@ import getPrisma, {
   type GitUsernameScope,
 } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import type { GitProvider as GitProviderEnum } from '@classmoji/database/client';
 
 import { getGitProvider } from '../git/index.ts';
@@ -168,7 +169,7 @@ const isUniqueViolation = (error: unknown): boolean =>
 /**
  * Classify a thrown error into the closed failure vocabulary and log the raw
  * one with context, so the detail stays in the server logs rather than in a
- * response body. Octokit errors carry a numeric `.status`; Prisma errors carry
+ * response body. Every reason but `not_found` is also reported. Octokit errors carry a numeric `.status`; Prisma errors carry
  * a string `.code`; anything else falls back to the caller's default.
  */
 const failureReason = (
@@ -177,6 +178,21 @@ const failureReason = (
   fallback: TeamFailureReason
 ): TeamFailureReason => {
   console.error(`[team] ${context}`, error);
+  const reason = classifyFailure(error, fallback);
+  // The context names logins and slugs, so it stays in the log; a provider
+  // 404 is "not there", not a fault.
+  if (reason !== 'not_found') {
+    const status = (error as { status?: unknown } | null)?.status;
+    reportError(error, {
+      surface: 'team.admin',
+      level: typeof status === 'number' && status < 500 ? 'warning' : 'error',
+      tags: { reason, status: typeof status === 'number' ? status : undefined },
+    });
+  }
+  return reason;
+};
+
+const classifyFailure = (error: unknown, fallback: TeamFailureReason): TeamFailureReason => {
   if (typeof error === 'object' && error !== null) {
     const status = (error as { status?: unknown }).status;
     if (typeof status === 'number') return status === 404 ? 'not_found' : 'provider_error';

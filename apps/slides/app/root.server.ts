@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { sentryBrowserConfig } from '@classmoji/utils/sentry';
 import { getAuthSession } from '@classmoji/auth/server';
 import type { Prisma } from '@classmoji/database/client';
@@ -83,6 +84,8 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
     user = found ? withLogin(found) : null;
   } catch (error: unknown) {
     console.error('User lookup failed:', error);
+    // A database failure sends a signed-in user back to the web app: reported.
+    reportError(error, { surface: 'slides.root.user_lookup' });
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
     return redirect(webappUrl);
   }

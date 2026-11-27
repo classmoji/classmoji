@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, { USER_PUBLIC_SELECT } from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS, withLogins } from '@classmoji/utils';
 import { uniqueViolationTarget } from './uniqueViolation.ts';
@@ -375,6 +376,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
         );
       } catch (error: unknown) {
         console.error('Failed to register the content project push hook:', error);
+        reportError(error, { surface: 'page.gitlab_push_hook' });
       }
     }
   }

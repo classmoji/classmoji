@@ -20,6 +20,7 @@
  *     (plan D8: the thread list is the shared discussion every member sees).
  */
 import type { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 
 import { checkOrigin, readCappedBody } from './originCheck.server.ts';
 import {
@@ -324,6 +325,7 @@ async function guarded(label: string, run: () => Promise<Response>): Promise<Res
     return await run();
   } catch (error) {
     console.error(`[page-comments] ${label} failed:`, error);
+    reportError(error, { surface: 'pages.page_comments', tags: { op: label } });
     return fail(500, 'SERVER_ERROR', 'Something went wrong');
   }
 }
@@ -337,6 +339,7 @@ async function auditQuietly(deps: Pick<PageCommentsDeps, 'audit'>, row: CommentA
     await deps.audit(row);
   } catch (error) {
     console.warn(`[page-comments] audit (${String(row.data.tool)}) failed:`, error);
+    reportError(error, { surface: 'audit.write', tags: { tool: String(row.data.tool) } });
   }
 }
 

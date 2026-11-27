@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { Prisma, type AuditLogAction, type Role } from '@classmoji/database/client';
+import { reportError } from '@classmoji/utils/error-report';
 
 // Valid AuditLogAction values from Prisma schema
 const VALID_ACTIONS = [
@@ -61,6 +62,23 @@ export function logAuditMiss(reason: string, row: unknown): void {
   console.error('audit_miss', line);
 }
 
+/**
+ * What an error report may say about a row: its action, resource type and the
+ * `data.tool` that names the surface. Never the row itself (data can carry
+ * ids of other people, lengths, and whatever a caller put there).
+ */
+function rowTags(row: { action?: unknown; resource_type?: unknown; data?: unknown }) {
+  const tool =
+    row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+      ? (row.data as { tool?: unknown }).tool
+      : undefined;
+  return {
+    action: typeof row.action === 'string' ? row.action : undefined,
+    resource_type: typeof row.resource_type === 'string' ? row.resource_type : undefined,
+    tool: typeof tool === 'string' ? tool : undefined,
+  };
+}
+
 /** One `platform_audit_logs` row, as `recordPlatformAudit` takes it. */
 export interface PlatformAuditRow {
   actor_id: string | null;
@@ -80,6 +98,10 @@ export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> 
   try {
     await getPrisma().platformAuditLog.create({ data: row });
   } catch (error) {
+    reportError(error, {
+      surface: 'audit.write',
+      tags: { action: row.action, resource_type: row.target_type, table: 'platform_audit_logs' },
+    });
     logAuditMiss(
       `platform audit write failed: ${error instanceof Error ? error.message : String(error)}`,
       row
@@ -87,16 +109,34 @@ export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> 
   }
 }
 
+/** Why `refuse` dropped a row, as a closed set (the reason text quotes the input). */
+type RefusalCode =
+  | 'missing_classroom'
+  | 'missing_user'
+  | 'invalid_action'
+  | 'missing_role'
+  | 'invalid_role';
+
 /**
  * Invalid input: outside production a bug to fix now, so it throws; in
- * production the caller's action has already happened, so the miss is logged
- * and the call returns null.
+ * production the caller's action has already happened, so the miss is logged,
+ * reported (a row that should exist does not), and the call returns null.
  */
-function refuse(reason: string, row: AuditLogData): null {
+function refuse(reason: string, code: RefusalCode, row: AuditLogData): null {
   if (process.env.NODE_ENV !== 'production') {
     throw new Error(`Audit row not written: ${reason}`);
   }
   logAuditMiss(reason, row);
+  reportError(new Error(`Audit row not written: ${code}`), {
+    surface: 'audit.skipped',
+    level: 'warning',
+    tags: {
+      ...rowTags(row),
+      // An unknown action is caller input; only a known one is a safe tag.
+      action: VALID_ACTIONS.includes(row.action) ? row.action : undefined,
+      reason: code,
+    },
+  });
   return null;
 }
 
@@ -143,14 +183,17 @@ function jsonEqual(a: unknown, b: unknown): boolean {
  *
  * Invalid input (no classroom or user, an unknown role or action, a missing
  * role on anything but ACCESS_DENIED) throws outside production and, in
- * production, logs one `audit_miss` line and returns null.
+ * production, logs one `audit_miss` line, reports it and returns null. A
+ * failed write is reported and thrown.
  */
 export const create = async (data: AuditLogData) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
 
-  if (!classroom_id) return refuse('missing classroom_id', data);
-  if (!user_id) return refuse('missing user_id', data);
-  if (!VALID_ACTIONS.includes(action)) return refuse(`invalid action "${action}"`, data);
+  if (!classroom_id) return refuse('missing classroom_id', 'missing_classroom', data);
+  if (!user_id) return refuse('missing user_id', 'missing_user', data);
+  if (!VALID_ACTIONS.includes(action)) {
+    return refuse(`invalid action "${action}"`, 'invalid_action', data);
+  }
 
   // 'NONE' is what the classroom gate passes today for a refused non-member.
   // Those rows have never been written; the next change passes null instead
@@ -158,11 +201,13 @@ export const create = async (data: AuditLogData) => {
   if (role === 'NONE') return null;
 
   if (role === null) {
-    if (action !== 'ACCESS_DENIED') return refuse(`missing role on ${action}`, data);
+    if (action !== 'ACCESS_DENIED') {
+      return refuse(`missing role on ${action}`, 'missing_role', data);
+    }
   } else if (typeof role !== 'string' || !role) {
-    return refuse('missing role', data);
+    return refuse('missing role', 'missing_role', data);
   } else if (!VALID_ROLES.includes(role)) {
-    return refuse(`invalid role "${role}"`, data);
+    return refuse(`invalid role "${role}"`, 'invalid_role', data);
   }
 
   const normalizedResourceId =
@@ -181,6 +226,22 @@ export const create = async (data: AuditLogData) => {
     auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
 
+  // A failed write is reported here, once, and still thrown to the caller,
+  // which logs it and carries on (its action has already happened).
+  return writeRow(data, auditData, normalizedResourceId, normalizedRole).catch((error: unknown) => {
+    reportError(error, { surface: 'audit.write', tags: rowTags(data) });
+    throw error;
+  });
+};
+
+/** Insert the row, or count a repeat read on the row it repeats (see `create`). */
+async function writeRow(
+  data: AuditLogData,
+  auditData: Prisma.AuditLogUncheckedCreateInput,
+  normalizedResourceId: string | null,
+  normalizedRole: Role | null
+) {
+  const { user_id, classroom_id, resource_type, action } = data;
   const prisma = getPrisma();
   if (!COUNTED_ACTIONS.has(action)) return prisma.auditLog.create({ data: auditData });
 
@@ -231,4 +292,4 @@ export const create = async (data: AuditLogData) => {
   }
 
   return prisma.auditLog.create({ data: auditData });
-};
+}

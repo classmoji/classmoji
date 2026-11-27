@@ -1,5 +1,6 @@
 import { useLoaderData } from 'react-router';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
 
 /**
  * Root index route.
@@ -7,7 +8,7 @@ import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
  * so they can navigate to the right one.
  */
 export const loader = async ({ request }: { request: Request }) => {
-  const authData = await getAuthSession(request).catch(() => null);
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
 
   if (!authData) {
     return { classrooms: [] };

@@ -1,5 +1,6 @@
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { platformAudit } from '~/utils/audit.server';
+import { reportError } from '@classmoji/utils/error-report';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 
 /**
@@ -177,6 +178,7 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
         return { error: 'That classroom no longer exists — the list is out of date.' };
       }
       console.error('[admin] content-delivery toggle failed:', error);
+      reportError(error, { surface: 'admin.delivery.toggle', tags: { enabled } });
       return { error: 'Could not change that classroom. Try again.' };
     }
     return { ok: true, changed: 1 };
@@ -202,6 +204,7 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
       return { ok: true, changed: count };
     } catch (error) {
       console.error('[admin] content-delivery bulk update failed:', error);
+      reportError(error, { surface: 'admin.delivery.bulk', tags: { enabled } });
       return { error: 'Could not apply that change. Try again.' };
     }
   }

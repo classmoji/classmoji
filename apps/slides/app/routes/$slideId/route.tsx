@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { gitWeb } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { useLoaderData, useFetcher, useRevalidator, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
@@ -854,6 +855,16 @@ export const action = async ({
   const { slideId } = params;
   if (!slideId) return { error: 'Missing slideId' };
 
+  // An intent that failed for a reason the editor cannot fix (its generic
+  // failure answer below), reported beside its log line. `intent` is one of
+  // the names this action handles, never the posted value.
+  const reportActionFailure = (error: unknown, intent: string, level?: 'warning') =>
+    reportError(error, {
+      surface: 'slides.deck_action',
+      ...(level ? { level } : {}),
+      tags: { intent, slide_id: slideId },
+    });
+
   // Fetch slide to get classroom/git org info
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
@@ -972,6 +983,10 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('[slides] Save version failed:', error);
+      // A 4xx from the collab server is answered as that 4xx: not reported.
+      const refused =
+        error instanceof CollabRequestError && error.status >= 400 && error.status < 500;
+      if (!refused) reportActionFailure(error, 'collab-save-version');
       return data(
         { intent: 'collab-save-version' as const, error: "Couldn't save a version. Try again." },
         { status: error instanceof CollabRequestError && error.status ? error.status : 502 }
@@ -1029,6 +1044,7 @@ export const action = async ({
     } catch (err: unknown) {
       // Never in the way of editing: no prompt this time.
       console.error('Failed to detect orphaned images (live):', err);
+      reportActionFailure(err, 'collab-orphaned-images', 'warning');
       return { intent: 'collab-orphaned-images' as const, orphanedImages: [] };
     }
   }
@@ -1112,6 +1128,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to list themes:', error);
+      reportActionFailure(error, 'list-themes');
       return { intent: 'list-themes', customThemes: [], sharedThemes: [] };
     }
   }
@@ -1157,6 +1174,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to get theme content:', error);
+      reportActionFailure(error, 'get-theme-content');
       return { intent: 'get-theme-content', cssThemes: [] };
     }
   }
@@ -1198,6 +1216,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to list snippets:', error);
+      reportActionFailure(error, 'list-snippets');
       return { intent: 'list-snippets', snippets: [] };
     }
   }
@@ -1322,6 +1341,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to fetch latest content:', error);
+      reportActionFailure(error, 'fetch-latest');
       // Tag the intent so the client can distinguish a fetch-latest failure
       // from a save error and clear its loading state (S8).
       return {
@@ -1403,7 +1423,10 @@ export const action = async ({
       // extension this classroom does not take, 400 for a bad name. Only a
       // real failure is logged and answers 500.
       const refused = uploadRefusalStatus(error) ?? (isCommitTooLargeRefusal(error) ? 413 : null);
-      if (!refused) console.error('Failed to upload image:', error);
+      if (!refused) {
+        console.error('Failed to upload image:', error);
+        reportActionFailure(error, 'upload-image');
+      }
       return data(
         {
           intent: 'upload-image' as const,
@@ -1452,6 +1475,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to save snippet:', error);
+      reportActionFailure(error, 'save-snippet');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1517,6 +1541,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to update snippet:', error);
+      reportActionFailure(error, 'update-snippet');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1546,6 +1571,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to delete snippet:', error);
+      reportActionFailure(error, 'delete-snippet');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1591,6 +1617,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to save theme:', error);
+      reportActionFailure(error, 'save-theme');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1658,6 +1685,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to update theme:', error);
+      reportActionFailure(error, 'update-theme');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1687,6 +1715,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to delete theme:', error);
+      reportActionFailure(error, 'delete-theme');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1740,6 +1769,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to delete images:', error);
+      reportActionFailure(error, 'delete-images');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1791,6 +1821,7 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to update visibility:', error);
+      reportActionFailure(error, 'update-visibility');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1839,6 +1870,7 @@ export const action = async ({
       return redirect(`/${slideId}?notice=preview-accepted`);
     } catch (error: unknown) {
       console.error('Failed to accept preview into the live deck:', error);
+      reportActionFailure(error, 'preview-accept');
       return data({ error: "Couldn't merge the preview. Try again." }, { status: 502 });
     }
   }
@@ -1933,6 +1965,7 @@ export const action = async ({
         );
       }
       console.error('Failed to accept preview:', error);
+      reportActionFailure(error, 'preview-accept');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -1944,6 +1977,7 @@ export const action = async ({
       return redirect(`/${slideId}?notice=preview-discarded`);
     } catch (error: unknown) {
       console.error('Failed to discard preview:', error);
+      reportActionFailure(error, 'preview-discard');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -2078,6 +2112,7 @@ export const action = async ({
         ).map(image => ({ ...image, url: contentProxyUrl(gitOrgLogin, repo, image.path) }));
       } catch (err: unknown) {
         console.error('Failed to detect orphaned images:', err);
+        reportActionFailure(err, 'save', 'warning');
       }
 
       // adoption_required gates the live-editor remount on a FULL comparison
@@ -2128,6 +2163,7 @@ export const action = async ({
         return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
       }
       console.error('Failed to save slide (ops):', error);
+      reportActionFailure(error, 'save');
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -2207,6 +2243,9 @@ export const action = async ({
         };
       } catch (err: unknown) {
         console.error(`Failed to get shared theme URLs for ${sharedThemeName}:`, err);
+        // The deck is then saved with the default theme in place of the one
+        // the author chose: reported (never with the theme's name).
+        reportActionFailure(err, 'save.shared_theme');
         // Fall back to default theme if shared theme lookup fails
         theme = 'white';
       }
@@ -2286,6 +2325,7 @@ export const action = async ({
     } catch (err: unknown) {
       // Don't fail the save if orphan detection fails
       console.error('Failed to detect orphaned images:', err);
+      reportActionFailure(err, 'save', 'warning');
     }
 
     // Return the full HTML: it is the editor's next-session document and the
@@ -2341,6 +2381,7 @@ export const action = async ({
       return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
     }
     console.error('Failed to save slide:', error);
+    reportActionFailure(error, 'save');
     return { error: error instanceof Error ? error.message : String(error) };
   }
 };

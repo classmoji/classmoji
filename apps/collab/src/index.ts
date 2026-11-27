@@ -1,4 +1,8 @@
+// First: error tracking must be running before the server is built.
+import './sentry.ts';
+
 import { ClassmojiService } from '@classmoji/services';
+import { flushErrorReports, reportError } from '@classmoji/utils/error-report';
 
 import { createAdapterRegistry } from './adapters/registry.ts';
 import { createServiceAuditSink } from './audit.ts';
@@ -24,9 +28,15 @@ try {
   await holdSingleInstance(createPgInstanceLock(instanceLockUrl()), {
     onLost: reason => {
       console.error(`[collab] FATAL: ${reason}; exiting so only one instance serves`);
+      reportError(new Error('collab instance lock lost; exiting'), {
+        surface: 'collab.instance_lock',
+        level: 'fatal',
+        tags: { stage: 'lost' },
+      });
       // Flush what this process holds (destroy stores pending docs), then go.
       void (async () => {
         await live?.destroy().catch(() => {});
+        await flushErrorReports(2000);
         // A second instance must stop serving, visibly (non-zero exit).
         // eslint-disable-next-line no-process-exit
         process.exit(1);
@@ -36,6 +46,8 @@ try {
 } catch (err) {
   if (err instanceof SingleInstanceError) {
     console.error(`[collab] FATAL: ${err.message}`);
+    reportError(err, { surface: 'collab.instance_lock', level: 'fatal', tags: { stage: 'boot' } });
+    await flushErrorReports(2000);
     // Exit non-zero so a second machine crash-loops where it is seen.
     // eslint-disable-next-line no-process-exit
     process.exit(1);

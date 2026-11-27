@@ -48,7 +48,8 @@
  *   viewing as someone refuses.
  */
 
-import { APIError } from 'better-auth/api';
+import { APIError, isAPIError } from 'better-auth/api';
+import { reportError } from '@classmoji/utils/error-report';
 import { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionMessages.ts';
 
 export { CONNECT_APP_VIEWING_AS_MESSAGE };
@@ -164,7 +165,10 @@ export async function applyAppConnectionRules(
   let sessions: readonly AppConnectionSession[];
   try {
     sessions = await lookupSessions();
-  } catch {
+  } catch (error: unknown) {
+    // A refusal from the session read is its own answer; anything else is a
+    // fault behind the 503, reported here since the 503 itself carries no cause.
+    if (!isAPIError(error)) reportError(error, { surface: 'auth.app_connection' });
     throw new APIError('SERVICE_UNAVAILABLE', {
       error: 'temporarily_unavailable',
       error_description: "Couldn't check your session. Try again in a moment.",

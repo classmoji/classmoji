@@ -1,5 +1,6 @@
 import { tasks } from '@trigger.dev/sdk';
 import { Prisma } from '@classmoji/database/client';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { GITLAB_PROJECTS_SUBGROUP, parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
@@ -758,6 +759,11 @@ class HelperService {
             `[ungraded-slots] could not queue ${moves.length - i} slot moves off ${graderId}:`,
             error
           );
+          reportError(error, {
+            surface: 'staff.ungraded_slots',
+            tags: { step: 'queue' },
+            extra: { slots: moves.length - i },
+          });
           outcome.failed += moves.length - i;
           break;
         }
@@ -795,6 +801,7 @@ class HelperService {
           `[ungraded-slots] could not move submission ${move.gitRepoAssignmentId} off ${graderId}:`,
           error
         );
+        reportError(error, { surface: 'staff.ungraded_slots', tags: { step: 'move' } });
         outcome.failed += 1;
       }
     });
@@ -883,6 +890,11 @@ class HelperService {
       return await this.resolveUngradedSlots({ classroomId, graderId, choice, departingName });
     } catch (error) {
       console.error(`[staff] ungraded slots of ${graderId} were not handled:`, error);
+      reportError(error, {
+        surface: 'staff.ungraded_slots',
+        tags: { step: 'settle' },
+        extra: { classroomId, slots: expectedCount },
+      });
       return { ...emptyOutcome(choice, expectedCount), failed: expectedCount };
     }
   }

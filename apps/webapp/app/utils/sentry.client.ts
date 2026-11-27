@@ -76,7 +76,8 @@ export const initSentry = (
       graphQL: { document: false, variables: false },
     },
     tracesSampleRate: 0.05,
-    // No server SDK continues a trace, so no sentry-trace/baggage headers.
+    // The server reports errors only and continues no trace, so no
+    // sentry-trace/baggage headers.
     tracePropagationTargets: [],
     integrations: [reactRouterTracingIntegration()],
     // Errors carry tags, streamed spans carry attributes: both name the app.

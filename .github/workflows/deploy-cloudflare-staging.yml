@@ -139,7 +139,8 @@ jobs:
             // Present only while a signing key is being rotated: the Worker
             // verifies against it as a fallback so URLs minted under the old
             // key survive the change. Allowed, never required.
-            const optional = ["CONTENT_SIGNING_SECRET_PREVIOUS"];
+            // SENTRY_DSN: error reporting, off while unset.
+            const optional = ["CONTENT_SIGNING_SECRET_PREVIOUS", "SENTRY_DSN"];
             const allowed = [...required, ...optional];
 
             const text = readFileSync(raw, "utf8");

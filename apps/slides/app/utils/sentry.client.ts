@@ -1,6 +1,8 @@
 /**
  * Browser error tracking (Sentry). Errors plus light tracing, no replay, and
  * no PII: the only thing known about a person is their internal user id.
+ * (The server reports its own errors, errors only, through `@sentry/node`:
+ * server/sentry.ts and app/entry.server.tsx.)
  *
  * `.client` keeps the SDK out of the server bundle; on the server every export
  * here is `undefined`, so call these from effects and event handlers only,

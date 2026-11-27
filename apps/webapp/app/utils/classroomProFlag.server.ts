@@ -1,4 +1,5 @@
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 
 /**
  * Whether a classroom is on Pro, as a bare boolean — the one fact the staff
@@ -55,6 +56,7 @@ export const loadQuizzesVisible = async (classroomId: string): Promise<boolean> 
     return await quizzesVisibleOrThrow(classroomId);
   } catch (error) {
     console.error('[loadQuizzesVisible] quiz visibility lookup failed', error);
+    reportError(error, { surface: 'quiz.visibility', tags: { classroom_id: classroomId } });
     return false;
   }
 };

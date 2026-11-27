@@ -1,4 +1,5 @@
 import { classroomSlugFromPath, fallbackMode } from '~/utils/sessionMode.server';
+import { setRequestUserId } from '~/utils/sentry.server';
 import {
   Links,
   Meta,
@@ -253,6 +254,8 @@ const loadRoot = async ({ request, url }: Route.LoaderArgs) => {
 
   // Get auth session (works for both OAuth and test-login sessions)
   const authData = await getAuthSession(request);
+  // Server errors in this request name the user, by internal id only.
+  setRequestUserId(authData?.userId);
 
   // Also try Better Auth's session for impersonation detection
   const betterAuthSession = await auth.api.getSession({ headers: request.headers });

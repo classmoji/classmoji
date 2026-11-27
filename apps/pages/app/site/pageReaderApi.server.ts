@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { READER_API_JSON_HEADERS, isForeignFetch } from '~/utils/pageSections.server.ts';
 import { activeSiteFor, siteSubdomainOf } from './apiBinding.server.ts';
@@ -103,12 +104,14 @@ export async function sitePageReaderResponse({
       } catch (error) {
         // The read is the viewer's either way; a failed log line must not fail it.
         console.warn('[page-reader] audit failed:', error);
+        reportError(error, { surface: 'audit.write', tags: { tool: 'page_reader', via: 'site' } });
       }
     }
 
     return json({ payload });
   } catch (error) {
     console.error('[page-reader] failed:', error);
+    reportError(error, { surface: 'pages.site.page_reader' });
     return json({ error: 'Something went wrong' }, 500);
   }
 }

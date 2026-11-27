@@ -45,6 +45,7 @@ import {
   type SlidePointer,
 } from '@classmoji/collab';
 import { DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
+import { reportError } from '@classmoji/utils/error-report';
 
 import {
   AccessRechecker,
@@ -63,6 +64,7 @@ import {
 import { durationMs, type CheckpointTrigger } from './checkpoint.ts';
 import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
+import { reportingHook } from './report.ts';
 import { recordAudit, type AuditSink } from './audit.ts';
 import { summarizeStructure, watchDeckStructure, type StructuralOp } from './structureAudit.ts';
 import { currentEpoch, isReseedMarker, type CollabDocStore } from './store/types.ts';
@@ -308,38 +310,45 @@ export class CollabRuntime {
       onRequest: payload => handleRequest(payload, this),
       extensions: [
         new Database({
+          // fetch reports through asAuthError; a failed store is only logged
+          // by Hocuspocus (the doc stays in memory), so it is reported here.
           fetch: payload => this.fetch(payload),
-          store: payload => this.store(payload),
+          store: reportingHook('store', payload => this.store(payload)),
         }),
         {
           extensionName: 'classmoji-collab',
-          afterLoadDocument: async payload => this.afterLoad(payload),
-          connected: async ({ connection, requestHeaders, context, documentName }) => {
-            const entry = this.loaded.get(documentName);
-            if (entry) entry.humanLeft = false;
-            this.rechecker.track(
-              connection as Connection<CollabConnectionContext>,
-              requestHeaders.get('cookie') ?? ''
-            );
-            this.auditConnection('COLLAB_JOIN', context);
-            // Sockets are people (agents edit over direct connections).
-            const classroomId =
-              entry?.classroomId ?? (context as Partial<CollabConnectionContext>)?.classroomId;
-            if (classroomId) this.warmer?.connected(classroomId);
-            // A client that reconnects still knows the agents' old states and
-            // ignores them sent again unchanged (same clock): send them anew.
-            this.republishAgents(documentName);
-          },
-          onChange: async payload => this.onChange(payload),
-          onDisconnect: async payload => {
+          afterLoadDocument: reportingHook('after_load', async payload => this.afterLoad(payload)),
+          connected: reportingHook(
+            'connected',
+            async ({ connection, requestHeaders, context, documentName }) => {
+              const entry = this.loaded.get(documentName);
+              if (entry) entry.humanLeft = false;
+              this.rechecker.track(
+                connection as Connection<CollabConnectionContext>,
+                requestHeaders.get('cookie') ?? ''
+              );
+              this.auditConnection('COLLAB_JOIN', context);
+              // Sockets are people (agents edit over direct connections).
+              const classroomId =
+                entry?.classroomId ?? (context as Partial<CollabConnectionContext>)?.classroomId;
+              if (classroomId) this.warmer?.connected(classroomId);
+              // A client that reconnects still knows the agents' old states and
+              // ignores them sent again unchanged (same clock): send them anew.
+              this.republishAgents(documentName);
+            }
+          ),
+          onChange: reportingHook('change', async payload => this.onChange(payload)),
+          onDisconnect: reportingHook('disconnect', async payload => {
             this.auditConnection('COLLAB_LEAVE', payload.context);
             const classroomId =
               this.loaded.get(payload.documentName)?.classroomId ??
               (payload.context as Partial<CollabConnectionContext> | undefined)?.classroomId;
             if (classroomId) this.warmer?.disconnected(classroomId);
             await this.onLastLeave(payload);
-          },
-          afterStoreDocument: async payload => this.afterStore(payload),
+          }),
+          afterStoreDocument: reportingHook('after_store', async payload =>
+            this.afterStore(payload)
+          ),
           afterUnloadDocument: async ({ documentName }) => {
             this.loaded.delete(documentName);
           },
@@ -433,7 +442,7 @@ export class CollabRuntime {
           cause: err,
         });
       }
-      throw asAuthError(err, `loading ${documentName}`);
+      throw asAuthError(err, `loading ${documentName}`, { stage: 'load', documentName });
     }
   }
 
@@ -891,6 +900,10 @@ export class CollabRuntime {
         console.error(
           `[collab] checkpoint for classroom ${classroomId} still missing after ${streak - 1} re-trigger(s); leaving it to the sweeper`
         );
+        reportError(new Error('checkpoint still missing after re-triggers; left to the sweeper'), {
+          surface: 'collab.checkpoint_watchdog',
+          tags: { classroom_id: classroomId, retriggers: streak - 1 },
+        });
       } else {
         const generation = (this.keyGeneration.get(classroomId) ?? 0) + 1;
         this.keyGeneration.set(classroomId, generation);

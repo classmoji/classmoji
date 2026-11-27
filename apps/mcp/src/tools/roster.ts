@@ -32,6 +32,7 @@ import { tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { isValidEmail } from '@classmoji/utils/email';
+import { reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
@@ -225,6 +226,10 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
       })
       .catch((error: unknown) => {
         console.error('[mcp] remove_user_from_organization trigger failed:', error);
+        reportError(error, {
+          surface: 'mcp.trigger.remove_user_from_organization',
+          tags: { user_id: target.id },
+        });
       });
 
     return ok({

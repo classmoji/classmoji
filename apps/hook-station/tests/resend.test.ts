@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 
 /**
  * The Resend delivery webhook: signature, replay, and what a bounce writes.
@@ -314,5 +315,37 @@ describe('what an event does', () => {
     });
 
     expect(response.statusCode).toBe(500);
+  });
+
+  it('reports the database failure once, with the event type and message id, never the body', async () => {
+    const failure = new Error('connection lost');
+    updateMany.mockRejectedValue(failure);
+    const captured: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        captured.push({ error, context });
+      },
+      flush: async () => true,
+    });
+    try {
+      const app = await buildApp();
+      const body = bouncePayload();
+      const response = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/resend',
+        headers: sign(body),
+        payload: body,
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(captured).toHaveLength(1);
+      expect(captured[0].error).toBe(failure);
+      expect(captured[0].context).toEqual({
+        surface: 'resend.delivery_state',
+        tags: { provider: 'resend', event: 'email.bounced', email_id: 'msg-abc' },
+      });
+    } finally {
+      setErrorReporter(null);
+    }
   });
 });

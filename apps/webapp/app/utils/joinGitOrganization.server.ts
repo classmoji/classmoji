@@ -3,6 +3,7 @@ import type { Prisma } from '@classmoji/database/client';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { ClassmojiService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
 import { gitAccountId, gitUsername } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { describeInviteFailure } from '~/routes/_user.select-organization/inviteError.server';
 
 /**
@@ -34,6 +35,19 @@ export type GitJoinResult =
   | { ok: false; reason: 'failed'; message: string };
 
 type GitOrganizationRow = Prisma.GitOrganizationGetPayload<Record<string, never>>;
+
+/**
+ * Github answers a join with these when the student, not Classmoji, has to
+ * act: no such account (404), already a member or invited (422), rate limited
+ * (429, or a 403 that says so). The student's message says what to do; they
+ * are not reported as failures. Anything else (no status, 401, other 403s,
+ * 5xx) is our side: a broken installation, Github down.
+ */
+const studentSideInviteFailure = (status: number | null, githubMessage: string | null) =>
+  status === 404 ||
+  status === 422 ||
+  status === 429 ||
+  /rate limit|invitations? limit/i.test(githubMessage ?? '');
 
 export const githubInvitationUrl = (orgLogin: string) =>
   `https://github.com/orgs/${encodeURIComponent(orgLogin)}/invitation`;
@@ -114,6 +128,10 @@ export const joinGitOrganization = async ({
         organization: org.login,
         login: studentLogin,
         message,
+      });
+      reportError(error, {
+        surface: 'join.gitlab.activate',
+        tags: { classroom_id: classroom.id, tool },
       });
       await auditJoin('failed', { message: message.slice(0, 200) });
       return {
@@ -215,6 +233,12 @@ export const joinGitOrganization = async ({
       status: failure.status,
       githubMessage: failure.githubMessage,
     });
+    if (!studentSideInviteFailure(failure.status, failure.githubMessage)) {
+      reportError(error, {
+        surface: 'join.github.invite',
+        tags: { classroom_id: classroom.id, tool, status: failure.status ?? undefined },
+      });
+    }
     await auditJoin('failed', { status: failure.status, githubMessage: failure.githubMessage });
     return { ok: false, reason: 'failed', message: failure.message };
   }
