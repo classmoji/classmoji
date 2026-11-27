@@ -1205,7 +1205,8 @@ export interface CommentAuditRow {
   resource_type: 'PAGES';
   resource_id: string;
   action: AuditLogAction;
-  data: Prisma.InputJsonObject;
+  /** `tool` names the surface (`page_comment`, `page_comment_reaction`, `page_comment_thread`). */
+  data: Prisma.InputJsonObject & { tool: PageCommentEvent['tool'] };
 }
 
 /**

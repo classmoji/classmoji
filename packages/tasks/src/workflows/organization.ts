@@ -45,6 +45,8 @@ interface RemoveUserPayload {
   role?: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
   /** Who asked for the removal; audits a plan-owner hand-off it causes. */
   actorUserId?: string | null;
+  /** The platform admin viewing as that person ("View as"), for the same row. */
+  impersonatedBy?: string | null;
   payload?: RemoveUserPayload;
 }
 
@@ -321,6 +323,11 @@ export const removeUserFromOrganizationTask = task({
     const payload = arg?.payload ? arg.payload : arg;
 
     const { user, gitOrganization, classroom, organization, role, actorUserId } = payload;
+    const impersonatedBy =
+      typeof payload.impersonatedBy === 'string' && payload.impersonatedBy
+        ? payload.impersonatedBy
+        : null;
+    const actor = impersonatedBy ? { actorUserId, impersonatedBy } : { actorUserId };
 
     // Support both new (classroom/gitOrganization) and legacy (organization) params
     const classroomData = classroom || organization;
@@ -368,9 +375,12 @@ export const removeUserFromOrganizationTask = task({
           }
         }
       }
-      return ClassmojiService.classroomMembership.remove(classroomData.id, user.id, userRole, {
-        actorUserId,
-      });
+      return ClassmojiService.classroomMembership.remove(
+        classroomData.id,
+        user.id,
+        userRole,
+        actor
+      );
     }
 
     // The username on the org's provider, read from the stored account; the
@@ -467,7 +477,7 @@ export const removeUserFromOrganizationTask = task({
       classroomData.id,
       user.id,
       role || 'STUDENT',
-      { actorUserId }
+      actor
     );
   },
 });
