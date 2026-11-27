@@ -48,7 +48,13 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     gitRepoAssignment: { findById: (...a: unknown[]) => mocks.graFindById(...a) },
     token: { purchaseExtensionHours: (...a: unknown[]) => mocks.purchaseExtensionHours(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
 }));
 

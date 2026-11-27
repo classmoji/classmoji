@@ -17,8 +17,11 @@
  *      only when the classroom is ACTIVE; `readerState` tools skip it and keep
  *      only the entry gate of step 3)
  *
- * and AFTER it, for classroom-bound surfaces, adds a `<field>_local` rendering
- * in the classroom's time zone next to every timestamp (see localTimes.ts).
+ * and AFTER it records a staff read (`auditRead`), adds `audit_incomplete: true`
+ * to a write whose change is saved but whose audit row could not be written
+ * (`writeAudit`), and, for classroom-bound surfaces, adds a `<field>_local`
+ * rendering in the classroom's time zone next to every timestamp (see
+ * localTimes.ts).
  *
  * Handlers are wrapped so ANY thrown error becomes a structured `isError`
  * tool result (S5) — never a hung request or a crashed process.
@@ -29,7 +32,9 @@
  *   3. In the handler, do S1 target-ownership checks by comparing ids
  *      against `ctx.classroom.classroomId`, route mutations through
  *      packages/services orchestrators, and write an audit-log entry for
- *      every mutation (ClassmojiService.audit.create).
+ *      every mutation with `writeAudit` (mcp/audit.ts), awaited, after the
+ *      change. A row that cannot be written does not fail the call: the
+ *      registry adds `audit_incomplete: true` to its result (step 6).
  *      Exception: the platform-wide feedback board (tools/feedback.ts) writes
  *      no audit rows, by decision, matching the webapp.
  * Resources follow the same shape via `ResourceDefinition` (scope is always
@@ -54,7 +59,7 @@ import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 import { jsonText } from './jsonText.ts';
-import { auditRead, type ReadAudit } from './audit.ts';
+import { auditRead, withAuditIncomplete, type ReadAudit } from './audit.ts';
 import { toolInputSchema, type ToolInputSchema } from './toolInputSchema.ts';
 import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
 
@@ -68,6 +73,12 @@ export interface ToolContext {
   viewer: Viewer;
   /** Present iff the tool declared a non-null `roles` (classroom-bound). */
   classroom?: ClassroomContext;
+  /**
+   * Set by `writeAudit` when a row of this call could not be written (the
+   * change it describes is saved). The registry then adds
+   * `audit_incomplete: true` to a write's successful result.
+   */
+  auditIncomplete?: boolean;
 }
 
 export interface ToolResult {
@@ -427,12 +438,18 @@ function runHandler(def: ToolDefinition<never>, viewer: Viewer) {
         }
       }
 
-      const result = await (def.handler as ToolDefinition['handler'])(args, ctx);
+      let result = await (def.handler as ToolDefinition['handler'])(args, ctx);
       // 5. Record a staff read of student data (successful calls only).
       if (def.auditRead && !result.isError) {
         await auditRead(def.name, def.auditRead, args ?? {}, ctx);
       }
-      // 6. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
+      // 6. A write whose change is saved but whose audit row is not: the
+      //    normal answer, flagged, so the client neither reports a failure
+      //    nor retries a change that already took effect. Never on a read.
+      if (def.scope === 'write' && ctx.auditIncomplete && !result.isError) {
+        result = withAuditIncomplete(result);
+      }
+      // 7. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
       //    Classroom-bound tools only: without a classroom there is no zone.
       return ctx.classroom
         ? localizeToolResult(result, renderZone(ctx.classroom.effectiveTimezone))

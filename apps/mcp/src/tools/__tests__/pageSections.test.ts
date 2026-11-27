@@ -56,7 +56,13 @@ vi.mock('@classmoji/services', async () => {
       contentIndex: { slideMetadataText: () => '' },
       pageSections: sections,
       pageComments: comments,
-      audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
+      audit: {
+        create: (...args: unknown[]) => mocks.auditCreate(...args),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
     },
   };
 });
@@ -1393,7 +1399,7 @@ describe('parity with the page: the shared reader rule', () => {
 
   it('a failed audit write after the act is not a tool error (check, unlock, status)', async () => {
     mocks.auditCreate.mockRejectedValue(new Error('audit down'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const checked = await call(
         pageSectionCheckTool,
@@ -1412,10 +1418,11 @@ describe('parity with the page: the shared reader rule', () => {
         ctxFor(TEACHER, 'TEACHER')
       );
       expect(report.page_id).toBe(PAGE);
-      expect(mocks.auditCreate).toHaveBeenCalledTimes(3);
-      expect(warn).toHaveBeenCalled();
+      // Each of the three rows tried twice, then one audit_miss line each.
+      expect(mocks.auditCreate).toHaveBeenCalledTimes(6);
+      expect(error.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(3);
     } finally {
-      warn.mockRestore();
+      error.mockRestore();
     }
   });
 });

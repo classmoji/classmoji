@@ -770,7 +770,7 @@ export const ClassmojiService = {
     findBySlug: async () => f().form,
     update: async (_id, updates) => { f().updates.push(updates); return {}; },
   },
-  audit: { create: async row => { f().audits.push(row); } },
+  audit: { record: async row => { f().audits.push(row); return { written: true }; } },
 };
 `),
         '/app/utils/formAuth.server.ts': STUB(`

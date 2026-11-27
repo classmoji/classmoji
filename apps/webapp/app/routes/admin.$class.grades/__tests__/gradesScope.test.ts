@@ -121,6 +121,7 @@ vi.mock('antd', () => ({ Skeleton: () => null }));
 vi.mock('react-router', () => ({ Await: () => null, Outlet: () => null }));
 
 const route = await import('../route.tsx');
+const { expectAwaitsWrite } = await import('../../../__tests__/support/awaitedWrite.ts');
 
 const CLASS_SLUG = 'intro-101';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
@@ -248,6 +249,14 @@ describe('grades loader — the payload carries only what the table renders', ()
     if (role === 'OWNER') expected.push(...CONTACT_FIELDS);
 
     expect(Object.keys(student).sort()).toEqual(expected.sort());
+  });
+
+  it('waits for its VIEW row before answering', async () => {
+    grantLoader('TEACHER');
+    await expectAwaitsWrite(mocks.addAuditLog, () => route.loader(loaderArgs()));
+    expect(mocks.addAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'VIEW', resourceType: 'CLASS_GRADES_SCREEN' })
+    );
   });
 
   it('pins the membership key set — id, user_id, letter_grade', async () => {

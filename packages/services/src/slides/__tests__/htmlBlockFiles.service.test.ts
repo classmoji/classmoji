@@ -61,7 +61,10 @@ vi.mock('@classmoji/database', () => ({
 
 vi.mock('../../content/ContentService.ts', () => ({ ContentService: content }));
 vi.mock('../../classmoji/contentAssets.service.ts', () => assets);
-vi.mock('../../classmoji/audit.service.ts', () => ({ create: auditCreate }));
+vi.mock('../../classmoji/audit.service.ts', async importOriginal => {
+  const { recordWith } = await importOriginal<typeof import('../../classmoji/audit.service.ts')>();
+  return { create: auditCreate, record: (row: unknown) => recordWith(auditCreate, row) };
+});
 
 const {
   writeHtmlBlockFile,

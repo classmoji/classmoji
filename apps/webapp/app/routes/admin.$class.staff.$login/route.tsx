@@ -69,7 +69,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   // Audit log for viewing staff details
-  addAuditLog({
+  await addAuditLog({
     request,
     params,
     action: 'VIEW',

@@ -64,7 +64,7 @@ vi.mock('@classmoji/services', () => ({
     subscription: {
       getProStateForClassroomId: (...args: unknown[]) => mocks.getProState(...args),
     },
-    audit: { create: vi.fn() },
+    audit: { create: vi.fn(), record: vi.fn(async () => ({ written: true })) },
     githubUserToken: { getGitHubTokenForUser: vi.fn() },
   },
 }));

@@ -91,7 +91,13 @@ vi.mock('@classmoji/services', async () => {
         resolvePageAssetUrl: (...a: unknown[]) => mocks.resolvePageAssetUrl(...a),
         canonicalizePageCoverRef: (...a: unknown[]) => mocks.canonicalizePageCoverRef(...a),
       },
-      audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+      audit: {
+        create: (...a: unknown[]) => mocks.auditCreate(...a),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
     },
   };
 });

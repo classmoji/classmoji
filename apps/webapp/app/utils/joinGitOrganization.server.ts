@@ -62,28 +62,25 @@ export const joinGitOrganization = async ({
   const studentLogin = gitUsername(identity, courseProvider);
 
   // One audit row per join attempt, success or failure, so staff can see why
-  // a student is stuck pending. A failed write must not fail the join.
+  // a student is stuck pending. A failed write must not fail the join: it is
+  // reported (`audit_miss`) and the join goes on.
   const auditJoin = async (outcome: string, detail: Record<string, unknown> = {}) => {
-    try {
-      await ClassmojiService.audit.create({
-        user_id: userId,
-        classroom_id: classroom.id,
-        role: membership.role,
-        action: 'UPDATE',
-        resource_type: 'CLASSROOM_MEMBERSHIP',
-        resource_id: membership.id,
-        data: {
-          tool,
-          outcome,
-          provider: courseProvider,
-          organization: org.login,
-          login: studentLogin ?? null,
-          ...detail,
-        } as Prisma.InputJsonValue,
-      });
-    } catch (error: unknown) {
-      console.error('Failed to audit classroom join:', error);
-    }
+    await ClassmojiService.audit.record({
+      user_id: userId,
+      classroom_id: classroom.id,
+      role: membership.role,
+      action: 'UPDATE',
+      resource_type: 'CLASSROOM_MEMBERSHIP',
+      resource_id: membership.id,
+      data: {
+        tool,
+        outcome,
+        provider: courseProvider,
+        organization: org.login,
+        login: studentLogin ?? null,
+        ...detail,
+      } as Prisma.InputJsonValue,
+    });
   };
 
   // GitLab course: the student needs GitLab connected (their project is

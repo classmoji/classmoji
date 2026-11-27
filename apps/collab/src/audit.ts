@@ -6,7 +6,9 @@
  * holds no role there as that classroom's one non-member row for the day
  * (`recordNonMemberRefusal`, counted).
  *
- * Fire and forget: an audit failure never blocks or fails a connection.
+ * Fire and forget: an audit failure never blocks or fails a connection. The
+ * real sink writes through the audit service's `record`, which tries a failed
+ * write once more and then leaves one `audit_miss` line with the row.
  */
 export interface AuditEntry {
   userId: string;
@@ -50,13 +52,14 @@ export function recordNonMemberRefusal(
 }
 
 /**
- * The real sink: `ClassmojiService.audit.create` and
- * `ClassmojiService.audit.recordNonMemberRefusal`. Every structural UPDATE is
- * its own row; a reconnect's repeated JOIN (or LEAVE) within seconds is
+ * The real sink: `ClassmojiService.audit.record` and
+ * `ClassmojiService.audit.recordNonMemberRefusal`, neither of which throws for
+ * a failed write (each leaves an `audit_miss` line). Every structural UPDATE
+ * is its own row; a reconnect's repeated JOIN (or LEAVE) within seconds is
  * counted on the row it repeats.
  */
 export function createServiceAuditSink(
-  create: (data: {
+  write: (data: {
     user_id: string;
     classroom_id: string;
     role: string;
@@ -69,7 +72,7 @@ export function createServiceAuditSink(
 ): AuditSink {
   return {
     record: entry =>
-      create({
+      write({
         user_id: entry.userId,
         classroom_id: entry.classroomId,
         role: entry.role,

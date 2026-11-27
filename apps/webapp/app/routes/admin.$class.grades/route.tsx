@@ -262,7 +262,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     return { quiz, form };
   });
 
-  addAuditLog({
+  await addAuditLog({
     request,
     params,
     action: 'VIEW',

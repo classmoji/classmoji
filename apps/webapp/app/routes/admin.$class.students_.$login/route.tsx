@@ -202,7 +202,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     })
   );
 
-  addAuditLog({
+  await addAuditLog({
     request,
     params,
     action: 'VIEW',
@@ -346,7 +346,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const schoolId = normalizeSchoolId(body.school_id);
       if (schoolId === undefined) return { error: 'School ID must be 64 characters or fewer.' };
       await ClassmojiService.user.update(enrollment.user.id, { school_id: schoolId });
-      addAuditLog({
+      await addAuditLog({
         request,
         params,
         action: 'UPDATE',

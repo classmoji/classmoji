@@ -76,7 +76,7 @@ const deps: PageSectionsDeps<SectionsPageRow> = {
   sectionActivity: args => ClassmojiService.pageSections.sectionActivity(args),
 
   audit: ({ userId, classroomId, role, pageId, action, data }) =>
-    ClassmojiService.audit.create({
+    ClassmojiService.audit.record({
       user_id: userId,
       classroom_id: classroomId,
       role,

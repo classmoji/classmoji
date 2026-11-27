@@ -27,7 +27,13 @@ vi.mock('@classmoji/database', async () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     classroomMembership: {
       updateById: (...a: unknown[]) => mocks.membershipUpdateById(...a),
     },

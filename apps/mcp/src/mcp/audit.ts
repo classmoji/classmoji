@@ -1,9 +1,18 @@
 /**
  * Audit-log rows written by the MCP server.
  *
- * `writeAudit` is the one writer every tool uses for its mutation rows (and
- * the forms, team-set and page-section tools for their own VIEW rows); it is
- * re-exported from tools/shared.ts.
+ * `writeAudit` is the one writer every tool uses for the row of a change it
+ * has made (and the page-section tools for their status read); it is
+ * re-exported from tools/shared.ts. The change is already saved, so a failed
+ * write never turns the call into an error: the audit service tries once
+ * more and then logs an `audit_miss` line, `writeAudit` notes the miss on the
+ * call's context, and the registry adds `audit_incomplete: true` to the
+ * write's successful result (`withAuditIncomplete`). A client is told the
+ * change happened, so it does not retry a call that already took effect.
+ *
+ * `writeAuditOrFail` is for a read that is recorded BEFORE its data is handed
+ * over (form responses, team-set runs, quiz attempts): a failed write fails
+ * the call, and nothing is returned.
  *
  * `ReadAudit` / `auditRead` record staff reads of student data in the audit
  * log, for every client: a read tool or resource that returns other people's
@@ -22,7 +31,8 @@ import { ClassmojiService } from '@classmoji/services';
 import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
-import type { ToolContext } from './registry.ts';
+import { jsonText } from './jsonText.ts';
+import type { ToolContext, ToolResult } from './registry.ts';
 
 export interface AuditEntry {
   /** Web-route vocabulary, e.g. 'GIT_REPO_ASSIGNMENT', 'REGRADE_REQUEST'. */
@@ -56,19 +66,13 @@ function withImpersonation(
   return { data: { value: data, impersonated_by: impersonatedBy } };
 }
 
-/**
- * Write an audit-log row for a mutation. The audit service refuses malformed
- * input (a throw outside production, an `audit_miss` log line in production),
- * so the payload is built strictly from validated context: `role` is the
- * enforcing membership's Role enum (or the tool's own validated override) and
- * `action` is a literal from the AuditLogAction enum.
- */
-export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<void> {
+/** The row `entry` stands for, from the request's validated context. */
+function auditRow(ctx: ToolContext, entry: AuditEntry) {
   const classroom = ctx.classroom;
   if (!classroom) {
     throw new ToolError('internal', 'Classroom context missing (tool misregistered?)');
   }
-  await ClassmojiService.audit.create({
+  return {
     user_id: ctx.viewer.userId,
     classroom_id: classroom.classroomId,
     role: entry.role ?? classroom.role,
@@ -76,7 +80,61 @@ export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<v
     resource_id: entry.resource_id ?? null,
     action: entry.action,
     ...withImpersonation(entry.data, ctx.viewer.impersonatedBy),
+  };
+}
+
+/**
+ * Write the audit-log row for a change the tool has made. The audit service
+ * refuses malformed input (a throw outside production, an `audit_miss` log
+ * line in production), so the payload is built strictly from validated
+ * context: `role` is the enforcing membership's Role enum (or the tool's own
+ * validated override) and `action` is a literal from the AuditLogAction enum.
+ *
+ * A failed write does not throw: it is logged by the audit service, marked on
+ * `ctx` (the registry then adds `audit_incomplete: true` to the result), and
+ * the call answers as it would have. Returns whether the row was written.
+ */
+export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<boolean> {
+  const { written } = await ClassmojiService.audit.record(auditRow(ctx, entry));
+  if (!written) ctx.auditIncomplete = true;
+  return written;
+}
+
+/**
+ * Write the VIEW row of a read that must be recorded before its data is handed
+ * over: a failed write throws, so the call fails and returns nothing.
+ */
+export async function writeAuditOrFail(ctx: ToolContext, entry: AuditEntry): Promise<void> {
+  await ClassmojiService.audit.create(auditRow(ctx, entry));
+}
+
+/**
+ * A write's successful result with `audit_incomplete: true` added, for a call
+ * whose change was saved but one of whose audit rows was not written. The
+ * field goes into the first text block that holds a JSON object (every tool
+ * answers through `ok()`); a result without one gets a block of its own.
+ */
+export function withAuditIncomplete(result: ToolResult): ToolResult {
+  const index = result.content.findIndex(block => {
+    if (block.type !== 'text' || typeof block.text !== 'string') return false;
+    try {
+      const parsed: unknown = JSON.parse(block.text);
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+      return false;
+    }
   });
+  if (index === -1) {
+    return {
+      ...result,
+      content: [...result.content, { type: 'text', text: jsonText({ audit_incomplete: true }) }],
+    };
+  }
+  const block = result.content[index];
+  const payload = JSON.parse(block.text) as Record<string, unknown>;
+  const content = [...result.content];
+  content[index] = { ...block, text: jsonText({ ...payload, audit_incomplete: true }) };
+  return { ...result, content };
 }
 
 /**
@@ -125,8 +183,9 @@ export function filterKey(data: Record<string, string | number>): string {
  * Write the VIEW row for one successful read of `surface` (the tool or
  * resource name, stored as `data.tool`; the audit service counts a repeat of
  * the same read on its row). `client_id` tells a person's own MCP client
- * from Ask Moji. A failed write is logged and the read's answer stands, as
- * the web's audit helper does.
+ * from Ask Moji. Written after the read through the audit service's
+ * `record`: a failed write is logged (`audit_miss`) and the read's answer
+ * stands, with no field added to it.
  */
 export async function auditRead(
   surface: string,
@@ -136,10 +195,16 @@ export async function auditRead(
 ): Promise<void> {
   const classroom = ctx.classroom;
   if (!classroom) return;
+  let ids: ReturnType<NonNullable<ReadAudit['ids']>>;
   try {
     if (audit.when && !audit.when(classroom)) return;
-    const ids = audit.ids?.(input, classroom) ?? {};
-    await writeAudit(ctx, {
+    ids = audit.ids?.(input, classroom) ?? {};
+  } catch (error) {
+    console.warn(`[mcp] read audit (${surface}) failed:`, error);
+    return;
+  }
+  await ClassmojiService.audit.record(
+    auditRow(ctx, {
       resource_type: audit.resourceType,
       resource_id: ids.resourceId ?? null,
       action: 'VIEW',
@@ -150,10 +215,8 @@ export async function auditRead(
         ...(ids.data ?? {}),
         ...(ids.data ? { filter_key: filterKey(ids.data) } : {}),
       },
-    });
-  } catch (error) {
-    console.warn(`[mcp] read audit (${surface}) failed:`, error);
-  }
+    })
+  );
 }
 
 /**

@@ -20,6 +20,7 @@ vi.mock('@classmoji/services', () => ({ ClassmojiService: {}, ContentService: {}
 const {
   gitBlobSha,
   htmlBlockConvert,
+  liveConvertDeps,
   parseConvertPayload,
   planDeckConversion,
   runHtmlBlockConvert,
@@ -352,5 +353,24 @@ describe('runHtmlBlockConvert', () => {
     const capped = await runHtmlBlockConvert({ dryRun: true, limit: 1 }, limited.deps);
     expect(capped.decks).toHaveLength(1);
     expect(capped.counts.scanned).toBe(1);
+  });
+});
+
+describe('the live audit row, after the commit', () => {
+  it('reports a failed actor lookup and resolves, so the deck still counts as converted', async () => {
+    const { ClassmojiService } = await import('@classmoji/services');
+    const logAuditMiss = vi.fn();
+    const record = vi.fn(async () => ({ written: true }));
+    Object.assign(ClassmojiService, { audit: { logAuditMiss, record } });
+
+    // The database mock has no classroomMembership: the lookup throws.
+    await expect(
+      liveConvertDeps().audit(deckRow('d1'), { tool: 'task:html_block.convert' })
+    ).resolves.toBeUndefined();
+    expect(logAuditMiss).toHaveBeenCalledWith(
+      expect.stringContaining('audit actor lookup failed'),
+      expect.objectContaining({ resource_type: 'SLIDES', resource_id: 'd1' })
+    );
+    expect(record).not.toHaveBeenCalled();
   });
 });

@@ -86,7 +86,13 @@ vi.mock('@classmoji/services', () => ({
       NO_PLAN_OWNER: 'NO_PLAN_OWNER',
     },
     page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     orgRepoSettings: {
       updateOrgRepoSettings: (...a: unknown[]) => mocks.updateOrgRepoSettings(...a),
     },

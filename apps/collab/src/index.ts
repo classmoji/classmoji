@@ -54,7 +54,7 @@ const runtime = createCollabServer({
     adapters: createAdapterRegistry(),
     checkpoints: createTaskCheckpointTrigger(config),
     audit: createServiceAuditSink(
-      data => ClassmojiService.audit.create(data as never),
+      data => ClassmojiService.audit.record(data as never),
       refusal => ClassmojiService.audit.recordNonMemberRefusal(refusal)
     ),
   },

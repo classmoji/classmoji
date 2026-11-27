@@ -52,7 +52,13 @@ vi.mock('@classmoji/services', () => {
         previewLeftoverSlots: (...a: unknown[]) => mocks.previewLeftoverSlots(...a),
         countStrandedSlots: (...a: unknown[]) => mocks.countStrandedSlots(...a),
       },
-      audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+      audit: {
+        create: (...a: unknown[]) => mocks.auditCreate(...a),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
     },
     // staff_remove goes through the shared removal entry point
     // (startStaffRemoval); `mocks.removeStaff` stands in for it. Slots are

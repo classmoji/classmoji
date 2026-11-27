@@ -74,7 +74,13 @@ vi.mock('@classmoji/services', () => ({
     assignment: {
       reorderInModule: (...a: unknown[]) => mocks.assignmentReorderInModule(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
   },
 }));
