@@ -608,7 +608,8 @@ export const teamMemberRemoveTool: ToolDefinition<TeamMemberRemoveArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         login: args.login,
-        // Recorded by the service when a membership row was removed.
+        // Recorded by the service when a membership row was removed or the
+        // provider removal ran.
         actor: serviceActor(ctx, 'team_member_remove'),
       });
     } catch (error) {

@@ -688,9 +688,12 @@ export const deleteTeam = async ({
  * no longer matches anything on a second pass — those repositories have to be
  * renamed by hand on the provider. Callers must surface `failed`.
  *
- * Recorded for `actor` when the name, the slug or a repository changed:
- * TEAMS / UPDATE on the team, with `team_id`, `new_slug`, `previous_slug`,
- * the `renamed_repos` count and the names of the `failed_repos`.
+ * Recorded for `actor` when the write changed the stored name, the slug or a
+ * repository's name (as read under the team row's lock in that write): TEAMS /
+ * UPDATE on the team, with `team_id`, `new_slug`, `previous_slug` (the stored
+ * one the write replaced), the `renamed_repos` count (repositories whose name
+ * changed) and the names of the `failed_repos`. A rename to the name the team
+ * already has writes no row, whatever its repositories.
  */
 export const renameTeam = async ({
   classroomId,
@@ -784,7 +787,7 @@ export const renameTeam = async ({
     await renameQueue.drain();
   }
 
-  await teamService.renameAndRepos({
+  const written = await teamService.renameAndRepos({
     teamId: team.id,
     newName: updated.name,
     newSlug,
@@ -802,7 +805,11 @@ export const renameTeam = async ({
       .map(repo => (repo as { repository_id?: string | null }).repository_id)
   );
 
-  const changed = updated.name !== team.name || newSlug !== team.slug || succeeded.length > 0;
+  // Decided from the write: what the stored row held under its lock.
+  const changed =
+    written.previousName !== updated.name ||
+    written.previousSlug !== newSlug ||
+    written.changedRepos.length > 0;
   const audit = changed
     ? await recordForActor(actor, {
         classroomId,
@@ -812,8 +819,8 @@ export const renameTeam = async ({
         data: {
           team_id: team.id,
           new_slug: newSlug,
-          previous_slug: team.slug,
-          renamed_repos: succeeded.length,
+          previous_slug: written.previousSlug,
+          renamed_repos: written.changedRepos.length,
           failed_repos: failed.map(f => f.name),
         },
       })
@@ -989,9 +996,10 @@ export const addTeamMembers = async ({
  * nobody. The local removal is a deleteMany, so a membership row that is already
  * gone is not an error.
  *
- * Recorded for `actor` when a membership was removed: TEAMS / UPDATE on the
- * team, with `team_id`, `login`, `removed: true` and the member's `user_id`.
- * No membership row to remove: no row.
+ * Recorded for `actor` when a membership was removed, or when the provider
+ * removal ran: TEAMS / UPDATE on the team, with `team_id`, `login`, `removed`
+ * (whether a local membership row went) and the member's `user_id`. No
+ * provider call and no membership row to remove: no row.
  */
 export const removeTeamMember = async ({
   classroomId,
@@ -1023,14 +1031,15 @@ export const removeTeamMember = async ({
   const { count } = await teamMembershipService.removeMemberFromTeam(team, user.id, null);
   const recordedLogin = canonicalLogin ?? login;
 
+  // The provider removal is a change of its own, whether or not a local row went.
   const audit =
-    count > 0
+    count > 0 || canonicalLogin
       ? await recordForActor(actor, {
           classroomId,
           resourceType: 'TEAMS',
           resourceId: team.id,
           action: 'UPDATE',
-          data: { team_id: team.id, login: recordedLogin, removed: true, user_id: user.id },
+          data: { team_id: team.id, login: recordedLogin, removed: count > 0, user_id: user.id },
         })
       : NO_SERVICE_AUDIT;
 

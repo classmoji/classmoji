@@ -156,26 +156,51 @@ interface RepoRename {
   name: string;
 }
 
+/** What a rename replaced: the team's name and slug, and the repos whose name changed. */
+export interface RenameAndReposResult {
+  previousName: string;
+  previousSlug: string;
+  /** The repos of `repoRenames` whose stored name differed from the new one. */
+  changedRepos: RepoRename[];
+}
+
+/**
+ * Write a team's new name and slug and its repos' new names in one
+ * transaction. The team row is locked first (`FOR NO KEY UPDATE`) and its
+ * name and slug read under that lock, as are the repos' names, so what this
+ * answers is exactly what the writes replaced, whatever another rename did
+ * before it.
+ */
 export const renameAndRepos = async (payload: {
   teamId: string;
   newName: string;
   newSlug: string;
   repoRenames: RepoRename[];
-}) => {
+}): Promise<RenameAndReposResult> => {
   const { teamId, newName, newSlug, repoRenames } = payload;
-  const prisma = getPrisma();
-  return prisma.$transaction([
-    prisma.team.update({
+  return getPrisma().$transaction(async tx => {
+    const [locked] = await tx.$queryRaw<Array<{ name: string; slug: string }>>`
+      SELECT name, slug FROM teams WHERE id = ${teamId} FOR NO KEY UPDATE`;
+    const previous = repoRenames.length
+      ? await tx.gitRepo.findMany({
+          where: { id: { in: repoRenames.map(r => r.id) } },
+          select: { id: true, name: true },
+        })
+      : [];
+    await tx.team.update({
       where: { id: teamId },
       data: { name: newName, slug: newSlug },
-    }),
-    ...repoRenames.map(r =>
-      prisma.gitRepo.update({
-        where: { id: r.id },
-        data: { name: r.name },
-      })
-    ),
-  ]);
+    });
+    for (const r of repoRenames) {
+      await tx.gitRepo.update({ where: { id: r.id }, data: { name: r.name } });
+    }
+    const before = new Map(previous.map(repo => [repo.id, repo.name]));
+    return {
+      previousName: locked?.name ?? newName,
+      previousSlug: locked?.slug ?? newSlug,
+      changedRepos: repoRenames.filter(r => before.get(r.id) !== r.name),
+    };
+  });
 };
 
 export const findByTagId = async (classroomId: string, tagId: string) => {

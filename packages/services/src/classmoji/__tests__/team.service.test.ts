@@ -150,6 +150,11 @@ beforeEach(() => {
   teamFindFirst.mockResolvedValue(TEAM);
   teamFindBySlug.mockResolvedValue(null);
   teamFindByIdWithRepositories.mockResolvedValue({ git_repos: [] });
+  teamRenameAndRepos.mockImplementation(async ({ repoRenames }) => ({
+    previousName: 'Blue Team',
+    previousSlug: 'blue-team',
+    changedRepos: repoRenames,
+  }));
   tagFindMany.mockResolvedValue([{ id: 'tag-1' }]);
   teamTagCount.mockResolvedValue(2);
   queryRaw.mockResolvedValue([{ id: 'team-1' }]);

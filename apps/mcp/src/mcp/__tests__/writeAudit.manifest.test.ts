@@ -144,7 +144,7 @@ const WRITES: Record<string, Entry> = {
   team_rename: { kind: 'service', fn: 'teamAdmin.renameTeam', actor: 'serviceActor' },
   // Only when a membership was created (with the members' user ids).
   team_members_add: { kind: 'service', fn: 'teamAdmin.addTeamMembers', actor: 'serviceActor' },
-  // Only when a membership row was removed.
+  // When a membership row was removed or the provider removal ran.
   team_member_remove: {
     kind: 'service',
     fn: 'teamAdmin.removeTeamMember',

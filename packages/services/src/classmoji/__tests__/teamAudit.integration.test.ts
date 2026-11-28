@@ -3,8 +3,10 @@
  * Postgres: one TEAMS row with exactly the actor's fields (a web actor, and an
  * MCP one under View as), written after the save; the members' user ids on a
  * membership change; no row when nothing was saved (a member already on the
- * team, a membership already gone, a tag already attached, a rename to the
- * same name); none and no throw for `actor: null`; and a saved change that
+ * team, a tag already attached, a rename to the same name, a member neither
+ * the provider nor the team had), and a row with `removed: false` for a
+ * provider removal of someone not on the team here; none and no throw for
+ * `actor: null`; and a saved change that
  * reports `missed` when its row could not be written (an actor with no user
  * row, which the `audit_logs.user_id` foreign key refuses). Owner A in
  * classroom X cannot create a team under classroom Y's tag nor add Y's student
@@ -30,6 +32,11 @@ import type { AuditActor } from '../audit.service.ts';
 
 const provider = vi.hoisted(() => ({
   slugOf: (name: string) => name.trim().toLowerCase().replace(/\s+/g, '-'),
+  /** Run during a team rename on the provider: another save landing meanwhile. */
+  duringUpdateTeam: null as null | (() => Promise<void>),
+  /** Github account ids the provider no longer knows. */
+  goneAccounts: new Set<string>(),
+  removeTeamMember: vi.fn(async () => undefined),
 }));
 vi.mock('../../git/index.ts', async importOriginal => ({
   ...(await importOriginal<typeof import('../../git/index.ts')>()),
@@ -42,17 +49,17 @@ vi.mock('../../git/index.ts', async importOriginal => ({
       name,
       slug: provider.slugOf(name),
     }),
-    updateTeam: async (_org: string, _slug: string, { name }: { name: string }) => ({
-      name,
-      slug: provider.slugOf(name),
-    }),
+    updateTeam: async (_org: string, _slug: string, { name }: { name: string }) => {
+      await provider.duringUpdateTeam?.();
+      return { name, slug: provider.slugOf(name) };
+    },
     deleteTeam: async () => undefined,
     deleteRepository: async () => undefined,
     updateRepo: async () => undefined,
     addTeamMember: async () => undefined,
-    removeTeamMember: async () => undefined,
-    // The stored Github login is the current one.
-    getLoginById: async (id: string) => `login-${id}`,
+    removeTeamMember: provider.removeTeamMember,
+    // The stored Github login is the current one; a gone account has none.
+    getLoginById: async (id: string) => (provider.goneAccounts.has(id) ? null : `login-${id}`),
   }),
 }));
 
@@ -366,7 +373,7 @@ describe.skipIf(!RUN)('team services write their audit rows (integration)', () =
       expect(await prisma.teamMembership.count({ where: { team_id: team.id } })).toBe(0);
     });
 
-    it('records a removal with the user id, and nothing for a membership already gone', async () => {
+    it('records a removal with the user id, and a provider removal with no local row as removed: false', async () => {
       const { team } = await createTeam(X, 'Leaving', null);
       await teamAdmin.addTeamMembers({
         classroomId: X.classroomId,
@@ -407,8 +414,192 @@ describe.skipIf(!RUN)('team services write their audit rows (integration)', () =
           actor: webActor(X, 'web:teams.remove_member'),
         })
       );
+      // Not on the team here, but the provider removal still ran: recorded.
       expect(again.value.removed).toBe(false);
-      expect(again.rows).toEqual([]);
+      expect(again.value.audit).toEqual({ written: 1, missed: 0 });
+      expect(again.rows.map(r => [r.resource_id, r.data])).toEqual([
+        [
+          team.id,
+          {
+            tool: 'web:teams.remove_member',
+            team_id: team.id,
+            login: X.student.login,
+            removed: false,
+            user_id: X.student.id,
+          },
+        ],
+      ]);
+    });
+
+    it('writes no row when neither the provider nor the team had the member', async () => {
+      const { team } = await createTeam(X, 'Nobody', null);
+      const accountId = X.other.login.slice('login-'.length);
+      provider.goneAccounts.add(accountId);
+      provider.removeTeamMember.mockClear();
+      try {
+        const none = await newRows(X, () =>
+          teamAdmin.removeTeamMember({
+            classroomId: X.classroomId,
+            slugOrId: team.slug,
+            login: X.other.login,
+            actor: webActor(X, 'web:teams.remove_member'),
+          })
+        );
+        expect(provider.removeTeamMember).not.toHaveBeenCalled();
+        expect(none.value).toMatchObject({ removed: false, audit: { written: 0, missed: 0 } });
+        expect(none.rows).toEqual([]);
+      } finally {
+        provider.goneAccounts.delete(accountId);
+      }
+    });
+  });
+
+  describe('renameTeam and its repositories', () => {
+    /** A team of X with two repositories named after its slug, and one that is not. */
+    const linkedTeam = async (name: string) => {
+      const { team } = await createTeam(X, name, null);
+      const repository = await prisma.repository.create({
+        data: {
+          classroom_id: X.classroomId,
+          title: `Lab ${name} ${suite}`,
+          slug: `lab-${randomUUID().slice(0, 6)}-${suite}`,
+          template: 'org/template',
+          type: 'GROUP',
+        },
+        select: { id: true },
+      });
+      const repo = (prefix: string) =>
+        prisma.gitRepo.create({
+          data: {
+            provider: 'GITHUB',
+            provider_id: `gr-${randomUUID()}`,
+            name: `${prefix}-${team.slug}`,
+            classroom_id: X.classroomId,
+            repository_id: repository.id,
+            team_id: team.id,
+          },
+          select: { id: true },
+        });
+      const repos = [await repo('hw1'), await repo('hw2')];
+      const unrelated = await prisma.gitRepo.create({
+        data: {
+          provider: 'GITHUB',
+          provider_id: `gr-${randomUUID()}`,
+          name: `unrelated-${randomUUID().slice(0, 6)}`,
+          classroom_id: X.classroomId,
+          repository_id: repository.id,
+          team_id: team.id,
+        },
+        select: { id: true, name: true },
+      });
+      return { team, repos, unrelated };
+    };
+    const storedNames = (ids: string[]) =>
+      prisma.gitRepo
+        .findMany({ where: { id: { in: ids } }, select: { name: true } })
+        .then(rows => rows.map(r => r.name).sort());
+
+    it('counts the repositories it renamed; the same name again writes no row', async () => {
+      const { team, repos, unrelated } = await linkedTeam('Linked');
+      const renamed = await newRows(X, () =>
+        teamAdmin.renameTeam({
+          classroomId: X.classroomId,
+          slugOrId: team.id,
+          newName: `Linked Two ${suite}`,
+          actor: webActor(X, 'web:teams.rename'),
+        })
+      );
+      const newSlug = renamed.value.newSlug;
+      expect(renamed.value.renamedRepos.sort()).toEqual([`hw1-${newSlug}`, `hw2-${newSlug}`]);
+      expect(await storedNames(repos.map(r => r.id))).toEqual([
+        `hw1-${newSlug}`,
+        `hw2-${newSlug}`,
+      ]);
+      expect(await storedNames([unrelated.id])).toEqual([unrelated.name]);
+      expect(renamed.rows.map(r => r.data)).toEqual([
+        {
+          tool: 'web:teams.rename',
+          team_id: team.id,
+          new_slug: newSlug,
+          previous_slug: team.slug,
+          renamed_repos: 2,
+          failed_repos: [],
+        },
+      ]);
+
+      // The same name: the repositories are asked again under the names they
+      // have, nothing stored changes, and no row is written.
+      const same = await newRows(X, () =>
+        teamAdmin.renameTeam({
+          classroomId: X.classroomId,
+          slugOrId: team.id,
+          newName: `Linked Two ${suite}`,
+          actor: webActor(X, 'web:teams.rename'),
+        })
+      );
+      expect(same.value.renamedRepos.sort()).toEqual([`hw1-${newSlug}`, `hw2-${newSlug}`]);
+      expect(same.value.audit).toEqual({ written: 0, missed: 0 });
+      expect(same.rows).toEqual([]);
+    });
+
+    it('decides from the stored row its write replaced, when another save lands meanwhile', async () => {
+      const { team } = await createTeam(X, 'Overlap', null);
+      const other = `Overlap Other ${suite}`;
+      const landOther = async () => {
+        await prisma.team.update({
+          where: { id: team.id },
+          data: { name: other, slug: provider.slugOf(other) },
+        });
+      };
+
+      // Asked for the name it had when read; another rename stored a new one
+      // meanwhile, which this write replaces: recorded, from that stored slug.
+      provider.duringUpdateTeam = landOther;
+      let back;
+      try {
+        back = await newRows(X, () =>
+          teamAdmin.renameTeam({
+            classroomId: X.classroomId,
+            slugOrId: team.id,
+            newName: team.name,
+            actor: webActor(X, 'web:teams.rename'),
+          })
+        );
+      } finally {
+        provider.duringUpdateTeam = null;
+      }
+      expect((await prisma.team.findUniqueOrThrow({ where: { id: team.id } })).slug).toBe(
+        team.slug
+      );
+      expect(back.rows.map(r => r.data)).toEqual([
+        {
+          tool: 'web:teams.rename',
+          team_id: team.id,
+          new_slug: team.slug,
+          previous_slug: provider.slugOf(other),
+          renamed_repos: 0,
+          failed_repos: [],
+        },
+      ]);
+
+      // Asked for a name another save already stored meanwhile: this write
+      // changes nothing stored, and writes no row.
+      provider.duringUpdateTeam = landOther;
+      let already;
+      try {
+        already = await newRows(X, () =>
+          teamAdmin.renameTeam({
+            classroomId: X.classroomId,
+            slugOrId: team.id,
+            newName: other,
+            actor: webActor(X, 'web:teams.rename'),
+          })
+        );
+      } finally {
+        provider.duringUpdateTeam = null;
+      }
+      expect(already.value.newSlug).toBe(provider.slugOf(other));
+      expect(already.rows).toEqual([]);
     });
   });
 
