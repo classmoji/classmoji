@@ -671,6 +671,8 @@ interface SlideAccessResult {
   canEdit: boolean;
   canPresent: boolean;
   canViewSpeakerNotes: boolean;
+  /** The platform admin viewing as `userId` ("View as"), else null: for audit rows. */
+  impersonatedBy: string | null;
 }
 
 type ClassroomRecord = NonNullable<Awaited<ReturnType<typeof classroomService.findBySlug>>>;
@@ -2884,5 +2886,6 @@ export async function assertSlideAccess({
     canEdit,
     canPresent,
     canViewSpeakerNotes,
+    impersonatedBy: sessionImpersonator(authData),
   };
 }
