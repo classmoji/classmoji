@@ -90,10 +90,11 @@ describe('token.purchaseExtensionHours', () => {
       studentId: 'student-1',
       gitRepoAssignmentId: 'gra-1',
       hours,
+      actor: null,
     });
 
   it('derives the price from tokens_per_hour (never the caller) and records the purchase', async () => {
-    const tx = await purchase(2);
+    const { transaction: tx, audit } = await purchase(2);
 
     expect(txCreateMock).toHaveBeenCalledTimes(1);
     const created = txCreateMock.mock.calls[0][0] as { data: Record<string, unknown> };
@@ -103,6 +104,8 @@ describe('token.purchaseExtensionHours', () => {
     expect(created.data.git_repo_assignment_id).toBe('gra-1');
     expect(created.data.balance_after).toBe(94);
     expect(tx.id).toBe('tx-1');
+    // `actor: null`: no row owed.
+    expect(audit).toEqual({ written: 0, missed: 0 });
   });
 
   it('rejects non-integer or non-positive hours', async () => {
@@ -276,6 +279,7 @@ describe('token.purchaseExtensionHours in REPO mode (a push is the submission)',
       studentId: 'student-1',
       gitRepoAssignmentId: 'gra-1',
       hours,
+      actor: null,
     });
 
   it('lets a student who pushed late buy hours afterwards', async () => {
@@ -343,7 +347,7 @@ describe('token.cancelPurchase', () => {
   });
 
   it('flips only a standing purchase, then refunds its tokens and takes its hours back', async () => {
-    await cancelPurchase('tx-9');
+    await cancelPurchase('tx-9', { actor: null });
 
     expect(txUpdateManyMock).toHaveBeenCalledWith({
       where: { id: 'tx-9', type: 'PURCHASE', is_cancelled: false },
@@ -365,21 +369,23 @@ describe('token.cancelPurchase', () => {
     // Already cancelled, a GAIN, a REFUND: the conditional flip matches no row.
     txUpdateManyMock.mockResolvedValue({ count: 0 });
 
-    await expect(cancelPurchase('tx-9')).rejects.toThrow('not already cancelled');
+    await expect(cancelPurchase('tx-9', { actor: null })).rejects.toThrow('not already cancelled');
     expect(txCreateMock).not.toHaveBeenCalled();
   });
 
   it('refunds nothing for a transaction that does not exist', async () => {
     txFindUniqueMock.mockResolvedValue(null);
 
-    await expect(cancelPurchase('tx-missing')).rejects.toThrow('not already cancelled');
+    await expect(cancelPurchase('tx-missing', { actor: null })).rejects.toThrow(
+      'not already cancelled'
+    );
     expect(executeRawMock).not.toHaveBeenCalled();
     expect(txUpdateManyMock).not.toHaveBeenCalled();
     expect(txCreateMock).not.toHaveBeenCalled();
   });
 
   it("locks the purchase's ledger before it flips the purchase or reads the balance", async () => {
-    await cancelPurchase('tx-9');
+    await cancelPurchase('tx-9', { actor: null });
 
     const [, ...values] = executeRawMock.mock.calls[0] as [string[], ...unknown[]];
     expect(values).toEqual(['class-1', 'student-1']);
@@ -392,7 +398,7 @@ describe('token.cancelPurchase', () => {
     const latest = new Date(Date.now() + 60_000);
     txFindFirstMock.mockResolvedValue({ balance_after: 10, created_at: latest });
 
-    await cancelPurchase('tx-9');
+    await cancelPurchase('tx-9', { actor: null });
 
     const created = txCreateMock.mock.calls[0][0] as { data: { created_at: Date } };
     expect(created.data.created_at.getTime()).toBe(latest.getTime() + 1);
@@ -423,12 +429,15 @@ describe('token.purchaseExtensionHours re-reads a push-mode submission', () => {
       studentId: 'student-1',
       gitRepoAssignmentId: 'gra-1',
       hours: 2,
+      actor: null,
     });
 
   it('runs after the purchase is written, on a REPO-mode submission', async () => {
     graFindUniqueMock.mockResolvedValue(withMode('REPO'));
 
-    await expect(purchase()).resolves.toMatchObject({ id: 'tx-1', hours_purchased: 2 });
+    await expect(purchase()).resolves.toMatchObject({
+      transaction: { id: 'tx-1', hours_purchased: 2 },
+    });
     expect(recordPushAfterExtensionMock).toHaveBeenCalledWith('gra-1');
     expect(txCreateMock.mock.invocationCallOrder[0]).toBeLessThan(
       recordPushAfterExtensionMock.mock.invocationCallOrder[0]
@@ -453,7 +462,7 @@ describe('token.purchaseExtensionHours re-reads a push-mode submission', () => {
     recordPushAfterExtensionMock.mockRejectedValue(new Error('connection reset'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(purchase()).resolves.toMatchObject({ id: 'tx-1' });
+    await expect(purchase()).resolves.toMatchObject({ transaction: { id: 'tx-1' } });
     expect(errorSpy).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });

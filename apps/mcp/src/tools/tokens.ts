@@ -4,20 +4,28 @@
  * Tier confirmed against apps/webapp/app/routes/admin.$class.tokens.new:
  * requireClassroomAdmin — OWNER only. The web action fans out per-student to
  * the `assign_tokens_to_student` Trigger.dev task, whose entire body is
- * ClassmojiService.token.assignToStudent — MCP calls that same service
- * directly (identical effect, no queue dependency).
+ * ClassmojiService.token.grantTokens — MCP calls that same service directly
+ * (identical effect, no queue dependency). The service writes the TOKEN_GRANT
+ * row for the actor this tool passes, once the grant has committed.
  *
  * S9: amount is z.number().int().positive(); the target must hold a STUDENT
  * membership in THIS classroom (verified against the DB before granting).
- * token.assignToStudent computes balance_after from the student's latest
- * transaction inside a DB transaction.
+ * The service computes balance_after from the student's latest transaction
+ * inside a DB transaction.
  */
 
 import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  noteServiceAudit,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  serviceActor,
+} from './shared.ts';
 
 interface TokenGrantArgs {
   classroom: string;
@@ -55,20 +63,17 @@ export const tokenGrantTool: ToolDefinition<TokenGrantArgs> = {
       throw scopedNotFound('Student');
     }
 
-    const transaction = await ClassmojiService.token.assignToStudent({
+    // Built before the grant, so nothing can fail between the tokens moving
+    // and the answer. A missed row comes back as `audit_incomplete`.
+    const actor = serviceActor(ctx, 'token_grant');
+    const { transaction, audit } = await ClassmojiService.token.grantTokens({
       classroomId: classroom.classroomId,
       studentId: args.student_id,
       amount: args.amount,
-      type: 'GAIN',
       ...(args.description ? { description: args.description } : {}),
+      actor,
     });
-
-    await writeAudit(ctx, {
-      resource_type: 'TOKEN_GRANT',
-      resource_id: transaction.id,
-      action: 'CREATE',
-      data: { tool: 'token_grant', student_id: args.student_id, amount: args.amount },
-    });
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,

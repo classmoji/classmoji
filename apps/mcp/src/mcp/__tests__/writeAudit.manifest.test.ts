@@ -78,6 +78,15 @@ const WRITES: Record<string, Entry> = {
   // REGRADE_REQUEST row for the caller; a submission: the tool writes it after
   // the request_regrade run.
   regrade_create: { kind: 'both', fn: 'regradeRequest.createForQuizAttempt', actor: 'own' },
+  // ── tokens: the token service writes the row for the actor ──
+  token_grant: { kind: 'service', fn: 'token.grantTokens', actor: 'serviceActor' },
+  // A submission: token.purchaseExtensionHours; a quiz: the same row from
+  // token.purchaseQuizExtensionHours (pinned by extensions.test.ts).
+  extension_purchase: {
+    kind: 'service',
+    fn: 'token.purchaseExtensionHours',
+    actor: 'serviceActor',
+  },
   // ── people: the shared service writes the row for the actor ──
   staff_add: { kind: 'service', fn: 'staff.addStaff', actor: 'serviceActor' },
   staff_update: { kind: 'service', fn: 'staff.updateStaff', actor: 'serviceActor' },
@@ -103,7 +112,6 @@ const WRITES: Record<string, Entry> = {
   deck_apply: TOOL,
   deck_preview_accept: TOOL,
   deck_preview_discard: TOOL,
-  extension_purchase: TOOL,
   form_teams_run: TOOL,
   form_teams_create: TOOL,
   form_create: TOOL,
@@ -167,7 +175,6 @@ const WRITES: Record<string, Entry> = {
   tag_create: TOOL,
   team_tag_add: TOOL,
   team_tag_remove: TOOL,
-  token_grant: TOOL,
   // ── no row ──
   feedback_write: {
     kind: 'exempt',

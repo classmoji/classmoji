@@ -154,9 +154,9 @@ describe.skipIf(!RUN)('token ledger under concurrent writers (integration)', () 
     const second = await purchase(studentId, 20);
 
     const results = await Promise.allSettled([
-      tokenService.cancelPurchase(first.id),
+      tokenService.cancelPurchase(first.id, { actor: null }),
       purchase(studentId, 15),
-      tokenService.cancelPurchase(second.id),
+      tokenService.cancelPurchase(second.id, { actor: null }),
       purchase(studentId, 15),
       grant(studentId, 4),
     ]);
@@ -174,9 +174,9 @@ describe.skipIf(!RUN)('token ledger under concurrent writers (integration)', () 
     const bought = await purchase(studentId, 40);
 
     const results = await Promise.allSettled([
-      tokenService.cancelPurchase(bought.id),
-      tokenService.cancelPurchase(bought.id),
-      tokenService.cancelPurchase(bought.id),
+      tokenService.cancelPurchase(bought.id, { actor: null }),
+      tokenService.cancelPurchase(bought.id, { actor: null }),
+      tokenService.cancelPurchase(bought.id, { actor: null }),
       purchase(studentId, 10),
     ]);
 
