@@ -16,7 +16,10 @@ describe('bumpContentKeyVersion', () => {
   it('increments relative to the stored value and returns the new version', async () => {
     classroomUpdate.mockResolvedValue({ content_key_version: 4 });
 
-    await expect(bumpContentKeyVersion('class-1')).resolves.toEqual({ content_key_version: 4 });
+    await expect(bumpContentKeyVersion('class-1', null)).resolves.toEqual({
+      content_key_version: 4,
+      audit: { written: 0, missed: 0 },
+    });
 
     // A relative increment, NOT a read-then-write. Two owners clicking at the
     // same moment must produce two bumps rather than one lost update — and a
@@ -31,7 +34,7 @@ describe('bumpContentKeyVersion', () => {
   it('is scoped to the one classroom by id', async () => {
     classroomUpdate.mockResolvedValue({ content_key_version: 1 });
 
-    await bumpContentKeyVersion('class-2');
+    await bumpContentKeyVersion('class-2', null);
 
     expect(classroomUpdate.mock.calls[0][0].where).toEqual({ id: 'class-2' });
   });

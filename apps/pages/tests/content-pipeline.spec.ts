@@ -860,7 +860,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
     let claimed = false;
     try {
       if (!existing) {
-        await service.site.validateAndClaimSubdomain(room.id, subdomain);
+        await service.site.validateAndClaimSubdomain(room.id, subdomain, null);
         claimed = true;
       }
 
@@ -870,10 +870,14 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       // fail, and is exactly what an interrupted run leaves behind. Enabling one
       // without a home page is refused outright — hence the published-page
       // filter above.
-      await service.site.upsertSiteSettings(room.id, {
-        is_enabled: true,
-        home_page_id: existing?.home_page_id ?? publicPage.id,
-      });
+      await service.site.upsertSiteSettings(
+        room.id,
+        {
+          is_enabled: true,
+          home_page_id: existing?.home_page_id ?? publicPage.id,
+        },
+        null
+      );
 
       // Reached by Host header, not by hostname: there is no DNS for
       // `{subdomain}.{base}` locally. The site tree is script-less by design,
@@ -953,7 +957,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
       // a swallowed failure there leaves someone else's site switched on.
       if (restoreSite) {
         try {
-          await service.site.upsertSiteSettings(room.id, restoreSite);
+          await service.site.upsertSiteSettings(room.id, restoreSite, null);
         } catch (error) {
           // Deliberately loud. This is a pre-existing site belonging to the
           // classroom, and leaving it in the state THIS test wanted is a real
@@ -967,7 +971,7 @@ test.describe('E2E CD — pages, what each audience sees', () => {
           );
         }
       } else if (claimed) {
-        await service.site.deleteSiteForClassroom(room.id).catch(() => undefined);
+        await service.site.deleteSiteForClassroom(room.id, null).catch(() => undefined);
       }
     }
   });

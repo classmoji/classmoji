@@ -20,9 +20,10 @@ describe('findOrCreate', () => {
   it('inserts the tag in the given classroom and reports created:true', async () => {
     create.mockResolvedValue({ id: 'tag-1', name: 'pairs', classroom_id: 'class-1' });
 
-    await expect(findOrCreate('class-1', 'pairs')).resolves.toEqual({
+    await expect(findOrCreate('class-1', 'pairs', null)).resolves.toEqual({
       tag: { id: 'tag-1', name: 'pairs', classroom_id: 'class-1' },
       created: true,
+      audit: { written: 0, missed: 0 },
     });
     expect(create).toHaveBeenCalledExactlyOnceWith({
       data: { classroom_id: 'class-1', name: 'pairs' },
@@ -34,9 +35,10 @@ describe('findOrCreate', () => {
     create.mockRejectedValue(uniqueViolation());
     findUnique.mockResolvedValue({ id: 'tag-0', name: 'pairs', classroom_id: 'class-1' });
 
-    await expect(findOrCreate('class-1', 'pairs')).resolves.toEqual({
+    await expect(findOrCreate('class-1', 'pairs', null)).resolves.toEqual({
       tag: { id: 'tag-0', name: 'pairs', classroom_id: 'class-1' },
       created: false,
+      audit: { written: 0, missed: 0 },
     });
     // Looked up by the exact (classroom, name) key — case-sensitive.
     expect(findUnique).toHaveBeenCalledExactlyOnceWith({
@@ -49,14 +51,14 @@ describe('findOrCreate', () => {
     create.mockRejectedValue(error);
     findUnique.mockResolvedValue(null);
 
-    await expect(findOrCreate('class-1', 'pairs')).rejects.toBe(error);
+    await expect(findOrCreate('class-1', 'pairs', null)).rejects.toBe(error);
   });
 
   it('rethrows any other error without a lookup', async () => {
     const error = new Error('connection lost');
     create.mockRejectedValue(error);
 
-    await expect(findOrCreate('class-1', 'pairs')).rejects.toBe(error);
+    await expect(findOrCreate('class-1', 'pairs', null)).rejects.toBe(error);
     expect(findUnique).not.toHaveBeenCalled();
   });
 });

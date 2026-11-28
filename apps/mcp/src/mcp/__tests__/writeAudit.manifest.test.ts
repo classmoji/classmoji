@@ -99,6 +99,31 @@ const WRITES: Record<string, Entry> = {
   // records the completed removal (classroomMembership.remove) for the actor
   // the payload carries.
   roster_remove_student: { kind: 'both', fn: 'buildRemoveUserPayload', actor: 'serviceActor' },
+  // ── settings: the settings service writes the row for the actor ──
+  // One row for the settings and the name together, when either changed.
+  classroom_settings_update: {
+    kind: 'service',
+    fn: 'classroom.updateClassroomSettings',
+    actor: 'serviceActor',
+  },
+  // After GitHub applied the change (REPO_SETTINGS, old → new).
+  org_repo_settings_update: {
+    kind: 'service',
+    fn: 'orgRepoSettings.updateOrgRepoSettings',
+    actor: 'serviceActor',
+  },
+  emoji_mapping_upsert: {
+    kind: 'service',
+    fn: 'emojiMapping.saveEmojiMapping',
+    actor: 'serviceActor',
+  },
+  letter_grade_mapping_upsert: {
+    kind: 'service',
+    fn: 'letterGradeMapping.save',
+    actor: 'serviceActor',
+  },
+  // A created tag only; one that already existed records nothing.
+  tag_create: { kind: 'service', fn: 'organizationTag.findOrCreate', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -120,8 +145,6 @@ const WRITES: Record<string, Entry> = {
   form_delete: TOOL,
   form_response_create: TOOL,
   form_response_update: TOOL,
-  emoji_mapping_upsert: TOOL,
-  letter_grade_mapping_upsert: TOOL,
   media_delete: TOOL,
   file_upload_start: TOOL,
   file_upload_finish: TOOL,
@@ -162,8 +185,6 @@ const WRITES: Record<string, Entry> = {
   repo_delete: TOOL,
   resource_link_add: TOOL,
   resource_link_remove: TOOL,
-  classroom_settings_update: TOOL,
-  org_repo_settings_update: TOOL,
   slide_create: TOOL,
   slide_update: TOOL,
   slide_delete: TOOL,
@@ -172,7 +193,6 @@ const WRITES: Record<string, Entry> = {
   team_rename: TOOL,
   team_members_add: TOOL,
   team_member_remove: TOOL,
-  tag_create: TOOL,
   team_tag_add: TOOL,
   team_tag_remove: TOOL,
   // ── no row ──

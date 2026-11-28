@@ -10,8 +10,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { matchOfferedZone, timeZoneOptions } from '../timeZoneOptions';
 
 const mocks = vi.hoisted(() => ({
+  requestImpersonator: vi.fn(),
   assertClassroomAccess: vi.fn(),
   updateSettings: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 class ClassroomSettingsValidationError extends Error {
@@ -45,9 +50,19 @@ const save = (body: unknown) =>
     }),
   } as never) as Promise<{ success?: string; error?: string }>;
 
+/** The actor the route hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.general.time_zone',
+  impersonatedBy: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.assertClassroomAccess.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
@@ -64,13 +79,17 @@ describe('saveTimeZone', () => {
 
   it('writes only the timezone through the validating service', async () => {
     const result = await save({ timezone: 'America/New_York', anthropic_api_key: 'sk-x' });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { timezone: 'America/New_York' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      { timezone: 'America/New_York' },
+      ACTOR
+    );
     expect(result.success).toBe('Time zone updated');
   });
 
   it('clears the zone with null', async () => {
     await save({ timezone: null });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { timezone: null });
+    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { timezone: null }, ACTOR);
   });
 
   it('returns the refusal as an error, not a 500', async () => {

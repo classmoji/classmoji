@@ -46,7 +46,15 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  noteServiceAudit,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  serviceActor,
+  writeAudit,
+} from './shared.ts';
 
 /**
  * The fixed sentences for the service's `tag_required` refusal, by the call
@@ -723,21 +731,14 @@ export const tagCreateTool: ToolDefinition<TagCreateArgs> = {
     }
 
     // classroomId is ALWAYS the authorized classroom, never request input.
-    const { tag, created } = await ClassmojiService.organizationTag.findOrCreate(
+    // The service records a created tag; one that already existed is not a
+    // change and records nothing.
+    const { tag, created, audit } = await ClassmojiService.organizationTag.findOrCreate(
       classroom.classroomId,
-      name
+      name,
+      serviceActor(ctx, 'tag_create')
     );
-
-    // A tag that already existed is not a mutation, so it writes no audit row.
-    // `value` is the name created.
-    if (created) {
-      await writeAudit(ctx, {
-        resource_type: 'TAGS',
-        resource_id: tag.id,
-        action: 'CREATE',
-        data: { tool: 'tag_create', name: tag.name, value: tag.name },
-      });
-    }
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,

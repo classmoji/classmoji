@@ -12,7 +12,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, writeAudit } from './shared.ts';
+import { noteServiceAudit, ok, OWNER_ONLY, requireClassroomCtx, serviceActor } from './shared.ts';
 
 interface EmojiMappingArgs {
   classroom: string;
@@ -47,20 +47,19 @@ export const emojiMappingUpsertTool: ToolDefinition<EmojiMappingArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    const mapping = await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.classroomId, {
-      emoji: args.emoji,
-      grade: args.grade,
-      // Omit undefined fields so the upsert's UPDATE branch leaves them unchanged.
-      ...(args.extra_tokens !== undefined ? { extra_tokens: args.extra_tokens } : {}),
-      ...(args.description !== undefined ? { description: args.description } : {}),
-    });
-
-    await writeAudit(ctx, {
-      resource_type: 'SETTINGS',
-      resource_id: mapping.id,
-      action: 'UPDATE',
-      data: { tool: 'emoji_mapping_upsert', emoji: args.emoji, grade: args.grade },
-    });
+    // The service records the change (none when nothing changed).
+    const { mapping, audit } = await ClassmojiService.emojiMapping.saveEmojiMapping(
+      classroom.classroomId,
+      {
+        emoji: args.emoji,
+        grade: args.grade,
+        // Omit undefined fields so the upsert's UPDATE branch leaves them unchanged.
+        ...(args.extra_tokens !== undefined ? { extra_tokens: args.extra_tokens } : {}),
+        ...(args.description !== undefined ? { description: args.description } : {}),
+      },
+      serviceActor(ctx, 'emoji_mapping_upsert')
+    );
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,
@@ -96,21 +95,13 @@ export const letterGradeMappingUpsertTool: ToolDefinition<LetterGradeMappingArgs
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    const mapping = await ClassmojiService.letterGradeMapping.save(classroom.classroomId, {
-      letter_grade: args.letter_grade,
-      min_grade: args.min_grade,
-    });
-
-    await writeAudit(ctx, {
-      resource_type: 'SETTINGS',
-      resource_id: mapping.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'letter_grade_mapping_upsert',
-        letter_grade: args.letter_grade,
-        min_grade: args.min_grade,
-      },
-    });
+    // The service records the change (none when nothing changed).
+    const { mapping, audit } = await ClassmojiService.letterGradeMapping.save(
+      classroom.classroomId,
+      { letter_grade: args.letter_grade, min_grade: args.min_grade },
+      serviceActor(ctx, 'letter_grade_mapping_upsert')
+    );
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,

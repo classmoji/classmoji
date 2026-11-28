@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  requestImpersonator: vi.fn(),
   assertClassroomAccess: vi.fn(),
   updateSettings: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
@@ -17,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   canUseQuizzes: vi.fn(),
   getAllModels: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -63,9 +68,19 @@ const post = (body: unknown) =>
 const save = (fields: Record<string, unknown>) =>
   post({ _action: 'saveLLMSettings', anthropic_api_key: '', ...fields });
 
+/** The actor the route hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.ai',
+  impersonatedBy: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.assertClassroomAccess.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
@@ -84,7 +99,7 @@ describe('saveLLMSettings: effort', () => {
         mocks.updateSettings.mockClear();
         const result = await save({ [field]: level });
         expect(result.error).toBeUndefined();
-        expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { [field]: level });
+        expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { [field]: level }, ACTOR);
       }
     }
   );
@@ -96,7 +111,7 @@ describe('saveLLMSettings: effort', () => {
       mocks.updateSettings.mockClear();
       const result = await save({ exploration_effort: level });
       expect(result.error).toBeUndefined();
-      expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { exploration_effort: level });
+      expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { exploration_effort: level }, ACTOR);
     }
   });
 
@@ -118,20 +133,28 @@ describe('saveLLMSettings: effort', () => {
       grading_effort: 'max',
       exploration_effort: 'low',
     });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      llm_model: 'claude-sonnet-5',
-      question_effort: 'high',
-      grading_effort: 'max',
-      exploration_effort: 'low',
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        llm_model: 'claude-sonnet-5',
+        question_effort: 'high',
+        grading_effort: 'max',
+        exploration_effort: 'low',
+      },
+      ACTOR
+    );
   });
 
   it('puts a cleared select (null) or an empty string back to the default', async () => {
     await save({ question_effort: null, grading_effort: '' });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      question_effort: null,
-      grading_effort: null,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        question_effort: null,
+        grading_effort: null,
+      },
+      ACTOR
+    );
   });
 
   it.each([['extreme'], ['HIGH'], [' low'], [3], [true], [{ effort: 'low' }]])(
@@ -162,17 +185,21 @@ describe('saveLLMSettings: effort', () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: null });
     const result = await save({ anthropic_api_key: 'sk-ant-new', grading_effort: 'high' });
     expect(result.error).toBeUndefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      anthropic_api_key: 'sk-ant-new',
-      grading_effort: 'high',
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        anthropic_api_key: 'sk-ant-new',
+        grading_effort: 'high',
+      },
+      ACTOR
+    );
   });
 
   it('lets a keyless classroom clear an effort', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: null });
     const result = await save({ question_effort: null });
     expect(result.error).toBeUndefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { question_effort: null });
+    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { question_effort: null }, ACTOR);
   });
 });
 
@@ -183,18 +210,26 @@ describe('saveLLMSettings: Ask Moji', () => {
       syllabus_bot_effort: 'max',
     });
     expect(result.error).toBeUndefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      syllabus_bot_model: 'claude-sonnet-5',
-      syllabus_bot_effort: 'max',
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        syllabus_bot_model: 'claude-sonnet-5',
+        syllabus_bot_effort: 'max',
+      },
+      ACTOR
+    );
   });
 
   it('puts a cleared model or effort back to the default', async () => {
     await save({ syllabus_bot_model: '', syllabus_bot_effort: null });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      syllabus_bot_model: null,
-      syllabus_bot_effort: null,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        syllabus_bot_model: null,
+        syllabus_bot_effort: null,
+      },
+      ACTOR
+    );
   });
 
   it('refuses an effort that is not a level and writes nothing', async () => {
@@ -225,7 +260,11 @@ describe('saveLLMSettings: Ask Moji', () => {
     });
     const result = await post({ _action: 'saveLLMSettings', anthropic_api_key: 'sk-ant-new' });
     expect(result.error).toBeUndefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { anthropic_api_key: 'sk-ant-new' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      { anthropic_api_key: 'sk-ant-new' },
+      ACTOR
+    );
   });
 });
 
@@ -242,7 +281,8 @@ describe('clearLLMSettings', () => {
         exploration_effort: null,
         syllabus_bot_model: null,
         syllabus_bot_effort: null,
-      })
+      }),
+      ACTOR
     );
   });
 
@@ -262,7 +302,7 @@ describe('saveQuizSettings', () => {
       llm_model: 'claude-opus-5-5',
     });
     expect(result.success).toBeDefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { quizzes_enabled: true });
+    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { quizzes_enabled: true }, ACTOR);
   });
 
   it("turns updateSettings' Pro refusal into a readable error", async () => {
@@ -290,7 +330,7 @@ describe('saveAskMojiSettings', () => {
       llm_model: 'claude-opus-5-5',
     });
     expect(result.success).toBeDefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { syllabus_bot_enabled: true });
+    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { syllabus_bot_enabled: true }, ACTOR);
   });
 
   it("turns updateSettings' Pro refusal into a readable error", async () => {

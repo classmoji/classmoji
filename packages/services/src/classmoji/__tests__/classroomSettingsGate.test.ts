@@ -18,14 +18,19 @@ const canUseQuizzesMock = vi.fn();
 
 const findUniqueMock = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+vi.mock('@classmoji/database', () => {
+  const client = {
     classroomSettings: {
       upsert: (...a: unknown[]) => upsertMock(...a),
       findUnique: (...a: unknown[]) => findUniqueMock(...a),
     },
-  }),
-}));
+    // The classroom row lock the save takes; the faked transaction runs its
+    // callback on the same client.
+    $queryRaw: async () => [],
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
+  };
+  return { default: () => client };
+});
 
 vi.mock('../entitlement.service.ts', () => ({
   canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a),
@@ -47,7 +52,7 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     const { updateSettings, ClassroomSettingsEntitlementError } =
       await import('../classroom.service.ts');
 
-    const refusal = updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true });
+    const refusal = updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true }, null);
     await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     // The AI settings tab and the MCP tool show this message as is.
     await expect(refusal).rejects.toThrow('Ask Moji requires a Pro subscription.');
@@ -58,7 +63,7 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     canUseSyllabusBotMock.mockResolvedValue({ allowed: true });
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true });
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true }, null);
 
     expect(canUseSyllabusBotMock).toHaveBeenCalledWith(CLASSROOM_ID);
     expect(upsertMock).toHaveBeenCalledTimes(1);
@@ -68,7 +73,7 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     canUseSyllabusBotMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: false });
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: false }, null);
 
     expect(upsertMock).toHaveBeenCalledTimes(1);
     expect(canUseSyllabusBotMock).not.toHaveBeenCalled();
@@ -77,7 +82,7 @@ describe('updateSettings — syllabus bot Pro gate', () => {
   it('does not consult entitlement for unrelated settings writes', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' }, null);
 
     expect(canUseSyllabusBotMock).not.toHaveBeenCalled();
     expect(upsertMock).toHaveBeenCalledTimes(1);
@@ -91,7 +96,7 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     await expect(
       // A JSON body can carry the string "true"; a strict === true check would
       // have waved this straight through to Prisma.
-      updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: 'true' as unknown as boolean })
+      updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: 'true' as unknown as boolean }, null)
     ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     expect(upsertMock).not.toHaveBeenCalled();
   });
@@ -105,7 +110,7 @@ describe('updateSettings — quizzes Pro gate', () => {
     const { updateSettings, ClassroomSettingsEntitlementError } =
       await import('../classroom.service.ts');
 
-    const refusal = updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+    const refusal = updateSettings(CLASSROOM_ID, { quizzes_enabled: true }, null);
     await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     // The AI settings tab and the MCP tool show this message as is.
     await expect(refusal).rejects.toThrow('AI Quizzes requires a Pro subscription.');
@@ -116,7 +121,7 @@ describe('updateSettings — quizzes Pro gate', () => {
     canUseQuizzesMock.mockResolvedValue({ allowed: true });
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: true }, null);
 
     expect(canUseQuizzesMock).toHaveBeenCalledWith(CLASSROOM_ID);
     expect(upsertMock).toHaveBeenCalledTimes(1);
@@ -126,7 +131,7 @@ describe('updateSettings — quizzes Pro gate', () => {
     canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { quizzes_enabled: false });
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: false }, null);
 
     expect(upsertMock).toHaveBeenCalledTimes(1);
     expect(canUseQuizzesMock).not.toHaveBeenCalled();
@@ -135,7 +140,7 @@ describe('updateSettings — quizzes Pro gate', () => {
   it('does not consult entitlement for unrelated settings writes', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
 
-    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' }, null);
 
     expect(canUseQuizzesMock).not.toHaveBeenCalled();
     expect(upsertMock).toHaveBeenCalledTimes(1);
@@ -147,7 +152,7 @@ describe('updateSettings — quizzes Pro gate', () => {
       await import('../classroom.service.ts');
 
     await expect(
-      updateSettings(CLASSROOM_ID, { quizzes_enabled: 'true' as unknown as boolean })
+      updateSettings(CLASSROOM_ID, { quizzes_enabled: 'true' as unknown as boolean }, null)
     ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     expect(upsertMock).not.toHaveBeenCalled();
   });
@@ -164,19 +169,19 @@ describe('updateSettings — time zone', () => {
 
   it('stores a valid IANA zone', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    await updateSettings(CLASSROOM_ID, { timezone: 'America/New_York' });
+    await updateSettings(CLASSROOM_ID, { timezone: 'America/New_York' }, null);
     expect(written()).toEqual({ timezone: 'America/New_York' });
   });
 
   it("stores the canonical spelling, not the caller's", async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    await updateSettings(CLASSROOM_ID, { timezone: 'america/new_york' });
+    await updateSettings(CLASSROOM_ID, { timezone: 'america/new_york' }, null);
     expect(written()).toEqual({ timezone: 'America/New_York' });
   });
 
   it('accepts UTC, which Intl.supportedValuesOf omits', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    await updateSettings(CLASSROOM_ID, { timezone: 'UTC' });
+    await updateSettings(CLASSROOM_ID, { timezone: 'UTC' }, null);
     expect(written()).toEqual({ timezone: 'UTC' });
   });
 
@@ -187,7 +192,7 @@ describe('updateSettings — time zone', () => {
   ])('refuses %s before writing', async (_case, zone) => {
     const { updateSettings, ClassroomSettingsValidationError } =
       await import('../classroom.service.ts');
-    const error = await updateSettings(CLASSROOM_ID, { timezone: zone }).catch(e => e);
+    const error = await updateSettings(CLASSROOM_ID, { timezone: zone }, null).catch(e => e);
     expect(error).toBeInstanceOf(ClassroomSettingsValidationError);
     expect(error.code).toBe('TIMEZONE_INVALID');
     expect(upsertMock).not.toHaveBeenCalled();
@@ -195,22 +200,24 @@ describe('updateSettings — time zone', () => {
 
   it('caps the rejected value it echoes back', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    const error = await updateSettings(CLASSROOM_ID, { timezone: 'x'.repeat(5000) }).catch(e => e);
+    const error = await updateSettings(CLASSROOM_ID, { timezone: 'x'.repeat(5000) }, null).catch(
+      e => e
+    );
     expect(error.message.length).toBeLessThan(200);
     expect(error.message).toContain('…');
   });
 
   it('clears the zone on null or a blank string', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    await updateSettings(CLASSROOM_ID, { timezone: null });
-    await updateSettings(CLASSROOM_ID, { timezone: '   ' });
+    await updateSettings(CLASSROOM_ID, { timezone: null }, null);
+    await updateSettings(CLASSROOM_ID, { timezone: '   ' }, null);
     expect((upsertMock.mock.calls[0][0] as { update: unknown }).update).toEqual({ timezone: null });
     expect((upsertMock.mock.calls[1][0] as { update: unknown }).update).toEqual({ timezone: null });
   });
 
   it('leaves the zone alone when the patch omits it', async () => {
     const { updateSettings } = await import('../classroom.service.ts');
-    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' }, null);
     expect(written()).toEqual({ theme: 'stone' });
   });
 });
@@ -231,24 +238,32 @@ describe('updateSettings — Ask Moji instructions', () => {
       await import('../classroom.service.ts');
     const { INSTRUCTIONS_MAX_CHARS } = await import('@classmoji/utils/ask-moji/limits');
 
-    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '  Be brief.  ' });
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '  Be brief.  ' }, null);
     expect(upsertMock.mock.calls[0][0].update).toEqual({ syllabus_bot_instructions: 'Be brief.' });
 
-    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '   ' });
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '   ' }, null);
     expect(upsertMock.mock.calls[1][0].update).toEqual({ syllabus_bot_instructions: null });
 
-    await updateSettings(CLASSROOM_ID, {
-      syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS),
-    });
+    await updateSettings(
+      CLASSROOM_ID,
+      {
+        syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS),
+      },
+      null
+    );
     expect(upsertMock).toHaveBeenCalledTimes(3);
 
-    const tooLong = updateSettings(CLASSROOM_ID, {
-      syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS + 1),
-    });
+    const tooLong = updateSettings(
+      CLASSROOM_ID,
+      {
+        syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS + 1),
+      },
+      null
+    );
     await expect(tooLong).rejects.toBeInstanceOf(ClassroomSettingsValidationError);
     await expect(tooLong).rejects.toMatchObject({ code: 'INSTRUCTIONS_TOO_LONG' });
     await expect(
-      updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: 42 as never })
+      updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: 42 as never }, null)
     ).rejects.toMatchObject({ code: 'INSTRUCTIONS_INVALID' });
     expect(upsertMock).toHaveBeenCalledTimes(3);
   });

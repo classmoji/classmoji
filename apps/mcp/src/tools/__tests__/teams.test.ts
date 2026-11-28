@@ -869,16 +869,25 @@ describe('team_tag_remove', () => {
 
 describe('tag_create', () => {
   const ARGS = { classroom: 'org/cs1-w26', name: 'workshop-pairs' };
+  const WRITTEN = { written: 1, missed: 0 };
+  const NONE = { written: 0, missed: 0 };
+  /** serviceActor for this tool: the tag service writes the TAGS row. */
+  const TAG_ACTOR = expect.objectContaining({ tool: 'tag_create', via: 'mcp', role: 'OWNER' });
 
-  it('creates the tag in the ctx classroom, audits it with a scalar value', async () => {
+  it('creates the tag in the ctx classroom, recorded by the service for its actor', async () => {
     mocks.tagFindOrCreate.mockResolvedValue({
       tag: { id: 'tag-9', name: 'workshop-pairs', classroom_id: 'class-1' },
       created: true,
+      audit: WRITTEN,
     });
 
     const payload = parse(await tagCreateTool.handler(ARGS, CTX));
 
-    expect(mocks.tagFindOrCreate).toHaveBeenCalledExactlyOnceWith('class-1', 'workshop-pairs');
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      'workshop-pairs',
+      TAG_ACTOR
+    );
     expect(payload).toMatchObject({
       success: true,
       created: true,
@@ -886,20 +895,26 @@ describe('tag_create', () => {
     });
     // Allow-listed: the raw row (classroom_id etc.) is never echoed.
     expect(payload.tag).toEqual({ id: 'tag-9', name: 'workshop-pairs' });
-    expect(auditRow()).toMatchObject({
-      action: 'CREATE',
-      classroom_id: 'class-1',
-      // A tag row is about the tag, not a team: TAGS, as the web's tag rows.
-      resource_type: 'TAGS',
-      resource_id: 'tag-9',
-      data: { tool: 'tag_create', name: 'workshop-pairs', value: 'workshop-pairs' },
+    // The tool writes no row of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('marks the call when the service could not write its row', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-9', name: 'workshop-pairs' },
+      created: true,
+      audit: { written: 0, missed: 1 },
     });
+    const ctx = { ...CTX } as typeof CTX;
+    await tagCreateTool.handler(ARGS, ctx);
+    expect((ctx as { auditIncomplete?: boolean }).auditIncomplete).toBe(true);
   });
 
   it('returns an existing tag with created:false and writes no audit row', async () => {
     mocks.tagFindOrCreate.mockResolvedValue({
       tag: { id: 'tag-1', name: 'workshop-pairs' },
       created: false,
+      audit: NONE,
     });
 
     const payload = parse(await tagCreateTool.handler(ARGS, CTX));
@@ -912,17 +927,22 @@ describe('tag_create', () => {
     mocks.tagFindOrCreate.mockResolvedValue({
       tag: { id: 'tag-9', name: 'Section A' },
       created: true,
+      audit: WRITTEN,
     });
 
     expect(tagCreateTool.inputSchema.name.parse('  Section A  ')).toBe('Section A');
     await tagCreateTool.handler({ ...ARGS, name: '  Section A  ' }, CTX);
-    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Section A');
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Section A', TAG_ACTOR);
   });
 
   it('keeps the case the caller sent (names are case-sensitive, as in the web)', async () => {
-    mocks.tagFindOrCreate.mockResolvedValue({ tag: { id: 't', name: 'Frontend' }, created: true });
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 't', name: 'Frontend' },
+      created: true,
+      audit: WRITTEN,
+    });
     await tagCreateTool.handler({ ...ARGS, name: 'Frontend' }, CTX);
-    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Frontend');
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledWith('class-1', 'Frontend', TAG_ACTOR);
   });
 
   it('rejects an empty or whitespace-only name', async () => {

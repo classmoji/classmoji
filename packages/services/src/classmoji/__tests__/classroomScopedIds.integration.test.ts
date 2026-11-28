@@ -33,7 +33,7 @@ describe.skipIf(!RUN_DB_SUITES)('ids are scoped to their classroom (integration)
     it('deletes nothing when the tag belongs to another classroom', async () => {
       const before = await prisma.teamTag.count({ where: { tag_id: fx.Y.tagId } });
 
-      expect(await organizationTag.deleteInClassroom(fx.X.id, fx.Y.tagId)).toBeNull();
+      expect((await organizationTag.deleteInClassroom(fx.X.id, fx.Y.tagId, null)).tag).toBeNull();
 
       expect(await prisma.tag.findUnique({ where: { id: fx.Y.tagId } })).not.toBeNull();
       expect(await prisma.teamTag.count({ where: { tag_id: fx.Y.tagId } })).toBe(before);
@@ -42,14 +42,14 @@ describe.skipIf(!RUN_DB_SUITES)('ids are scoped to their classroom (integration)
     });
 
     it.each([[undefined], [''], [{ not: '' }], [42]])('deletes nothing for %j', async id => {
-      expect(await organizationTag.deleteInClassroom(fx.X.id, id)).toBeNull();
+      expect((await organizationTag.deleteInClassroom(fx.X.id, id, null)).tag).toBeNull();
       expect(await prisma.tag.count({ where: { id: { in: [fx.X.tagId, fx.Y.tagId] } } })).toBe(2);
     });
 
     it('deletes a tag of its own classroom', async () => {
       const extra = await prisma.tag.create({ data: { classroom_id: fx.X.id, name: 'extra' } });
 
-      expect(await organizationTag.deleteInClassroom(fx.X.id, extra.id)).toEqual({
+      expect((await organizationTag.deleteInClassroom(fx.X.id, extra.id, null)).tag).toEqual({
         id: extra.id,
         name: 'extra',
       });

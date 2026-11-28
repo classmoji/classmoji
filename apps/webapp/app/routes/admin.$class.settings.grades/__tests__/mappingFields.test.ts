@@ -1,7 +1,8 @@
 /**
  * The emoji and letter grade intents of the grades settings action write only
- * the fields the settings table sends, to the URL's classroom, and audit each
- * change. A body field naming a classroom or a row id is not read.
+ * the fields the settings table sends, to the URL's classroom, and pass the
+ * services the actor that records each change; the route writes no row of its
+ * own. A body field naming a classroom or a row id is not read.
  *
  * The services' own rule (the classroom and the row are never taken from the
  * values) runs against Postgres in packages/services
@@ -16,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   saveLetterGrade: vi.fn(),
   deleteLetterGrade: vi.fn(),
   auditCreate: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -70,16 +76,25 @@ beforeEach(() => {
     classroom: { id: 'class-x', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
-  mocks.saveEmojiMapping.mockResolvedValue({ id: 'em-1' });
-  mocks.saveLetterGrade.mockResolvedValue({ id: 'lg-1' });
-  mocks.deleteEmojiMapping.mockResolvedValue({ count: 1 });
-  mocks.deleteLetterGrade.mockResolvedValue({ count: 1 });
+  mocks.saveEmojiMapping.mockResolvedValue({ mapping: { id: 'em-1' }, audit: WRITTEN });
+  mocks.saveLetterGrade.mockResolvedValue({ mapping: { id: 'lg-1' }, audit: WRITTEN });
+  mocks.deleteEmojiMapping.mockResolvedValue({ count: 1, audit: WRITTEN });
+  mocks.deleteLetterGrade.mockResolvedValue({ count: 1, audit: WRITTEN });
   mocks.auditCreate.mockResolvedValue(null);
+  mocks.requestImpersonator.mockResolvedValue(null);
+});
+
+const WRITTEN = { written: 1, missed: 0 };
+const actor = (tool: string, impersonatedBy: string | null = null) => ({
+  userId: 'owner-x',
+  role: 'OWNER',
+  tool,
+  impersonatedBy,
 });
 
 describe('saveEmojiToGradeMapping', () => {
-  it("passes only the row's fields, for the URL's classroom, and audits the change", async () => {
-    await post('saveEmojiToGradeMapping', {
+  it("passes only the row's fields and the actor, for the URL's classroom", async () => {
+    const result = await post('saveEmojiToGradeMapping', {
       emoji: 'star',
       grade: 90,
       extra_tokens: 2,
@@ -88,20 +103,27 @@ describe('saveEmojiToGradeMapping', () => {
       id: 'row-of-class-y',
     });
 
-    expect(mocks.saveEmojiMapping).toHaveBeenCalledWith('class-x', {
-      emoji: 'star',
-      grade: 90,
-      extra_tokens: 2,
-      description: 'Great',
+    expect(mocks.saveEmojiMapping).toHaveBeenCalledWith(
+      'class-x',
+      { emoji: 'star', grade: 90, extra_tokens: 2, description: 'Great' },
+      actor('web:settings.grades.emoji_mapping_upsert')
+    );
+    // The mapping, as before; the service wrote the row.
+    expect(result).toEqual({ id: 'em-1' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes the admin viewing as the owner, and answers the same when the row was missed', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-2');
+    mocks.saveEmojiMapping.mockResolvedValue({
+      mapping: { id: 'em-1' },
+      audit: { written: 0, missed: 1 },
     });
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      classroom_id: 'class-x',
-      action: 'UPDATE',
-      resource_type: 'SETTINGS',
-      resource_id: 'em-1',
-      data: { tool: 'web:settings.grades.emoji_mapping_upsert', emoji: 'star', grade: 90 },
-    });
+    const result = await post('saveEmojiToGradeMapping', { emoji: 'star', grade: 90 });
+    expect(mocks.saveEmojiMapping.mock.calls[0][2]).toEqual(
+      actor('web:settings.grades.emoji_mapping_upsert', 'admin-2')
+    );
+    expect(result).toEqual({ id: 'em-1' });
   });
 
   it('refuses a row without an emoji or a numeric grade, writing nothing', async () => {
@@ -114,36 +136,51 @@ describe('saveEmojiToGradeMapping', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('deletes by emoji in the URL classroom and audits only a delete that happened', async () => {
-    await post('deleteEmojiToGradeMapping', { emoji: 'star', classroom_id: 'class-y' });
-    expect(mocks.deleteEmojiMapping).toHaveBeenCalledWith('class-x', 'star');
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  it('deletes by emoji in the URL classroom, with the actor that records it', async () => {
+    const result = await post('deleteEmojiToGradeMapping', {
+      emoji: 'star',
+      classroom_id: 'class-y',
+    });
+    expect(mocks.deleteEmojiMapping).toHaveBeenCalledWith(
+      'class-x',
+      'star',
+      actor('web:settings.grades.emoji_mapping_delete')
+    );
+    expect(result).toEqual({ deleted: 1 });
 
-    mocks.deleteEmojiMapping.mockResolvedValue({ count: 0 });
-    mocks.auditCreate.mockClear();
-    await post('deleteEmojiToGradeMapping', { emoji: 'nope' });
+    mocks.deleteEmojiMapping.mockResolvedValue({ count: 0, audit: { written: 0, missed: 0 } });
+    expect(await post('deleteEmojiToGradeMapping', { emoji: 'nope' })).toEqual({ deleted: 0 });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 
 describe('saveLetterGradeMapping', () => {
-  it("passes only the letter and minimum, for the URL's classroom, and audits the change", async () => {
-    await post('saveLetterGradeMapping', {
+  it("passes only the letter, the minimum and the actor, for the URL's classroom", async () => {
+    const result = await post('saveLetterGradeMapping', {
       letter_grade: 'A',
       min_grade: 90,
       classroom_id: 'class-y',
       id: 'row-of-class-y',
     });
 
-    expect(mocks.saveLetterGrade).toHaveBeenCalledWith('class-x', {
-      letter_grade: 'A',
-      min_grade: 90,
-    });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      classroom_id: 'class-x',
-      action: 'UPDATE',
-      data: { tool: 'web:settings.grades.letter_grade_mapping_upsert', letter_grade: 'A' },
-    });
+    expect(mocks.saveLetterGrade).toHaveBeenCalledWith(
+      'class-x',
+      { letter_grade: 'A', min_grade: 90 },
+      actor('web:settings.grades.letter_grade_mapping_upsert')
+    );
+    expect(result).toEqual({ id: 'lg-1' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('deletes a letter in the URL classroom, with the actor that records it', async () => {
+    const result = await post('deleteLetterGradeMapping', { letter_grade: 'A' });
+    expect(mocks.deleteLetterGrade).toHaveBeenCalledWith(
+      'class-x',
+      'A',
+      actor('web:settings.grades.letter_grade_mapping_delete')
+    );
+    expect(result).toEqual({ success: 'Deleted mapping successfully.' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a malformed row, writing nothing', async () => {

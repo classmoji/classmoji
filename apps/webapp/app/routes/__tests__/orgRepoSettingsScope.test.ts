@@ -9,7 +9,8 @@
  *   - the change goes to the classroom's own organization, with the requesting
  *     user's own GitHub token, never the App installation;
  *   - a GitHub 403 is reported as "only organization owners";
- *   - each change writes an audit row with old → new values;
+ *   - each change is recorded by the service (old → new values) for the
+ *     actor the route passes; the route writes no row of its own;
  *   - the loader reports whether the viewer can edit, from their own
  *     organization membership;
  *   - while viewing as another user, nothing is sent to GitHub.
@@ -32,6 +33,18 @@ const mocks = vi.hoisted(() => ({
   getImmediateUserOctokit: vi.fn(),
   clearRevokedToken: vi.fn(),
   userRequest: vi.fn(),
+  recordForActor: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
+}));
+
+// The service's audit writer, so the row it hands over can be read.
+vi.mock('../../../../../packages/services/src/classmoji/audit.service.ts', () => ({
+  NO_SERVICE_AUDIT: { written: 0, missed: 0 },
+  recordForActor: (...a: unknown[]) => mocks.recordForActor(...a),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -109,6 +122,8 @@ beforeEach(() => {
     membership: { role: 'OWNER' },
   });
   mocks.getAuthSession.mockResolvedValue({ userId: 'owner-1', token: USER_TOKEN });
+  mocks.requestImpersonator.mockResolvedValue(null);
+  mocks.recordForActor.mockResolvedValue({ written: 1, missed: 0 });
   mocks.getImmediateUserOctokit.mockReturnValue({ request: mocks.userRequest });
   mocks.userRequest.mockImplementation(async (r: string, params: Record<string, unknown>) => {
     if (r === 'GET /orgs/{org}') {
@@ -160,25 +175,55 @@ describe('repository settings action', () => {
     expect(mocks.getGitProvider).not.toHaveBeenCalled();
   });
 
-  it('writes an audit row with old and new values', async () => {
-    await post({ members_can_create_repositories: true });
+  it('has the service record the change, with old and new values, for its actor', async () => {
+    const result = await post({ members_can_create_repositories: true });
 
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledOnce();
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
-      request: sameObject(routeRequest),
-      classroomId: 'class-1',
-      userId: 'owner-1',
-      role: 'OWNER',
-      action: 'UPDATE',
-      resourceType: 'REPO_SETTINGS',
-      resourceId: 'class-1',
-      metadata: {
-        tool: 'web:settings.repos',
-        org: 'myorg',
-        changes: { members_can_create_repositories: { from: false, to: true } },
-        value: 'members_can_create_repositories=true',
-      },
+    expect(result).toEqual({ success: 'Permissions updated', action: 'UPDATE_MEMBER_PERMISSIONS' });
+    expect(mocks.requestImpersonator).toHaveBeenCalledWith(sameObject(routeRequest));
+    expect(mocks.recordForActor).toHaveBeenCalledExactlyOnceWith(
+      { userId: 'owner-1', role: 'OWNER', tool: 'web:settings.repos', impersonatedBy: null },
+      {
+        classroomId: 'class-1',
+        resourceType: 'REPO_SETTINGS',
+        resourceId: 'class-1',
+        action: 'UPDATE',
+        data: {
+          org: 'myorg',
+          changes: { members_can_create_repositories: { from: false, to: true } },
+          value: 'members_can_create_repositories=true',
+          fields: ['members_can_create_repositories'],
+          values: { members_can_create_repositories: true },
+          previous: { members_can_create_repositories: false },
+        },
+      }
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers the same when the service could not write its row', async () => {
+    mocks.recordForActor.mockResolvedValue({ written: 0, missed: 1 });
+    expect(await post({ members_can_create_repositories: true })).toEqual({
+      success: 'Permissions updated',
+      action: 'UPDATE_MEMBER_PERMISSIONS',
     });
+  });
+
+  it('does not report a throw from the audit row as a failed GitHub update', async () => {
+    // Outside production the row's own input check throws; GitHub applied the change.
+    mocks.recordForActor.mockRejectedValue(new Error('audit row: invalid input'));
+
+    await expect(post({ members_can_create_repositories: true })).rejects.toThrow(
+      'audit row: invalid input'
+    );
+    expect(patchCalls()).toHaveLength(1);
+  });
+
+  it('records nothing when GitHub already had those values', async () => {
+    expect(await post({ default_repository_permission: 'none' })).toEqual({
+      success: 'Permissions updated',
+      action: 'UPDATE_MEMBER_PERMISSIONS',
+    });
+    expect(mocks.recordForActor).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -197,6 +242,7 @@ describe('repository settings action', () => {
     expect(typeof result.error).toBe('string');
     expect(mocks.userRequest).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.recordForActor).not.toHaveBeenCalled();
   });
 
   it('reports a GitHub 403 as a refused change, without an audit row', async () => {
@@ -213,6 +259,7 @@ describe('repository settings action', () => {
       action: 'UPDATE_MEMBER_PERMISSIONS',
     });
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.recordForActor).not.toHaveBeenCalled();
   });
 
   it('asks the user to sign in again when there is no GitHub token', async () => {
@@ -277,6 +324,7 @@ describe('repository settings action', () => {
       action: 'UPDATE_MEMBER_PERMISSIONS',
     });
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.recordForActor).not.toHaveBeenCalled();
   });
 
   it('refuses while viewing as another user, before contacting GitHub', async () => {

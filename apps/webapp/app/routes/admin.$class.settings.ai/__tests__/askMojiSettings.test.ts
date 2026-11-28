@@ -1,14 +1,15 @@
 /**
- * AI settings: the owner's Ask Moji instructions, the audit row every save
- * writes, and the Ask Moji switch's availability.
+ * AI settings: the owner's Ask Moji instructions, who every save is recorded
+ * for, and the Ask Moji switch's availability.
  *
  *   - Instructions are owner-only to read and write (the page's gate), saved
  *     by their own action that writes that one field through updateSettings,
  *     and a refusal is a fixed line by validation code.
- *   - Every save writes one UPDATE row (`web:settings.ai`, `data.fields`),
- *     with the instructions' length and never their text, never a key's
- *     value, and `impersonated_by` while an admin views as the owner. A
- *     refused save writes none.
+ *   - Every save hands updateSettings the actor (`web:settings.ai`, the owner,
+ *     the admin viewing as them); the service writes the one UPDATE row (its
+ *     shape, with the instructions' length and never their text or a key's
+ *     value, is pinned in packages/services settingsAudit.integration.test.ts).
+ *     The route writes no row of its own, and a refused save reaches no write.
  *   - The switch follows askMojiAvailable.
  *   - Without Trigger neither AI feature runs: one banner, no section line.
  *   - Every save is its own row.
@@ -29,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   getAllModels: vi.fn(),
   askMojiAvailable: vi.fn(),
   isQuizRuntimeConfigured: vi.fn(),
+  requestImpersonator: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
   ValidationError: class ClassroomSettingsValidationError extends Error {
     code: string;
@@ -39,6 +41,9 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
+}));
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
@@ -89,18 +94,19 @@ const load = () =>
 const saveInstructions = (value: unknown) =>
   post({ _action: 'saveAskMojiInstructions', syllabus_bot_instructions: value });
 
-/** The one audit row the last save wrote. */
-const auditRow = () => {
-  expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
-  return mocks.addClassroomAuditLog.mock.calls[0][0] as {
-    classroomId: string;
-    userId: string;
-    role: string;
-    action: string;
-    resourceType: string;
-    resourceId: string;
-    metadata: Record<string, unknown>;
-  };
+/** The actor every AI settings save hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.ai',
+  impersonatedBy: null as string | null,
+};
+
+/** The one save the last action made: its fields and its actor. */
+const savedWith = () => {
+  expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
+  const [classroomId, fields, actor] = mocks.updateSettings.mock.calls[0];
+  return { classroomId, fields: fields as Record<string, unknown>, actor };
 };
 
 beforeEach(() => {
@@ -110,7 +116,8 @@ beforeEach(() => {
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
-  mocks.updateSettings.mockResolvedValue({});
+  mocks.updateSettings.mockResolvedValue({ settings: {}, audit: { written: 1, missed: 0 } });
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: 'sk-ant-classroom' });
   mocks.canUseSyllabusBot.mockResolvedValue({ allowed: true });
   mocks.canUseQuizzes.mockResolvedValue({ allowed: true });
@@ -141,20 +148,26 @@ describe('saveAskMojiInstructions', () => {
   it('writes only the instructions, into the gated classroom', async () => {
     const result = await saveInstructions('Answer in Spanish.');
     expect(result.success).toBe('Ask Moji instructions saved');
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      syllabus_bot_instructions: 'Answer in Spanish.',
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      { syllabus_bot_instructions: 'Answer in Spanish.' },
+      ACTOR
+    );
   });
 
   it('passes a clear (null or blank) to the service, which stores null', async () => {
     await saveInstructions(null);
-    expect(mocks.updateSettings).toHaveBeenLastCalledWith('c1', {
-      syllabus_bot_instructions: null,
-    });
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith(
+      'c1',
+      { syllabus_bot_instructions: null },
+      ACTOR
+    );
     await saveInstructions('   ');
-    expect(mocks.updateSettings).toHaveBeenLastCalledWith('c1', {
-      syllabus_bot_instructions: '   ',
-    });
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith(
+      'c1',
+      { syllabus_bot_instructions: '   ' },
+      ACTOR
+    );
   });
 
   it('refuses a value that is not text without writing', async () => {
@@ -182,38 +195,31 @@ describe('saveAskMojiInstructions', () => {
     await expect(saveInstructions('Be brief.')).rejects.toThrow('db down');
   });
 
-  it('audits the field and the trimmed length, never the text', async () => {
+  it('leaves the row to the service: the actor goes in, no row comes from the route', async () => {
     await saveInstructions('  Answer in Spanish.  ');
-    const row = auditRow();
-    expect(row).toMatchObject({
-      classroomId: 'c1',
-      userId: 'owner-1',
-      role: 'OWNER',
-      action: 'UPDATE',
-      resourceType: 'SETTINGS',
-      resourceId: 'c1',
-    });
-    expect(row.metadata).toEqual({
-      tool: AI_SETTINGS_AUDIT_TOOL,
-      fields: ['syllabus_bot_instructions'],
-      instructions_length: 'Answer in Spanish.'.length,
-    });
-    expect(JSON.stringify(row)).not.toContain('Spanish');
+    expect(savedWith().actor).toEqual(ACTOR);
+    expect(ACTOR.tool).toBe(AI_SETTINGS_AUDIT_TOOL);
+    expect(JSON.stringify(savedWith().actor)).not.toContain('Spanish');
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('audits a clear as length 0', async () => {
-    await saveInstructions(null);
-    expect(auditRow().metadata.instructions_length).toBe(0);
-  });
-
-  it('hands the audit funnel the request, whose session names any View As admin', async () => {
+  it('names the admin viewing as the owner, from the request session', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-5');
     await saveInstructions('Be brief.');
-    expect((auditRow() as { request?: unknown }).request).toBeInstanceOf(Request);
-    expect(auditRow().metadata).not.toHaveProperty('impersonated_by');
+    expect(mocks.requestImpersonator.mock.calls[0][0]).toBeInstanceOf(Request);
+    expect(savedWith().actor).toEqual({ ...ACTOR, impersonatedBy: 'admin-5' });
+  });
+
+  it('answers the same when the service could not write its row', async () => {
+    mocks.updateSettings.mockResolvedValue({ settings: {}, audit: { written: 0, missed: 1 } });
+    expect(await saveInstructions('Be brief.')).toEqual({
+      success: 'Ask Moji instructions saved',
+      action: 'save-quiz-settings',
+    });
   });
 });
 
-describe('every AI settings save is audited', () => {
+describe('every AI settings save is recorded for its actor', () => {
   it.each([
     [
       'saveQuizSettings',
@@ -235,29 +241,30 @@ describe('every AI settings save is audited', () => {
       },
       ['llm_model', 'syllabus_bot_effort', 'anthropic_api_key'],
     ],
-  ])(
-    '%s writes one row naming its fields, never folded into the last',
-    async (_label, body, fields) => {
-      await post(body);
-      const row = auditRow();
-      expect(row.metadata).toEqual({ tool: AI_SETTINGS_AUDIT_TOOL, fields });
-      expect(row.action).toBe('UPDATE');
-      expect(JSON.stringify(row)).not.toContain('sk-ant-new-secret');
-    }
-  );
-
-  it('audits Clear all AI settings with every field it cleared', async () => {
-    await post({ _action: 'clearLLMSettings' });
-    const fields = auditRow().metadata.fields as string[];
-    expect(fields).toEqual(
-      expect.arrayContaining(['anthropic_api_key', 'llm_model', 'syllabus_bot_model'])
-    );
-    expect(fields).not.toContain('syllabus_bot_instructions');
+  ])('%s is one save of its fields, with the actor', async (_label, body, fields) => {
+    await post(body);
+    const saved = savedWith();
+    expect(saved.classroomId).toBe('c1');
+    expect(Object.keys(saved.fields)).toEqual(fields);
+    expect(saved.actor).toEqual(ACTOR);
+    expect(JSON.stringify(saved.actor)).not.toContain('sk-ant-new-secret');
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('writes no row for a refused save', async () => {
+  it('Clear all AI settings is one save of every field it clears, with the actor', async () => {
+    await post({ _action: 'clearLLMSettings' });
+    const saved = savedWith();
+    expect(Object.keys(saved.fields)).toEqual(
+      expect.arrayContaining(['anthropic_api_key', 'llm_model', 'syllabus_bot_model'])
+    );
+    expect(saved.fields).not.toHaveProperty('syllabus_bot_instructions');
+    expect(saved.actor).toEqual(ACTOR);
+  });
+
+  it('a refused save reaches no write and no row', async () => {
     const result = await post({ _action: 'saveLLMSettings', llm_model: 'claude-haiku-4-5' });
     expect(result.error).toBeDefined();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 

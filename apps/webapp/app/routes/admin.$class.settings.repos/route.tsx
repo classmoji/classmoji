@@ -2,11 +2,8 @@ import { Select, Switch, Alert, Button } from 'antd';
 import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
-import {
-  addClassroomAuditLog,
-  assertClassroomAccess,
-  assertClassroomMutationAllowed,
-} from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { clearRevokedToken, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService, getGitProvider, OrgRepoSettingsError } from '@classmoji/services';
 import {
@@ -314,13 +311,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Get classroom with git_organization to find the GitHub org login
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'REPO_SETTINGS',
     attemptedAction: 'modify',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   let input: unknown;
@@ -352,54 +350,38 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     return { error: ORG_SETTINGS_IMPERSONATION_MESSAGE, action: UPDATE_ACTION };
   }
 
-  let result;
+  const actor = await auditActor(request, gate, 'web:settings.repos');
   try {
     // Applies only the settings this page edits, to the classroom's own
-    // organization (never one named in the request).
-    result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
+    // organization (never one named in the request), and records the change.
+    await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
       gitOrganization: classroom.git_organization,
       userToken: authData?.token ?? null,
       input,
+      classroomId: classroom.id,
+      actor,
     });
   } catch (error: unknown) {
-    if (error instanceof OrgRepoSettingsError) {
-      // GitHub no longer accepts the token: drop the cached copy (memory, and
-      // the database if it still holds that same token) so the next request
-      // refreshes or asks for a new sign-in, as the classroom creation and
-      // organization pages do. A failure here is logged; the sign-in message
-      // still goes back.
-      const refusedToken = authData?.token;
-      if (error.code === 'NO_GITHUB_TOKEN' && error.status === 401 && refusedToken) {
-        try {
-          await clearRevokedToken(userId, refusedToken);
-        } catch (clearError: unknown) {
-          console.error('Failed to clear a GitHub token GitHub no longer accepts:', clearError);
-        }
+    // Every refusal of the input and every failure of the GitHub read or
+    // update arrives as an OrgRepoSettingsError, with the message to show.
+    // Anything else (the audit row's own check of its input, outside
+    // production) is not a failed GitHub update and is not reported as one.
+    if (!(error instanceof OrgRepoSettingsError)) throw error;
+    // GitHub no longer accepts the token: drop the cached copy (memory, and
+    // the database if it still holds that same token) so the next request
+    // refreshes or asks for a new sign-in, as the classroom creation and
+    // organization pages do. A failure here is logged; the sign-in message
+    // still goes back.
+    const refusedToken = authData?.token;
+    if (error.code === 'NO_GITHUB_TOKEN' && error.status === 401 && refusedToken) {
+      try {
+        await clearRevokedToken(userId, refusedToken);
+      } catch (clearError: unknown) {
+        console.error('Failed to clear a GitHub token GitHub no longer accepts:', clearError);
       }
-      return { error: error.message, action: UPDATE_ACTION };
     }
-    console.error('Failed to update GitHub organization repository settings:', error);
-    return {
-      error: "Couldn't update the GitHub organization settings. Try again.",
-      action: UPDATE_ACTION,
-    };
+    return { error: error.message, action: UPDATE_ACTION };
   }
-
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership?.role,
-    action: 'UPDATE',
-    resourceType: 'REPO_SETTINGS',
-    resourceId: classroom.id,
-    metadata: {
-      tool: 'web:settings.repos',
-      org: result.org,
-      changes: result.changes,
-      value: result.value,
-    },
-  });
 
   return {
     success: 'Permissions updated',
