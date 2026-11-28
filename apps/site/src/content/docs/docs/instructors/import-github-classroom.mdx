@@ -14,9 +14,11 @@ Already ran your course on Github Classroom? If you exported its data while Gith
 
 ### How it works
 
-The import reads an export of your Github Classroom data. It makes **zero Github API calls** and nothing is sent to Github. Your export is read entirely in your browser, then the normalized data is saved to your Classmoji account.
+The import reads an export of your Github Classroom data. Your export is read in your browser, then the normalized data is saved to your Classmoji account.
 
-You don't need to install the Classmoji Github app to import. Classrooms come in fully usable. Install the app later to light up the Github-connected features (no re-import needed):
+To import a classroom, the Classmoji Github app must be installed on its Github organization, and you must be one of the organization's owners, as you must to create a classroom in it. Classmoji asks Github, with your Github sign-in, whether you are an owner of each organization in the export, and your sign-in sees an organization only once the app is installed there. If it is not installed yet, the import asks you to install it first (an organization owner can), then import again.
+
+The app runs the Github-connected features of an imported classroom:
 
 - **Repository syncing** to keep imported repos in step with Github.
 - **Live submissions**: push and issue webhooks from the student repos.
@@ -49,7 +51,7 @@ A single export can contain many classrooms. Pick the ones you want to bring ove
 
 For each selected classroom you can edit its **slug** (the part of the URL, e.g. `cs-101`). Slugs are auto-generated from the classroom name and must be unique across Classmoji; if yours is taken, the wizard suggests a variation. Any warnings from the export (skipped files, students with grades but no repo) are listed here too.
 
-Click **Import** and Classmoji creates everything. A single classroom drops you straight into its admin dashboard; importing several returns you to your classrooms list.
+Click **Import** and Classmoji creates everything. A single classroom drops you straight into its admin dashboard; importing several returns you to your classrooms list. If a classroom could not be imported, or some of its students are already on Classmoji, the wizard stays open and lists them, with a link to each classroom that was imported.
 
 <Screenshot src={importReviewImg} alt="The review step showing each classroom's editable slug before importing" frame url="app.classmoji.io/import-classroom" size="lg" />
 
@@ -73,6 +75,7 @@ Click **Import** and Classmoji creates everything. A single classroom drops you 
 - **Assignments arrive in push mode.** Nothing is opened on Github by the import. Students keep submitting the way they did in Github Classroom: a push to their repository is the submission. If you'd rather have Classmoji open an issue per student, switch the assignment to issue mode in **Edit** before anyone submits; the mode locks once a submission exists.
 - **Group assignments** are imported with their teams. Each team's members are enrolled and the shared repository is linked to the team.
 - **Re-importing is safe.** The import is idempotent. Uploading the same export again updates records in place rather than creating duplicates, and it won't overwrite edits you've made in Classmoji.
+- **Students who are already on Classmoji** are not added by the import. The import names them, and you add them from **Students** by email.
 - **Students with grades but no repository** (graded in Github Classroom but never accepted the assignment) are skipped, with a warning so you know who was left out.
 
 ### Organize into modules

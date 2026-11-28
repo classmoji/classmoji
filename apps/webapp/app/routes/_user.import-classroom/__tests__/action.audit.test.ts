@@ -21,6 +21,9 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('~/constants', () => ({ ActionTypes: { IMPORT_CLASSROOM: 'import' } }));
 
+// The organization check has its own tests (action.organizations.test.ts).
+vi.mock('../organizations.server', () => ({ verifyImportOrganizations: async () => new Map() }));
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     githubClassroomImport: {
@@ -76,5 +79,32 @@ describe('import-classroom audit rows', () => {
         resourceId: 'class-again',
       }),
     ]);
+  });
+
+  it('writes no row for a classroom that was refused, and returns the refusal', async () => {
+    const refusal = {
+      classroomName: 'Refused',
+      message: 'You need to be an owner of the Github organization acme to import this classroom.',
+    };
+    mocks.importGithubClassrooms.mockResolvedValue({
+      results: [result('class-new', false)],
+      errors: [refusal],
+    });
+
+    const response = await runImport();
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
+    expect(mocks.addClassroomAuditLog.mock.calls[0][0]).toMatchObject({ classroomId: 'class-new' });
+    expect(response).toMatchObject({ errors: [refusal] });
+  });
+
+  it('writes no row when every classroom was refused', async () => {
+    const refusal = { classroomName: 'Refused', message: 'refused' };
+    mocks.importGithubClassrooms.mockResolvedValue({ results: [], errors: [refusal] });
+
+    const response = await runImport();
+
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(response).toEqual({ error: 'refused', errors: [refusal] });
   });
 });

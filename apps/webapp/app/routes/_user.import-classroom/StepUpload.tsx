@@ -19,9 +19,11 @@ export default function StepUpload({ onFile, parsing, parseError, fileName }: Pr
   return (
     <div>
       <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
-        If you exported your GitHub Classroom data while the Classroom export utility was still
-        available, zip that export folder and upload it here. GitHub has since retired the export
-        tooling, so this only works with an export you already have.{' '}
+        If you exported your Github Classroom data while the Classroom export utility was still
+        available, zip that export folder and upload it here. Github has since retired the export
+        tooling, so this only works with an export you already have. To import a classroom, the
+        Classmoji Github app must be installed on its Github organization, and you must be one of
+        the organization&apos;s owners.{' '}
         <a
           href={IMPORT_DOCS_URL}
           target="_blank"
@@ -57,7 +59,8 @@ export default function StepUpload({ onFile, parsing, parseError, fileName }: Pr
       </Upload.Dragger>
 
       <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
-        Nothing is sent to GitHub. The export is read entirely in your browser.
+        The export is read in your browser. Classmoji checks with Github that you own each
+        organization in it.
       </p>
 
       {parseError && (
