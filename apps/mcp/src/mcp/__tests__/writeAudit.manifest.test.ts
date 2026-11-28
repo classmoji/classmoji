@@ -78,6 +78,13 @@ const WRITES: Record<string, Entry> = {
   // REGRADE_REQUEST row for the caller; a submission: the tool writes it after
   // the request_regrade run.
   regrade_create: { kind: 'both', fn: 'regradeRequest.createForQuizAttempt', actor: 'own' },
+  // ── people: the shared service writes the row for the actor ──
+  staff_add: { kind: 'service', fn: 'staff.addStaff', actor: 'serviceActor' },
+  staff_update: { kind: 'service', fn: 'staff.updateStaff', actor: 'serviceActor' },
+  // staff.recordStaffRemoval writes the removal's row (with the follow-up
+  // markers only this tool's rows carry), staff.recordLeftoverSettled the
+  // follow-up's; the grader moves are recorded by settleUngradedSlots.
+  staff_remove: { kind: 'service', fn: 'staff.recordStaffRemoval', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -149,9 +156,6 @@ const WRITES: Record<string, Entry> = {
   slide_create: TOOL,
   slide_update: TOOL,
   slide_delete: TOOL,
-  staff_add: TOOL,
-  staff_update: TOOL,
-  staff_remove: TOOL,
   team_create: TOOL,
   team_delete: TOOL,
   team_rename: TOOL,

@@ -162,6 +162,7 @@ export type {
   StaffRemovalStart,
   UngradedSlotsOutcome,
 } from './helper/index.ts';
+export { ungradedOutcomeCounts } from './classmoji/staffAudit.ts';
 export type {
   LateOverrideMode,
   LateOverrideOutcome,

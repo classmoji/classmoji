@@ -187,6 +187,9 @@ beforeEach(() => {
   });
 });
 
+/** No grader row owed: every move here runs with `actor: null`. */
+const NONE = { written: 0, missed: 0 };
+
 describe('moveGraderSlot', () => {
   it('adds the new grader before removing the old one, with stored names', async () => {
     const result = await HelperService.moveGraderSlot({
@@ -196,7 +199,7 @@ describe('moveGraderSlot', () => {
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(mocks.calls).toEqual([
       'gh-add:ta-ann:2',
       'db-add:u-ann:s2',
@@ -218,7 +221,7 @@ describe('moveGraderSlot', () => {
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'graded_since' });
+    expect(result).toEqual({ audit: NONE, status: 'graded_since' });
     expect(mocks.calls).toEqual([]);
   });
 
@@ -232,7 +235,7 @@ describe('moveGraderSlot', () => {
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'graded_since' });
+    expect(result).toEqual({ audit: NONE, status: 'graded_since' });
     expect(mocks.calls.some(c => c.startsWith('gh-remove') || c.startsWith('db-remove'))).toBe(
       false
     );
@@ -248,7 +251,7 @@ describe('moveGraderSlot', () => {
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'grader_not_eligible' });
+    expect(result).toEqual({ audit: NONE, status: 'grader_not_eligible' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-gone']);
   });
 
@@ -262,7 +265,7 @@ describe('moveGraderSlot', () => {
       toGraderId: 'u-ann',
       fallbackToUnassign: true,
     });
-    expect(result).toEqual({ status: 'unassigned', reason: 'grader_not_eligible' });
+    expect(result).toEqual({ audit: NONE, status: 'unassigned', reason: 'grader_not_eligible' });
     expect(submissions.get('s1')!.graderIds).toEqual([]);
   });
 
@@ -277,7 +280,7 @@ describe('moveGraderSlot', () => {
     await HelperService.moveGraderSlot(payload);
     const again = await HelperService.moveGraderSlot(payload);
     // A retry finds the move already made and reports it as the move it is.
-    expect(again).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(again).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
     // Nothing doubled up: one add and one removal in all.
     expect(mocks.addGraderToAssignment).toHaveBeenCalledTimes(1);
@@ -295,7 +298,7 @@ describe('moveGraderSlot', () => {
       toGraderId: 'u-ann',
       fallbackToUnassign: true,
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
   });
 
@@ -308,7 +311,7 @@ describe('moveGraderSlot', () => {
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
   });
 
@@ -482,6 +485,27 @@ describe('resolveUngradedSlots', () => {
     expect(mocks.createNotifications.mock.calls[0][0].title).toContain('(being assigned now)');
   });
 
+  it('a queued run carries the removing person, so the run records the same rows', async () => {
+    seed(helper.UNGRADED_INLINE_LIMIT + 1);
+    const actor = {
+      userId: 'owner-1',
+      role: 'OWNER' as const,
+      tool: 'web:staff.remove',
+      impersonatedBy: null,
+    };
+    const outcome = await HelperService.resolveUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'reassign',
+      actor,
+    });
+    expect(outcome.queued).toBe(true);
+    const [, items] = mocks.batchTrigger.mock.calls[0];
+    for (const item of items) expect(item.payload.actor).toEqual(actor);
+    // The runs write their own rows: none was owed in this request.
+    expect(outcome.audit).toEqual(NONE);
+  });
+
   it('a chunk that fails to queue fails only itself and what follows', async () => {
     seed(1001); // three chunks of at most 500
     mocks.batchTrigger
@@ -509,6 +533,7 @@ describe('startStaffRemoval', () => {
   it('refuses without a choice when asked to, before anything is queued', async () => {
     await expect(
       HelperService.startStaffRemoval({
+        actor: null,
         classroomId: 'class-1',
         login: 'ta-gone',
         role: 'ASSISTANT',
@@ -525,6 +550,7 @@ describe('startStaffRemoval', () => {
     );
     await expect(
       HelperService.startStaffRemoval({
+        actor: null,
         classroomId: 'class-1',
         login: 'ta-gone',
         role: 'OWNER',
@@ -536,6 +562,7 @@ describe('startStaffRemoval', () => {
 
   it('queues the removal and moves NOTHING itself', async () => {
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
@@ -543,6 +570,12 @@ describe('startStaffRemoval', () => {
       requireChoice: true,
     });
     expect(mocks.calls).toEqual(['removeStaff']);
+    expect(mocks.removeStaff).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      login: 'ta-gone',
+      role: 'ASSISTANT',
+      actor: null,
+    });
     expect(mocks.findUngradedSlotsForGrader).not.toHaveBeenCalled();
     expect(started).toMatchObject({
       runId: 'run-1',
@@ -556,6 +589,7 @@ describe('startStaffRemoval', () => {
 
   it('without requireChoice, a missing choice becomes keep', async () => {
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
@@ -574,6 +608,7 @@ describe('startStaffRemoval', () => {
       heldUngradedCount: 3,
     });
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'TEACHER',

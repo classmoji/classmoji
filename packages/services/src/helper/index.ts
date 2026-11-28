@@ -6,6 +6,7 @@ import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
 import {
   NO_SERVICE_AUDIT,
+  addServiceAudit,
   recordForActor,
   type AuditActor,
   type ServiceAudit,
@@ -41,6 +42,12 @@ export interface MoveGraderSlotPayload {
    * the slot with someone who can no longer grade it.
    */
   fallbackToUnassign?: boolean;
+  /**
+   * Who the add and the removal are recorded for, when the move belongs to a
+   * person's action (the owner removing a grader). Absent in runs queued
+   * before it existed: those record nothing.
+   */
+  actor?: AuditActor | null;
 }
 
 export type MoveGraderSlotResult =
@@ -74,6 +81,8 @@ export interface UngradedSlotsOutcome {
   failed: number;
   queued: boolean;
   fallback: 'no_eligible_graders' | null;
+  /** The grader rows the moves made in this request owed (queued runs write their own). */
+  audit: ServiceAudit;
 }
 
 /** What `startStaffRemoval` hands back: the queued removal plus what is at stake. */
@@ -101,6 +110,7 @@ const emptyOutcome = (choice: UngradedChoice, total: number): UngradedSlotsOutco
   failed: 0,
   queued: false,
   fallback: null,
+  audit: NO_SERVICE_AUDIT,
 });
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -662,6 +672,20 @@ class HelperService {
       /** Who the add and the removal are recorded for; null records neither. */
       actor: AuditActor | null;
     }
+  ): Promise<MoveGraderSlotResult & { audit: ServiceAudit }> {
+    let audit = NO_SERVICE_AUDIT;
+    const result = await this.moveGraderSlotRecorded(payload, owed => {
+      audit = addServiceAudit(audit, owed);
+    });
+    return { ...result, audit };
+  }
+
+  private static async moveGraderSlotRecorded(
+    payload: MoveGraderSlotPayload & {
+      gitOrganization?: HelperGitOrganization | null;
+      actor: AuditActor | null;
+    },
+    owed: (audit: ServiceAudit) => void
   ): Promise<MoveGraderSlotResult> {
     const { classroomId, gitRepoAssignmentId, fromGraderId, toGraderId, actor } = payload;
 
@@ -688,6 +712,7 @@ class HelperService {
         notify: false,
         actor,
       });
+      if ('audit' in added) owed(added.audit);
       if ('graderLogin' in added) {
         toLogin = added.graderLogin;
       } else if (added.status === 'grader_not_eligible') {
@@ -722,6 +747,7 @@ class HelperService {
       graderId: fromGraderId,
       actor,
     });
+    if ('audit' in removed) owed(removed.audit);
     if (removed.status === 'submission_not_found') return { status: 'submission_not_found' };
     if (removed.status === 'grader_not_assigned') {
       // Already gone (a retry, or a concurrent move). With the new grader on the
@@ -802,9 +828,9 @@ class HelperService {
     choice: UngradedChoice;
     departingName?: string;
     /**
-     * Who the slot moves made inline are recorded for (one grader row each);
-     * null records none. Moves queued as `move_grader_slot` runs carry no
-     * actor.
+     * Who the slot moves are recorded for (a grader row for each add and each
+     * removal), made here or by the `move_grader_slot` runs, which carry it in
+     * their payload; null records none.
      */
     actor: AuditActor | null;
   }): Promise<UngradedSlotsOutcome> {
@@ -885,6 +911,7 @@ class HelperService {
                 fromGraderId: graderId,
                 toGraderId: move.toGraderId,
                 fallbackToUnassign: choice === 'reassign',
+                ...(actor ? { actor } : {}),
               } satisfies MoveGraderSlotPayload,
             }))
           );
@@ -916,6 +943,7 @@ class HelperService {
           fallbackToUnassign: choice === 'reassign',
           actor,
         });
+        outcome.audit = addServiceAudit(outcome.audit, result.audit);
         if (result.status === 'moved') record(move, result.toLogin);
         else if (result.status === 'unassigned' && result.reason === 'grader_not_eligible') {
           outcome.unassigned += 1;
@@ -961,18 +989,19 @@ class HelperService {
     role,
     ungradedSubmissions,
     requireChoice = false,
-    actorUserId = null,
-    impersonatedBy = null,
+    actor,
   }: {
     classroomId: string;
     login: string;
     role: StaffRole;
     ungradedSubmissions?: UngradedChoice | null;
     requireChoice?: boolean;
-    /** The owner asking for the removal, for the audit of any plan-owner hand-off. */
-    actorUserId?: string | null;
-    /** The platform admin viewing as that owner ("View as"), for the same row. */
-    impersonatedBy?: string | null;
+    /**
+     * The owner asking for the removal, for the audit of any plan-owner
+     * hand-off it causes. The removal's own row is the caller's, written with
+     * `staff.recordStaffRemoval` once it knows the outcome.
+     */
+    actor: AuditActor | null;
   }): Promise<StaffRemovalStart> {
     const preview = await ClassmojiService.staff.previewRemoval({ classroomId, login, role });
 
@@ -988,8 +1017,7 @@ class HelperService {
       classroomId,
       login,
       role,
-      actorUserId,
-      impersonatedBy,
+      actor,
     });
 
     return {

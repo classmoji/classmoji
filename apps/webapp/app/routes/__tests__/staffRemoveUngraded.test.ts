@@ -14,7 +14,12 @@
  *   - the callout says what became of the slots for each choice, including the
  *     no-other-grader fallback, background runs, ineligible graders and
  *     failures;
- *   - the gate is the action's own OWNER gate.
+ *   - the gate is the action's own OWNER gate;
+ *   - the removal, the plan-owner hand-off it may cause and the grader moves
+ *     are recorded for the owner (the actor built from the gate, with the
+ *     admin viewing as them), and the removal's one row states the role, where
+ *     the run stood and counts of what became of the slots — never a
+ *     follow-up marker, and no row when the removal failed.
  *
  * Whether the choice applies at all (no grader-flagged ASSISTANT/TEACHER role
  * left) and the moves themselves are pinned in packages/services
@@ -29,6 +34,12 @@ const mocks = vi.hoisted(() => ({
   startStaffRemoval: vi.fn(),
   settleUngradedSlots: vi.fn(),
   waitForRunCompletion: vi.fn(),
+  recordStaffRemoval: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -37,8 +48,15 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
 }));
 
-vi.mock('@classmoji/services', () => ({
-  ClassmojiService: { staff: {} },
+vi.mock('@classmoji/services', async () => ({
+  ClassmojiService: {
+    staff: { recordStaffRemoval: (...a: unknown[]) => mocks.recordStaffRemoval(...a) },
+  },
+  ungradedOutcomeCounts: (
+    await vi.importActual<typeof import('@classmoji/services/staff-audit')>(
+      '@classmoji/services/staff-audit'
+    )
+  ).ungradedOutcomeCounts,
   HelperService: {
     startStaffRemoval: (...a: unknown[]) => mocks.startStaffRemoval(...a),
     settleUngradedSlots: (...a: unknown[]) => mocks.settleUngradedSlots(...a),
@@ -55,6 +73,9 @@ vi.mock('~/constants', () => ({
 }));
 
 const { action } = await import('../admin.$class.staff/action');
+
+/** The owner, as the gate resolved them: who every row is recorded for. */
+const ACTOR = { userId: 'owner-1', role: 'OWNER', tool: 'web:staff.remove', impersonatedBy: null };
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
@@ -113,6 +134,8 @@ beforeEach(() => {
   });
   mocks.startStaffRemoval.mockResolvedValue(started(0, null));
   mocks.waitForRunCompletion.mockResolvedValue({ status: 'COMPLETED' });
+  mocks.recordStaffRemoval.mockResolvedValue({ written: 1, missed: 0 });
+  mocks.requestImpersonator.mockResolvedValue(null);
 });
 
 describe('removeStaff — ungraded submissions', () => {
@@ -133,7 +156,7 @@ describe('removeStaff — ungraded submissions', () => {
         login: 'ta-gone',
         role: 'ASSISTANT',
         ungradedSubmissions: choice,
-        actorUserId: 'owner-1',
+        actor: ACTOR,
       });
       expect(mocks.settleUngradedSlots).toHaveBeenCalledExactlyOnceWith({
         classroomId: 'class-1',
@@ -141,11 +164,71 @@ describe('removeStaff — ungraded submissions', () => {
         choice,
         departingName: 'Gone Person',
         expectedCount: 3,
-        // The slot moves write no grader rows of their own.
-        actor: null,
+        // Each move is recorded as its grader rows, for the owner.
+        actor: ACTOR,
+      });
+      // One row for the removal, counts only.
+      expect(mocks.recordStaffRemoval).toHaveBeenCalledExactlyOnceWith(ACTOR, {
+        classroomId: 'class-1',
+        userId: 'u-gone',
+        role: 'ASSISTANT',
+        choice,
+        removal: 'completed',
+        ungraded: {
+          choice,
+          total: 3,
+          reassigned: 0,
+          unassigned: 0,
+          kept: 0,
+          failed: 0,
+          queued: false,
+        },
       });
     }
   );
+
+  it('under View as, every actor names the admin', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-1');
+    mocks.startStaffRemoval.mockResolvedValue(started(3, 'unassign'));
+    mocks.settleUngradedSlots.mockResolvedValue(outcome({ choice: 'unassign', total: 3 }));
+    await remove({ login: 'ta-gone', role: 'ASSISTANT', ungradedSubmissions: 'unassign' });
+
+    const viewed = { ...ACTOR, impersonatedBy: 'admin-1' };
+    expect(mocks.startStaffRemoval.mock.calls[0][0]).toMatchObject({ actor: viewed });
+    expect(mocks.settleUngradedSlots.mock.calls[0][0]).toMatchObject({ actor: viewed });
+    expect(mocks.recordStaffRemoval.mock.calls[0][0]).toEqual(viewed);
+  });
+
+  it('the row counts the slots moved, never names who took them', async () => {
+    settleWith(9, 'reassign', {
+      reassigned: [
+        { graderId: 'u-bob', login: 'ta-bob', count: 5 },
+        { graderId: 'u-cat', login: 'ta-cat', count: 4 },
+      ],
+      unassigned: 1,
+      alreadyCovered: 1,
+      fallback: 'no_eligible_graders',
+    });
+    await remove({ login: 'ta-gone', role: 'ASSISTANT', ungradedSubmissions: 'reassign' });
+    const [, row] = mocks.recordStaffRemoval.mock.calls[0];
+    expect(row.ungraded).toEqual({
+      choice: 'reassign',
+      total: 9,
+      reassigned: 9,
+      unassigned: 2,
+      kept: 0,
+      failed: 0,
+      queued: false,
+      fallback: 'no_eligible_graders',
+    });
+    expect(JSON.stringify(row)).not.toContain('ta-');
+  });
+
+  it('a row that cannot be written changes nothing the owner is told', async () => {
+    mocks.recordStaffRemoval.mockResolvedValue({ written: 0, missed: 1 });
+    const result = await remove({ login: 'ta-gone', role: 'ASSISTANT' });
+    expect(result).toEqual({ success: 'Staff member removed', action: 'remove-user' });
+  });
 
   it('settles only after the removal run has completed', async () => {
     const order: string[] = [];
@@ -183,6 +266,8 @@ describe('removeStaff — ungraded submissions', () => {
       action: 'remove-user',
       error: 'Failed to remove staff member. Please try again.',
     });
+    // Nothing was removed: no row.
+    expect(mocks.recordStaffRemoval).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -201,12 +286,26 @@ describe('removeStaff — ungraded submissions', () => {
     expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
     expect(result.error).toContain('still in progress');
     expect(result.error).toContain('ungraded submissions were not changed');
+    // Recorded as still running, nothing moved; no follow-up is offered.
+    expect(mocks.recordStaffRemoval).toHaveBeenCalledExactlyOnceWith(ACTOR, {
+      classroomId: 'class-1',
+      userId: 'u-gone',
+      role: 'ASSISTANT',
+      choice: 'reassign',
+      removal: 'in_progress',
+      ungraded: { choice: 'reassign', total: 3, moved: 0 },
+    });
   });
 
   it('with nothing at stake, an unknown final run is reported as before', async () => {
     mocks.waitForRunCompletion.mockResolvedValue(undefined);
     const result = await remove({ login: 'ta-gone', role: 'ASSISTANT' });
     expect(result.success).toBe('Staff member removed');
+    expect(mocks.recordStaffRemoval.mock.calls[0][1]).toMatchObject({
+      choice: null,
+      removal: 'in_progress',
+      ungraded: null,
+    });
   });
 
   it('sends null when the page offered no choice, and settles nothing at stake', async () => {
@@ -223,6 +322,7 @@ describe('removeStaff — ungraded submissions', () => {
       ungradedSubmissions: 'spread-thin',
     });
     expect(mocks.startStaffRemoval).not.toHaveBeenCalled();
+    expect(mocks.recordStaffRemoval).not.toHaveBeenCalled();
     expect(result).toEqual({
       action: 'remove-user',
       error: 'Pick what happens to their ungraded submissions.',
