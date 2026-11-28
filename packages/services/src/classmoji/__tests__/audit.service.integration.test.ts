@@ -354,6 +354,45 @@ describe.skipIf(!RUN)('audit writer (integration)', () => {
       });
     });
 
+    it('derives the row id from the person, the classroom and the UTC day (pinned)', async () => {
+      // Fixed inputs and the id the derivation gives them: a change to how
+      // the id is made would split one person's refusals of a day in two.
+      const userId = '00000000-0000-4000-8000-00000000a001';
+      const classroomId = '00000000-0000-4000-8000-00000000c001';
+      const pinnedId = 'c563729f-d914-87da-9c41-bbd35b6739fb';
+      const clear = async () => {
+        await prisma.auditLog.deleteMany({ where: { id: pinnedId } });
+        await prisma.classroom.deleteMany({ where: { id: classroomId } });
+        await prisma.user.deleteMany({ where: { id: userId } });
+      };
+      await clear(); // anything a crashed run left behind
+      try {
+        await prisma.user.create({
+          data: { id: userId, email: `audit-pinned-${suite}@example.test`, name: 'Pinned' },
+        });
+        await prisma.classroom.create({
+          data: {
+            id: classroomId,
+            slug: `audit-pinned-${suite}`,
+            git_org_id: orgId,
+            name: `Audit pinned ${suite}`,
+            content_namespace: `audit-pinned-${suite}`,
+            content_repo: `content-audit-pinned-${suite}`,
+          },
+        });
+
+        await audit.recordNonMemberRefusal(
+          { userId, classroomId },
+          { now: new Date('2031-06-15T12:00:00.000Z') }
+        );
+
+        const rows = await prisma.auditLog.findMany({ where: { classroom_id: classroomId } });
+        expect(rows.map(row => row.id)).toEqual([pinnedId]);
+      } finally {
+        await clear();
+      }
+    });
+
     it('25 refusals at once are one row with count 25', async () => {
       const now = nextDay();
       await Promise.all(
