@@ -19,8 +19,9 @@
  *   exempt  — writes no row, for the reason given.
  *
  * The `tool` and `service` checks read the handler's source (and the bodies of
- * same-file functions it calls, two levels down): a check of the text, not of
- * a run, but enough that a write tool which never reaches a writer fails here.
+ * the functions of its own file that it calls, two levels down): a check of
+ * the text, not of a run, but enough that a write tool which never reaches a
+ * writer fails here.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -164,23 +165,31 @@ const SOURCES = readdirSync(TOOLS_DIR)
   .filter(file => file.endsWith('.ts'))
   .map(file => readFileSync(path.join(TOOLS_DIR, file), 'utf8'));
 
-/** The text of a top-level function or const of the tools' files named `name`. */
-function bodyOf(name: string): string | null {
+/** The source of the tools file that defines the tool named `tool`. */
+function sourceOf(tool: string): string {
+  const matches = SOURCES.filter(source => source.includes(`name: '${tool}',`));
+  if (matches.length !== 1) throw new Error(`${tool}: defined in ${matches.length} files`);
+  return matches[0];
+}
+
+/** The text of the top-level function or const named `name` in `source`. */
+function bodyOf(source: string, name: string): string | null {
   const start = new RegExp(
     `\\n(?:export )?(?:async )?(?:function ${name}\\b|const ${name}\\s*[=:])`
   );
-  for (const source of SOURCES) {
-    const match = start.exec(source);
-    if (!match) continue;
-    const rest = source.slice(match.index + 1);
-    const end = rest.search(/\n\};?\n/);
-    return end === -1 ? rest : rest.slice(0, end);
-  }
-  return null;
+  const match = start.exec(source);
+  if (!match) return null;
+  const rest = source.slice(match.index + 1);
+  const end = rest.search(/\n\};?\n/);
+  return end === -1 ? rest : rest.slice(0, end);
 }
 
-/** The handler's source with the bodies of the functions it calls, two levels down. */
+/**
+ * The handler's source with the bodies of the functions of its own file that
+ * it calls, two levels down.
+ */
 function reachableSource(def: ToolDefinition<never>): string {
+  const file = sourceOf(def.name);
   let text = def.handler.toString();
   const seen = new Set<string>();
   for (let depth = 0; depth < 2; depth++) {
@@ -188,7 +197,7 @@ function reachableSource(def: ToolDefinition<never>): string {
     for (const name of called) {
       if (seen.has(name)) continue;
       seen.add(name);
-      const body = bodyOf(name);
+      const body = bodyOf(file, name);
       if (body) text += `\n${body}`;
     }
   }

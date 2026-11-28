@@ -135,13 +135,18 @@ beforeEach(() => {
   });
 });
 
-async function call(name: string, args: Record<string, unknown>) {
+async function call(
+  name: string,
+  args: Record<string, unknown>,
+  { impersonatedBy }: { impersonatedBy?: string } = {}
+) {
   viewerSeq += 1;
   userId = `user-${viewerSeq}`;
   const server = buildMcpServer({
     userId,
     clientId: CLIENT,
     scopes: new Set(['read', 'write']),
+    ...(impersonatedBy ? { impersonatedBy } : {}),
   } as never);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: CLIENT, version: '0.0.0' });
@@ -258,5 +263,15 @@ describe.each(CASES)('$tool', ({ tool, args, answer, service, payload }) => {
     answer(NONE);
     const result = await call(tool, args);
     expect(parse(result)).not.toHaveProperty('audit_incomplete');
+  });
+});
+
+describe('under View as', () => {
+  it('the actor names the admin viewing as the caller', async () => {
+    CASES[0].answer(WRITTEN);
+    await call(CASES[0].tool, CASES[0].args, { impersonatedBy: 'admin-1' });
+    expect(mocks.addGrade.mock.calls[0][0]).toMatchObject({
+      actor: { ...actorFor('grade_add'), impersonatedBy: 'admin-1' },
+    });
   });
 });
