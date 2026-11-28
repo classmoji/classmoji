@@ -317,8 +317,12 @@ test.describe('server.ts', () => {
       {},
       { slideId: 42 },
       { slideId: {} },
+      // Strings no slide id can be: the database would refuse the query.
+      { slideId: 'slide\u0000-1' },
+      { slideId: 'slide-1\n' },
+      { slideId: 'x'.repeat(257) },
     ]) {
-      test(`a payload naming no slide id (${JSON.stringify(payload)}) is not queried, answered or reported`, async () => {
+      test(`a payload naming no slide id (${String(JSON.stringify(payload)).slice(0, 40)}) is not queried, answered or reported`, async () => {
         const { emits, queried, reports, logged } = await run(payload, neverCalled);
         expect(queried).toEqual([]);
         // What it answered before: nothing.
@@ -339,6 +343,14 @@ test.describe('server.ts', () => {
         });
         expect(emits).toEqual([]);
         expect(reports).toEqual([{ error, context: { surface: 'slides.multiplex.join' } }]);
+      }
+    });
+
+    test('a uuid or any other id shape up to the bound is still looked up', async () => {
+      for (const slideId of ['6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b', 'slide-1', 'x'.repeat(256)]) {
+        const { queried, emits } = await run({ slideId }, async () => null);
+        expect(queried).toEqual([slideId]);
+        expect(emits).toEqual([['join_error', { reason: 'slide_not_found' }]]);
       }
     });
 

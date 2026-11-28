@@ -178,6 +178,19 @@ describe('initServerSentry privacy (real SDK, fake transport)', () => {
     expectNothingSecret();
   });
 
+  it('sends no short secret a name gives away', async () => {
+    withIsolationScope(() => {
+      reportError(new Error(secrets.SHORT_SECRET_MESSAGE), { surface: 'test.choke_point' });
+    });
+    await flushErrorReports(2000);
+    const sent = events();
+    expect(sent).toHaveLength(1);
+    expectNothingSecret();
+    expect(sent[0].exception.values[0].value).toBe(
+      'boot refused COLLAB_INTERNAL_SECRET=[redacted], sent Authorization: Bearer [redacted]'
+    );
+  });
+
   it('reports one error object once across handleError and a choke point', async () => {
     withIsolationScope(() => {
       const error = new Error('one object');

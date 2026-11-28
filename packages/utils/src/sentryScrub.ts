@@ -444,10 +444,18 @@ const redactJsonParseInput = (text: string): string =>
  * Each starts at a literal prefix or behind a lookbehind of its own class.
  */
 const TOKEN_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  // `Authorization: Bearer …` / `authorization=Basic …`: the credential, any length.
+  [
+    /\b((?:proxy-)?authorization["']?[ \t]{0,8}[:=][ \t]{0,8})(Bearer|Basic)[ \t]{1,4}[A-Za-z0-9._~+/=-]+/gi,
+    '$1$2 [redacted]',
+  ],
   // An Authorization credential quoted in a message: `Bearer`/`Basic` and 16+ token characters.
   [/\b(Bearer|Basic)[ \t]{1,4}[A-Za-z0-9._~+/=-]{16,}/gi, '$1 [redacted]'],
   // JWTs (access tokens, id tokens): three base64url parts, the first `eyJ`.
   [/(?<![\w-])eyJ[\w-]*\.[\w-]+\.[\w-]*/g, '[jwt]'],
+  // Two-part signed tokens (base64url JSON `eyJ…`, `.`, a signature), as the
+  // class invite and class-site return tokens are.
+  [/(?<![\w-])eyJ[\w-]{10,}\.[\w-]{10,}/g, '[signed-token]'],
   // Classmoji's own MCP tokens.
   [/(?<![\w-])askmoji_[\w-]+/g, 'askmoji_[redacted]'],
   // Github tokens: personal, OAuth, user-to-server, server-to-server, refresh, fine-grained.
@@ -510,17 +518,169 @@ const endOfQuoted = (text: string, from: number, quote: string): number => {
   return endOfLine(text, limit, false);
 };
 
-/** A header-shaped name (`x-collab-secret`, `Cookie`): its whole line is the value. */
+/** A header-shaped name (`x-collab-secret`, `Cookie`, `Authorization`). */
 const isHeaderName = (name: string): boolean =>
   name.includes('-') || /^(?:cookie|authorization)$/i.test(name);
+
+/**
+ * A name that says secret beyond doubt (`password`, `passwd`, `secret`,
+ * `client_secret`, `COLLAB_INTERNAL_SECRET`, `x-collab-secret`, `api_key`,
+ * `apikey`, `RESEND_API_KEY`): its bare value is redacted however short (see
+ * `isSecretBareValue`). Other secret names (`token`, `signature`, `sig`,
+ * `ENCRYPTION_KEY`, …) keep the MIN_BARE_SECRET_LENGTH rule, since prose
+ * says `Invalid token: jwt expired`.
+ */
+const UNAMBIGUOUS_SECRET_WORDS = new Set(['password', 'passwords', 'passwd', 'secret', 'secrets']);
+const isUnambiguousSecretName = (name: string): boolean => {
+  const words = keyWords(name);
+  return (
+    words.some(word => UNAMBIGUOUS_SECRET_WORDS.has(word)) || words.join('').endsWith('apikey')
+  );
+};
+
+/**
+ * Words that say a value is absent or what kind it is, never a value
+ * (`password: required`, `secret: undefined`, `authorization: missing`):
+ * kept after any secret name.
+ */
+const NON_VALUES = new Set([
+  'null',
+  'undefined',
+  'none',
+  'true',
+  'false',
+  'empty',
+  'missing',
+  'required',
+  'unset',
+]);
+
+/**
+ * Whether a bare value after an unambiguous secret name is the secret:
+ * after `=` always (`password=hunter2`, `COLLAB_INTERNAL_SECRET=short`,
+ * `api_key=abc1`, `password=null`); after `:`, when it has at least 4
+ * characters or any digit or capital (`secret: shortpw`, `password: Ab1`)
+ * and is not one of NON_VALUES, so prose stays (`password: is too short`,
+ * `secret: not set`, `password: required`).
+ */
+const isSecretBareValue = (value: string, separator: string): boolean => {
+  if (!value) return false;
+  if (separator === '=') return true;
+  if (NON_VALUES.has(value.toLowerCase())) return false;
+  return value.length >= 4 || /[0-9A-Z]/.test(value);
+};
+
+/**
+ * Whether a header's single token is credential-shaped rather than a word of
+ * prose: MIN_BARE_SECRET_LENGTH characters, or a digit, or a capital after a
+ * lower-case letter (`aB3x`, `abcDEF`, not `Role`, `STUDENT`, `role`).
+ */
+const isCredentialShaped = (token: string): boolean =>
+  token.length >= MIN_BARE_SECRET_LENGTH || /\d/.test(token) || /[a-z][A-Z]/.test(token);
+
+/** Auth schemes a header value may start with (`Bearer abc`, `token ghp_…`). */
+const AUTH_SCHEMES = new Set(['bearer', 'basic', 'token', 'bot', 'digest', 'negotiate', 'dpop']);
+
+/** Where the bare value starting at `from` ends. */
+const bareValueEnd = (text: string, from: number): number => {
+  BARE_VALUE.lastIndex = from;
+  BARE_VALUE.exec(text);
+  return BARE_VALUE.lastIndex;
+};
+
+/** One cookie pair: up to whitespace, a quote, `,` or `;`. */
+const COOKIE_PAIR = /[^\s"'`,;]*/y;
+
+/** Where the cookie pair starting at `from` ends. */
+const cookiePairEnd = (text: string, from: number): number => {
+  COOKIE_PAIR.lastIndex = from;
+  COOKIE_PAIR.exec(text);
+  return COOKIE_PAIR.lastIndex;
+};
+
+/** Index of the first character after at most 8 spaces or tabs from `from`. */
+const skipBlanks = (text: string, from: number): number => {
+  let i = from;
+  while (i < text.length && i - from < 8 && (text[i] === ' ' || text[i] === '\t')) i++;
+  return i;
+};
+
+/**
+ * Whether nothing of the value follows `from`: the end of the text or the
+ * line, or a delimiter or quote, after at most a few blanks. A token that is
+ * the whole value is a credential; one followed by more words is prose.
+ */
+const valueEndsAt = (text: string, from: number): boolean => {
+  const i = skipBlanks(text, from);
+  return i >= text.length || '\n\r,;)}]>"\'`'.includes(text[i]);
+};
+
+/**
+ * The span of a secret-named header's value that is redacted (`[from, to)`,
+ * empty for none). Only a credential-shaped value, never the prose after it:
+ * - a cookie list (`Cookie: a=b; session=c`): the whole list of pairs;
+ * - an auth scheme and its credential (`Authorization: Token abc123 for x`):
+ *   the credential, the scheme stays (Bearer and Basic after
+ *   `Authorization:` were already redacted by TOKEN_PATTERNS, any length);
+ * - a single token (`x-collab-secret: s3cr3t to collab`): that token, when
+ *   it is credential-shaped or the whole value (after an unambiguous name,
+ *   as `isSecretBareValue` says, or the whole value);
+ * - a second token that is credential-shaped (`Authorization: Splunk 0123…`,
+ *   a scheme not listed): that one, with the first when it is one too.
+ * So `authorization: role STUDENT cannot edit c1` stays as it is.
+ */
+const headerSecretSpan = (text: string, start: number, name: string): [number, number] => {
+  const tokenEnd = bareValueEnd(text, start);
+  if (tokenEnd === start) return [start, start];
+  const token = text.slice(start, tokenEnd);
+  if (/cookie/i.test(name) && token.includes('=')) {
+    // Every `name=value` pair, `;`-separated (a value may already read `[redacted]`).
+    let end = cookiePairEnd(text, start);
+    while (text[end] === ';') {
+      const next = skipBlanks(text, end + 1);
+      const pairEnd = cookiePairEnd(text, next);
+      if (pairEnd === next) break;
+      end = pairEnd;
+    }
+    return [start, end];
+  }
+  const afterScheme = skipBlanks(text, tokenEnd);
+  if (AUTH_SCHEMES.has(token.toLowerCase()) && afterScheme > tokenEnd) {
+    const credentialEnd = bareValueEnd(text, afterScheme);
+    const credential = text.slice(afterScheme, credentialEnd);
+    if (
+      credential &&
+      (isCredentialShaped(credential) ||
+        valueEndsAt(text, credentialEnd) ||
+        isUnambiguousSecretName(name))
+    ) {
+      return [afterScheme, credentialEnd];
+    }
+    return [start, start];
+  }
+  const whole = valueEndsAt(text, tokenEnd);
+  const firstSecret =
+    !NON_VALUES.has(token.toLowerCase()) &&
+    (isUnambiguousSecretName(name) ? isSecretBareValue(token, ':') : isCredentialShaped(token));
+  const secondEnd = whole ? afterScheme : bareValueEnd(text, afterScheme);
+  const secondSecret =
+    afterScheme > tokenEnd && isCredentialShaped(text.slice(afterScheme, secondEnd));
+  if (secondSecret) return [firstSecret ? start : afterScheme, secondEnd];
+  if (firstSecret || (whole && !NON_VALUES.has(token.toLowerCase()))) return [start, tokenEnd];
+  return [start, start];
+};
 
 /**
  * Values whose name is a secret (`isSecretName`), found by scanning:
  * - a quoted value (`"password":"…"`, `client_secret: '…'`, `cookie: '…'`):
  *   the quotes and all;
- * - a header line (`x-collab-secret: …`, `Cookie: …`): the rest of the line;
+ * - a header (`x-collab-secret: …`, `Cookie: …`, `Authorization: …`): its
+ *   credential-shaped value only, up to the value's end (`headerSecretSpan`);
  * - a bare value (`token=…`, `GITHUB_TOKEN: …`): when it has at least
- *   MIN_BARE_SECRET_LENGTH characters.
+ *   MIN_BARE_SECRET_LENGTH characters, or after an unambiguous name
+ *   (`password=…`, `secret: …`) as `isSecretBareValue` says.
+ * A value left alone is shorter than MIN_BARE_SECRET_LENGTH, so rescanning
+ * from inside it stays linear.
  */
 const redactSecretValues = (text: string): string => {
   const pattern = new RegExp(NAME_AND_SEPARATOR.source, 'g');
@@ -529,22 +689,26 @@ const redactSecretValues = (text: string): string => {
   for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
     const [, quote, name, separator] = m;
     if (!isSecretName(name)) continue;
-    const start = pattern.lastIndex;
-    const first = text[start];
-    let end = start;
+    const valueStart = pattern.lastIndex;
+    const first = text[valueStart];
+    let from = valueStart;
+    let to = valueStart;
     if (first === '"' || first === "'") {
-      end = endOfQuoted(text, start, first);
+      to = endOfQuoted(text, valueStart, first);
     } else if (separator === ':' && !quote && isHeaderName(name)) {
-      end = endOfLine(text, start, true);
+      [from, to] = headerSecretSpan(text, valueStart, name);
     } else {
-      BARE_VALUE.lastIndex = start;
-      BARE_VALUE.exec(text);
-      if (BARE_VALUE.lastIndex - start >= MIN_BARE_SECRET_LENGTH) end = BARE_VALUE.lastIndex;
+      const end = bareValueEnd(text, valueStart);
+      const value = text.slice(valueStart, end);
+      const secret = isUnambiguousSecretName(name)
+        ? isSecretBareValue(value, separator)
+        : value.length >= MIN_BARE_SECRET_LENGTH;
+      if (secret) to = end;
     }
-    if (end > start) {
-      out += `${text.slice(last, start)}[redacted]`;
-      last = end;
-      pattern.lastIndex = end;
+    if (to > from) {
+      out += `${text.slice(last, from)}[redacted]`;
+      last = to;
+      pattern.lastIndex = to;
     }
   }
   return out + text.slice(last);

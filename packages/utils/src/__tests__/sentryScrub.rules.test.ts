@@ -52,6 +52,13 @@ const ADVERSARIAL: Record<string, string> = Object.fromEntries(
     'token: ',
     'x-a-secret',
     'Bearer ',
+    'authorization: Bearer a',
+    'authorization: ',
+    'cookie:',
+    'Cookie: a=b;',
+    'password:',
+    'x-a-secret: a ',
+    'eyJaaaaaaaaaa.',
     '[a="x"]x',
     '"x" is not valid JSON',
     'session_',
@@ -163,6 +170,91 @@ describe('length bounds', () => {
 // ---------------------------------------------------------------------------
 // What the scrubber must leave alone
 // ---------------------------------------------------------------------------
+
+describe('secret values after a name', () => {
+  it('redacts a header credential only, never the prose or the rest of the line', () => {
+    for (const text of [
+      'authorization: role STUDENT cannot edit c1',
+      'authorization: token expired for c1',
+      'cookie: missing from request',
+      'Authorization: missing',
+      'authorization: not allowed',
+      'x-collab-secret: not set',
+    ]) {
+      expect(scrubText(text)).toBe(text);
+    }
+    expect(scrubText('headers: { Authorization: Bearer abc }, next: 1')).toBe(
+      'headers: { Authorization: Bearer [redacted] }, next: 1'
+    );
+    expect(scrubText('Authorization: Token abc123 for x')).toBe(
+      'Authorization: Token [redacted] for x'
+    );
+    expect(scrubText('x-gitlab-token: abc')).toBe('x-gitlab-token: [redacted]');
+    expect(scrubText('x-api-key: abc')).toBe('x-api-key: [redacted]');
+    // A scheme that is not listed: the credential after it still goes.
+    expect(scrubText('Authorization: Splunk 0123456789abcdef0123')).toBe(
+      'Authorization: Splunk [redacted]'
+    );
+    expect(scrubText('Authorization: ApiKey abc123')).toBe('Authorization: [redacted]');
+    // A cookie header: every pair, whatever its name, and nothing after them.
+    expect(scrubText('Cookie: theme=dark; sid=s3cr3tvalue tail')).toBe('Cookie: [redacted] tail');
+  });
+
+  it('after Authorization, Bearer and Basic go at any length, long and short alike', () => {
+    expect(scrubText('Authorization: Bearer ab')).toBe('Authorization: Bearer [redacted]');
+    expect(scrubText('Authorization: Bearer abcdefghijklmnop1234')).toBe(
+      'Authorization: Bearer [redacted]'
+    );
+    expect(scrubText('proxy-authorization=basic dXNlcg== x')).toBe(
+      'proxy-authorization=basic [redacted] x'
+    );
+    // Without the header name, 16+ only: prose stays.
+    expect(scrubText('Bearer realm missing')).toBe('Bearer realm missing');
+    // A stand-in is not wrapped again.
+    expect(scrubText('Authorization: token ghp_abcdef y')).toBe(
+      'Authorization: token [github-token] y'
+    );
+  });
+
+  it.each([
+    // Unambiguous names: after `=` always, after `:` 4+ characters or a
+    // digit/capital, unless a word saying the value is absent.
+    ['password=hunter2', 'password=[redacted]'],
+    ['password=x', 'password=[redacted]'],
+    ['password: hunter2', 'password: [redacted]'],
+    ['secret: shortpw', 'secret: [redacted]'],
+    ['secret: Ab1', 'secret: [redacted]'],
+    ['COLLAB_INTERNAL_SECRET=short', 'COLLAB_INTERNAL_SECRET=[redacted]'],
+    ['api_key=abc1', 'api_key=[redacted]'],
+    ['apikey: abcd', 'apikey: [redacted]'],
+    ['passwd=pw', 'passwd=[redacted]'],
+    ['client_secret=abc', 'client_secret=[redacted]'],
+    ['password=required', 'password=[redacted]'],
+    ['secret=null', 'secret=[redacted]'],
+    // Prose after them stays: a short word, or a word saying the value is absent.
+    ['password: is too short', 'password: is too short'],
+    ['secret: not set', 'secret: not set'],
+    ['password: required', 'password: required'],
+    ['password: undefined', 'password: undefined'],
+    ['secret: null', 'secret: null'],
+    // Other secret names keep the 12+ rule; `code` is a diagnostic.
+    ['token: abc', 'token: abc'],
+    ['token=abc123def456ghi', 'token=[redacted]'],
+    ['DEPLOY_KEY: x', 'DEPLOY_KEY: x'],
+    ['code=abcdef', 'code=abcdef'],
+  ])('%j → %j', (text, expected) => expect(scrubText(text)).toBe(expected));
+
+  it('redacts a two-part signed token (invite, class-site return)', () => {
+    expect(scrubText('join eyJhbGciOiJIUzI1NiJ9.c2lnbmF0dXJlXzEyMzQ end')).toBe(
+      'join [signed-token] end'
+    );
+    expect(scrubUrl('/site/return/eyJjbGFzcyI6ImNzNTIifQ.abcdefghijklmnop')).toBe(
+      '/site/return/[signed-token]'
+    );
+    // Too short to be one.
+    expect(scrubText('eyJ.x and eyJabc.def')).toBe('eyJ.x and eyJabc.def');
+  });
+});
 
 describe('ordinary text stays as it was', () => {
   it.each([

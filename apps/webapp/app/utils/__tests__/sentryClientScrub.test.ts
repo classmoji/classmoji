@@ -92,10 +92,13 @@ it('scrubs the error, its breadcrumbs and the sampled span before they leave', a
     return out;
   });
   const event = items.find(item => item.type === 'event')?.payload as {
+    tags?: Record<string, unknown>;
     request?: { url?: string };
     exception?: { values?: Array<{ value?: string }> };
     breadcrumbs?: Array<{ category?: string; message?: string }>;
   };
+  // Every event names its app and runtime, as the servers' do.
+  expect(event.tags).toMatchObject({ app: 'webapp', runtime: 'browser' });
   expect(event.request?.url).toBe('http://localhost:3000/teacher/cs52/students/[login]');
   expect(event.exception?.values?.[0].value).toBe('boom at /join/[code]');
   const click = event.breadcrumbs?.find(crumb => crumb.category === 'ui.click');
@@ -105,4 +108,7 @@ it('scrubs the error, its breadcrumbs and the sampled span before they leave', a
   const spanText = JSON.stringify(items.filter(item => item.type !== 'event'));
   expect(spanText).toContain('/api/search');
   expect(spanText).not.toContain('?q=');
+  // Spans carry the same two as attributes.
+  expect(spanText).toMatch(/"runtime":\{[^}]*"value":"browser"/);
+  expect(spanText).toMatch(/"app":\{[^}]*"value":"webapp"/);
 });

@@ -38,6 +38,19 @@
  *   whose handler flushes and exits) it leaves exiting to that listener.
  * - the tracing-only integrations are never added (`defaultIntegrations` is
  *   the SDK's list "without performance").
+ * - Fastify: removed. It subscribes to Fastify's NATIVE diagnostics channel
+ *   (`tracing:fastify.request.handler:error`, published whatever
+ *   `enableRuntimeChannelInjection` says) and captures a route's error before
+ *   the app's own `onError` hook or error handler runs, marking it captured:
+ *   hook-station's `hook_station.route` and the mcp server's `mcp.http`
+ *   reports (surface, route, status, provider tags) were then dropped as
+ *   duplicates. Those hooks report 5xx only; without the integration a 4xx
+ *   is never sent (its own default skipped 4xx too).
+ * - the other framework integrations stay, inert: Express, Hapi, Koa and
+ *   Hono only subscribe once orchestrion has injected their module (runtime
+ *   injection is off and no bundle is built with Sentry's plugin), and Nitro
+ *   captures nothing. Express errors are reported through
+ *   `setupExpressErrorHandler`, registered explicitly.
  *
  * Exit behaviour: unchanged. Every server has its own `unhandledRejection`
  * listener today through `@classmoji/database` (it reports, flushes and exits
@@ -102,6 +115,8 @@ const REPLACED_INTEGRATIONS = new Set([
   'Http',
   'NodeFetch',
   'OnUnhandledRejection',
+  // Pre-empts the apps' own Fastify hooks (see the file header).
+  'Fastify',
 ]);
 
 /** The integration list `initServerSentry` installs, from the SDK's defaults. */

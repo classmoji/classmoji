@@ -28,6 +28,9 @@ export const REQUEST_HEADERS: Record<string, string> = {
 };
 export const REQUEST_BODY = JSON.stringify({ note: BODY_SECRET });
 export const ERROR_MESSAGE = `upstream https://x.test/join/${JOIN_CODE}?invite=abc refused Bearer ${BEARER_VALUE}`;
+// A secret far shorter than any length rule: its name alone gives it away.
+export const SHORT_SECRET = 'Pw4x';
+export const SHORT_SECRET_MESSAGE = `boot refused COLLAB_INTERNAL_SECRET=${SHORT_SECRET}, sent Authorization: Bearer ${SHORT_SECRET}`;
 
 /** Every string that must not appear anywhere in what is sent. */
 export const FORBIDDEN = [
@@ -40,4 +43,5 @@ export const FORBIDDEN = [
   'invite=',
   INVITE_JWT,
   USER_EMAIL,
+  SHORT_SECRET,
 ];

@@ -27,14 +27,26 @@ export interface JoinDeps {
 }
 
 /**
+ * Longest string taken as a slide id. Slide ids are uuids (36 characters,
+ * `Slide.id @default(uuid())`, never set by the app); this leaves room for
+ * any other id shape and stops a megabyte string reaching the database.
+ */
+export const MAX_SLIDE_ID_LENGTH = 256;
+
+/**
  * The slide id a `join` payload names, or null when it names none: the
  * payload is client input (any JSON value, or nothing), so only an object
- * whose `slideId` is a string is a request to join.
+ * whose `slideId` is a string that can be an id is a request to join. A
+ * string with a control character (a NUL byte, which Postgres refuses in
+ * text), or longer than MAX_SLIDE_ID_LENGTH, names no slide.
  */
 export function joinSlideId(payload: unknown): string | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const slideId = (payload as { slideId?: unknown }).slideId;
-  return typeof slideId === 'string' ? slideId : null;
+  if (typeof slideId !== 'string') return null;
+  if (slideId.length > MAX_SLIDE_ID_LENGTH) return null;
+  // eslint-disable-next-line no-control-regex
+  return /[\u0000-\u001f\u007f]/.test(slideId) ? null : slideId;
 }
 
 /**

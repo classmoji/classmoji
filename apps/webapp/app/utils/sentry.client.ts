@@ -47,7 +47,8 @@ const firstReport = (error: unknown): boolean => {
 
 /**
  * Start Sentry if the server sent a config; null when it is off. The three
- * apps share one Sentry project, so every event is tagged with its app.
+ * apps share one Sentry project, so every event is tagged with its app
+ * (and `runtime: browser`).
  *
  * Returns React Router's instrumentation for `HydratedRouter`'s
  * `instrumentations`: navigations are then named by their full route
@@ -93,8 +94,12 @@ export const initSentry = (
     beforeBreadcrumb: breadcrumb => scrubBrowserBreadcrumb(breadcrumb),
     beforeSendSpan: span => scrubSpan(span),
     integrations: [reactRouterTracingIntegration()],
-    // Errors carry tags, streamed spans carry attributes: both name the app.
-    initialScope: { tags: { app }, attributes: { app } },
+    // Errors carry tags, streamed spans carry attributes: both name the app
+    // and the runtime.
+    initialScope: {
+      tags: { app, runtime: 'browser' },
+      attributes: { app, runtime: 'browser' },
+    },
   });
   enabled = true;
   return { instrumentations: [createSentryClientInstrumentation({ captureErrors: false })] };

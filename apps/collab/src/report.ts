@@ -51,3 +51,25 @@ export function reportingHook<P extends { documentName: string }, R>(
     }
   };
 }
+
+/**
+ * A failure that stops the server before it serves (its config, the
+ * DATABASE_URL check, taking the instance lock): reported as fatal with a
+ * surface, `collab.instance_lock` when another instance holds the lock,
+ * `collab.boot` for anything else (a database that never answered, a missing
+ * secret). It prints, flushes and decides nothing: the caller logs, flushes,
+ * exits or rethrows exactly as it did before (a rethrown error reaches the
+ * process's crash handler, which flushes before it exits).
+ */
+export function reportBootFailure(err: unknown): void {
+  reportError(err, {
+    // Matched by name, as CollabAuthError is: this file stays free of the
+    // lock's database client.
+    surface:
+      err instanceof Error && err.name === 'SingleInstanceError'
+        ? 'collab.instance_lock'
+        : 'collab.boot',
+    level: 'fatal',
+    tags: { stage: 'boot' },
+  });
+}

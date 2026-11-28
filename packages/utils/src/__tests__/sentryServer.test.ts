@@ -298,11 +298,12 @@ describe('scrubText', () => {
   });
 
   it('redacts secrets written as key: value, JSON, headers and env pairs', () => {
-    // A bare value is redacted when it looks like a secret (12+ characters);
-    // a quoted one always.
+    // A quoted value always; a bare one after a name that can only be a
+    // secret (password, secret, api key) however short; else at 12+ characters.
     expect(scrubText('login failed, password: hunter2-Secret-2024')).toBe(
       'login failed, password: [redacted]'
     );
+    expect(scrubText('login failed, password: hunter2')).toBe('login failed, password: [redacted]');
     expect(scrubText('body {"password":"hunter2","id":"u1"}')).toBe(
       'body {"password":[redacted],"id":"u1"}'
     );
@@ -310,12 +311,14 @@ describe('scrubText', () => {
     expect(scrubText("config { client_secret: 'abc123' }")).toBe(
       'config { client_secret: [redacted] }'
     );
+    // A header loses its credential, up to the value's end, not the prose after it.
     expect(scrubText('sent x-collab-secret: s3cr3t to collab')).toBe(
-      'sent x-collab-secret: [redacted]'
+      'sent x-collab-secret: [redacted] to collab'
     );
     expect(scrubText('env SOME_SECRET=abc123def456ghi OTHER=1')).toBe(
       'env SOME_SECRET=[redacted] OTHER=1'
     );
+    expect(scrubText('env SOME_SECRET=abc OTHER=1')).toBe('env SOME_SECRET=[redacted] OTHER=1');
     expect(scrubText('RESEND_API_KEY="re_x" and GITHUB_TOKEN: 0123456789abcdef')).toBe(
       'RESEND_API_KEY=[redacted] and GITHUB_TOKEN: [redacted]'
     );
@@ -331,7 +334,8 @@ describe('scrubText', () => {
     expect(scrubText('Signature: t=1700000000,v1=abcdef0123,v0=99ff bad')).toBe(
       'Signature: [signature] bad'
     );
-    expect(scrubText('stripe-signature: t=1,v1=ab')).toBe('stripe-signature: [redacted]');
+    // The signature rule already replaced the value, so the header has nothing left.
+    expect(scrubText('stripe-signature: t=1,v1=ab')).toBe('stripe-signature: [signature]');
   });
 
   it('leaves ordinary diagnostics alone', () => {
@@ -358,9 +362,12 @@ describe('scrubText', () => {
   });
 
   it('redacts authorization values', () => {
-    // An Authorization header line loses its whole value.
+    // After `Authorization:` / `authorization=` the credential goes at any length.
     expect(scrubText('sent Authorization: Bearer abc.def-123')).toBe(
-      'sent Authorization: [redacted]'
+      'sent Authorization: Bearer [redacted]'
+    );
+    expect(scrubText('sent authorization=Basic ab then')).toBe(
+      'sent authorization=Basic [redacted] then'
     );
     // A bare credential needs 16+ characters.
     expect(scrubText('sent Bearer abc.def-1234567890XYZ')).toBe('sent Bearer [redacted]');
@@ -412,6 +419,10 @@ describe('scrubText', () => {
     expect(
       scrubText('retry with token=abc123def456ghi&code=def, password=hunter2-Secret-2024')
     ).toBe('retry with token=[redacted]&code=def, password=[redacted]');
+    // A short token is a word (12+ rule), `code` is a diagnostic; a password is a password.
+    expect(scrubText('retry with token=abc&code=def, password=hunter2')).toBe(
+      'retry with token=abc&code=def, password=[redacted]'
+    );
   });
 
   it('redacts email addresses', () => {

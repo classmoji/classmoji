@@ -20,7 +20,8 @@ import { recordAudit } from '../src/audit.ts';
 import { createTaskCheckpointTrigger } from '../src/checkpoint.ts';
 import { handleRequest } from '../src/http.ts';
 import { handleInternal } from '../src/internal.ts';
-import { isTypedRefusal, reportingHook, roomTags } from '../src/report.ts';
+import { SingleInstanceError } from '../src/instanceLock.ts';
+import { isTypedRefusal, reportBootFailure, reportingHook, roomTags } from '../src/report.ts';
 import type { CollabRuntime } from '../src/server.ts';
 import { SECRET, startServer } from './helpers.ts';
 
@@ -111,6 +112,24 @@ describe('reportingHook', () => {
       })({ documentName: ROOM })
     ).rejects.toBe(failure);
     expect(captured).toEqual([]);
+  });
+});
+
+describe('reportBootFailure', () => {
+  it('reports the lock error as collab.instance_lock and anything else as collab.boot, fatal', () => {
+    const lock = new SingleInstanceError('another collab server holds the instance lock');
+    const unreachable = Object.assign(new Error('Connection failed while connecting'), {
+      cause: new Error('connect ECONNREFUSED 127.0.0.1:1'),
+    });
+    const config = new Error('COLLAB_INTERNAL_SECRET must be set');
+    for (const err of [lock, unreachable, config]) reportBootFailure(err);
+    expect(captured.map(c => [c.error, c.context])).toEqual([
+      [lock, { surface: 'collab.instance_lock', level: 'fatal', tags: { stage: 'boot' } }],
+      [unreachable, { surface: 'collab.boot', level: 'fatal', tags: { stage: 'boot' } }],
+      [config, { surface: 'collab.boot', level: 'fatal', tags: { stage: 'boot' } }],
+    ]);
+    // It prints nothing itself: the boot code's own lines are unchanged.
+    expect(console.error).not.toHaveBeenCalled();
   });
 });
 

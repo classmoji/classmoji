@@ -64,10 +64,20 @@ describe('initServerSentry in a real process', () => {
     // Sentry's two: its capture, and the crash-when-alone that keeps Node's default.
     expect(report.after).toEqual({ uncaughtException: 1, unhandledRejection: 2 });
     expect(report.events).toBe(1);
-    for (const gone of ['Console', 'ProcessSession', 'LocalVariablesAsync']) {
+    // Fastify captures a route error ahead of the apps' own hooks.
+    for (const gone of ['Console', 'ProcessSession', 'LocalVariablesAsync', 'Fastify']) {
       expect(report.integrations).not.toContain(gone);
     }
-    for (const kept of ['Http', 'NodeFetch', 'OnUncaughtException', 'OnUnhandledRejection']) {
+    // The other framework integrations are inert without orchestrion.
+    for (const kept of [
+      'Http',
+      'NodeFetch',
+      'OnUncaughtException',
+      'OnUnhandledRejection',
+      'Express',
+      'Koa',
+      'Hapi',
+    ]) {
       expect(report.integrations).toContain(kept);
     }
     // Tracing-only integrations are never added.
