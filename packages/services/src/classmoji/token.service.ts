@@ -215,7 +215,7 @@ export const purchaseExtensionHours = async ({
   hours: number;
   /** Who the purchase is recorded for; null writes no audit row. */
   actor: AuditActor | null;
-}): Promise<{ transaction: PurchaseTransaction; audit: ServiceAudit }> => {
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
   if (!Number.isInteger(hours) || hours <= 0) {
     throw new Error('Invalid hours: Must be a positive whole number.');
   }
@@ -335,7 +335,7 @@ export const purchaseQuizExtensionHours = async ({
   /** Who the purchase is recorded for; null writes no audit row. */
   actor: AuditActor | null;
   now?: Date;
-}): Promise<{ transaction: PurchaseTransaction; audit: ServiceAudit }> => {
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
   if (!Number.isInteger(hours) || hours <= 0) {
     throw new Error('Invalid hours: Must be a positive whole number.');
   }
@@ -415,8 +415,8 @@ export const purchaseQuizExtensionHours = async ({
   return { transaction, audit };
 };
 
-/** A ledger row as the token service writes and returns it. */
-type PurchaseTransaction = Awaited<ReturnType<typeof updateExtension>>;
+/** A ledger row as the token service writes and returns it: a purchase, refund or grant. */
+type LedgerRow = Awaited<ReturnType<typeof updateExtension>>;
 
 /**
  * The TOKEN_PURCHASE row of a purchase that has committed: what it was bought
@@ -425,7 +425,7 @@ type PurchaseTransaction = Awaited<ReturnType<typeof updateExtension>>;
  */
 const recordPurchase = (
   actor: AuditActor | null,
-  transaction: PurchaseTransaction,
+  transaction: LedgerRow,
   target: { git_repo_assignment_id: string } | { assignment_id: string }
 ): Promise<ServiceAudit> =>
   recordForActor(actor, {
@@ -485,7 +485,7 @@ export const cancelPurchase = async (
     /** Who the cancel is recorded for; null writes no audit row. */
     actor: AuditActor | null;
   }
-): Promise<{ refund: PurchaseTransaction; audit: ServiceAudit }> => {
+): Promise<{ refund: LedgerRow; audit: ServiceAudit }> => {
   const refund = await getPrisma().$transaction(async tx => {
     // The ledger to lock is the purchase's; a row's classroom and student
     // never change, so they can be read before the lock.
@@ -649,7 +649,7 @@ export const grantTokens = async ({
   description?: string;
   /** Who the grant is recorded for; null writes no audit row. */
   actor: AuditActor | null;
-}): Promise<{ transaction: PurchaseTransaction; audit: ServiceAudit }> => {
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
   const transaction = await assignToStudent({
     classroomId,
     studentId,

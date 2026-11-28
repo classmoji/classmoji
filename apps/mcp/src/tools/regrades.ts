@@ -45,8 +45,8 @@
  * write none here; a repo request is audited by `regradeRequest.create` in the
  * `request_regrade` run, for the `serviceActor` this tool puts in its payload,
  * and a repo resolution by `regradeRequest.resolveRepo` in the task, which
- * gets this tool's name beside its data. No tool here writes a row itself. Asking and
- * resolving are both refused where the classroom shows no quizzes (the
+ * gets this tool's name beside its data. No tool here writes a row itself.
+ * Asking and resolving are both refused where the classroom shows no quizzes (the
  * service's refusal, the one every quiz tool gives); such a classroom lists no
  * quiz requests either. A request already resolved is reported as such
  * before its arguments are checked, so a retry reads as already_resolved.
