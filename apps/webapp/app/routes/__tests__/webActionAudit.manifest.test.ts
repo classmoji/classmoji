@@ -509,13 +509,13 @@ const startsTask = (text: string, id: string) => {
 };
 
 /**
- * Whether an intent's `text` names the tool `tool`: as written (`'web:x.y'`),
- * through a constant of its file that holds it (`QUIZ_LATE_WAIVER_TOOL`), or
- * as a template whose `${…}` is the intent itself (`web:slides.${field}`).
+ * Whether `text` names the tool `tool`: as written (`'web:x.y'`), through a
+ * constant of `file` (the text of the file `text` is from) that holds it
+ * (`QUIZ_LATE_WAIVER_TOOL`), or as a template whose `${…}` is the intent
+ * itself (`web:slides.${field}`).
  */
-const namesTool = (intent: WebActionIntent, text: string, tool: string) => {
+const toolIn = (text: string, file: string, tool: string, intentName: string) => {
   if (new RegExp(`['"\`]${escape(tool)}['"\`]`).test(text)) return true;
-  const file = stripComments(readFileSync(resolve(REPO_ROOT, intent.file), 'utf8'));
   const constants = [
     ...file.matchAll(
       new RegExp(
@@ -526,8 +526,57 @@ const namesTool = (intent: WebActionIntent, text: string, tool: string) => {
   ].map(m => m[1]);
   if (constants.some(name => new RegExp(`(?<![\\w$.])${escape(name)}\\b`).test(text))) return true;
   return [...text.matchAll(/`([^`]*)`/g)].some(
-    m => m[1].includes('${') && m[1].replace(/\$\{[^}]*\}/g, intent.intent) === tool
+    m => m[1].includes('${') && m[1].replace(/\$\{[^}]*\}/g, intentName) === tool
   );
+};
+
+/**
+ * Whether an intent names the tool `tool`: in its own code, or through a
+ * function of its WRITER_IN file (`helper`) that it calls and whose own
+ * declaration names it (`calendarCreateAudit(…)`), never by the helper file
+ * holding it somewhere.
+ */
+const namesTool = (intent: WebActionIntent, helper: string, tool: string) => {
+  const file = stripComments(readFileSync(resolve(REPO_ROOT, intent.file), 'utf8'));
+  if (toolIn(intent.text, file, tool, intent.intent)) return true;
+  if (!helper) return false;
+  const declared = [
+    ...new Set(
+      [
+        ...helper.matchAll(
+          /(?:^|\n)\s*(?:export\s+)?(?:const|let|function|async\s+function)\s+([A-Za-z_$][\w$]*)/g
+        ),
+      ].map(m => m[1])
+    ),
+  ];
+  return declared.some(name => {
+    if (!new RegExp(`(?<![\\w$.])${escape(name)}\\s*\\(`).test(intent.text)) return false;
+    try {
+      return toolIn(declarationText(helper, name), helper, tool, intent.intent);
+    } catch {
+      return false;
+    }
+  });
+};
+
+/**
+ * The route modules of `routesDir` that export an action this reader cannot
+ * find, or whose action yields no intent: [] when every one is read.
+ */
+const unreadModules = (routesDir = ROUTES_DIR): string[] => {
+  const read = webActionIntents(routesDir);
+  const unread: string[] = [];
+  for (const module of routeModules(routesDir)) {
+    if (!exportsAction(module.file, routesDir)) continue;
+    const source = actionSource(module.file, 'action', routesDir);
+    if (!source) {
+      unread.push(`${module.id}: exports an action this reader does not find`);
+      continue;
+    }
+    const routeId = source.routeId && source.routeId !== module.id ? source.routeId : module.id;
+    if (!read.some(i => i.routeId === routeId)) unread.push(`${module.id}: no intent read`);
+  }
+  return unread;
 };
 
 /**
@@ -551,7 +600,7 @@ function problemsFor(intent: WebActionIntent, entry: Entry, helper = ''): string
     if (!reaches(text, intent.shared, FUNNEL)) {
       problems.push(`${key}: should write its row through the audit funnel`);
     }
-    if (!namesTool(intent, text, name)) problems.push(`${key}: should name its tool '${name}'`);
+    if (!namesTool(intent, helper, name)) problems.push(`${key}: should name its tool '${name}'`);
   } else if (kind === 'task') {
     if (!startsTask(text, name)) problems.push(`${key}: should start the ${name} run`);
     if (!OWN_ACTOR_TASKS.has(name) && !reaches(text, intent.shared, ACTOR)) {
@@ -818,6 +867,91 @@ describe('the web-action reader', () => {
       't.tools#run: should start the another_thing run',
     ]);
   });
+
+  it('takes a tool from a constant of the file or a template on the intent, and a run by its task export', () => {
+    const routes = fixtureRoutes({
+      'k.kinds/route.tsx': `
+        const SAVE_TOOL = 'web:k.save';
+        export const action = async ({ request }) => {
+          const field = (await request.formData()).get('field');
+          if (field === 'save') {
+            await addClassroomAuditLog({ metadata: { tool: SAVE_TOOL } });
+          }
+          if (field === 'pin' || field === 'hide') {
+            await addClassroomAuditLog({ metadata: { tool: \`web:k.\${field}\` } });
+          }
+          if (field === 'grant') {
+            const actor = await auditActor(request, gate, 'web:k.grant');
+            await Tasks.assignTokensToStudentTask.batchTrigger([{ actor }]);
+          }
+        };
+      `,
+    });
+    const byIntent = new Map(webActionIntents(routes).map(i => [i.intent, i]));
+    expect(problemsFor(readIntent(byIntent, 'save'), 'route:web:k.save')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'save'), 'route:web:k.other')).toEqual([
+      "k.kinds#save: should name its tool 'web:k.other'",
+    ]);
+    expect(problemsFor(readIntent(byIntent, 'pin'), 'route:web:k.pin')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'hide'), 'route:web:k.hide')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'pin'), 'route:web:k.hide')).toEqual([
+      "k.kinds#pin: should name its tool 'web:k.hide'",
+    ]);
+    expect(problemsFor(readIntent(byIntent, 'grant'), 'task:assign_tokens_to_student')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'grant'), 'task:request_regrade')).toEqual([
+      'k.kinds#grant: should start the request_regrade run',
+    ]);
+  });
+
+  it("takes a helper file's tool only through the function of it the intent calls", () => {
+    const helper = stripComments(`
+      export const createAudit = (title) => ({ tool: 'web:h.create', title });
+      export const deleteAudit = (title) => ({ tool: 'web:h.delete', title });
+    `);
+    const route = (builder: string) =>
+      fixtureRoutes({
+        'h.helper/route.tsx': `
+          export const action = async ({ request }) => {
+            const intent = (await request.formData()).get('intent');
+            if (intent === 'create') {
+              await addClassroomAuditLog({ metadata: ${builder}('x') });
+            }
+          };
+        `,
+      });
+    const read = (dir: string) => new Map(webActionIntents(dir).map(i => [i.intent, i]));
+    const right = readIntent(read(route('createAudit')), 'create');
+    expect(problemsFor(right, 'route:web:h.create', helper)).toEqual([]);
+    const wrong = readIntent(read(route('deleteAudit')), 'create');
+    expect(problemsFor(wrong, 'route:web:h.create', helper)).toEqual([
+      "h.helper#create: should name its tool 'web:h.create'",
+    ]);
+  });
+
+  it('flags a module that exports an action the reader cannot find', () => {
+    const routes = fixtureRoutes({
+      'u.default/route.tsx': `export { default as action } from './impl';`,
+      'u.default/impl.ts': `export default async function () { return null; }`,
+      'u.read/route.tsx': `export * from './action';`,
+      'u.read/action.ts': `export const action = async () => null;`,
+    });
+    expect(unreadModules(routes)).toEqual([
+      'u.default: exports an action this reader does not find',
+    ]);
+  });
+
+  it('reads a namedAction member whose value holds commas as one intent', () => {
+    const found = actionIntents(
+      declarationText(
+        stripComments(`
+          export const action = ({ request }) =>
+            namedAction(request, { create: () => save(a, b, c), remove() { return drop(x, y); } });
+        `),
+        'action'
+      )
+    );
+    expect(found.map(i => i.intent)).toEqual(['create', 'remove']);
+  });
 });
 
 describe('web action audit manifest', () => {
@@ -827,18 +961,7 @@ describe('web action audit manifest', () => {
   });
 
   it('reads an action and at least one intent from every route module that exports one', () => {
-    const unread: string[] = [];
-    for (const module of routeModules()) {
-      if (!exportsAction(module.file)) continue;
-      const source = actionSource(module.file);
-      if (!source) {
-        unread.push(`${module.id}: exports an action this reader does not find`);
-        continue;
-      }
-      const routeId = source.routeId && source.routeId !== module.id ? source.routeId : module.id;
-      if (!intents.some(i => i.routeId === routeId)) unread.push(`${module.id}: no intent read`);
-    }
-    expect(unread).toEqual([]);
+    expect(unreadModules()).toEqual([]);
   });
 
   it('classifies every (route, intent), and nothing that no longer exists', () => {

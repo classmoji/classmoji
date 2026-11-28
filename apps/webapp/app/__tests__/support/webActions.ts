@@ -489,11 +489,7 @@ export function splitIntents(action: string, source = ''): IntentSplit {
       // The member's value: a method body, or the expression after `:`.
       let j = key.lastIndex;
       if (m[4] === '(') j = matchingClose(body, j - 1);
-      const brace = body.indexOf('{', j);
-      const comma = body.indexOf(',', j);
-      const end =
-        brace !== -1 && (comma === -1 || brace < comma) ? matchingClose(body, brace) : comma;
-      const stop = end === -1 ? body.length : end;
+      const stop = memberEnd(body, j);
       // `update: handleUpdate`: that function's declaration is the intent's code.
       const ref = m[4] === ':' ? /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(body.slice(j, stop)) : null;
       const text = (ref && declared(ref[1])) || body.slice(start, stop);
@@ -555,6 +551,26 @@ export function splitIntents(action: string, source = ''): IntentSplit {
   let rest = action;
   for (const [from, to] of cuts) rest = `${rest.slice(0, from)}${rest.slice(to)}`;
   return { intents: [...intents, { intent: '*', text: rest }], shared, dispatches: true };
+}
+
+/**
+ * Where an object member's value that starts at `at` ends: the first `,` at
+ * its own depth (brackets and strings skipped), or the end of `body`.
+ */
+function memberEnd(body: string, at: number): number {
+  for (let i = at; i < body.length; i++) {
+    const c = body[i];
+    if (c === '{' || c === '(' || c === '[') {
+      i = matchingClose(body, i) - 1;
+    } else if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < body.length && body[j] !== c) j += body[j] === '\\' ? 2 : 1;
+      i = j;
+    } else if (c === ',') {
+      return i;
+    }
+  }
+  return body.length;
 }
 
 /** `declarationText`, or '' for a declaration this reader does not follow. */
