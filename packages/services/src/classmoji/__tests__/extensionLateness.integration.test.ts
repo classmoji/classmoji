@@ -132,7 +132,10 @@ describe.skipIf(!RUN)('extension hours and lateness (integration)', () => {
     studentId: string,
     gitRepoAssignmentId: string,
     hours: number
-  ) => tokenService.purchaseExtensionHours({ classroomId, studentId, gitRepoAssignmentId, hours });
+  ) =>
+    tokenService
+      .purchaseExtensionHours({ classroomId, studentId, gitRepoAssignmentId, hours, actor: null })
+      .then(({ transaction }) => transaction);
 
   beforeAll(async () => {
     const org = await prisma.gitOrganization.create({
@@ -176,7 +179,7 @@ describe.skipIf(!RUN)('extension hours and lateness (integration)', () => {
     });
     expect(await gitRepoAssignmentService.getLatePercentage(classroom.slug)).toBe(50);
 
-    await tokenService.cancelPurchase(purchase.id);
+    await tokenService.cancelPurchase(purchase.id, { actor: null });
     expect(await gitRepoAssignmentService.getLateCount(classroom.slug)).toEqual({
       total: 2,
       late: 2,

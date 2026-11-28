@@ -9,6 +9,7 @@ import { useGitWeb } from '~/hooks/useGitWeb';
 import { AssignGradersError, ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assignGradersToAssignmentsHandler } from './utils';
+import { auditActor } from '~/utils/auditActor.server';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -105,10 +106,11 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const gate = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'ASSIGNMENT',
     action: 'assign_graders',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -122,7 +124,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   try {
     ({ numAssignmentsToAddGradersTo } = await assignGradersToAssignmentsHandler(
       { ...data, classroomId: classroom.id },
-      sessionId
+      sessionId,
+      await auditActor(request, gate, 'web:graders.assign_bulk')
     ));
   } catch (error: unknown) {
     // The service's caller-fixable failures (no graders flagged, missing

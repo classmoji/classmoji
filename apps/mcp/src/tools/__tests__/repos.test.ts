@@ -101,6 +101,20 @@ const CTX: ToolContext = {
   },
 } as unknown as ToolContext;
 
+/** What the repository service answers about the row it wrote. */
+const WRITTEN = { written: 1, missed: 0 };
+const NO_ROW = { written: 0, missed: 0 };
+
+/** The actor `serviceActor` builds for CTX: the repository service records for it. */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+});
+
 function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
@@ -112,11 +126,14 @@ beforeEach(() => {
   mocks.checkTemplate.mockResolvedValue({ ok: true });
   mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-1' });
   mocks.repositoryCreate.mockResolvedValue({
-    id: 'repo-new',
-    title: 'Lab 1',
-    slug: 'lab-1',
-    type: 'INDIVIDUAL',
-    is_published: false,
+    repository: {
+      id: 'repo-new',
+      title: 'Lab 1',
+      slug: 'lab-1',
+      type: 'INDIVIDUAL',
+      is_published: false,
+    },
+    audit: WRITTEN,
   });
 });
 
@@ -146,7 +163,9 @@ describe('repo_create', () => {
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
     // The key isolation guarantee: creating a container must NOT provision repos.
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
-    expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+    // The repository service records the create, for the caller.
+    expect(mocks.repositoryCreate.mock.calls[0][1]).toEqual(actorFor('repo_create'));
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a Github Project template on a Gitlab classroom', async () => {
@@ -184,11 +203,14 @@ describe('repo_create', () => {
   it('creates a GROUP container when the tag_id belongs to the classroom', async () => {
     mocks.findByClassroomId.mockResolvedValue([{ id: 'tag-a' }]);
     mocks.repositoryCreate.mockResolvedValue({
-      id: 'repo-g',
-      title: 'Group Lab',
-      slug: 'group-lab',
-      type: 'GROUP',
-      is_published: false,
+      repository: {
+        id: 'repo-g',
+        title: 'Group Lab',
+        slug: 'group-lab',
+        type: 'GROUP',
+        is_published: false,
+      },
+      audit: WRITTEN,
     });
 
     await repoCreateTool.handler(
@@ -442,7 +464,13 @@ const dependents = (
 function echoUpdate(base: Record<string, unknown> = {}) {
   mocks.repositoryUpdate.mockImplementation(async (_id: string, patch: Record<string, unknown>) => {
     const merged = { ...storedRepo(base), ...patch };
-    return { ...merged, tag: merged.tag_id ? { id: merged.tag_id, name: 'workshop-pairs' } : null };
+    return {
+      repository: {
+        ...merged,
+        tag: merged.tag_id ? { id: merged.tag_id, name: 'workshop-pairs' } : null,
+      },
+      audit: WRITTEN,
+    };
   });
 }
 
@@ -467,7 +495,8 @@ describe('repo_update', () => {
     expect(mocks.repositoryUpdate).toHaveBeenCalledWith(
       REPO_ID,
       { team_formation_mode: 'INSTRUCTOR', tag_id: TAG_ID },
-      'class-1'
+      'class-1',
+      actorFor('repo_update')
     );
     expect(payload.repository).toMatchObject({
       id: REPO_ID,
@@ -475,23 +504,21 @@ describe('repo_update', () => {
       tag: { id: TAG_ID, name: 'workshop-pairs' },
       max_team_size: 2,
     });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      resource_type: 'REPOSITORIES',
-      resource_id: REPO_ID,
-      action: 'UPDATE',
-      data: {
-        tool: 'repo_update',
-        fields: ['tag_id', 'team_formation_mode'],
-        values: { tag_id: TAG_ID, team_formation_mode: 'INSTRUCTOR' },
-      },
-    });
+    // The repository service records the change; the tool writes no row.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
   });
 
-  it('audits a scalar `value` that is exactly the serialized `values`', async () => {
-    await repoUpdateTool.handler({ ...BASE, description: 'Pairs', max_team_size: 3 }, CTX);
-    const data = (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
-    expect(data.value).toBe(JSON.stringify(data.values));
+  it('reports audit_incomplete when the service could not write its row', async () => {
+    mocks.repositoryUpdate.mockImplementation(
+      async (_id: string, patch: Record<string, unknown>) => ({
+        repository: { ...storedRepo(), ...patch, tag: null },
+        audit: { written: 0, missed: 1 },
+      })
+    );
+    const ctx = { ...CTX } as ToolContext;
+    await repoUpdateTool.handler({ ...BASE, description: 'Pairs', max_team_size: 3 }, ctx);
+    expect(ctx.auditIncomplete).toBe(true);
   });
 
   it('rejects an empty patch before touching the database', async () => {
@@ -665,13 +692,8 @@ describe('repo_update', () => {
       team_formation_deadline: null,
       max_team_size: null,
     });
-    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
-    expect(audit.data.fields).toEqual([
-      'type',
-      'tag_id',
-      'team_formation_deadline',
-      'max_team_size',
-    ]);
+    // The service records each of them, old and new values, as it saved them.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('never clears stale team fields on an edit to an already-INDIVIDUAL row', async () => {
@@ -736,19 +758,19 @@ describe('repo_update', () => {
   });
 
   it('maps a row deleted between the write and its re-read to not_found', async () => {
-    mocks.repositoryUpdate.mockResolvedValue(null);
+    mocks.repositoryUpdate.mockResolvedValue({ repository: null, audit: WRITTEN });
     await expect(repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX)).rejects.toMatchObject({
       kind: 'not_found',
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('survives a manifest refresh that throws (write + audit already done)', async () => {
+  it('survives a manifest refresh that throws (write + its row already done)', async () => {
     mocks.saveManifest.mockRejectedValue(new Error('db down'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const payload = parse(await repoUpdateTool.handler({ ...BASE, description: 'x' }, CTX));
     expect(payload.success).toBe(true);
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.repositoryUpdate).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
 
@@ -759,9 +781,15 @@ describe('repo_update', () => {
 });
 
 describe('repo_create manifest refresh', () => {
-  it('runs after the audit row and never fails the call', async () => {
+  it('runs after the create (and its row) and never fails the call', async () => {
     const order: string[] = [];
-    mocks.auditCreate.mockImplementation(async () => void order.push('audit'));
+    mocks.repositoryCreate.mockImplementation(async () => {
+      order.push('audit');
+      return {
+        repository: { id: 'repo-new', title: 'Lab 2', slug: 'lab-2', type: 'INDIVIDUAL' },
+        audit: WRITTEN,
+      };
+    });
     mocks.saveManifest.mockImplementation(async () => {
       order.push('manifest');
       throw new Error('db down');
@@ -880,13 +908,17 @@ describe('repo_delete', () => {
         assignmentDependent('a-2', 'Final', { pages: 1, slides: 3 }),
       ])
     );
-    mocks.deleteIfUnprovisioned.mockResolvedValue({ status: 'deleted' });
+    mocks.deleteIfUnprovisioned.mockResolvedValue({ status: 'deleted', audit: WRITTEN });
   });
 
   it('deletes an unpublished empty container and reports the cascade', async () => {
     const payload = parse(await repoDeleteTool.handler(ARGS, CTX));
 
-    expect(mocks.deleteIfUnprovisioned).toHaveBeenCalledWith(REPO_ID, 'class-1');
+    expect(mocks.deleteIfUnprovisioned).toHaveBeenCalledWith(
+      REPO_ID,
+      'class-1',
+      actorFor('repo_delete')
+    );
     const cascade = {
       module_items_removed: 1,
       page_links_removed: 2,
@@ -908,20 +940,8 @@ describe('repo_delete', () => {
       assignments_deleted_count: 2,
       ...cascade,
     });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      resource_type: 'REPOSITORIES',
-      resource_id: REPO_ID,
-      action: 'DELETE',
-      data: {
-        tool: 'repo_delete',
-        title: 'workshop',
-        assignments_deleted: [
-          { id: 'a-1', title: 'Checkpoint 1' },
-          { id: 'a-2', title: 'Final' },
-        ],
-        ...cascade,
-      },
-    });
+    // The repository service records the delete and its cascade.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
   });
 
@@ -946,12 +966,15 @@ describe('repo_delete', () => {
   });
 
   it.each([
-    [{ status: 'published' }, { kind: 'invalid_params', code: 'REPO_PUBLISHED' }],
     [
-      { status: 'provisioned', gitRepos: 2 },
+      { status: 'published', audit: NO_ROW },
+      { kind: 'invalid_params', code: 'REPO_PUBLISHED' },
+    ],
+    [
+      { status: 'provisioned', gitRepos: 2, audit: NO_ROW },
       { kind: 'invalid_params', code: 'REPOS_PROVISIONED' },
     ],
-    [{ status: 'not_found' }, { kind: 'not_found' }],
+    [{ status: 'not_found', audit: NO_ROW }, { kind: 'not_found' }],
   ])(
     'refuses when the conditional delete matched nothing (%o), with no audit row',
     async (outcome, error) => {

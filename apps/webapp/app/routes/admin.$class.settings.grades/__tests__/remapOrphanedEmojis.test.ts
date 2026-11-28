@@ -14,7 +14,13 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   remapGradeEmojis: vi.fn(),
   replaceScale: vi.fn(),
+  replaceLetterGrades: vi.fn(),
   addClassroomAuditLog: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -30,11 +36,13 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     assignmentGrade: { remapGradeEmojis: (...a: unknown[]) => mocks.remapGradeEmojis(...a) },
     emojiMapping: { replaceScale: (...a: unknown[]) => mocks.replaceScale(...a) },
+    letterGradeMapping: { replaceAll: (...a: unknown[]) => mocks.replaceLetterGrades(...a) },
   },
 }));
 
 const { action } = await import('../action');
-const { DEFAULT_EMOJI_MAPPINGS, SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
+const { DEFAULT_EMOJI_MAPPINGS, DEFAULT_LETTER_GRADE_MAPPINGS, SCORE_EMOJI_MAPPINGS } =
+  await import('@classmoji/utils');
 
 const post = (name: string, body: unknown) =>
   action({
@@ -142,10 +150,46 @@ describe('remapOrphanedEmojis', () => {
 });
 
 describe('populate', () => {
+  const actor = (tool: string) => ({
+    userId: 'owner-1',
+    role: 'OWNER',
+    tool,
+    impersonatedBy: null,
+  });
+
   it('replaces the scale in one call (no delete/save loop a re-seed could interleave)', async () => {
-    await post('populateDefaultMappings', {});
-    expect(mocks.replaceScale).toHaveBeenCalledWith('class-x', DEFAULT_EMOJI_MAPPINGS);
+    mocks.requestImpersonator.mockResolvedValue(null);
+    mocks.replaceScale.mockResolvedValue({ count: 11, audit: { written: 1, missed: 0 } });
+    expect(await post('populateDefaultMappings', {})).toEqual({
+      action: 'POPULATE_DEFAULT_MAPPINGS',
+      success: 'Default emoji mappings have been added.',
+    });
+    expect(mocks.replaceScale).toHaveBeenCalledWith(
+      'class-x',
+      DEFAULT_EMOJI_MAPPINGS,
+      actor('web:settings.grades.populate_default_mappings')
+    );
     await post('populateScoreScaleMappings', {});
-    expect(mocks.replaceScale).toHaveBeenCalledWith('class-x', SCORE_EMOJI_MAPPINGS);
+    expect(mocks.replaceScale).toHaveBeenCalledWith(
+      'class-x',
+      SCORE_EMOJI_MAPPINGS,
+      actor('web:settings.grades.populate_score_scale')
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('replaces the letter grades through the service, which records it once', async () => {
+    mocks.requestImpersonator.mockResolvedValue(null);
+    mocks.replaceLetterGrades.mockResolvedValue({ count: 5, audit: { written: 1, missed: 0 } });
+    expect(await post('populateDefaultLetterGradeMappings', {})).toEqual({
+      action: 'POPULATE_DEFAULT_LETTER_GRADE_MAPPINGS',
+      success: 'Default letter grade mappings have been added.',
+    });
+    expect(mocks.replaceLetterGrades).toHaveBeenCalledWith(
+      'class-x',
+      DEFAULT_LETTER_GRADE_MAPPINGS,
+      actor('web:settings.grades.populate_default_letter_grades')
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });

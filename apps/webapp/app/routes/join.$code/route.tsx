@@ -99,7 +99,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     return data({ error: 'Too many attempts. Wait a few minutes and try again.' }, 429);
   }
 
-  const result = await ClassmojiService.joinLink.joinByCode({ userId, code });
+  const result = await ClassmojiService.joinLink.joinByCode({
+    userId,
+    code,
+    // A roster invite for another class matched on the way is recorded as
+    // their claim; this class's membership is the join row below.
+    inviteClaim: { tool: 'web:roster.invite_email' },
+  });
   if (result.status === 'inactive') {
     return data({ error: 'This invite link is no longer active. Ask your instructor.' }, 404);
   }

@@ -7,6 +7,7 @@ import { nanoid } from 'nanoid';
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 /**
@@ -25,6 +26,12 @@ async function loadClassroomScopedGitRepoAssignment(id: unknown, classroomId: st
   return record;
 }
 
+/**
+ * The grading writes. Each grading change is recorded by the service that
+ * makes it, for the actor built from the intent's gate (`auditActor`); the
+ * route writes no audit row of its own. Autograde only starts a background
+ * run that commits a workflow file to the student repos and stores nothing.
+ */
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
   const data = await request.json();
@@ -87,7 +94,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async addGrade() {
-      const { userId, classroom, membership } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -95,6 +102,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'add_grade',
         metadata: { git_repo_assignment_id: data.gitRepoAssignment?.id },
       });
+      const { userId, classroom, membership } = gate;
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const grade = data.grade;
@@ -131,6 +139,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           grade,
           studentId: gitRepoAssignment.git_repo.student_id ?? undefined,
           teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
+          actor: await auditActor(request, gate, 'web:grades.add'),
         });
       } catch (error) {
         // Outside the classroom's grading scale: the caller's mistake, said
@@ -151,7 +160,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async removeGrade() {
-      const { classroom, membership } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -159,6 +168,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'remove_grade',
         metadata: { git_repo_assignment_id: data.gitRepoAssignment?.id },
       });
+      const { classroom, membership } = gate;
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const gitRepoAssignment = await loadClassroomScopedGitRepoAssignment(
@@ -207,6 +217,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           teamId: gitRepoAssignment.git_repo.team_id ?? undefined,
         },
         grade: gradeRecord,
+        actor: await auditActor(request, gate, 'web:grades.remove'),
       });
 
       return {
@@ -216,7 +227,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateLateOverride() {
-      const { classroom, membership } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -224,6 +235,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'update_late_override',
         metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
       });
+      const { classroom, membership } = gate;
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { is_late_override } = data;
@@ -244,8 +256,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
       const message = is_late_override ? 'Added override' : 'Removed override';
 
-      await ClassmojiService.gitRepoAssignment.update(gitRepoAssignment.id, {
-        is_late_override: Boolean(is_late_override),
+      await ClassmojiService.gitRepoAssignment.setLateOverrideForSubmission({
+        classroomId: classroom.id,
+        gitRepoAssignmentId: gitRepoAssignment.id,
+        isLateOverride: Boolean(is_late_override),
+        actor: await auditActor(request, gate, 'web:grades.late_override'),
       });
 
       return {
@@ -260,7 +275,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
      * assignment against it goes, and its grades go with it by cascade.
      */
     async deleteSubmission() {
-      const { classroom, membership } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -268,6 +283,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'delete_git_repo_assignment',
         metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
       });
+      const { classroom, membership } = gate;
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const gitRepoAssignment = await loadClassroomScopedGitRepoAssignment(
@@ -284,17 +300,17 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
       }
 
+      const actor = await auditActor(request, gate, 'web:grades.delete_submission');
       // Opt-in, mirroring team deletion: Classmoji's record always goes, the
       // GitHub repository only when explicitly asked. Removing the GitRepo
       // cascades to every assignment's submission on it, not just this one.
       if (data.delete_repository) {
         const full = await ClassmojiService.classroom.findById(classroom.id);
-        const gitRepo = gitRepoAssignment.git_repo;
-        await HelperService.deleteRepository({
-          id: gitRepo.id,
-          name: gitRepo.name,
-          gitOrganization: full!.git_organization,
-          deleteFromGithub: true,
+        await HelperService.deleteSubmission({
+          classroomId: classroom.id,
+          submission: gitRepoAssignment,
+          repository: { gitOrganization: full!.git_organization },
+          actor,
         });
         return {
           action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
@@ -302,7 +318,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      await ClassmojiService.gitRepoAssignment.deleteById(gitRepoAssignment.id);
+      await HelperService.deleteSubmission({
+        classroomId: classroom.id,
+        submission: gitRepoAssignment,
+        actor,
+      });
 
       return {
         action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
@@ -311,7 +331,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateGradeRelease() {
-      const { classroom, membership } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -319,6 +339,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'update_grade_release',
         metadata: { assignment_id: data.assignment_id },
       });
+      const { classroom, membership } = gate;
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { assignment_id, grades_released } = data;
@@ -344,8 +365,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         ? 'Grades released to students'
         : 'Grades hidden from students';
 
-      await ClassmojiService.assignment.update(assignment.id, {
-        grades_released: Boolean(grades_released),
+      await ClassmojiService.assignment.setGradesReleased({
+        assignmentId: assignment.id,
+        classroomId: classroom.id,
+        released: Boolean(grades_released),
+        actor: await auditActor(request, gate, 'web:grades.release'),
       });
 
       return {

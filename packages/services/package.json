@@ -37,6 +37,7 @@
     "./workers-ai": "./src/helpers/workersAi.ts",
     "./audit": "./src/classmoji/audit.service.ts",
     "./audit-resource-types": "./src/classmoji/auditResourceTypes.ts",
+    "./staff-audit": "./src/classmoji/staffAudit.ts",
     "./auth-email": "./src/classmoji/authEmail.service.ts",
     "./classroom": "./src/classmoji/classroom.service.ts",
     "./classroom-membership": "./src/classmoji/classroomMembership.service.ts",

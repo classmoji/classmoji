@@ -5,6 +5,7 @@ import { gitTerms } from '~/utils/gitWeb';
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
+import { auditActor } from '~/utils/auditActor.server';
 import { tasks } from '@trigger.dev/sdk/v3';
 import type { Route } from './+types/route';
 
@@ -19,10 +20,11 @@ const SUBMISSION_NOT_FOUND = 'Submission not found.';
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'repository_action',
   });
+  const { classroom, userId, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -59,13 +61,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         : null;
       if (!gitRepo) return { action: ActionTypes.DELETE_REPO, error: REPO_NOT_FOUND };
 
-      // The stored name, in this classroom's organization.
+      // The stored name, in this classroom's organization. The service
+      // records the delete (REPOSITORY / DELETE on the student repo).
       await HelperService.deleteRepository({
         id: gitRepo.id,
         name: gitRepo.name,
         gitOrganization: classroom.git_organization,
         classroomId: classroom.id,
         deleteFromGithub: true,
+        repositoryId: pageRepository?.id ?? null,
+        actor: await auditActor(request, gate, 'web:repos.delete_student_repo'),
       });
       return {
         action: ActionTypes.DELETE_REPO,
@@ -83,6 +88,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         gitRepoAssignmentId: data?.repoAssignmentId,
         graderId: data?.graderId,
         repositoryId: pageRepository.id,
+        actor: await auditActor(request, gate, 'web:graders.add'),
       });
       if (result.status === 'submission_not_found') {
         return { action: ActionTypes.ADD_GRADER, error: SUBMISSION_NOT_FOUND };
@@ -112,6 +118,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         gitRepoAssignmentId: data?.repoAssignmentId,
         graderId: data?.graderId,
         repositoryId: pageRepository.id,
+        actor: await auditActor(request, gate, 'web:graders.remove'),
       });
       if (result.status === 'submission_not_found') {
         return { action: ActionTypes.REMOVE_GRADER, error: SUBMISSION_NOT_FOUND };

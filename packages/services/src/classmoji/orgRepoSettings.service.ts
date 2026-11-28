@@ -21,6 +21,12 @@
  */
 
 import { GitHubProvider } from '../git/index.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 export const ORG_REPO_PERMISSIONS = ['none', 'read', 'write'] as const;
 export type OrgRepoPermission = (typeof ORG_REPO_PERMISSIONS)[number];
@@ -232,16 +238,26 @@ const pickSetting = (
  *   classroom gate's result. Its `login` is the only org this call can touch.
  * @param userToken - The requesting user's GitHub user-to-server token.
  * @param input - The requested settings; validated with parseOrgRepoSettingsInput.
+ * @param classroomId - The classroom the change is made from (the row's).
+ * @param actor - Who the change is recorded for, after GitHub applied it:
+ *   REPO_SETTINGS / UPDATE on the classroom, with `org`, `changes` (each
+ *   field's `from` and `to`), the `value` digest, and `fields`, `values` and
+ *   `previous`. Only when a field changed (a `from` GitHub did not report
+ *   counts as changed); `actor: null` records nothing.
  */
 export async function updateOrgRepoSettings({
   gitOrganization,
   userToken,
   input,
+  classroomId,
+  actor,
 }: {
   gitOrganization: OrgRepoSettingsTarget | null | undefined;
   userToken: string | null | undefined;
   input: unknown;
-}): Promise<OrgRepoSettingsResult> {
+  classroomId: string;
+  actor: AuditActor | null;
+}): Promise<OrgRepoSettingsResult & { audit: ServiceAudit }> {
   const updates = parseOrgRepoSettingsInput(input);
   const org = requireGitHubOrgLogin(gitOrganization);
 
@@ -299,7 +315,37 @@ export async function updateOrgRepoSettings({
     digest.push(`${field}=${String(to)}`);
   }
 
-  return { org, changes, settings, value: digest.join(';') };
+  const value = digest.join(';');
+  // A field whose value GitHub did not report before (`from: null`) counts as changed.
+  const changed: OrgRepoSettingsField[] = [];
+  const values: Record<string, string | boolean> = {};
+  const previous: Record<string, string | boolean | null> = {};
+  for (const field of ORG_REPO_SETTINGS_FIELDS) {
+    const change = changes[field];
+    if (!change || (change.from !== null && change.from === change.to)) continue;
+    changed.push(field);
+    values[field] = change.to;
+    previous[field] = change.from;
+  }
+  let audit: ServiceAudit = NO_SERVICE_AUDIT;
+  if (actor && changed.length > 0) {
+    audit = await recordForActor(actor, {
+      classroomId,
+      resourceType: 'REPO_SETTINGS',
+      resourceId: classroomId,
+      action: 'UPDATE',
+      data: {
+        org,
+        changes,
+        value,
+        fields: changed,
+        values,
+        previous,
+      },
+    });
+  }
+
+  return { org, changes, settings, value, audit };
 }
 
 export type OrgOwnerStatus = 'owner' | 'not_owner' | 'unknown';

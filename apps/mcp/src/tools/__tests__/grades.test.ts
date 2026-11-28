@@ -3,10 +3,10 @@
  *
  * grade_add reads what it changed from HelperService.addGradeToGitRepoAssignment,
  * which answers, from inside its transaction, the grade rows it removed and
- * the one it created. The tool records a row only when the call created or
- * removed something (a repeat, or the second of two identical calls racing on
- * the submission lock, changed nothing), names the caller's own removed grades
- * as `replaced`, and reports `deduplicated` when no new row was made.
+ * the one it created, and reports `deduplicated` when no new row was made.
+ * The audit row of each change is the service's (helper.gradeAudit tests in
+ * @classmoji/services): the tools pass the caller as the actor and write no
+ * row of their own.
  *
  * `@classmoji/services` is mocked (factory idiom).
  */
@@ -81,14 +81,35 @@ beforeEach(() => {
   mocks.addGradeToGitRepoAssignment.mockResolvedValue({
     removed: [],
     created: { id: 'g-new', emoji: '🟢' },
+    audit: WRITTEN,
   });
+  mocks.removeGradeFromGitRepoAssignment.mockResolvedValue({ removed: true, audit: WRITTEN });
   mocks.auditCreate.mockResolvedValue(undefined);
+});
+
+/** The service wrote the call's row. */
+const WRITTEN = { written: 1, missed: 0 };
+/** The call changed nothing: no row owed. */
+const NONE = { written: 0, missed: 0 };
+
+/** The actor every grade tool passes for CTX's caller. */
+const actorFor = (tool: string) => ({
+  userId: 'ta-1',
+  role: 'ASSISTANT',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
 });
 
 describe('grade_add', () => {
   it('reports deduplicated:true and writes no row when the call changed nothing', async () => {
     mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🟢' }]));
-    mocks.addGradeToGitRepoAssignment.mockResolvedValue({ removed: [], created: null });
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [],
+      created: null,
+      audit: NONE,
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-old', emoji: '🟢', grader: { login: 'ta' } },
     ]);
@@ -97,6 +118,39 @@ describe('grade_add', () => {
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(true);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(CTX.auditIncomplete).toBeUndefined();
+  });
+
+  it('grades as the caller and passes the caller as the actor, writing no row itself', async () => {
+    mocks.findById.mockResolvedValue(gra([]));
+    mocks.findByAssignmentId.mockResolvedValue([]);
+
+    await gradeAddTool.handler(ARGS, CTX);
+    expect(mocks.addGradeToGitRepoAssignment).toHaveBeenCalledExactlyOnceWith({
+      classroom: { id: 'class-1' },
+      gitRepoAssignment: { id: 'gra-1' },
+      graderId: 'ta-1',
+      grade: '🟢',
+      studentId: 'student-1',
+      teamId: undefined,
+      actor: actorFor('grade_add'),
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('marks the call when the service could not write its row', async () => {
+    mocks.findById.mockResolvedValue(gra([]));
+    mocks.findByAssignmentId.mockResolvedValue([]);
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [],
+      created: { id: 'g-new', emoji: '🟢' },
+      audit: { written: 0, missed: 1 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await gradeAddTool.handler(ARGS, ctx));
+    expect(payload).toMatchObject({ success: true, deduplicated: false });
+    expect(ctx.auditIncomplete).toBe(true);
   });
 
   it('writes no row for the second of two racing identical calls, whatever it read before', async () => {
@@ -105,7 +159,11 @@ describe('grade_add', () => {
     // changed nothing.
     mocks.findByClassroomId.mockResolvedValue(['score-70', 'score-80'].map(emoji => ({ emoji })));
     mocks.findById.mockResolvedValue(gra([{ id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' }]));
-    mocks.addGradeToGitRepoAssignment.mockResolvedValue({ removed: [], created: null });
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [],
+      created: null,
+      audit: NONE,
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-first', emoji: 'score-80', grader_id: 'ta-1' },
     ]);
@@ -120,6 +178,7 @@ describe('grade_add', () => {
     mocks.addGradeToGitRepoAssignment.mockResolvedValue({
       removed: [{ id: 'g-old', emoji: '🟢', grader_id: 'ta-2' }],
       created: { id: 'g-new', emoji: '🟢' },
+      audit: WRITTEN,
     });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-new', emoji: '🟢', grader: { login: 'ta' } },
@@ -128,32 +187,23 @@ describe('grade_add', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(false);
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    // Another grader's cleared grade is not the caller's to have replaced.
-    const { data } = mocks.auditCreate.mock.calls[0][0];
-    expect(data).toMatchObject({ tool: 'grade_add', emoji: '🟢' });
-    expect(data).not.toHaveProperty('replaced');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports deduplicated:false on a plain first-time grade', async () => {
     mocks.findById.mockResolvedValue(gra([]));
-    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
-      removed: [],
-      created: { id: 'g-new', emoji: '🟢' },
-    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-new', emoji: '🟢', grader: { login: 'ta' } },
     ]);
 
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(false);
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0].data).not.toHaveProperty('replaced');
   });
 
-  it('records a change when a grade went although the emoji was already there', async () => {
+  it('reports deduplicated when a grade went although the emoji was already there', async () => {
     // The caller's pre-regrade grade was cleared while another grader's equal
-    // grade stayed: `deduplicated`, but the grades changed, so it is recorded.
+    // grade stayed: `deduplicated`, though the grades changed (the service
+    // records that change).
     mocks.findById.mockResolvedValue(
       gra([
         { id: 'g-other', emoji: '🟢', grader_id: 'ta-2' },
@@ -163,6 +213,7 @@ describe('grade_add', () => {
     mocks.addGradeToGitRepoAssignment.mockResolvedValue({
       removed: [{ id: 'g-mine', emoji: '🔴', grader_id: 'ta-1' }],
       created: null,
+      audit: WRITTEN,
     });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-other', emoji: '🟢', grader: { login: 'ta2' } },
@@ -170,53 +221,15 @@ describe('grade_add', () => {
 
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(true);
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
-      tool: 'grade_add',
-      emoji: '🟢',
-      replaced: ['🔴'],
-    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('records the score a numeric re-grade replaced, as an array', async () => {
-    const scale = ['score-70', 'score-80', 'score-90'].map(emoji => ({ emoji }));
-    mocks.findByClassroomId.mockResolvedValue(scale);
-    mocks.findById.mockResolvedValue(
-      gra([
-        { id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' },
-        { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
-      ])
-    );
-    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
-      removed: [{ id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' }],
-      created: { id: 'g-new', emoji: 'score-80' },
-    });
-    mocks.findByAssignmentId.mockResolvedValue([
-      { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
-      { id: 'g-new', emoji: 'score-80', grader_id: 'ta-1' },
-    ]);
-
-    await gradeAddTool.handler({ ...ARGS, emoji: 'score-80' }, CTX);
-
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      resource_type: 'GIT_REPO_ASSIGNMENT',
-      resource_id: 'gra-1',
-      action: 'CREATE',
-      data: { tool: 'grade_add', emoji: 'score-80', replaced: ['score-70'] },
-    });
-  });
-
-  it('records the grade before reading the grades back, so a failed read leaves it recorded', async () => {
+  it('grades (and so records, in the service) before reading the grades back', async () => {
     mocks.findById.mockResolvedValue(gra([]));
-    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
-      removed: [],
-      created: { id: 'g-new', emoji: '🟢' },
-    });
     mocks.findByAssignmentId.mockRejectedValue(new Error('db down'));
 
     await expect(gradeAddTool.handler(ARGS, CTX)).rejects.toThrow('db down');
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.addGradeToGitRepoAssignment).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -229,22 +242,27 @@ describe('grade_remove_all per-grade audit (U9)', () => {
     mocks.findById.mockResolvedValue(gra([]));
   });
 
-  it('writes one audit row per grade and returns the removed count', async () => {
+  /** The grade ids the tool asked the service to remove. */
+  const removalsAsked = () =>
+    mocks.removeGradeFromGitRepoAssignment.mock.calls.map(
+      c => (c[0] as { grade: { id: string } }).grade.id
+    );
+
+  it('removes each grade through the service, as the caller, and returns the removed count', async () => {
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g1', emoji: '🟢' },
       { id: 'g2', emoji: '🔴' },
       { id: 'g3', emoji: '🟡' },
     ]);
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
 
     const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, CTX));
     expect(payload.removed_count).toBe(3);
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(3);
-    // Each audit row carries the specific grade id it removed.
-    const auditedGradeIds = mocks.auditCreate.mock.calls.map(
-      c => (c[0] as { data: { grade_id: string } }).data.grade_id
-    );
-    expect(auditedGradeIds).toEqual(['g1', 'g2', 'g3']);
+    // One service call per grade, each recording its own row for the actor.
+    expect(removalsAsked()).toEqual(['g1', 'g2', 'g3']);
+    for (const [arg] of mocks.removeGradeFromGitRepoAssignment.mock.calls) {
+      expect(arg).toMatchObject({ actor: actorFor('grade_remove_all') });
+    }
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('counts and audits only the grades this call removed', async () => {
@@ -255,16 +273,29 @@ describe('grade_remove_all per-grade audit (U9)', () => {
     ]);
     // g2 was already gone when its removal ran: nothing changed for it.
     mocks.removeGradeFromGitRepoAssignment
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce({ removed: true, audit: WRITTEN })
+      .mockResolvedValueOnce({ removed: false, audit: NONE })
+      .mockResolvedValueOnce({ removed: true, audit: WRITTEN });
+    const ctx = { ...CTX } as ToolContext;
 
-    const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, CTX));
+    const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, ctx));
     expect(payload.removed_count).toBe(2);
-    const auditedGradeIds = mocks.auditCreate.mock.calls.map(
-      c => (c[0] as { data: { grade_id: string } }).data.grade_id
-    );
-    expect(auditedGradeIds).toEqual(['g1', 'g3']);
+    expect(ctx.auditIncomplete).toBeUndefined();
+  });
+
+  it('marks the call when any one removal could not be recorded', async () => {
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g1', emoji: '🟢' },
+      { id: 'g2', emoji: '🔴' },
+    ]);
+    mocks.removeGradeFromGitRepoAssignment
+      .mockResolvedValueOnce({ removed: true, audit: { written: 0, missed: 1 } })
+      .mockResolvedValueOnce({ removed: true, audit: WRITTEN });
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, ctx));
+    expect(payload.removed_count).toBe(2);
+    expect(ctx.auditIncomplete).toBe(true);
   });
 
   it('still audits the completed removals when the loop throws partway', async () => {
@@ -272,17 +303,15 @@ describe('grade_remove_all per-grade audit (U9)', () => {
       { id: 'g1', emoji: '🟢' },
       { id: 'g2', emoji: '🔴' },
     ]);
-    // First removal succeeds and is audited; the second throws.
+    // First removal succeeds (and the service records it); the second throws.
     mocks.removeGradeFromGitRepoAssignment
-      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce({ removed: true, audit: WRITTEN })
       .mockRejectedValueOnce(new Error('boom'));
 
     await expect(gradeRemoveAllTool.handler(REMOVE_ARGS, CTX)).rejects.toThrow('boom');
-    // The completed first removal was audited before the failure — not stranded.
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(
-      (mocks.auditCreate.mock.calls[0][0] as { data: { grade_id: string } }).data.grade_id
-    ).toBe('g1');
+    // Each removal is its own service call, recorded as it lands: the first
+    // one's row was written before the failure — not stranded.
+    expect(removalsAsked()).toEqual(['g1', 'g2']);
   });
 });
 
@@ -319,9 +348,11 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
     expect(payload).toMatchObject({ success: true, git_repo_assignment_id: NUMERIC_ID });
     expect(mocks.findById).toHaveBeenCalledWith(NUMERIC_ID);
     expect(mocks.addGradeToGitRepoAssignment).toHaveBeenCalledWith(
-      expect.objectContaining({ gitRepoAssignment: { id: NUMERIC_ID } })
+      expect.objectContaining({
+        gitRepoAssignment: { id: NUMERIC_ID },
+        actor: actorFor('grade_add'),
+      })
     );
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ resource_id: NUMERIC_ID });
   });
 
   it('grade_remove matches the grade to the numeric submission', async () => {
@@ -331,8 +362,6 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
       emoji: '🟢',
       git_repo_assignment_id: NUMERIC_ID,
     });
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
-
     const payload = parse(
       await gradeRemoveTool.handler(
         { classroom: 'org/winter-2025', git_repo_assignment_id: NUMERIC_ID, grade_id: GRADE_ID },
@@ -344,17 +373,23 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
       removed: { id: GRADE_ID },
       already_removed: false,
     });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ resource_id: NUMERIC_ID });
+    expect(mocks.removeGradeFromGitRepoAssignment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitRepoAssignment: expect.objectContaining({ id: NUMERIC_ID }),
+        actor: actorFor('grade_remove'),
+      })
+    );
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('grade_remove writes no audit row when the grade was already removed', async () => {
+  it('grade_remove reports a grade that was already removed', async () => {
     mocks.findById.mockResolvedValue(numericGra([]));
     mocks.gradeFindById.mockResolvedValue({
       id: GRADE_ID,
       emoji: '🟢',
       git_repo_assignment_id: NUMERIC_ID,
     });
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(false);
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue({ removed: false, audit: NONE });
 
     const payload = parse(
       await gradeRemoveTool.handler(
@@ -373,7 +408,6 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
   it('grade_remove_all clears the numeric submission', async () => {
     mocks.findById.mockResolvedValue(numericGra([]));
     mocks.findByAssignmentId.mockResolvedValue([{ id: 'g1', emoji: '🟢' }]);
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
 
     const payload = parse(
       await gradeRemoveAllTool.handler(

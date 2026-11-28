@@ -30,16 +30,17 @@ import {
   type StaffRole,
   type UngradedSlotsOutcome,
 } from '@classmoji/services';
+import type { AuditActor } from '@classmoji/services/audit';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   requireClassroomCtx,
   scopedNotFound,
-  viewingAs,
-  writeAudit,
+  serviceActor,
 } from './shared.ts';
 
 /** The three staff roles these tools manage; STUDENT belongs to the roster tools. */
@@ -227,10 +228,14 @@ export const staffAddTool: ToolDefinition<StaffAddArgs> = {
         role: parsed.data.role,
         name: parsed.data.name,
         email: parsed.data.email,
+        // The service records the new membership (STAFF, CREATE) for this
+        // caller once it is saved; an existing one records nothing.
+        actor: serviceActor(ctx, 'staff_add'),
       });
     } catch (error) {
       throw mapStaffError(error);
     }
+    noteServiceAudit(ctx, result.audit);
 
     // An already-existing membership at this role short-circuits inside the
     // service BEFORE any GitHub or DB write — no mutation to audit in that case.
@@ -245,22 +250,6 @@ export const staffAddTool: ToolDefinition<StaffAddArgs> = {
         message: `${result.login} already holds the ${result.role} role in this classroom — nothing changed.`,
       });
     }
-
-    // Audit right after the service call: the membership (and the GitHub team
-    // add / org invite) is already committed, so nothing downstream may leave
-    // the mutation un-audited (plan §5.1). The ROLE is the point of the record.
-    await writeAudit(ctx, {
-      resource_type: 'STAFF',
-      resource_id: result.userId,
-      action: 'CREATE',
-      data: {
-        tool: 'staff_add',
-        user_id: result.userId,
-        login: result.login,
-        role: result.role,
-        already_org_member: result.alreadyOrgMember,
-      },
-    });
 
     return ok({
       success: true,
@@ -316,33 +305,23 @@ export const staffUpdateTool: ToolDefinition<StaffUpdateArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    let membership;
+    let updated;
     try {
       // Role-scoped inside the service: a user who is both OWNER and ASSISTANT
-      // here has two membership rows and only the named one is touched.
-      membership = await ClassmojiService.staff.updateStaff({
+      // here has two membership rows and only the named one is touched. The
+      // service records a change of the flag (STAFF, UPDATE) for this caller;
+      // a flag already at that value records nothing.
+      updated = await ClassmojiService.staff.updateStaff({
         classroomId: classroom.classroomId,
         login: args.login,
         role: args.role,
         isGrader: args.is_grader,
+        actor: serviceActor(ctx, 'staff_update'),
       });
     } catch (error) {
       throw mapStaffError(error);
     }
-
-    // resource_id identifies WHICH staff member was updated.
-    await writeAudit(ctx, {
-      resource_type: 'STAFF',
-      resource_id: membership.user_id,
-      action: 'UPDATE',
-      data: {
-        tool: 'staff_update',
-        user_id: membership.user_id,
-        login: args.login,
-        role: args.role,
-        is_grader: args.is_grader,
-      },
-    });
+    noteServiceAudit(ctx, updated.audit);
 
     return ok({ success: true, login: args.login, role: args.role, is_grader: args.is_grader });
   },
@@ -458,6 +437,9 @@ export const staffRemoveTool: StaffRemoveTool = {
 
     const classroomId = classroom.classroomId;
     const choiceArg = parsed.data.ungraded_submissions ?? null;
+    // Who the removal's row, the plan-owner hand-off and the grader moves
+    // are recorded for.
+    const actor = serviceActor(ctx, 'staff_remove');
 
     let started: StaffRemovalStart;
     try {
@@ -472,8 +454,7 @@ export const staffRemoveTool: StaffRemoveTool = {
         role: parsed.data.role,
         ungradedSubmissions: choiceArg,
         requireChoice: true,
-        actorUserId: ctx.viewer.userId,
-        ...viewingAs(ctx),
+        actor,
       });
     } catch (error) {
       // The follow-up to a removal that could not finish settling: the role is
@@ -481,7 +462,7 @@ export const staffRemoveTool: StaffRemoveTool = {
       // that were left. Only a real open removal qualifies
       // (staff.previewLeftoverSlots); anything else stays the uniform not-found.
       if (choiceArg && error instanceof StaffServiceError && error.code === 'staff_not_found') {
-        return settleLeftover(ctx, {
+        return settleLeftover(ctx, actor, {
           classroomId,
           login: parsed.data.login,
           role: parsed.data.role,
@@ -519,7 +500,11 @@ export const staffRemoveTool: StaffRemoveTool = {
             choice: started.choice,
             departingName: started.name || started.login,
             expectedCount: started.ungradedCount,
+            // Each move is recorded as its grader rows; this tool's STAFF row
+            // sums them up (`ungraded_submissions`).
+            actor,
           });
+          noteServiceAudit(ctx, outcome.audit);
         }
       } else if (removal === 'completed') {
         // Nothing was at stake when this call started, but a parallel removal
@@ -543,23 +528,21 @@ export const staffRemoveTool: StaffRemoveTool = {
               { choice: started.choice, total: started.ungradedCount, moved: 0 }
             : null;
 
-    await writeAudit(ctx, {
-      resource_type: 'STAFF',
-      resource_id: started.userId,
-      action: 'DELETE',
-      data: {
-        tool: 'staff_remove',
-        // `value`: the role removed and what became of it.
-        value: `${started.role}:${started.choice ?? 'none'}`,
-        user_id: started.userId,
+    // The markers staff.previewLeftoverSlots accepts for a follow-up call
+    // (`removal: 'pending'`, `followup`) are kept on this tool's rows only.
+    noteServiceAudit(
+      ctx,
+      await ClassmojiService.staff.recordStaffRemoval(actor, {
+        classroomId,
+        userId: started.userId,
         login: started.login,
         role: started.role,
+        choice: started.choice,
         removal,
-        // The markers staff.previewLeftoverSlots accepts for a follow-up call.
-        ...(followup ? { [followup]: true } : {}),
-        ...(ungraded ? { ungraded_submissions: ungraded } : {}),
-      },
-    });
+        followup,
+        ungraded,
+      })
+    );
 
     if (removal === 'failed') {
       throw new ToolError(
@@ -624,6 +607,7 @@ export const staffRemoveTool: StaffRemoveTool = {
  */
 async function settleLeftover(
   ctx: Parameters<StaffRemoveTool['handler']>[1],
+  actor: AuditActor,
   {
     classroomId,
     login,
@@ -655,23 +639,23 @@ async function settleLeftover(
     choice,
     departingName: leftover.name || leftover.login,
     expectedCount: leftover.ungradedCount,
+    // Each move is recorded as its grader rows; the STAFF row below sums them up.
+    actor,
   });
+  noteServiceAudit(ctx, outcome.audit);
   const ungraded = describeUngraded(outcome);
 
-  await writeAudit(ctx, {
-    resource_type: 'STAFF',
-    resource_id: leftover.userId,
-    action: 'UPDATE',
-    data: {
-      tool: 'staff_remove',
-      value: `leftover:${role}:${choice}`,
-      user_id: leftover.userId,
+  noteServiceAudit(
+    ctx,
+    await ClassmojiService.staff.recordLeftoverSettled(actor, {
+      classroomId,
+      userId: leftover.userId,
       login: leftover.login,
       role,
-      removal: 'already_done',
-      ungraded_submissions: ungraded,
-    },
-  });
+      choice,
+      ungraded,
+    })
+  );
 
   return ok({
     success: true,

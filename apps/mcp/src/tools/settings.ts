@@ -8,17 +8,20 @@
  *   - api.classrooms.$id.status / api.classrooms.$id.archive → ['OWNER']
  *   - admin.$class.settings.repos → ['OWNER']
  *
- * THE CENTRAL SAFETY PROPERTY: `ClassmojiService.classroom.updateSettings` is a
- * bare upsert — it writes ANY key it is handed, including `anthropic_api_key`,
- * `openai_api_key` and the llm_* columns. The web actions forward the whole
- * request body into it; this tool must not. Every handler here builds an
- * EXPLICIT object field-by-field from validated arguments and passes THAT, so
- * an unknown or secret key simply has no path to the database. The same rule
- * covers `classroom.update` (whitelisted to `name`, mirroring the web route's
- * PROFILE_FIELDS, which exists to keep `slug` and `git_org_id` unwritable) and
- * the GitHub organization settings, which go through the same
- * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web route and
- * run with the caller's own GitHub account.
+ * WHAT IS PASSED: `ClassmojiService.classroom.updateClassroomSettings` saves
+ * exactly the settings columns its caller names, so each caller chooses them:
+ * the web actions pick each tab's fields from the request body, and every
+ * handler here builds its object field by field from validated arguments
+ * (the display and feature switches, the token and late-penalty rates, grade
+ * visibility and release, the default page, theme, time zone and Ask Moji
+ * instructions, as the schema below lists them) and passes that. API keys,
+ * models and any column not in the schema are never among them (keys and
+ * models are set on the web AI settings tab). The classroom row gets `name`
+ * only, mirroring the web route's PROFILE_FIELDS, which keeps `slug` and
+ * `git_org_id` out of reach. The GitHub organization settings go through the
+ * same `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web
+ * route and run with the caller's own GitHub account. The services write the
+ * audit rows (`serviceActor`); the tools write none of their own.
  *
  * Responses echo only the fields the tool itself set — never the service
  * return, which carries the raw settings row (API keys included).
@@ -36,11 +39,12 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadPageInClassroom,
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   requireClassroomCtx,
+  serviceActor,
   viewingAs,
-  writeAudit,
 } from './shared.ts';
 
 /**
@@ -256,35 +260,28 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       throw new ToolError('invalid_params', 'Provide at least one setting to update');
     }
 
-    // Settings BEFORE the classroom row: `updateSettings` refuses a Pro-only
-    // field on an unentitled classroom, and doing it first means that refusal
-    // cannot leave a committed `name` change behind with no audit entry.
-    if (Object.keys(settings).length > 0) {
-      try {
-        await ClassmojiService.classroom.updateSettings(classroom.classroomId, settings);
-      } catch (error: unknown) {
-        if (error instanceof ClassroomSettingsEntitlementError) {
-          throw new ToolError('forbidden', error.message, 'PRO_REQUIRED');
-        }
-        throw error;
+    // One save, recorded by the service as one row when something changed:
+    // settings BEFORE the classroom row (`updateSettings`' Pro refusal throws
+    // before `name` is written), and the Classroom row itself `name` ONLY,
+    // mirroring the web route's PROFILE_FIELDS whitelist (slug is the key in
+    // every URL and two HMAC credentials; git_org_id would move the classroom
+    // to another org).
+    try {
+      const { audit } = await ClassmojiService.classroom.updateClassroomSettings(
+        classroom.classroomId,
+        {
+          ...(Object.keys(settings).length > 0 ? { settings } : {}),
+          ...(args.name !== undefined ? { classroom: { name: args.name } } : {}),
+        },
+        serviceActor(ctx, 'classroom_settings_update')
+      );
+      noteServiceAudit(ctx, audit);
+    } catch (error: unknown) {
+      if (error instanceof ClassroomSettingsEntitlementError) {
+        throw new ToolError('forbidden', error.message, 'PRO_REQUIRED');
       }
+      throw error;
     }
-
-    // The Classroom row itself: `name` ONLY, mirroring the web route's
-    // PROFILE_FIELDS whitelist (slug is the key in every URL and two HMAC
-    // credentials; git_org_id would move the classroom to another org).
-    if (args.name !== undefined) {
-      await ClassmojiService.classroom.update(classroom.classroomId, { name: args.name });
-    }
-
-    // Every call is its own row: switching a setting on and off again records
-    // both changes.
-    await writeAudit(ctx, {
-      resource_type: 'SETTINGS',
-      resource_id: classroom.classroomId,
-      action: 'UPDATE',
-      data: { tool: 'classroom_settings_update', fields: changed },
-    });
 
     // Echo the validated values we just wrote — never the service return, which
     // carries the raw settings row (API keys included).
@@ -475,10 +472,13 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
 
     let result;
     try {
+      // The service records the change (REPO_SETTINGS) once GitHub applied it.
       result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
         gitOrganization: record?.git_organization,
         userToken: tokenResult?.token ?? null,
         input: updates,
+        classroomId: classroom.classroomId,
+        actor: serviceActor(ctx, 'org_repo_settings_update'),
       });
     } catch (error: unknown) {
       if (error instanceof OrgRepoSettingsError) {
@@ -522,17 +522,7 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       throw error;
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'REPO_SETTINGS',
-      resource_id: classroom.classroomId,
-      action: 'UPDATE',
-      data: {
-        tool: 'org_repo_settings_update',
-        org: result.org,
-        changes: result.changes,
-        value: result.value,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,

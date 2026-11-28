@@ -149,7 +149,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // an address they did not register with is picked up on their next sign-in
     // instead of being stranded forever (#307). Never let it block the picker.
     try {
-      const { claimed } = await ClassmojiService.classroomInvite.claimPendingInvites(typedUser.id);
+      // Each membership the claim creates is recorded for this person (and the
+      // admin viewing as them, if any).
+      const { claimed } = await ClassmojiService.classroomInvite.claimPendingInvites(typedUser.id, {
+        tool: 'web:roster.invite_email',
+        impersonatedBy: sessionImpersonator(authData),
+      });
       if (claimed > 0) {
         const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
           includeMemberships: true,

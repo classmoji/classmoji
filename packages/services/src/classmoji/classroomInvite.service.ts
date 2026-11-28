@@ -1,5 +1,22 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@classmoji/database/client';
+import {
+  NO_SERVICE_AUDIT,
+  addServiceAudit,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+
+/**
+ * Who a person's own invite claim is recorded for: the surface (`tool`) and
+ * the platform admin viewing as them, if any. The claimant is always the
+ * person, as a STUDENT, the role they were invited as.
+ */
+export interface InviteClaimAudit {
+  tool: string;
+  impersonatedBy?: string | null;
+}
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
@@ -63,19 +80,32 @@ export const findInvitesByClassroomId = async (
 
 /**
  * Delete one pending invite of a classroom. The invite is deleted only where
- * it belongs to `classroomId`; returns false (nothing deleted) for an invite
- * of another classroom, an unknown id, or a value that is not a non-empty
- * string.
+ * it belongs to `classroomId`; `deleted: false` (nothing deleted) for an
+ * invite of another classroom, an unknown id, or a value that is not a
+ * non-empty string.
+ *
+ * A deleted invite is recorded for `actor` (STUDENT_ROSTER, DELETE, on the
+ * invite's id: an invite names no user yet); nothing deleted records nothing.
  */
 export const deleteInviteInClassroom = async (
   classroomId: string,
-  id: unknown
-): Promise<boolean> => {
-  if (typeof id !== 'string' || id === '' || !classroomId) return false;
+  id: unknown,
+  actor: AuditActor | null
+): Promise<{ deleted: boolean; audit: ServiceAudit }> => {
+  if (typeof id !== 'string' || id === '' || !classroomId) {
+    return { deleted: false, audit: NO_SERVICE_AUDIT };
+  }
   const { count } = await getPrisma().classroomInvite.deleteMany({
     where: { id, classroom_id: classroomId },
   });
-  return count > 0;
+  if (count === 0) return { deleted: false, audit: NO_SERVICE_AUDIT };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'STUDENT_ROSTER',
+    resourceId: id,
+    action: 'DELETE',
+  });
+  return { deleted: true, audit };
 };
 
 /**
@@ -104,10 +134,19 @@ export const deleteInviteInClassroom = async (
  * `canEnterClassroom` only refuses UNPUBLISHED, so an ARCHIVED classroom's invite
  * really does resolve, and the student gets a card in the Archived section. That
  * is the same card `addStudents` would have given them.
+ *
+ * Each membership the claim created is recorded after the commit, for the
+ * person themselves as a STUDENT under `audit.tool` (CLASSROOM_MEMBERSHIP,
+ * CREATE, on the person, with the membership's id), one row per classroom;
+ * an invite consumed for a classroom they were already in records nothing,
+ * nor does `audit: null`. `exceptClassroomId`: a classroom whose membership
+ * the caller records itself (the join link records its own join).
  */
 export const claimPendingInvites = async (
-  userId: string
-): Promise<{ claimed: number; classroomIds: string[] }> => {
+  userId: string,
+  audit: InviteClaimAudit | null,
+  { exceptClassroomId }: { exceptClassroomId?: string } = {}
+): Promise<{ claimed: number; classroomIds: string[]; audit: ServiceAudit }> => {
   const prisma = getPrisma();
 
   const user = await prisma.user.findUnique({
@@ -119,7 +158,7 @@ export const claimPendingInvites = async (
       accounts: { where: { provider_id: 'github' }, select: { email: true, username: true } },
     },
   });
-  if (!user) return { claimed: 0, classroomIds: [] };
+  if (!user) return { claimed: 0, classroomIds: [], audit: NO_SERVICE_AUDIT };
 
   // An unverified `email` was typed, not proven: claiming on it would let anyone
   // take the invite by entering someone else's address.
@@ -127,7 +166,7 @@ export const claimPendingInvites = async (
     user.emailVerified ? user.email : null,
     ...user.accounts.map(account => account.email),
   ]);
-  if (invites.length === 0) return { claimed: 0, classroomIds: [] };
+  if (invites.length === 0) return { claimed: 0, classroomIds: [], audit: NO_SERVICE_AUDIT };
 
   // One membership per classroom even if the same classroom invited both of the
   // user's addresses, or the same address under two casings — `school_email` is
@@ -141,11 +180,11 @@ export const claimPendingInvites = async (
   const hasOwnName =
     !!user.name?.trim() && !user.accounts.some(account => account.username === user.name);
 
-  await prisma.$transaction([
-    ...(rosterName && !hasOwnName
-      ? [prisma.user.update({ where: { id: userId }, data: { name: rosterName } })]
-      : []),
-    prisma.classroomMembership.createMany({
+  const created = await prisma.$transaction(async tx => {
+    if (rosterName && !hasOwnName) {
+      await tx.user.update({ where: { id: userId }, data: { name: rosterName } });
+    }
+    const rows = await tx.classroomMembership.createManyAndReturn({
       data: classroomIds.map(classroom_id => ({
         classroom_id,
         user_id: userId,
@@ -153,13 +192,34 @@ export const claimPendingInvites = async (
         has_accepted_invite: false,
       })),
       skipDuplicates: true,
-    }),
-    prisma.classroomInvite.deleteMany({
+      select: { id: true, classroom_id: true },
+    });
+    await tx.classroomInvite.deleteMany({
       where: { id: { in: invites.map(invite => invite.id) } },
-    }),
-  ]);
+    });
+    return rows;
+  });
 
-  return { claimed: classroomIds.length, classroomIds };
+  const actor: AuditActor | null = audit
+    ? { userId, role: 'STUDENT', tool: audit.tool, impersonatedBy: audit.impersonatedBy ?? null }
+    : null;
+  let owed = NO_SERVICE_AUDIT;
+  for (const membership of created) {
+    if (membership.classroom_id === exceptClassroomId) continue;
+    owed = addServiceAudit(
+      owed,
+      await recordForActor(actor, {
+        classroomId: membership.classroom_id,
+        resourceType: 'CLASSROOM_MEMBERSHIP',
+        // The person, by user id; their new membership beside it.
+        resourceId: userId,
+        action: 'CREATE',
+        data: { membership_id: membership.id },
+      })
+    );
+  }
+
+  return { claimed: classroomIds.length, classroomIds, audit: owed };
 };
 
 /**

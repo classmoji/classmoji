@@ -13,6 +13,13 @@ import type { AssignmentType, Prisma } from '@classmoji/database/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+import { reorderAuditData } from './orderAudit.ts';
+import {
   QUIZ_ASSIGNMENT_CREATE_REFUSAL,
   QUIZ_ASSIGNMENT_DELETE_REFUSAL,
   QuizAssignmentError,
@@ -479,7 +486,14 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
+export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) =>
+  (await updateWithPrevious(id, updates)).updated;
+
+/**
+ * `update`, also answering the fields it read just before writing (under the
+ * row lock), so a caller can tell what its own write changed.
+ */
+const updateWithPrevious = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
   // One transaction: a QUIZ row's quiz is mirrored from the row as written
   // (read back, so any update shape the caller used is covered). The row is
   // locked before the previous values are read, so two writes at once see
@@ -511,7 +525,51 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
   // Notifications only once the write has committed.
   await notifyAfterUpdate(id, updates, previous, updated);
 
-  return updated;
+  return { previous, updated };
+};
+
+/**
+ * Release (or hide) an assignment's grades to its students: the notifying
+ * write `update` makes (a false→true flip notifies the graded students). The
+ * caller has checked the assignment belongs to `classroomId`.
+ *
+ * When the flag changed, one audit row is written for `actor` after the
+ * write, in `assignment_update`'s shape (ASSIGNMENT, UPDATE: `fields`,
+ * `values`, `value`) plus the previous value. A repeat that changes nothing
+ * records nothing.
+ */
+export const setGradesReleased = async ({
+  assignmentId,
+  classroomId,
+  released,
+  actor,
+}: {
+  assignmentId: string;
+  classroomId: string;
+  released: boolean;
+  /** Who the change is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
+}): Promise<{ changed: boolean; audit: ServiceAudit }> => {
+  const { previous, updated } = await updateWithPrevious(assignmentId, {
+    grades_released: released,
+  });
+  if (previous?.grades_released === updated.grades_released) {
+    return { changed: false, audit: NO_SERVICE_AUDIT };
+  }
+  const values = { grades_released: updated.grades_released };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'ASSIGNMENT',
+    resourceId: assignmentId,
+    action: 'UPDATE',
+    data: {
+      fields: ['grades_released'],
+      values,
+      value: JSON.stringify(values),
+      previous: { grades_released: previous?.grades_released ?? null },
+    },
+  });
+  return { changed: true, audit };
 };
 
 type AssignmentNotificationSnapshot = {
@@ -881,15 +939,33 @@ export const updateInClassroom = async (
  * The module is proven to belong to the classroom first, and the list has to
  * name every assignment in it — a partial list would leave the rest behind on
  * stale positions.
+ *
+ * Recorded for `actor` when the order changed: MODULES / UPDATE on the
+ * module, `kind: 'ASSIGNMENTS'`, with the assignments that moved and their new
+ * places (`orderAudit.ts`), read against the order in place under the module
+ * row's lock. The same order again, or `actor: null`: no row.
  */
 export const reorderInModule = async (
   moduleId: string,
   orderedAssignmentIds: string[],
-  classroomId: string
-) =>
-  getPrisma().$transaction(tx =>
+  classroomId: string,
+  actor: AuditActor | null
+): Promise<{ audit: ServiceAudit }> => {
+  const { before } = await getPrisma().$transaction(tx =>
     reorderInModuleTx(tx, moduleId, orderedAssignmentIds, classroomId)
   );
+  const change = reorderAuditData('ASSIGNMENTS', before, orderedAssignmentIds);
+  const audit = change
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'MODULES',
+        resourceId: moduleId,
+        action: 'UPDATE',
+        data: change,
+      })
+    : NO_SERVICE_AUDIT;
+  return { audit };
+};
 
 /** Whether `ordered` names exactly the ids in `existing`, each once. */
 const sameIdSet = (existing: Iterable<string>, ordered: string[]) => {
@@ -902,7 +978,11 @@ const sameIdSet = (existing: Iterable<string>, ordered: string[]) => {
   );
 };
 
-/** `reorderInModule` inside the caller's transaction. */
+/**
+ * `reorderInModule` inside the caller's transaction. Records nothing; returns
+ * the module's assignments in the order they showed before the write
+ * (`before`), for the caller's row.
+ */
 export const reorderInModuleTx = async (
   tx: Db,
   moduleId: string,
@@ -922,6 +1002,7 @@ export const reorderInModuleTx = async (
 
   const existing = await tx.assignment.findMany({
     where: { module_id: moduleId },
+    orderBy: MODULE_ORDER,
     select: { id: true },
   });
   if (
@@ -939,6 +1020,7 @@ export const reorderInModuleTx = async (
       data: { position: index },
     });
   }
+  return { before: existing.map(a => a.id) };
 };
 
 /**
@@ -950,16 +1032,52 @@ export const reorderInModuleTx = async (
  * Only the module changes: weight, deadlines, grades and submissions travel
  * with the assignment, and the course grade is a weighted mean over all of
  * them, so which module holds it does not move any number.
+ *
+ * A move is recorded for `actor` as the MCP's assignment_update records one:
+ * ASSIGNMENT / UPDATE with `fields: ['module_id']`, `values`, `from_module_id`
+ * (and `value`, their digest), plus the `position` it landed on. A plain
+ * reorder (the module it is already in) is recorded as `reorderInModule`
+ * records one. `actor: null`: no row.
  */
 export const moveToModule = async (
   assignmentId: string,
   toModuleId: string,
   orderedAssignmentIds: string[],
-  classroomId: string
-) =>
-  getPrisma().$transaction(tx =>
+  classroomId: string,
+  actor: AuditActor | null
+): Promise<{ audit: ServiceAudit }> => {
+  const { fromModuleId, before } = await getPrisma().$transaction(tx =>
     moveToModuleTx(tx, assignmentId, toModuleId, orderedAssignmentIds, classroomId)
   );
+  if (fromModuleId === toModuleId) {
+    const change = reorderAuditData('ASSIGNMENTS', before, orderedAssignmentIds);
+    const audit = change
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'MODULES',
+          resourceId: toModuleId,
+          action: 'UPDATE',
+          data: change,
+        })
+      : NO_SERVICE_AUDIT;
+    return { audit };
+  }
+  const values = { module_id: toModuleId };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'ASSIGNMENT',
+    resourceId: assignmentId,
+    action: 'UPDATE',
+    data: {
+      fields: ['module_id'],
+      values,
+      from_module_id: fromModuleId,
+      value: JSON.stringify({ ...values, from_module_id: fromModuleId }),
+      position: orderedAssignmentIds.indexOf(assignmentId),
+    },
+  });
+  return { audit };
+};
 
 /**
  * `moveToModule` inside the caller's transaction. Everything is checked
@@ -967,7 +1085,8 @@ export const moveToModule = async (
  * assignment is, and the ordering names exactly the target's assignments plus
  * the moved one), then the move, the target's order and the source's
  * compaction land together. Both module rows are locked in id order, as
- * `moveToModuleEnd` and `module.deleteById` lock them.
+ * `moveToModuleEnd` and `module.deleteById` lock them. Records nothing;
+ * returns the module it came from and, for a plain reorder, the order before.
  */
 export const moveToModuleTx = async (
   tx: Db,
@@ -1009,7 +1128,7 @@ export const moveToModuleTx = async (
       data: { module_id: toModuleId },
     });
   }
-  await reorderInModuleTx(tx, toModuleId, orderedAssignmentIds, classroomId);
+  const { before } = await reorderInModuleTx(tx, toModuleId, orderedAssignmentIds, classroomId);
 
   if (fromModuleId !== toModuleId) {
     const remaining = await tx.assignment.findMany({
@@ -1021,6 +1140,7 @@ export const moveToModuleTx = async (
       await tx.assignment.update({ where: { id: row.id }, data: { position: index } });
     }
   }
+  return { fromModuleId, before };
 };
 
 // One module's assignments in display order: the hand-arranged position, then

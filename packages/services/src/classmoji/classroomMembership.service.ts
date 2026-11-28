@@ -7,6 +7,7 @@ import getPrisma, {
 import { withLogin, withLogins } from '@classmoji/utils';
 import { findClassroomGitProvider, findClassroomGitScope } from './classroomGitProvider.ts';
 import * as planOwnerService from './planOwner.service.ts';
+import { NO_SERVICE_AUDIT, recordForActor, type AuditActor } from './audit.service.ts';
 import type { Prisma, Role } from '@classmoji/database/client';
 
 interface ClassroomMembershipUpsertData {
@@ -467,6 +468,19 @@ export const findUserIdInClassroom = async (
   return row?.user_id ?? null;
 };
 
+/** `remove`'s actor: the plan-owner hand-off's, and the removal's own row. */
+export interface MembershipRemovalActor extends MembershipActor {
+  /**
+   * Who the removal of a named role is recorded for, once its row is deleted
+   * (STUDENT_ROSTER for a student, STAFF for a staff role; DELETE, on the
+   * person): the person who asked for it. None records nothing, and neither
+   * does a call that deleted nothing.
+   */
+  audit?: AuditActor | null;
+  /** Whether the membership removed had been accepted, for that row. */
+  hadAcceptedInvite?: boolean;
+}
+
 /**
  * Delete a membership
  * @param {string} classroomId - UUID of the Classroom
@@ -478,24 +492,46 @@ export const remove = async (
   classroomId: string,
   userId: string,
   role?: Role,
-  actor: MembershipActor = {}
+  actor: MembershipRemovalActor = {}
 ) => {
   const deleteRows = (db: Prisma.TransactionClient) =>
     db.classroomMembership.deleteMany({
       where: { classroom_id: classroomId, user_id: userId, ...(role ? { role } : {}) },
     });
 
-  // Removing a named non-owner role cannot change the owners, so it takes the
-  // plain delete.
-  if (role && role !== 'OWNER') return deleteRows(getPrisma());
+  const deleted = await (async () => {
+    // Removing a named non-owner role cannot change the owners, so it takes
+    // the plain delete.
+    if (role && role !== 'OWNER') return deleteRows(getPrisma());
 
-  const ownerMembership = await getPrisma().classroomMembership.findFirst({
-    where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
-    select: { id: true },
-  });
-  if (!ownerMembership) return deleteRows(getPrisma());
+    const ownerMembership = await getPrisma().classroomMembership.findFirst({
+      where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+      select: { id: true },
+    });
+    if (!ownerMembership) return deleteRows(getPrisma());
 
-  return leaveOwnership(classroomId, userId, deleteRows, actor);
+    return leaveOwnership(classroomId, userId, deleteRows, actor);
+  })();
+
+  // Recorded after the delete has committed, and only when it deleted a row.
+  const audit =
+    role && deleted.count > 0
+      ? await recordForActor(actor.audit ?? null, {
+          classroomId,
+          resourceType: role === 'STUDENT' ? 'STUDENT_ROSTER' : 'STAFF',
+          resourceId: userId,
+          action: 'DELETE',
+          data: {
+            user_id: userId,
+            role,
+            ...(actor.hadAcceptedInvite !== undefined
+              ? { had_accepted_invite: actor.hadAcceptedInvite }
+              : {}),
+            removal: 'completed',
+          },
+        })
+      : NO_SERVICE_AUDIT;
+  return { count: deleted.count, audit };
 };
 
 /**

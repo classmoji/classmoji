@@ -43,20 +43,20 @@ describe.skipIf(!RUN_DB_SUITES)('grade mappings stay in their classroom (integra
     const before = await yRows();
     const extra = { classroom_id: fx.Y.id, id: yEmojiId };
 
-    const created = await emojiMapping.saveEmojiMapping(fx.X.id, {
-      emoji: 'star',
-      grade: 95,
-      ...extra,
-    } as emojiMapping.EmojiMappingFields);
+    const { mapping: created } = await emojiMapping.saveEmojiMapping(
+      fx.X.id,
+      { emoji: 'star', grade: 95, ...extra } as emojiMapping.EmojiMappingFields,
+      null
+    );
     expect(created.classroom_id).toBe(fx.X.id);
     expect(created.id).not.toBe(yEmojiId);
 
     // The update branch too.
-    const updated = await emojiMapping.saveEmojiMapping(fx.X.id, {
-      emoji: 'star',
-      grade: 96,
-      ...extra,
-    } as emojiMapping.EmojiMappingFields);
+    const { mapping: updated } = await emojiMapping.saveEmojiMapping(
+      fx.X.id,
+      { emoji: 'star', grade: 96, ...extra } as emojiMapping.EmojiMappingFields,
+      null
+    );
     expect(updated.id).toBe(created.id);
     expect(updated.classroom_id).toBe(fx.X.id);
     expect(updated.grade).toBe(96);
@@ -67,12 +67,16 @@ describe.skipIf(!RUN_DB_SUITES)('grade mappings stay in their classroom (integra
   it("a letter grade saved for X is X's row, whatever classroom or id the values carry", async () => {
     const before = await yRows();
     for (const min of [80, 85]) {
-      const row = await letterGradeMapping.save(fx.X.id, {
-        letter_grade: 'A',
-        min_grade: min,
-        classroom_id: fx.Y.id,
-        id: yLetterId,
-      } as letterGradeMapping.LetterGradeMappingFields);
+      const { mapping: row } = await letterGradeMapping.save(
+        fx.X.id,
+        {
+          letter_grade: 'A',
+          min_grade: min,
+          classroom_id: fx.Y.id,
+          id: yLetterId,
+        } as letterGradeMapping.LetterGradeMappingFields,
+        null
+      );
       expect(row.classroom_id).toBe(fx.X.id);
       expect(row.id).not.toBe(yLetterId);
     }
@@ -81,10 +85,20 @@ describe.skipIf(!RUN_DB_SUITES)('grade mappings stay in their classroom (integra
 
   it('deletes from X only, and nothing for a value that is not a string', async () => {
     const before = await yRows();
-    expect(await emojiMapping.deleteEmojiMapping(fx.X.id, 'star')).toEqual({ count: 1 });
-    expect(await letterGradeMapping.delete(fx.X.id, 'A')).toEqual({ count: 1 });
-    expect(await emojiMapping.deleteEmojiMapping(fx.X.id, { not: '' })).toEqual({ count: 0 });
-    expect(await letterGradeMapping.delete(fx.X.id, undefined)).toEqual({ count: 0 });
+    const none = { written: 0, missed: 0 };
+    expect(await emojiMapping.deleteEmojiMapping(fx.X.id, 'star', null)).toEqual({
+      count: 1,
+      audit: none,
+    });
+    expect(await letterGradeMapping.delete(fx.X.id, 'A', null)).toEqual({ count: 1, audit: none });
+    expect(await emojiMapping.deleteEmojiMapping(fx.X.id, { not: '' }, null)).toEqual({
+      count: 0,
+      audit: none,
+    });
+    expect(await letterGradeMapping.delete(fx.X.id, undefined, null)).toEqual({
+      count: 0,
+      audit: none,
+    });
     expect(await yRows()).toEqual(before);
   });
 });

@@ -83,7 +83,9 @@ describe('saveEmojiMapping', () => {
     const values = { emoji: 'rocket', grade: 100, extra_tokens: 0, description: 'Great' };
     upsert.mockResolvedValue({ classroom_id: 'class-1', ...values });
 
-    await expect(saveEmojiMapping('class-1', values)).resolves.toMatchObject(values);
+    await expect(saveEmojiMapping('class-1', values, null)).resolves.toMatchObject({
+      mapping: values,
+    });
 
     expect(calls).toEqual(['lock', 'upsert']);
     expect(queryRaw.mock.calls[0].slice(1)).toEqual(['emoji-scale:class-1']);

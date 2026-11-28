@@ -165,7 +165,12 @@ describe('action', () => {
 
     const result = await action(args('POST'));
 
-    expect(mocks.joinByCode).toHaveBeenCalledWith({ userId: 'user-a', code: CODE });
+    expect(mocks.joinByCode).toHaveBeenCalledWith({
+      userId: 'user-a',
+      code: CODE,
+      // A roster invite of another class matched on the way is their claim.
+      inviteClaim: { tool: 'web:roster.invite_email' },
+    });
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 'user-a',

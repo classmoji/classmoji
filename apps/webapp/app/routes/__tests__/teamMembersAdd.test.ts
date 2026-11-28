@@ -2,7 +2,9 @@
  * teams.$slug.edit ?/addMembersToTeam: logins go to teamAdmin.addTeamMembers
  * with the classroom the OWNER gate authorized (never one from the body), and
  * a login the service refuses because its user is not a member of this
- * classroom comes back in the action's failure list, with nothing added.
+ * classroom comes back in the action's failure list, with nothing added. The
+ * route hands the service its actor (`web:teams.add_members`); the service
+ * records the members it added.
  *
  * The membership rule itself is pinned in packages/services
  * (classmoji/__tests__/team.service.test.ts).
@@ -13,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   addTeamMembers: vi.fn(),
 }));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({ requestImpersonator: async () => null }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
@@ -62,6 +66,12 @@ describe('addMembersToTeam', () => {
       classroomId: 'class-x',
       slugOrId: 'team-x',
       logins: ['student-of-class-y'],
+      actor: {
+        userId: 'owner-x',
+        role: 'OWNER',
+        tool: 'web:teams.add_members',
+        impersonatedBy: null,
+      },
     });
     expect(result).toMatchObject({
       error: expect.stringContaining('Could not add 1'),

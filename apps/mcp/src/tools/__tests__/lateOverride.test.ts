@@ -4,7 +4,9 @@
  * Three layers:
  *   1. The handler, with `@classmoji/services` mocked factory-style (as in
  *      graders.test.ts): the three selector modes, the exactly-one rule,
- *      clearing, the response counts, not_found handling and the audit rows.
+ *      clearing, the response counts, not_found handling, and the actor and
+ *      mode it hands the service, which writes the audit rows (the tool
+ *      writes none in repo mode).
  *   2. The REGISTRY pipeline, with the real tool registered on a real McpServer
  *      over the SDK's in-memory transport (as registry.test.ts and
  *      contentSearch.test.ts do): who may call it and the locked-classroom
@@ -12,7 +14,8 @@
  *      could not show them.
  *   3. The REAL service method against the schema-validating Prisma stub: the
  *      classroom filter must sit in the WHERE of BOTH the read and the write,
- *      and every field the queries name must exist.
+ *      every field the queries name must exist, and one audit row is written
+ *      per changed submission for the actor.
  */
 
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
@@ -92,7 +95,13 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
+/**
+ * What the service answers: the ids, and the rows it wrote (one per updated
+ * id unless `auditFailedIds` names it).
+ */
 function serviceResult(partial: Partial<Record<string, string[]>> = {}) {
+  const updated = partial.updatedIds ?? [];
+  const failed = partial.auditFailedIds ?? [];
   return {
     updatedIds: [],
     unchangedIds: [],
@@ -100,22 +109,21 @@ function serviceResult(partial: Partial<Record<string, string[]>> = {}) {
     notLateIds: [],
     notSubmittedIds: [],
     lateIds: [],
+    auditFailedIds: [],
+    audit: { written: updated.length - failed.length, missed: failed.length },
     ...partial,
   };
 }
 
-const auditRows = () =>
-  mocks.auditCreate.mock.calls.map(
-    c =>
-      c[0] as {
-        resource_type: string;
-        resource_id: string;
-        action: string;
-        role: string;
-        classroom_id: string;
-        data: Record<string, unknown>;
-      }
-  );
+/** The actor the tool hands the service for a caller with `role`. */
+const actorAs = (role: 'OWNER' | 'TEACHER', userId = 'teacher-1', clientId = 'c') => ({
+  userId,
+  role,
+  tool: 'submission_late_override',
+  impersonatedBy: null,
+  clientId,
+  via: 'mcp',
+});
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
@@ -170,11 +178,14 @@ describe('submission_late_override — single submission', () => {
 
     const payload = parse(await submissionLateOverrideTool.handler(ARGS, CTX));
 
-    // classroomId comes from ctx, never from the request.
+    // classroomId comes from ctx, never from the request; the caller is the
+    // actor the service records the row for.
     expect(mocks.setLateOverride).toHaveBeenCalledWith({
       classroomId: 'class-1',
       selector: { ids: [SUB_A] },
       isLateOverride: true,
+      actor: actorAs('TEACHER'),
+      mode: 'single',
     });
     expect(payload).toMatchObject({
       success: true,
@@ -190,16 +201,9 @@ describe('submission_late_override — single submission', () => {
       ids_truncated: false,
     });
 
-    const [audit] = auditRows();
-    expect(auditRows()).toHaveLength(1);
-    expect(audit).toMatchObject({
-      resource_type: 'GIT_REPO_ASSIGNMENT',
-      resource_id: SUB_A,
-      action: 'UPDATE',
-      role: 'TEACHER',
-      classroom_id: 'class-1',
-      data: { tool: 'submission_late_override', value: true, mode: 'single' },
-    });
+    // The service writes the row; the tool writes none of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(CTX.auditIncomplete).toBeUndefined();
   });
 
   it('refuses a missing or foreign id with the uniform not_found and audits nothing', async () => {
@@ -234,7 +238,6 @@ describe('submission_late_override — single submission', () => {
       expect.objectContaining({ isLateOverride: false })
     );
     expect(payload).toMatchObject({ is_late_override: false, updated_count: 1, late_count: 1 });
-    expect(auditRows()[0].data).toMatchObject({ value: false });
   });
 });
 
@@ -264,6 +267,8 @@ describe('submission_late_override — list of ids', () => {
       classroomId: 'class-1',
       selector: { ids: [SUB_A, SUB_B, SUB_C, FOREIGN] },
       isLateOverride: true,
+      actor: actorAs('TEACHER'),
+      mode: 'ids',
     });
     expect(payload).toMatchObject({
       mode: 'ids',
@@ -278,16 +283,8 @@ describe('submission_late_override — list of ids', () => {
       not_found_ids: [FOREIGN],
     });
     expect(payload).not.toHaveProperty('assignment_id');
-
-    // One audit row per CHANGED submission — never the unchanged or foreign ids.
-    expect(auditRows().map(r => r.resource_id)).toEqual([SUB_A, SUB_B]);
-    for (const row of auditRows()) {
-      expect(row.data).toMatchObject({
-        tool: 'submission_late_override',
-        value: true,
-        mode: 'ids',
-      });
-    }
+    // The rows (one per CHANGED submission) are the service's.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('caps each id list in the response but keeps the counts exact', async () => {
@@ -306,8 +303,6 @@ describe('submission_late_override — list of ids', () => {
     expect(payload.updated_count).toBe(many.length);
     expect(payload.updated_ids).toHaveLength(LATE_OVERRIDE_ID_LIST_CAP);
     expect(payload.ids_truncated).toBe(true);
-    // Every changed row is still audited, not just the ones the response lists.
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(many.length);
   });
 });
 
@@ -330,6 +325,8 @@ describe('submission_late_override — assignment_id', () => {
       classroomId: 'class-1',
       selector: { assignmentId: ASSIGNMENT_ID },
       isLateOverride: true,
+      actor: actorAs('TEACHER'),
+      mode: 'assignment',
     });
     expect(payload).toMatchObject({
       mode: 'assignment',
@@ -340,12 +337,6 @@ describe('submission_late_override — assignment_id', () => {
       not_found_count: 0,
       late_count: 3,
       late_updated_count: 2,
-    });
-    expect(auditRows().map(r => r.resource_id)).toEqual([SUB_A, SUB_B]);
-    expect(auditRows()[0].data).toMatchObject({
-      mode: 'assignment',
-      assignment_id: ASSIGNMENT_ID,
-      value: true,
     });
   });
 
@@ -403,7 +394,6 @@ describe('submission_late_override — assignment_id', () => {
       late_updated_count: 1,
     });
     expect(payload).not.toHaveProperty('reason');
-    expect(auditRows().map(r => r.resource_id)).toEqual([SUB_A]);
   });
 });
 
@@ -433,19 +423,17 @@ describe('submission_late_override — skips and audit failures', () => {
       { length: 45 },
       (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
     );
-    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: ids }));
-    const secret = 'db password is hunter2';
-    mocks.auditCreate.mockImplementation(async (row: { resource_id: string }) => {
-      if (row.resource_id === ids[3] || row.resource_id === ids[30]) throw new Error(secret);
-    });
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.setLateOverride.mockResolvedValue(
+      serviceResult({ updatedIds: ids, auditFailedIds: [ids[3], ids[30]] })
+    );
     const ctx = { ...CTX } as ToolContext;
 
-    const result = await submissionLateOverrideTool.handler(
-      { classroom: 'org/c', git_repo_assignment_ids: ids, is_late_override: true },
-      ctx
+    const payload = parse(
+      await submissionLateOverrideTool.handler(
+        { classroom: 'org/c', git_repo_assignment_ids: ids, is_late_override: true },
+        ctx
+      )
     );
-    const payload = parse(result);
 
     expect(payload).toMatchObject({
       success: true,
@@ -454,13 +442,6 @@ describe('submission_late_override — skips and audit failures', () => {
     });
     // The registry adds `audit_incomplete` from this mark (through the registry, below).
     expect(ctx.auditIncomplete).toBe(true);
-    // Every row was attempted, in parallel chunks — the loop did not stop at the
-    // failure; the two that failed were each tried once more.
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(47);
-    // The error is logged server-side and never reaches the client.
-    expect(logged.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(2);
-    expect(result.content[0].text).not.toContain(secret);
-    logged.mockRestore();
   });
 
   it('omits audit_incomplete when every audit row lands', async () => {
@@ -539,20 +520,24 @@ describe('submission_late_override — through the registry', () => {
 
   const ARGS = { classroom: 'org/c', git_repo_assignment_id: SUB_A, is_late_override: true };
 
-  it.each(['OWNER', 'TEACHER'])('lets %s set the exemption', async role => {
+  it.each(['OWNER', 'TEACHER'] as const)('lets %s set the exemption', async role => {
     mockClassroom('ACTIVE', role);
     mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [SUB_A] }));
 
     const result = await call(ARGS);
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ updated_count: 1 });
-    expect(auditRows()[0].role).toBe(role);
+    // The row is recorded as the role the registry enforced, for this client.
+    expect(mocks.setLateOverride.mock.calls.at(-1)?.[0]).toMatchObject({
+      actor: actorAs(role, `user-${viewerSeq}`, 'late-override-test'),
+    });
   });
 
-  it('answers normally with audit_incomplete when an audit row is not written', async () => {
+  it('answers normally with audit_incomplete when the service could not write a row', async () => {
     mockClassroom('ACTIVE', 'OWNER');
-    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [SUB_A] }));
-    mocks.auditCreate.mockRejectedValue(new Error('db down'));
+    mocks.setLateOverride.mockResolvedValue(
+      serviceResult({ updatedIds: [SUB_A], auditFailedIds: [SUB_A] })
+    );
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const result = await call(ARGS);
@@ -620,7 +605,6 @@ describe('submission_late_override — through the registry', () => {
     expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
       expect.objectContaining({ classroomId: 'class-1', selector: { ids: [NUMERIC] } })
     );
-    expect(auditRows()[0]).toMatchObject({ resource_id: NUMERIC });
 
     const list = await call({
       classroom: 'org/c',
@@ -738,6 +722,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { ids: [SUB_A, SUB_B, SUB_C, SUB_D, FOREIGN, SUB_A] },
       isLateOverride: true,
@@ -764,7 +749,58 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
       notSubmittedIds: [],
       // SUB_B counts as late even though it is exempt — the point of the count.
       lateIds: [SUB_A, SUB_B, SUB_D],
+      // No actor: no rows owed.
+      auditFailedIds: [],
+      audit: { written: 0, missed: 0 },
     });
+    expect(prismaCallsFor('auditLog')).toHaveLength(0);
+  });
+
+  it('writes one row per changed submission for the actor, after the write', async () => {
+    setPrismaRows({
+      gitRepoAssignment: {
+        findMany: [
+          row(SUB_A, { closed_at: LATE_CLOSE }),
+          row(SUB_B, { is_late_override: true, closed_at: LATE_CLOSE }), // already exempt
+          row(SUB_D),
+        ],
+        updateManyAndReturn: [{ id: SUB_A }, { id: SUB_D }],
+      },
+    });
+
+    const result = await realService.setLateOverrideInClassroom({
+      classroomId: 'class-1',
+      selector: { ids: [SUB_A, SUB_B, SUB_D] },
+      isLateOverride: true,
+      now: NOW,
+      actor: actorAs('TEACHER'),
+      mode: 'ids',
+    });
+
+    expect(result).toMatchObject({ auditFailedIds: [], audit: { written: 2, missed: 0 } });
+    const rows = prismaCallsFor('auditLog', 'create').map(
+      c => (c.args as { data: Record<string, unknown> }).data
+    );
+    expect(rows).toEqual([
+      {
+        user_id: 'teacher-1',
+        classroom_id: 'class-1',
+        role: 'TEACHER',
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        resource_id: SUB_A,
+        action: 'UPDATE',
+        data: {
+          via: 'mcp',
+          field: 'is_late_override',
+          value: true,
+          mode: 'ids',
+          previous: false,
+          tool: 'submission_late_override',
+          client_id: 'c',
+        },
+      },
+      expect.objectContaining({ resource_id: SUB_D }),
+    ]);
   });
 
   it('single id on time: skipped as not_late, nothing written', async () => {
@@ -773,6 +809,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { ids: [SUB_C] },
       isLateOverride: true,
@@ -795,6 +832,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { assignmentId: ASSIGNMENT_ID },
       isLateOverride: true,
@@ -817,6 +855,8 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
       notLateIds: [SUB_C],
       notSubmittedIds: [SUB_B],
       lateIds: [SUB_A, SUB_B],
+      auditFailedIds: [],
+      audit: { written: 0, missed: 0 },
     });
   });
 
@@ -833,6 +873,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { assignmentId: ASSIGNMENT_ID },
       isLateOverride: false,
@@ -863,6 +904,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { ids: [SUB_A, SUB_B] },
       isLateOverride: true,
@@ -886,6 +928,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
     });
 
     const result = await realService.setLateOverrideInClassroom({
+      actor: null,
       classroomId: 'class-1',
       selector: { assignmentId: ASSIGNMENT_ID },
       isLateOverride: false,
@@ -900,6 +943,7 @@ describe('gitRepoAssignment.setLateOverrideInClassroom (real service, schema stu
   it('refuses to run without a classroom id', async () => {
     await expect(
       realService.setLateOverrideInClassroom({
+        actor: null,
         classroomId: '',
         selector: { assignmentId: ASSIGNMENT_ID },
         isLateOverride: true,

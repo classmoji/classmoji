@@ -7,9 +7,11 @@
  *     service's `tag_required` refusal comes back as its own fixed sentence, not
  *     the generic "Could not create this team." — as does a tag write that fails
  *     because the tag was deleted meanwhile (P2003);
- *   - new team, ?/createTag: the tag is upserted in the authorized classroom
- *     (never one from the body) under the trimmed name, an empty name is refused
- *     without a write, and a failed write is reported without its cause;
+ *   - new team, ?/createTag: the tag is found or created in the authorized
+ *     classroom (never one from the body) under the trimmed name, for the
+ *     route's actor (the tag service records a created one), an empty name is
+ *     refused without a write, and a failed write is reported without its
+ *     cause;
  *   - edit team (admin.$class.teams.$slug.edit, ?/removeTeamTag): the service's
  *     refusal to remove a team's last tag comes back as its own fixed sentence,
  *     and other codes keep their messages and the generic default.
@@ -36,9 +38,23 @@ const mocks = vi.hoisted(() => ({
   assertClassroomMutationAllowed: vi.fn(),
   createTeam: vi.fn(),
   removeTeamTag: vi.fn(),
-  tagUpsert: vi.fn(),
+  tagFindOrCreate: vi.fn(),
   tagsByClassroom: vi.fn(),
+  requestImpersonator: vi.fn(),
 }));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
+}));
+
+/** The actor the routes hand the services for `tool`. */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+});
+const AUDIT = { written: 1, missed: 0 };
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
@@ -52,7 +68,7 @@ vi.mock('@classmoji/services', () => ({
       removeTeamTag: (...a: unknown[]) => mocks.removeTeamTag(...a),
     },
     organizationTag: {
-      upsert: (...a: unknown[]) => mocks.tagUpsert(...a),
+      findOrCreate: (...a: unknown[]) => mocks.tagFindOrCreate(...a),
       findByClassroomId: (...a: unknown[]) => mocks.tagsByClassroom(...a),
     },
   },
@@ -105,6 +121,7 @@ beforeEach(() => {
     classroom: CLASSROOM,
     membership: { id: 'm-1', role: 'OWNER' },
   });
+  mocks.requestImpersonator.mockResolvedValue(null);
 });
 
 describe('new team — createTeam', () => {
@@ -113,6 +130,7 @@ describe('new team — createTeam', () => {
       team: { id: 't-1', name: 'Red', slug: 'red', is_visible: true },
       tagsAdded: ['tag-1'],
       tagsFailed: [],
+      audit: AUDIT,
     });
 
     const result = await postNewTeam('createTeam', {
@@ -127,6 +145,7 @@ describe('new team — createTeam', () => {
       name: 'Red',
       isVisible: true,
       tagIds: ['tag-1'],
+      actor: actorFor('web:teams.create'),
     });
     expect(result).toEqual({ success: 'Team created successfully', action: 'save-team' });
   });
@@ -183,28 +202,36 @@ describe('new team — createTeam', () => {
 });
 
 describe('new team — createTag', () => {
-  it('upserts the trimmed name in the authorized classroom', async () => {
-    mocks.tagUpsert.mockResolvedValue({ id: 'tag-9', name: 'Projects', classroom_id: 'class-1' });
+  it('finds or creates the trimmed name in the authorized classroom, for its actor', async () => {
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-9', name: 'Projects', classroom_id: 'class-1' },
+      created: true,
+      audit: AUDIT,
+    });
 
     const result = await postNewTeam('createTag', {
       name: '  Projects  ',
       classroomId: 'someone-elses',
     });
 
-    expect(mocks.tagUpsert).toHaveBeenCalledExactlyOnceWith('class-1', 'Projects');
+    expect(mocks.tagFindOrCreate).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      'Projects',
+      actorFor('web:teams.create_tag')
+    );
     expect(result).toEqual({ tag: { id: 'tag-9', name: 'Projects' } });
   });
 
   it.each([[''], ['   '], [undefined], [42]])('refuses the name %j without a write', async name => {
     const result = await postNewTeam('createTag', { name });
 
-    expect(mocks.tagUpsert).not.toHaveBeenCalled();
+    expect(mocks.tagFindOrCreate).not.toHaveBeenCalled();
     expect(result).toEqual({ error: 'A tag name is required.' });
   });
 
   it('reports a failed write without its cause', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.tagUpsert.mockRejectedValue(new Error('P1001: database unreachable'));
+    mocks.tagFindOrCreate.mockRejectedValue(new Error('P1001: database unreachable'));
 
     const result = await postNewTeam('createTag', { name: 'Projects' });
 
@@ -213,7 +240,11 @@ describe('new team — createTag', () => {
   });
 
   it('runs behind the same OWNER and mutation gates as createTeam', async () => {
-    mocks.tagUpsert.mockResolvedValue({ id: 'tag-9', name: 'Projects' });
+    mocks.tagFindOrCreate.mockResolvedValue({
+      tag: { id: 'tag-9', name: 'Projects' },
+      created: false,
+      audit: { written: 0, missed: 0 },
+    });
 
     await postNewTeam('createTag', { name: 'Projects' });
 
@@ -240,6 +271,7 @@ describe('edit team — removeTeamTag', () => {
     expect(mocks.removeTeamTag).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
       teamTagId: 'tt-1',
+      actor: actorFor('web:teams.remove_tag'),
     });
     expect(result).toEqual({
       error: `A team needs at least one tag, so the last tag on @${TEAM_SLUG} can't be removed.`,
@@ -248,7 +280,12 @@ describe('edit team — removeTeamTag', () => {
   });
 
   it('removes a tag that is not the last one', async () => {
-    mocks.removeTeamTag.mockResolvedValue({ teamTagId: 'tt-1', teamId: 't-1', tagId: 'tag-1' });
+    mocks.removeTeamTag.mockResolvedValue({
+      teamTagId: 'tt-1',
+      teamId: 't-1',
+      tagId: 'tag-1',
+      audit: AUDIT,
+    });
 
     const result = await postEditTeam('removeTeamTag', { id: 'tt-1' });
 

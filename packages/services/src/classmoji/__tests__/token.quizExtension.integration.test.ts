@@ -95,12 +95,15 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
     tokenService.assignToStudent({ classroomId, studentId, amount, type: 'GAIN' });
 
   const buy = (studentId: string, assignmentId: string, hours: number, inClassroom = classroomId) =>
-    tokenService.purchaseQuizExtensionHours({
-      classroomId: inClassroom,
-      studentId,
-      assignmentId,
-      hours,
-    });
+    tokenService
+      .purchaseQuizExtensionHours({
+        classroomId: inClassroom,
+        studentId,
+        assignmentId,
+        hours,
+        actor: null,
+      })
+      .then(({ transaction }) => transaction);
 
   beforeAll(async () => {
     const org = await prisma.gitOrganization.create({
@@ -253,7 +256,7 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
     const assignment = await makeQuiz();
     const purchase = await buy(student, assignment.id, 4);
 
-    const refund = await tokenService.cancelPurchase(purchase.id);
+    const { refund } = await tokenService.cancelPurchase(purchase.id, { actor: null });
     expect(refund).toMatchObject({
       type: 'REFUND',
       amount: 8,
@@ -262,7 +265,9 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
       assignment_id: assignment.id,
       description: `${assignment.title} · −4 h`,
     });
-    await expect(tokenService.cancelPurchase(purchase.id)).rejects.toThrow('not already cancelled');
+    await expect(tokenService.cancelPurchase(purchase.id, { actor: null })).rejects.toThrow(
+      'not already cancelled'
+    );
 
     expect(await tokenService.getBalance(classroomId, student)).toBe(20);
     const hours = await netQuizExtensionHours({ classroomId, studentId: student });
@@ -285,7 +290,7 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
     // The log still names it, and a refund still reads it.
     const [listed] = await tokenService.findTransactions({ id: purchase.id });
     expect(listed.assignment).toBeNull();
-    const refund = await tokenService.cancelPurchase(purchase.id);
+    const { refund } = await tokenService.cancelPurchase(purchase.id, { actor: null });
     expect(refund.description).toBe(`${assignment.title} · −2 h`);
     expect(await tokenService.getBalance(classroomId, student)).toBe(20);
   });

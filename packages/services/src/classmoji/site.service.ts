@@ -13,6 +13,13 @@ import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+import { describeSettingsChange, settingsChangeData, settingsValues } from './settingsAudit.ts';
 import type { ModuleItemType, Prisma, Role } from '@classmoji/database/client';
 
 /**
@@ -205,14 +212,59 @@ export const isSubdomainConflict = (error: unknown): boolean => {
 };
 
 /**
+ * The SITE_SETTINGS row of a site change, for `actor`, when `before` → `after`
+ * changed one of `fields`; nothing otherwise. `data` keys go first.
+ */
+async function recordSiteChange(
+  actor: AuditActor | null,
+  classroomId: string,
+  action: 'CREATE' | 'UPDATE',
+  site: { id: string },
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+  fields: string[]
+): Promise<ServiceAudit> {
+  if (!actor) return NO_SERVICE_AUDIT;
+  const change = describeSettingsChange('ClassroomSite', before, after, fields);
+  if (!change) return NO_SERVICE_AUDIT;
+  return recordForActor(actor, {
+    classroomId,
+    resourceType: 'SITE_SETTINGS',
+    resourceId: site.id,
+    action,
+    data: settingsChangeData(change),
+  });
+}
+
+/**
+ * Lock `classroomId`'s site row for the rest of `tx` (`FOR UPDATE`), so the
+ * row a site change reads is the one it replaces: an overlapping change, and
+ * the serving path's verification stamp, wait for it. Locks nothing when the
+ * classroom has no site.
+ */
+const lockSiteRow = (tx: Prisma.TransactionClient, classroomId: string) =>
+  tx.$queryRaw`SELECT id FROM classroom_sites WHERE classroom_id = ${classroomId} FOR UPDATE`;
+
+/**
  * Claim (or re-point) a classroom's subdomain, creating the site row on first
  * call.
  *
  * The site is NOT enabled here — a new row defaults to is_enabled = false and an
  * existing row's flag is untouched. Enabling is upsertSiteSettings' job and
  * requires a home page.
+ *
+ * Recorded for `actor` after the save: SITE_SETTINGS on the site, CREATE for a
+ * new site, UPDATE for a new subdomain (`fields`, `values`, `previous`);
+ * re-claiming the same subdomain records nothing. The previous subdomain is
+ * read in the transaction that writes, under a lock on the classroom row (a
+ * site may not exist yet) and on the site row; the row is written after the
+ * commit.
  */
-export async function validateAndClaimSubdomain(classroomId: string, subdomain: string) {
+export async function validateAndClaimSubdomain(
+  classroomId: string,
+  subdomain: string,
+  actor: AuditActor | null
+) {
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
     select: { id: true, is_example: true },
@@ -251,12 +303,27 @@ export async function validateAndClaimSubdomain(classroomId: string, subdomain: 
     );
   }
 
+  let before: { subdomain: string } | null;
+  let site;
   try {
-    return await getPrisma().classroomSite.upsert({
-      where: { classroom_id: classroomId },
-      create: { classroom_id: classroomId, subdomain: availability.normalized },
-      update: { subdomain: availability.normalized },
-    });
+    ({ before, site } = await getPrisma().$transaction(async tx => {
+      // FOR NO KEY UPDATE on the classroom: serialises claims for a classroom
+      // with no site yet without blocking inserts that reference it.
+      await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR NO KEY UPDATE`;
+      await lockSiteRow(tx, classroomId);
+      const before = actor
+        ? await tx.classroomSite.findUnique({
+            where: { classroom_id: classroomId },
+            select: { subdomain: true },
+          })
+        : null;
+      const site = await tx.classroomSite.upsert({
+        where: { classroom_id: classroomId },
+        create: { classroom_id: classroomId, subdomain: availability.normalized },
+        update: { subdomain: availability.normalized },
+      });
+      return { before, site };
+    }));
   } catch (error: unknown) {
     // The check above is advisory; another classroom can claim the label in the
     // gap. The index is the authority. Keyed on classroom_id, this upsert can
@@ -270,6 +337,16 @@ export async function validateAndClaimSubdomain(classroomId: string, subdomain: 
     }
     throw error;
   }
+  const audit = await recordSiteChange(
+    actor,
+    classroomId,
+    before ? 'UPDATE' : 'CREATE',
+    site,
+    before,
+    site,
+    ['subdomain']
+  );
+  return { site, audit };
 }
 
 export type SiteSettingsInput = {
@@ -298,10 +375,40 @@ export type SiteSettingsInput = {
  * NULL, which leaves an enabled site with a null home page. That is deliberate:
  * losing a page must not delete the site row and release its subdomain. PR2's
  * serving code has to treat that shape as a repairable landing state.)
+ *
+ * Recorded for `actor` after the save, when a setting changed: SITE_SETTINGS /
+ * UPDATE on the site (`fields`, `values`, `previous`). The checks and the
+ * write run in one transaction on the locked site row, so `previous` is the
+ * row the save replaced; the row is written after the commit.
  */
-export async function upsertSiteSettings(classroomId: string, input: SiteSettingsInput) {
-  const prisma = getPrisma();
-  const existing = await prisma.classroomSite.findUnique({
+export async function upsertSiteSettings(
+  classroomId: string,
+  input: SiteSettingsInput,
+  actor: AuditActor | null
+) {
+  const { existing, site, data } = await getPrisma().$transaction(tx =>
+    saveSiteSettings(tx, classroomId, input)
+  );
+  const audit = await recordSiteChange(
+    actor,
+    classroomId,
+    'UPDATE',
+    site,
+    existing,
+    site,
+    Object.keys(data)
+  );
+  return { site, audit };
+}
+
+/** `upsertSiteSettings`' checks and write, through `tx`, on the locked site row. */
+async function saveSiteSettings(
+  tx: Prisma.TransactionClient,
+  classroomId: string,
+  input: SiteSettingsInput
+) {
+  await lockSiteRow(tx, classroomId);
+  const existing = await tx.classroomSite.findUnique({
     where: { classroom_id: classroomId },
   });
   if (!existing) {
@@ -336,7 +443,7 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     // so the constraint happily accepts another classroom's page. Only a
     // classroom-scoped read can refuse it — and a draft, which must never be
     // the front door of a public site.
-    const page = await prisma.page.findFirst({
+    const page = await tx.page.findFirst({
       where: { id: nextHomePageId, classroom_id: classroomId },
       select: { id: true, is_draft: true },
     });
@@ -361,14 +468,16 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     );
   }
 
-  return prisma.classroomSite.update({
+  const data = {
+    ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
+    ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
+    ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
+  };
+  const site = await tx.classroomSite.update({
     where: { classroom_id: classroomId },
-    data: {
-      ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
-      ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
-      ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
-    },
+    data,
   });
+  return { existing, site, data };
 }
 
 /**
@@ -382,26 +491,43 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
  * Absence is an ERROR, not a no-op. `prisma.delete` on a missing row throws an
  * opaque P2025; checking first turns a double-submit into a message the caller
  * can render, and matches upsertSiteSettings' SITE_NOT_FOUND contract.
+ *
+ * Recorded for `actor` once the row is gone: SITE_SETTINGS / DELETE on the
+ * site, with the `previous` subdomain and custom domain (read from the locked
+ * row in the transaction that deletes it).
  */
-export async function deleteSiteForClassroom(classroomId: string) {
-  const prisma = getPrisma();
-  const existing = await prisma.classroomSite.findUnique({
-    where: { classroom_id: classroomId },
-    select: { id: true, subdomain: true, custom_domain: true },
+export async function deleteSiteForClassroom(classroomId: string, actor: AuditActor | null) {
+  const existing = await getPrisma().$transaction(async tx => {
+    await lockSiteRow(tx, classroomId);
+    const existing = await tx.classroomSite.findUnique({
+      where: { classroom_id: classroomId },
+      select: { id: true, subdomain: true, custom_domain: true },
+    });
+    if (!existing) {
+      throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site to remove.');
+    }
+    await tx.classroomSite.delete({ where: { classroom_id: classroomId } });
+    return existing;
   });
-  if (!existing) {
-    throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site to remove.');
-  }
-
-  await prisma.classroomSite.delete({ where: { classroom_id: classroomId } });
   // The row is gone, so this is the LAST moment the hostname is knowable from
   // our side. Best-effort, after the delete: a Fly outage must not block an
   // instructor from removing their site, and the reconcile task
   // (packages/tasks/src/workflows/customDomains.ts) sweeps up whatever this
   // misses — including the classroom-delete cascade, which drops this row
   // inside the database with no application code on the path at all.
+  const audit = actor
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'SITE_SETTINGS',
+        resourceId: existing.id,
+        action: 'DELETE',
+        data: {
+          previous: settingsValues('ClassroomSite', existing, ['subdomain', 'custom_domain']),
+        },
+      })
+    : NO_SERVICE_AUDIT;
   await releaseCert(existing.custom_domain);
-  return existing;
+  return { removed: existing, audit };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,15 +613,26 @@ export const isCustomDomainConflict = (error: unknown): boolean => {
  * `FlyCertService.addCert(domain)` — so a Fly outage leaves a claimed domain
  * awaiting a certificate (retryable from the admin UI) rather than rolling back
  * a claim the instructor just made.
+ *
+ * Recorded for `actor` once the claim is saved (before any certificate is
+ * asked for): SITE_SETTINGS / UPDATE on the site, `custom_domain` and a
+ * cleared `custom_domain_verified_at` among `fields`, `values`, `previous`.
+ * Re-claiming the same, unverified domain records nothing. The previous
+ * domain is read from the locked site row in the transaction that writes (the
+ * gates run first, on their own reads); the row is written after the commit.
  */
-export async function setCustomDomain(classroomId: string, domain: string) {
+export async function setCustomDomain(
+  classroomId: string,
+  domain: string,
+  actor: AuditActor | null
+) {
   const prisma = getPrisma();
 
-  const existing = await prisma.classroomSite.findUnique({
+  const found = await prisma.classroomSite.findUnique({
     where: { classroom_id: classroomId },
-    select: { id: true, custom_domain: true },
+    select: { id: true },
   });
-  if (!existing) {
+  if (!found) {
     throw new SiteError(
       SITE_ERROR.SITE_NOT_FOUND,
       'This classroom has no site yet — claim a subdomain first.'
@@ -527,14 +664,27 @@ export async function setCustomDomain(classroomId: string, domain: string) {
   // Re-claiming the same hostname is a no-op on the certificate but must still
   // clear the stamp: the admin is asking for re-verification, and a re-claim is
   // the one moment we can honestly say "prove it again".
-  const previous = existing.custom_domain;
-
+  let existing;
   let updated;
   try {
-    updated = await prisma.classroomSite.update({
-      where: { classroom_id: classroomId },
-      data: { custom_domain: normalized, custom_domain_verified_at: null },
-    });
+    ({ existing, updated } = await prisma.$transaction(async tx => {
+      await lockSiteRow(tx, classroomId);
+      const existing = await tx.classroomSite.findUnique({
+        where: { classroom_id: classroomId },
+        select: { id: true, custom_domain: true, custom_domain_verified_at: true },
+      });
+      if (!existing) {
+        throw new SiteError(
+          SITE_ERROR.SITE_NOT_FOUND,
+          'This classroom has no site yet — claim a subdomain first.'
+        );
+      }
+      const updated = await tx.classroomSite.update({
+        where: { classroom_id: classroomId },
+        data: { custom_domain: normalized, custom_domain_verified_at: null },
+      });
+      return { existing, updated };
+    }));
   } catch (error: unknown) {
     if (isCustomDomainConflict(error)) {
       throw new SiteError(
@@ -545,9 +695,15 @@ export async function setCustomDomain(classroomId: string, domain: string) {
     throw error;
   }
 
+  const audit = await recordSiteChange(actor, classroomId, 'UPDATE', updated, existing, updated, [
+    'custom_domain',
+    'custom_domain_verified_at',
+  ]);
+
+  const previous = existing.custom_domain;
   if (previous && previous !== normalized) await releaseCert(previous);
 
-  return updated;
+  return { site: updated, audit };
 }
 
 /**
@@ -558,26 +714,39 @@ export async function setCustomDomain(classroomId: string, domain: string) {
  * something to show an error for. Returns the hostname that was released (or
  * null), which is what the caller needs to tell the instructor their DNS record
  * can now come down.
+ *
+ * Recorded for `actor` once the domain is cleared: SITE_SETTINGS / UPDATE on
+ * the site (`fields`, `values`, `previous`, read from the locked site row in
+ * the transaction that clears it). Nothing to clear: no row.
  */
-export async function clearCustomDomain(classroomId: string) {
-  const prisma = getPrisma();
-
-  const existing = await prisma.classroomSite.findUnique({
-    where: { classroom_id: classroomId },
-    select: { id: true, custom_domain: true },
+export async function clearCustomDomain(classroomId: string, actor: AuditActor | null) {
+  const { existing, cleared } = await getPrisma().$transaction(async tx => {
+    await lockSiteRow(tx, classroomId);
+    const existing = await tx.classroomSite.findUnique({
+      where: { classroom_id: classroomId },
+      select: { id: true, custom_domain: true, custom_domain_verified_at: true },
+    });
+    if (!existing) {
+      throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site.');
+    }
+    if (!existing.custom_domain) return { existing, cleared: null };
+    const cleared = await tx.classroomSite.update({
+      where: { classroom_id: classroomId },
+      data: { custom_domain: null, custom_domain_verified_at: null },
+    });
+    return { existing, cleared };
   });
-  if (!existing) {
-    throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site.');
+  if (!cleared) {
+    return { released: null as string | null, audit: NO_SERVICE_AUDIT };
   }
-  if (!existing.custom_domain) return { released: null as string | null };
 
-  await prisma.classroomSite.update({
-    where: { classroom_id: classroomId },
-    data: { custom_domain: null, custom_domain_verified_at: null },
-  });
+  const audit = await recordSiteChange(actor, classroomId, 'UPDATE', cleared, existing, cleared, [
+    'custom_domain',
+    'custom_domain_verified_at',
+  ]);
 
   await releaseCert(existing.custom_domain);
-  return { released: existing.custom_domain };
+  return { released: existing.custom_domain as string | null, audit };
 }
 
 /**

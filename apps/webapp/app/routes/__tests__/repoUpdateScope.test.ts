@@ -7,7 +7,9 @@
  * the body, loads it from the classroom, and builds the task payload from the
  * STORED template — a template in the body is ignored; a bare stored name is a
  * repository in the classroom's organization. A refused id or a malformed body
- * triggers nothing and asks GitHub for nothing.
+ * triggers nothing and asks GitHub for nothing. A request that queued runs
+ * writes one REPOSITORIES row (`web:repos.update_student_repos`, the count),
+ * after the runs are queued; nothing else of the request is kept.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +23,11 @@ const mocks = vi.hoisted(() => ({
   getGitProvider: vi.fn(),
   batchTrigger: vi.fn(),
   createPublicToken: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+}));
+
+vi.mock('~/utils/helpers', () => ({
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -146,6 +153,26 @@ describe.each(ROUTES)('%s', (_name, route, params) => {
         payload: expect.objectContaining({ repoName: 'lab-1-bob', templateRepo: 'lab-1-template' }),
       }),
     ]);
+    // One row once the runs are queued: the count, never the branch or text.
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
+      classroomId: 'class-1',
+      userId: 'owner-1',
+      role: 'OWNER',
+      action: 'UPDATE',
+      resourceType: 'REPOSITORIES',
+      resourceId: 'repo-1',
+      metadata: { tool: 'web:repos.update_student_repos', repos_to_update: 2 },
+    });
+    expect(mocks.batchTrigger.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.addClassroomAuditLog.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('writes no row when the repository has no student repos to update', async () => {
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+    await submit({ values: { title: 't' }, repository: { id: 'repo-1' } });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('refuses a repository outside this classroom with no GitHub call and no task', async () => {
@@ -159,6 +186,7 @@ describe.each(ROUTES)('%s', (_name, route, params) => {
     expect(mocks.octokitRequest).not.toHaveBeenCalled();
     expect(mocks.gitRepoFindByRepository).not.toHaveBeenCalled();
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('resolves a stored bare template name against the classroom organization', async () => {

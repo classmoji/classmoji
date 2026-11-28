@@ -54,12 +54,20 @@
 import { ClassmojiService } from '@classmoji/services';
 import { withHiddenRows } from '@classmoji/utils';
 import type { ModuleItemType } from '@classmoji/database/client';
+import type { ServiceAudit } from '@classmoji/services/audit';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  noteServiceAudit,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  serviceActor,
+} from './shared.ts';
 
 /**
  * Translate module.service's classroom-scoping throws (generic Errors) into
@@ -118,17 +126,13 @@ export const moduleCreateTool: ToolDefinition<ModuleCreateArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     try {
-      const module = await ClassmojiService.module.create(classroom.classroomId, {
-        title: args.title,
-        description: args.description ?? null,
-      });
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULES',
-        resource_id: module.id,
-        action: 'CREATE',
-        data: { tool: 'module_create', title: args.title },
-      });
+      // The module service records the create (MODULES / CREATE).
+      const { module, audit } = await ClassmojiService.module.create(
+        classroom.classroomId,
+        { title: args.title, description: args.description ?? null },
+        serviceActor(ctx, 'module_create')
+      );
+      noteServiceAudit(ctx, audit);
 
       return ok({
         success: true,
@@ -168,18 +172,14 @@ export const moduleUpdateTool: ToolDefinition<ModuleUpdateArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     try {
-      const module = await ClassmojiService.module.updateForClassroom(
+      // Recorded by the module service when the title or description changed.
+      const { module, audit } = await ClassmojiService.module.updateForClassroom(
         args.module_id,
         classroom.classroomId,
-        { title: args.title, description: args.description ?? null }
+        { title: args.title, description: args.description ?? null },
+        serviceActor(ctx, 'module_update')
       );
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULES',
-        resource_id: module.id,
-        action: 'UPDATE',
-        data: { tool: 'module_update', title: args.title },
-      });
+      noteServiceAudit(ctx, audit);
 
       return ok({
         success: true,
@@ -214,18 +214,14 @@ export const modulePublishTool: ToolDefinition<ModulePublishArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     try {
-      const module = await ClassmojiService.module.setPublished(
+      // Recorded by the module service when the flag changed.
+      const { module, audit } = await ClassmojiService.module.setPublished(
         args.module_id,
         args.published,
-        classroom.classroomId
+        classroom.classroomId,
+        serviceActor(ctx, 'module_publish')
       );
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULES',
-        resource_id: module.id,
-        action: 'UPDATE',
-        data: { tool: 'module_publish', published: args.published },
-      });
+      noteServiceAudit(ctx, audit);
 
       return ok({
         success: true,
@@ -327,24 +323,15 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     }
 
     try {
-      const item = await ClassmojiService.module.addItem(
+      // The module service records the new item (MODULE_ITEM / CREATE).
+      const { item, audit } = await ClassmojiService.module.addItem(
         args.module_id,
         args.item_type as Exclude<ModuleItemType, 'REPOSITORY' | 'QUIZ'>,
         args.target_id,
-        classroom.classroomId
+        classroom.classroomId,
+        serviceActor(ctx, 'module_item_add')
       );
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULE_ITEM',
-        resource_id: item.id,
-        action: 'CREATE',
-        data: {
-          tool: 'module_item_add',
-          module_id: args.module_id,
-          item_type: args.item_type,
-          target_id: args.target_id,
-        },
-      });
+      noteServiceAudit(ctx, audit);
 
       const alsoIn = await ClassmojiService.module.findOtherModulesHolding(
         args.item_type as Exclude<ModuleItemType, 'REPOSITORY' | 'QUIZ'>,
@@ -396,18 +383,13 @@ export const moduleItemRemoveTool: ToolDefinition<ModuleItemRemoveArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     try {
-      const item = await ClassmojiService.module.removeItem(args.item_id, classroom.classroomId);
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULE_ITEM',
-        resource_id: item.id,
-        action: 'DELETE',
-        data: {
-          tool: 'module_item_remove',
-          module_id: item.module_id,
-          item_type: item.item_type,
-        },
-      });
+      // The module service records the removal (MODULE_ITEM / DELETE).
+      const { item, audit } = await ClassmojiService.module.removeItem(
+        args.item_id,
+        classroom.classroomId,
+        serviceActor(ctx, 'module_item_remove')
+      );
+      noteServiceAudit(ctx, audit);
 
       return ok({ success: true, removed: { id: item.id, module_id: item.module_id } });
     } catch (error) {
@@ -449,22 +431,14 @@ export const moduleItemMoveTool: ToolDefinition<ModuleItemMoveArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     try {
-      const moved = await ClassmojiService.module.moveItemToModuleEnd(
+      // The module service records the move (MODULE_ITEM / UPDATE).
+      const { item: moved, audit } = await ClassmojiService.module.moveItemToModuleEnd(
         args.item_id,
         args.module_id,
-        classroom.classroomId
+        classroom.classroomId,
+        serviceActor(ctx, 'module_item_move')
       );
-
-      await writeAudit(ctx, {
-        resource_type: 'MODULE_ITEM',
-        resource_id: moved.id,
-        action: 'UPDATE',
-        data: {
-          tool: 'module_item_move',
-          module_id: args.module_id,
-          from_module_id: moved.from_module_id,
-        },
-      });
+      noteServiceAudit(ctx, audit);
 
       return ok({
         success: true,
@@ -547,12 +521,17 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
     };
     if (module.assignments.length > 0 && !onlyHiddenQuizzes) refuseOwned();
 
-    let deletedQuizAssignmentIds: string[] = [];
     try {
-      const deleted = await ClassmojiService.module.deleteById(module.id, classroom.classroomId, {
-        quizzesHidden,
-      });
-      deletedQuizAssignmentIds = deleted.deleted_quiz_assignment_ids;
+      // The module service records the delete (MODULES / DELETE: title, slug,
+      // was_published, the true items_removed and any quiz assignments that
+      // went with it).
+      const deleted = await ClassmojiService.module.deleteById(
+        module.id,
+        classroom.classroomId,
+        { quizzesHidden },
+        serviceActor(ctx, 'module_delete')
+      );
+      noteServiceAudit(ctx, deleted.audit);
     } catch (error) {
       if (error instanceof Error) {
         // The service re-checks under a lock: an assignment moved in, or the
@@ -573,23 +552,6 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
     // Legacy QUIZ items are listed for nobody (a quiz is in a module through
     // its assignment), so they are not counted in the reply either.
     const itemsRemoved = module.items.filter(item => item.item_type !== 'QUIZ').length;
-
-    await writeAudit(ctx, {
-      resource_type: 'MODULES',
-      resource_id: module.id,
-      action: 'DELETE',
-      data: {
-        tool: 'module_delete',
-        title: module.title,
-        slug: module.slug,
-        was_published: module.is_published,
-        // The true count: the audit log is the owner's record, not a read surface.
-        items_removed: module.items.length,
-        ...(deletedQuizAssignmentIds.length > 0
-          ? { quiz_assignment_ids: deletedQuizAssignmentIds }
-          : {}),
-      },
-    });
 
     return ok({
       success: true,
@@ -702,8 +664,11 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
 
     let rows: ReorderRow[];
     let moduleId: string | null = null;
-    // The service call for this kind, given the full list.
-    let apply: (full: string[]) => Promise<unknown>;
+    // The service call for this kind, given the full list. Each service
+    // records the reorder when the order changed (MODULES / UPDATE, `kind`,
+    // the moved rows and their new places).
+    const actor = serviceActor(ctx, 'module_reorder');
+    let apply: (full: string[]) => Promise<{ audit: ServiceAudit }>;
 
     if (kind === 'MODULES') {
       if (args.module_id !== undefined) {
@@ -716,7 +681,7 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
         classroom.classroomId
       );
       rows = modules.map(m => ({ id: m.id, title: m.title, hidden: false }));
-      apply = full => ClassmojiService.module.reorderModules(classroom.classroomId, full);
+      apply = full => ClassmojiService.module.reorderModules(classroom.classroomId, full, actor);
     } else {
       if (args.module_id === undefined) {
         throw new ToolError('invalid_params', `module_id is required for kind ${kind}.`);
@@ -744,7 +709,12 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
           hidden: quizzesHidden && a.type === 'QUIZ',
         }));
         apply = full =>
-          ClassmojiService.assignment.reorderInModule(module.id, full, classroom.classroomId);
+          ClassmojiService.assignment.reorderInModule(
+            module.id,
+            full,
+            classroom.classroomId,
+            actor
+          );
       } else {
         // Legacy REPOSITORY and QUIZ items are not in the content list (a
         // repository and a quiz sit in a module through an assignment): the
@@ -776,7 +746,7 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
             };
           });
         apply = full =>
-          ClassmojiService.module.reorderItems(module.id, full, classroom.classroomId);
+          ClassmojiService.module.reorderItems(module.id, full, classroom.classroomId, actor);
       }
     }
 
@@ -784,7 +754,8 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
     assertFullOrder(kind, visible, ordered);
     // The services take the full list: hidden rows go back where they sit now.
     try {
-      await apply(withHiddenRows(rows, ordered));
+      const { audit } = await apply(withHiddenRows(rows, ordered));
+      noteServiceAudit(ctx, audit);
     } catch (error) {
       if (error instanceof Error) {
         if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
@@ -806,19 +777,6 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
       }
       throw error;
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'MODULES',
-      resource_id: moduleId,
-      action: 'UPDATE',
-      data: {
-        tool: 'module_reorder',
-        kind,
-        ordered_ids: ordered,
-        // `value`: the order written.
-        value: `${kind}:${ordered.join(',')}`,
-      },
-    });
 
     const titles = new Map(visible.map(row => [row.id, row.title]));
     return ok({

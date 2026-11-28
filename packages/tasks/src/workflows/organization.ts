@@ -9,6 +9,7 @@ import {
   type GitHubProvider,
   type GitLabProvider,
 } from '@classmoji/services';
+import { parseAuditActor } from '@classmoji/services/audit';
 import { nanoid } from 'nanoid';
 import { addCollaboratorsToRepoTask, createRepositoriesTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
@@ -47,6 +48,11 @@ interface RemoveUserPayload {
   actorUserId?: string | null;
   /** The platform admin viewing as that person ("View as"), for the same row. */
   impersonatedBy?: string | null;
+  /**
+   * Who the removal is recorded for once the membership row is deleted (a
+   * student removal names one). A run queued without it records nothing.
+   */
+  auditActor?: unknown;
   payload?: RemoveUserPayload;
 }
 
@@ -261,10 +267,12 @@ async function leaveGitLabClassAsStudent(
   });
   for (const team of teams) {
     try {
+      // Part of the student's removal, which its own completion row records.
       await ClassmojiService.teamAdmin.removeTeamMember({
         classroomId,
         slugOrId: team.id,
         login: user?.login ?? gitlabUsername,
+        actor: null,
       });
     } catch (error: unknown) {
       console.error(`[remove_user] could not remove the student from team ${team.id}`, error);
@@ -327,7 +335,14 @@ export const removeUserFromOrganizationTask = task({
       typeof payload.impersonatedBy === 'string' && payload.impersonatedBy
         ? payload.impersonatedBy
         : null;
-    const actor = impersonatedBy ? { actorUserId, impersonatedBy } : { actorUserId };
+    // The removal's own row: written by classroomMembership.remove after the
+    // delete, for the actor the payload names (read field by field; an
+    // invalid one records nothing rather than fail the run after its change).
+    const actor = {
+      ...(impersonatedBy ? { actorUserId, impersonatedBy } : { actorUserId }),
+      audit: parseAuditActor(payload.auditActor),
+      hadAcceptedInvite: payload.user?.has_accepted_invite === true,
+    };
 
     // Support both new (classroom/gitOrganization) and legacy (organization) params
     const classroomData = classroom || organization;

@@ -17,7 +17,8 @@
  *     and a chunk that fails to queue fails only itself and what follows;
  *   - each receiving grader gets ONE summary notification;
  *   - startStaffRemoval refuses (requireChoice) before anything is queued and
- *     moves nothing itself; settleUngradedSlots never throws.
+ *     moves nothing itself; settleUngradedSlots never throws;
+ *   - every grader row attempted before a failure is in the outcome's audit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +38,14 @@ const mocks = vi.hoisted(() => ({
   removeStaff: vi.fn(),
   batchTrigger: vi.fn(),
   createNotifications: vi.fn(),
+  recordForActor: vi.fn(),
+}));
+
+// The grader rows: `actor: null` owes none (as the real rule), and a test
+// with an actor decides whether each row is written or missed.
+vi.mock('../../classmoji/audit.service.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../classmoji/audit.service.ts')>()),
+  recordForActor: (...a: unknown[]) => mocks.recordForActor(...a),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -137,6 +146,9 @@ beforeEach(() => {
   seed(3);
 
   mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: ORG });
+  mocks.recordForActor.mockImplementation((actor: unknown) =>
+    Promise.resolve(actor ? { written: 1, missed: 0 } : { written: 0, missed: 0 })
+  );
   mocks.gradesFor.mockResolvedValue([]);
   mocks.findSubmission.mockImplementation((id: string, classroomId: string) => {
     const sub = submissions.get(id);
@@ -187,15 +199,19 @@ beforeEach(() => {
   });
 });
 
+/** No grader row owed: every move here runs with `actor: null`. */
+const NONE = { written: 0, missed: 0 };
+
 describe('moveGraderSlot', () => {
   it('adds the new grader before removing the old one, with stored names', async () => {
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's2',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(mocks.calls).toEqual([
       'gh-add:ta-ann:2',
       'db-add:u-ann:s2',
@@ -211,12 +227,13 @@ describe('moveGraderSlot', () => {
   it('leaves a slot that was graded since the plan alone', async () => {
     mocks.gradesFor.mockResolvedValue([{ id: 'g1' }]);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'graded_since' });
+    expect(result).toEqual({ audit: NONE, status: 'graded_since' });
     expect(mocks.calls).toEqual([]);
   });
 
@@ -224,12 +241,13 @@ describe('moveGraderSlot', () => {
     // Ungraded before the add, graded by the time the old grader would go.
     mocks.gradesFor.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'g1' }]);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'graded_since' });
+    expect(result).toEqual({ audit: NONE, status: 'graded_since' });
     expect(mocks.calls.some(c => c.startsWith('gh-remove') || c.startsWith('db-remove'))).toBe(
       false
     );
@@ -239,25 +257,27 @@ describe('moveGraderSlot', () => {
   it('without the fallback, keeps the old grader when the new one is no longer eligible', async () => {
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'grader_not_eligible' });
+    expect(result).toEqual({ audit: NONE, status: 'grader_not_eligible' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-gone']);
   });
 
   it('with the fallback (reassign), unassigns when the planned grader left the pool', async () => {
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
       fallbackToUnassign: true,
     });
-    expect(result).toEqual({ status: 'unassigned', reason: 'grader_not_eligible' });
+    expect(result).toEqual({ audit: NONE, status: 'unassigned', reason: 'grader_not_eligible' });
     expect(submissions.get('s1')!.graderIds).toEqual([]);
   });
 
@@ -267,11 +287,12 @@ describe('moveGraderSlot', () => {
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
+      actor: null,
     };
     await HelperService.moveGraderSlot(payload);
     const again = await HelperService.moveGraderSlot(payload);
     // A retry finds the move already made and reports it as the move it is.
-    expect(again).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(again).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
     // Nothing doubled up: one add and one removal in all.
     expect(mocks.addGraderToAssignment).toHaveBeenCalledTimes(1);
@@ -282,31 +303,34 @@ describe('moveGraderSlot', () => {
     submissions.set('s1', { graderIds: ['u-gone', 'u-ann'] });
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
       fallbackToUnassign: true,
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
   });
 
   it('the departing grader already gone after a successful add is still a move', async () => {
     submissions.set('s1', { graderIds: [] });
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
     });
-    expect(result).toEqual({ status: 'moved', toLogin: 'ta-ann' });
+    expect(result).toEqual({ audit: NONE, status: 'moved', toLogin: 'ta-ann' });
     expect(submissions.get('s1')!.graderIds).toEqual(['u-ann']);
   });
 
   it('refuses a submission outside the classroom', async () => {
     mocks.classroomFindById.mockResolvedValue({ id: 'class-2', git_organization: ORG });
     const scoped = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-2',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -319,7 +343,12 @@ describe('moveGraderSlot', () => {
 
 describe('resolveUngradedSlots', () => {
   const resolve = (choice: 'reassign' | 'unassign' | 'keep') =>
-    HelperService.resolveUngradedSlots({ classroomId: 'class-1', graderId: 'u-gone', choice });
+    HelperService.resolveUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice,
+      actor: null,
+    });
 
   it('keep changes nothing', async () => {
     const outcome = await resolve('keep');
@@ -357,6 +386,7 @@ describe('resolveUngradedSlots', () => {
 
   it('sends ONE summary notification per receiving grader', async () => {
     await HelperService.resolveUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'reassign',
@@ -467,6 +497,27 @@ describe('resolveUngradedSlots', () => {
     expect(mocks.createNotifications.mock.calls[0][0].title).toContain('(being assigned now)');
   });
 
+  it('a queued run carries the removing person, so the run records the same rows', async () => {
+    seed(helper.UNGRADED_INLINE_LIMIT + 1);
+    const actor = {
+      userId: 'owner-1',
+      role: 'OWNER' as const,
+      tool: 'web:staff.remove',
+      impersonatedBy: null,
+    };
+    const outcome = await HelperService.resolveUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'reassign',
+      actor,
+    });
+    expect(outcome.queued).toBe(true);
+    const [, items] = mocks.batchTrigger.mock.calls[0];
+    for (const item of items) expect(item.payload.actor).toEqual(actor);
+    // The runs write their own rows: none was owed in this request.
+    expect(outcome.audit).toEqual(NONE);
+  });
+
   it('a chunk that fails to queue fails only itself and what follows', async () => {
     seed(1001); // three chunks of at most 500
     mocks.batchTrigger
@@ -478,6 +529,67 @@ describe('resolveUngradedSlots', () => {
     expect(outcome.queued).toBe(true);
     expect(outcome.reassigned.reduce((n, r) => n + r.count, 0)).toBe(500);
     expect(outcome.failed).toBe(501);
+  });
+
+  describe('a move that fails after its add', () => {
+    const actor = {
+      userId: 'owner-1',
+      role: 'OWNER' as const,
+      tool: 'web:staff.remove',
+      impersonatedBy: null,
+    };
+    const failRemoval = () => {
+      seed(1);
+      mocks.removeIssueAssignees.mockRejectedValue(new Error('GitHub 502'));
+    };
+
+    it('still reports the add row it missed, and the slot as failed', async () => {
+      failRemoval();
+      mocks.recordForActor.mockResolvedValue({ written: 0, missed: 1 });
+      const outcome = await HelperService.resolveUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        actor,
+      });
+      expect(outcome).toMatchObject({
+        failed: 1,
+        reassigned: [],
+        audit: { written: 0, missed: 1 },
+      });
+      // Only the add was attempted: the removal threw before its row.
+      expect(mocks.recordForActor).toHaveBeenCalledTimes(1);
+      expect(mocks.recordForActor.mock.calls[0][1]).toMatchObject({ action: 'CREATE' });
+    });
+
+    it('still reports the add row it wrote, and the slot as failed', async () => {
+      failRemoval();
+      const outcome = await HelperService.resolveUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        actor,
+      });
+      expect(outcome).toMatchObject({
+        failed: 1,
+        reassigned: [],
+        audit: { written: 1, missed: 0 },
+      });
+    });
+
+    it('settleUngradedSlots reports the same', async () => {
+      failRemoval();
+      mocks.recordForActor.mockResolvedValue({ written: 0, missed: 1 });
+      const outcome = await HelperService.settleUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        departingName: 'Gone Person',
+        expectedCount: 1,
+        actor,
+      });
+      expect(outcome).toMatchObject({ failed: 1, audit: { written: 0, missed: 1 } });
+    });
   });
 
   it('when the first chunk fails, nothing is reported queued and nobody is notified', async () => {
@@ -494,6 +606,7 @@ describe('startStaffRemoval', () => {
   it('refuses without a choice when asked to, before anything is queued', async () => {
     await expect(
       HelperService.startStaffRemoval({
+        actor: null,
         classroomId: 'class-1',
         login: 'ta-gone',
         role: 'ASSISTANT',
@@ -510,6 +623,7 @@ describe('startStaffRemoval', () => {
     );
     await expect(
       HelperService.startStaffRemoval({
+        actor: null,
         classroomId: 'class-1',
         login: 'ta-gone',
         role: 'OWNER',
@@ -521,6 +635,7 @@ describe('startStaffRemoval', () => {
 
   it('queues the removal and moves NOTHING itself', async () => {
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
@@ -528,6 +643,12 @@ describe('startStaffRemoval', () => {
       requireChoice: true,
     });
     expect(mocks.calls).toEqual(['removeStaff']);
+    expect(mocks.removeStaff).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      login: 'ta-gone',
+      role: 'ASSISTANT',
+      actor: null,
+    });
     expect(mocks.findUngradedSlotsForGrader).not.toHaveBeenCalled();
     expect(started).toMatchObject({
       runId: 'run-1',
@@ -541,6 +662,7 @@ describe('startStaffRemoval', () => {
 
   it('without requireChoice, a missing choice becomes keep', async () => {
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'ASSISTANT',
@@ -559,6 +681,7 @@ describe('startStaffRemoval', () => {
       heldUngradedCount: 3,
     });
     const started = await HelperService.startStaffRemoval({
+      actor: null,
       classroomId: 'class-1',
       login: 'ta-gone',
       role: 'TEACHER',
@@ -572,6 +695,7 @@ describe('startStaffRemoval', () => {
 describe('settleUngradedSlots', () => {
   it('carries out the choice', async () => {
     const outcome = await HelperService.settleUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'unassign',
@@ -584,6 +708,7 @@ describe('settleUngradedSlots', () => {
   it('never throws: a failure counts every expected slot as failed', async () => {
     mocks.findUngradedSlotsForGrader.mockRejectedValue(new Error('db down'));
     const outcome = await HelperService.settleUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'unassign',
@@ -591,5 +716,31 @@ describe('settleUngradedSlots', () => {
       expectedCount: 3,
     });
     expect(outcome).toMatchObject({ choice: 'unassign', failed: 3 });
+  });
+
+  it('a failure after some moves still reports the rows those moves wrote or missed', async () => {
+    // Every slot moves (an add and a removal each), then the summary fails.
+    mocks.recordForActor
+      .mockResolvedValueOnce({ written: 0, missed: 1 })
+      .mockResolvedValue({ written: 1, missed: 0 });
+    mocks.createNotifications.mockRejectedValue(new Error('notifications down'));
+    const outcome = await HelperService.settleUngradedSlots({
+      actor: { userId: 'owner-1', role: 'OWNER', tool: 'web:staff.remove', impersonatedBy: null },
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'reassign',
+      departingName: 'Gone Person',
+      expectedCount: 3,
+    });
+    expect([...submissions.values()].map(s => s.graderIds)).toEqual([
+      ['u-ann'],
+      ['u-bob'],
+      ['u-ann'],
+    ]);
+    expect(outcome).toMatchObject({
+      choice: 'reassign',
+      failed: 3,
+      audit: { written: 5, missed: 1 },
+    });
   });
 });

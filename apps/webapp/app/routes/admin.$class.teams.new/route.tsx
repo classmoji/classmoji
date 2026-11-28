@@ -9,6 +9,7 @@ import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -231,10 +232,11 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'create_team',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -245,13 +247,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   };
 
   return namedAction(request, {
-    // Every team needs a tag, so tags are made where the team is. Upsert, so
-    // re-entering a name that exists simply hands back that tag.
+    // Every team needs a tag, so tags are made where the team is. A name that
+    // exists simply hands back that tag; the tag service records a new one.
     async createTag() {
       const tagName = typeof name === 'string' ? name.trim() : '';
       if (!tagName) return { error: 'A tag name is required.' };
       try {
-        const tag = await ClassmojiService.organizationTag.upsert(classroom.id, tagName);
+        const { tag } = await ClassmojiService.organizationTag.findOrCreate(
+          classroom.id,
+          tagName,
+          await auditActor(request, gate, 'web:teams.create_tag')
+        );
         return { tag: { id: tag.id, name: tag.name } };
       } catch (error: unknown) {
         console.error('Tag create error:', error);
@@ -270,6 +276,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           // today, so the choice does not yet change who sees the team.
           isVisible: visibility === 'closed',
           tagIds: tags ?? [],
+          // The team service records the create (TEAMS / CREATE).
+          actor: await auditActor(request, gate, 'web:teams.create'),
         });
 
         return {

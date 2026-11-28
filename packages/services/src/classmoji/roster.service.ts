@@ -4,6 +4,12 @@ import { normalizeEmail } from '@classmoji/utils/email';
 import { appUrl, escapeVars, inviteLandingUrl } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 export interface RosterStudentInput {
   email: string;
@@ -50,6 +56,8 @@ export interface AddStudentsResult {
    * triggering `activate_membership` with each entry.
    */
   activations: Array<{ login: string; gitOrganizationId: string }>;
+  /** The roster row this call owed (none when it enrolled and invited nobody). */
+  audit: ServiceAudit;
 }
 
 /**
@@ -62,8 +70,11 @@ export interface AddStudentsResult {
  *
  * The memberships and the invites are written in ONE transaction: either both
  * land or neither does, so a failed invite write can no longer leave students
- * enrolled with no invites, no audit row and no emails. Emails, activations and
- * the audit row are the caller's job, after this resolves.
+ * enrolled with no invites, no audit row and no emails. Once they commit, the
+ * add is recorded for `actor` (STUDENT_ROSTER, CREATE, with the counts), so
+ * it is in the log before the caller sends any email; a call that enrolled
+ * and invited nobody records nothing. Emails and activations are the caller's
+ * job, after this resolves.
  * Shared by the web "Add Students" action and the MCP roster_add_student tool
  * so both take one code path.
  *
@@ -74,9 +85,12 @@ export const addStudents = async ({
   classroomId,
   students,
   signInvite,
+  actor,
 }: {
   classroomId: string;
   students: RosterStudentInput[];
+  /** Who the add is recorded for; null records nothing. */
+  actor: AuditActor | null;
   /**
    * Mints the signed token the invite link carries for an address. Injected
    * because signing lives in @classmoji/auth, which depends on this package.
@@ -243,6 +257,21 @@ export const addStudents = async ({
     });
   }
 
+  const audit =
+    newlyEnrolled.length + toInvite.length > 0
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'STUDENT_ROSTER',
+          action: 'CREATE',
+          data: {
+            added: newlyEnrolled.length,
+            invited: toInvite.length,
+            already_enrolled: alreadyEnrolled.length,
+            invalid: invalid.length,
+          },
+        })
+      : NO_SERVICE_AUDIT;
+
   return {
     addedExistingUsers: newlyEnrolled.length,
     invitedNewUsers: toInvite.length,
@@ -250,5 +279,6 @@ export const addStudents = async ({
     invalid,
     emails: emailsOut,
     activations,
+    audit,
   };
 };

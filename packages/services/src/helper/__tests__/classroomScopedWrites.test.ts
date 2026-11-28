@@ -76,6 +76,7 @@ beforeEach(() => {
 describe('addGraderInClassroom', () => {
   it('assigns the eligible grader with the stored repo name, issue and login', async () => {
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -83,7 +84,12 @@ describe('addGraderInClassroom', () => {
       repositoryId: 'repo-1',
     });
 
-    expect(result).toEqual({ status: 'added', graderLogin: 'ta-bob' });
+    // No actor here: nothing owed.
+    expect(result).toEqual({
+      status: 'added',
+      graderLogin: 'ta-bob',
+      audit: { written: 0, missed: 0 },
+    });
     expect(mocks.findSubmission).toHaveBeenCalledWith('ra-1', 'class-1', {
       repositoryId: 'repo-1',
       assignmentId: undefined,
@@ -95,6 +101,7 @@ describe('addGraderInClassroom', () => {
 
   it('refuses a submission outside the classroom with no GitHub call and no write', async () => {
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-2',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -109,6 +116,7 @@ describe('addGraderInClassroom', () => {
 
   it('refuses a grader who is not in the classroom grader pool', async () => {
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -125,6 +133,7 @@ describe('addGraderInClassroom', () => {
     mocks.findEligibleGrader.mockResolvedValue({ id: 'u-carol', login: 'ta-carol' });
 
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -140,6 +149,7 @@ describe('addGraderInClassroom', () => {
     mocks.findSubmission.mockResolvedValue({ ...SUBMISSION, provider_issue_number: null });
 
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -158,6 +168,7 @@ describe('addGraderInClassroom', () => {
     );
 
     const result = await HelperService.addGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -174,6 +185,7 @@ describe('addGraderInClassroom', () => {
 
     await expect(
       HelperService.addGraderInClassroom({
+        actor: null,
         classroomId: 'class-1',
         gitOrganization: ORG,
         gitRepoAssignmentId: 'ra-1',
@@ -186,6 +198,7 @@ describe('addGraderInClassroom', () => {
 describe('removeGraderInClassroom', () => {
   it('unassigns an assigned grader using the stored repo name, issue and login', async () => {
     const result = await HelperService.removeGraderInClassroom({
+      actor: null,
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -193,7 +206,11 @@ describe('removeGraderInClassroom', () => {
       assignmentId: 'asg-1',
     });
 
-    expect(result).toEqual({ status: 'removed', graderLogin: 'ta-carol' });
+    expect(result).toEqual({
+      status: 'removed',
+      graderLogin: 'ta-carol',
+      audit: { written: 0, missed: 0 },
+    });
     expect(mocks.findSubmission).toHaveBeenCalledWith('ra-1', 'class-1', {
       repositoryId: undefined,
       assignmentId: 'asg-1',
@@ -206,6 +223,7 @@ describe('removeGraderInClassroom', () => {
 
   it('refuses a submission outside the classroom with no GitHub call and no write', async () => {
     const result = await HelperService.removeGraderInClassroom({
+      actor: null,
       classroomId: 'class-2',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
@@ -220,6 +238,7 @@ describe('removeGraderInClassroom', () => {
   it('refuses a grader who is not assigned to the submission', async () => {
     for (const graderId of ['u-bob', undefined, { not: '' }]) {
       const result = await HelperService.removeGraderInClassroom({
+        actor: null,
         classroomId: 'class-1',
         gitOrganization: ORG,
         gitRepoAssignmentId: 'ra-1',
@@ -240,6 +259,7 @@ describe('deleteRepository', () => {
       gitOrganization: ORG,
       classroomId: 'class-1',
       deleteFromGithub: true,
+      actor: null,
     });
 
     expect(mocks.deleteRepository).toHaveBeenCalledWith('acme', 'lab-1-alice');
@@ -253,6 +273,7 @@ describe('deleteRepository', () => {
       name: 'lab-1-alice',
       gitOrganization: ORG,
       deleteFromGithub: false,
+      actor: null,
     });
 
     expect(mocks.deleteRepository).not.toHaveBeenCalled();

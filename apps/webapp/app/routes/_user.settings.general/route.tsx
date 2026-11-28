@@ -10,6 +10,7 @@ import { auth, isViewingAsAnotherUser, requireAuth } from '@classmoji/auth/serve
 import { authClient } from '@classmoji/auth/client';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 import {
   sendEmailVerificationCode,
   consumeEmailVerificationCode,
@@ -105,7 +106,18 @@ export const action = async ({ request }: Route.ActionArgs) => {
     if (!(await consumeEmailVerificationCode(email, code))) {
       return { error: 'Invalid or expired code. Try resending.' };
     }
-    await ClassmojiService.user.update(userId, { email, emailVerified: true });
+    // An invite for the new address is claimed here; each membership it
+    // creates is recorded for this person.
+    await ClassmojiService.user.update(
+      userId,
+      { email, emailVerified: true },
+      {
+        inviteClaim: {
+          tool: 'web:roster.invite_email',
+          impersonatedBy: await requestImpersonator(request),
+        },
+      }
+    );
     return { changed: true };
   }
 

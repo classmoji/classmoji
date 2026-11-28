@@ -1,6 +1,13 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma, PrismaClient } from '@classmoji/database/client';
 import { SCORE_EMOJI_MAPPINGS } from '@classmoji/utils';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+import { describeSettingsChange, settingsChangeData, settingsValues } from './settingsAudit.ts';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
 
@@ -20,26 +27,58 @@ export interface EmojiMappingFields {
  * Writes only the named fields, to `classroomId`'s row for that emoji: the
  * row's id and classroom are never taken from `values`. A field left
  * undefined keeps its stored value on an update.
+ *
+ * Recorded for `actor` after the save, when it created the emoji or changed
+ * one of its fields: SETTINGS / UPDATE on the mapping, `emoji` and `grade`,
+ * and the changed `fields` with their `values` and `previous` values (the
+ * description by name only), `created: true` for a new emoji. `actor: null`
+ * records nothing.
  */
-export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingFields) => {
+export const saveEmojiMapping = async (
+  classroomId: string,
+  values: EmojiMappingFields,
+  actor: AuditActor | null
+) => {
   const fields = {
     grade: values.grade,
     ...(values.extra_tokens !== undefined ? { extra_tokens: values.extra_tokens } : {}),
     ...(values.description !== undefined ? { description: values.description } : {}),
   };
-  return getPrisma().$transaction(async tx => {
+  const where = { classroom_id_emoji: { classroom_id: classroomId, emoji: values.emoji } };
+  const { mapping, before } = await getPrisma().$transaction(async tx => {
     await lockScale(tx, classroomId);
-    return tx.emojiMapping.upsert({
-      where: {
-        classroom_id_emoji: {
-          classroom_id: classroomId,
-          emoji: values.emoji,
-        },
-      },
+    const before = actor ? await tx.emojiMapping.findUnique({ where }) : null;
+    const mapping = await tx.emojiMapping.upsert({
+      where,
       update: fields,
       create: { ...fields, emoji: values.emoji, classroom_id: classroomId },
     });
+    return { mapping, before };
   });
+
+  let audit: ServiceAudit = NO_SERVICE_AUDIT;
+  const change = actor
+    ? describeSettingsChange(
+        'EmojiMapping',
+        before,
+        mapping,
+        before ? Object.keys(fields) : ['emoji', ...Object.keys(fields)]
+      )
+    : null;
+  if (actor && change) {
+    audit = await recordForActor(actor, {
+      classroomId,
+      resourceType: 'SETTINGS',
+      resourceId: mapping.id,
+      action: 'UPDATE',
+      data: {
+        ...settingsValues('EmojiMapping', mapping, ['emoji', 'grade']),
+        ...settingsChangeData(change),
+        ...(before ? {} : { created: true }),
+      },
+    });
+  }
+  return { mapping, audit };
 };
 
 export const findClassroomEmojiMappingDescription = async (classroomId: string) => {
@@ -149,12 +188,43 @@ export const quizScaleEmojis = (scale: Readonly<Record<string, number>>): string
 /**
  * Delete one emoji from `classroomId`'s scale. Returns how many rows went (0
  * or 1); an emoji that is not a non-empty string deletes nothing.
+ *
+ * A delete is recorded for `actor`: SETTINGS / DELETE on the mapping, its
+ * `emoji` and its `previous` grade and bonus tokens. Nothing deleted, or
+ * `actor: null`: no row.
  */
-export const deleteEmojiMapping = async (classroomId: string, emoji: unknown) => {
-  if (typeof emoji !== 'string' || emoji === '' || !classroomId) return { count: 0 };
-  return getPrisma().emojiMapping.deleteMany({
+export const deleteEmojiMapping = async (
+  classroomId: string,
+  emoji: unknown,
+  actor: AuditActor | null
+): Promise<{ count: number; audit: ServiceAudit }> => {
+  if (typeof emoji !== 'string' || emoji === '' || !classroomId) {
+    return { count: 0, audit: NO_SERVICE_AUDIT };
+  }
+  const prisma = getPrisma();
+  const before = actor
+    ? await prisma.emojiMapping.findUnique({
+        where: { classroom_id_emoji: { classroom_id: classroomId, emoji } },
+        select: { id: true, grade: true, extra_tokens: true },
+      })
+    : null;
+  const { count } = await prisma.emojiMapping.deleteMany({
     where: { classroom_id: classroomId, emoji },
   });
+  if (!actor || count === 0) return { count, audit: NO_SERVICE_AUDIT };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'SETTINGS',
+    resourceId: before?.id ?? null,
+    action: 'DELETE',
+    data: {
+      emoji,
+      ...(before
+        ? { previous: settingsValues('EmojiMapping', before, ['grade', 'extra_tokens']) }
+        : {}),
+    },
+  });
+  return { count, audit };
 };
 
 /**
@@ -179,21 +249,71 @@ export const ensureDefaultScale = async (classroomId: string, client: ScaleClien
   });
 
 /**
+ * A scale as comparable text: each emoji with its grade, bonus tokens and
+ * description, sorted. Each column as the write stores it (a left-out bonus is
+ * 0, a left-out description ''), so a replace with the same scale compares
+ * equal and one that changes only a description does not.
+ */
+const scaleKey = (
+  rows: ReadonlyArray<{
+    emoji: string;
+    grade: unknown;
+    extra_tokens?: unknown;
+    description?: string | null;
+  }>
+) =>
+  JSON.stringify(
+    rows
+      .map(
+        r => [r.emoji, Number(r.grade), Number(r.extra_tokens ?? 0), r.description ?? ''] as const
+      )
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  );
+
+/**
  * Replace a classroom's whole grading scale with `mappings` (the settings
  * page's "populate" buttons): one transaction under the scale lock, so no
  * reader sees it empty and a concurrent re-seed (`ensureDefaultScale`) cannot
  * mix its rows in. Grades and quiz adjustments on emojis that left the scale
  * become orphaned (the settings page's remap banner).
+ *
+ * Recorded for `actor` after the commit, when the scale is not the one it
+ * replaced (an emoji, a grade, bonus tokens or a description differs):
+ * SETTINGS / UPDATE on the classroom, `count` (emojis now) and
+ * `previous_count`; descriptions are compared, never recorded. `actor: null`
+ * records nothing.
  */
-export const replaceScale = async (classroomId: string, mappings: readonly EmojiMappingInput[]) =>
-  getPrisma().$transaction(
+export const replaceScale = async (
+  classroomId: string,
+  mappings: readonly EmojiMappingInput[],
+  actor: AuditActor | null
+) => {
+  const { previous } = await getPrisma().$transaction(
     async tx => {
       await lockScale(tx, classroomId);
+      const previous = actor
+        ? await tx.emojiMapping.findMany({
+            where: { classroom_id: classroomId },
+            select: { emoji: true, grade: true, extra_tokens: true, description: true },
+          })
+        : null;
       await tx.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
       await tx.emojiMapping.createMany({
         data: mappings.map(m => ({ ...m, classroom_id: classroomId })),
       });
-      return { count: mappings.length };
+      return { previous };
     },
     { timeout: 15_000 }
   );
+  let audit: ServiceAudit = NO_SERVICE_AUDIT;
+  if (actor && previous && scaleKey(previous) !== scaleKey(mappings)) {
+    audit = await recordForActor(actor, {
+      classroomId,
+      resourceType: 'SETTINGS',
+      resourceId: classroomId,
+      action: 'UPDATE',
+      data: { count: mappings.length, previous_count: previous.length },
+    });
+  }
+  return { count: mappings.length, audit };
+};

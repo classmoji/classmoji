@@ -19,7 +19,17 @@ import {
 } from '@classmoji/services/calendar-policy';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+  type AuditMetadata,
+} from '~/utils/helpers';
+import {
+  calendarCreateAudit,
+  calendarDeleteAudit,
+  calendarUpdateAudit,
+} from '~/utils/calendarAudit';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -142,6 +152,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
+  // Each write is recorded once it has landed, as the owner/teacher calendar
+  // records it (the same rows, `calendarAudit.ts`), with the role this
+  // request's gate resolved.
+  const audit = (action: string, resourceId: string, metadata: AuditMetadata) =>
+    addClassroomAuditLog({
+      request,
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'CALENDAR',
+      resourceId,
+      metadata,
+    });
+
   const formData = await request.formData();
   const intent = formData.get('intent');
 
@@ -178,19 +203,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
-    if (hasLinks) {
-      await ClassmojiService.calendar.updateEventLinks(
-        newEvent.id,
-        classroom.id,
-        {
-          pageIds: linkedPageIds || [],
-          slideIds: linkedSlideIds || [],
-          assignmentIds: linkedAssignmentIds || [],
-        },
-        null,
-        toFeaturedLinkRef(featuredKind, featuredId)
-      );
-    }
+    const saved = hasLinks
+      ? await ClassmojiService.calendar.updateEventLinks(
+          newEvent.id,
+          classroom.id,
+          {
+            pageIds: linkedPageIds || [],
+            slideIds: linkedSlideIds || [],
+            assignmentIds: linkedAssignmentIds || [],
+          },
+          null,
+          toFeaturedLinkRef(featuredKind, featuredId)
+        )
+      : null;
+
+    await audit('CREATE', newEvent.id, calendarCreateAudit(createData, saved));
 
     return data({ success: true });
   }
@@ -271,24 +298,33 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         (linkedPageIds !== undefined ||
           linkedSlideIds !== undefined ||
           linkedAssignmentIds !== undefined);
-      if (hasLinkUpdates) {
-        const linkOccurrenceDate =
-          editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
+      const linkOccurrenceDate =
+        editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
+      const saved = hasLinkUpdates
+        ? await ClassmojiService.calendar.updateEventLinks(
+            linkTargetId,
+            classroom.id,
+            {
+              pageIds: linkedPageIds || [],
+              slideIds: linkedSlideIds || [],
+              assignmentIds: linkedAssignmentIds || [],
+            },
+            linkOccurrenceDate,
+            // Ignored wherever the link keys are: a star with no date to sit on
+            // is as meaningless as a link with none.
+            toFeaturedLinkRef(featuredKind, featuredId)
+          )
+        : null;
 
-        await ClassmojiService.calendar.updateEventLinks(
-          linkTargetId,
-          classroom.id,
-          {
-            pageIds: linkedPageIds || [],
-            slideIds: linkedSlideIds || [],
-            assignmentIds: linkedAssignmentIds || [],
-          },
-          linkOccurrenceDate,
-          // Ignored wherever the link keys are: a star with no date to sit on
-          // is as meaningless as a link with none.
-          toFeaturedLinkRef(featuredKind, featuredId)
-        );
-      }
+      await audit(
+        'UPDATE',
+        eventId,
+        calendarUpdateAudit(
+          updateData,
+          { editScope, occurrenceDate, linksUpdated: Boolean(hasLinkUpdates) },
+          saved
+        )
+      );
 
       return data({ success: true });
     } catch (error: unknown) {
@@ -338,6 +374,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } else {
         await ClassmojiService.calendar.deleteEvent(eventId as string);
       }
+
+      await audit('DELETE', eventId, calendarDeleteAudit(event, options));
 
       return data({ success: true });
     } catch (error: unknown) {

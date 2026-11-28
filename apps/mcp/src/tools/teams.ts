@@ -30,6 +30,10 @@
  * foreign teams. The same holds for tags (Tag is classroom-scoped) and for the
  * TeamTag rows team_tag_remove resolves.
  *
+ * AUDIT: every tool hands the team service (or the tag service) its caller as
+ * actor (`serviceActor`); the service writes the TEAMS / TAGS row after what
+ * it saved, only when it saved something, and the tool writes none itself.
+ *
  * RESPONSES ARE ALLOW-LISTED: team.findByClassroomId returns memberships with
  * full User rows attached (contact PII included), so no service row is ever
  * spread into a response — every payload below is built field by field.
@@ -46,7 +50,14 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  noteServiceAudit,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  serviceActor,
+} from './shared.ts';
 
 /**
  * The fixed sentences for the service's `tag_required` refusal, by the call
@@ -263,27 +274,13 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
         name: args.name,
         isVisible: args.is_visible ?? false,
         tagIds: args.tag_ids,
+        // The service records the create (TEAMS / CREATE) once it is saved.
+        actor: serviceActor(ctx, 'team_create'),
       });
     } catch (error) {
       throw mapTeamError(error, 'create');
     }
-
-    // Audit right after the service call: the GitHub team and the local row are
-    // already committed, so nothing downstream may leave the mutation
-    // un-audited. resource_id names the team.
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: result.team.id,
-      action: 'CREATE',
-      data: {
-        tool: 'team_create',
-        team_id: result.team.id,
-        slug: result.team.slug,
-        is_visible: result.team.isVisible,
-        tags_added: result.tagsAdded.length,
-        tags_failed: result.tagsFailed.length,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,
@@ -352,27 +349,15 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         deleteOnProvider: args.delete_on_github === true,
+        // The service's DELETE row carries the blast radius (repos_deleted,
+        // deleted_repo_names): the trail is the only place left that says
+        // what the delete cost.
+        actor: serviceActor(ctx, 'team_delete'),
       });
     } catch (error) {
       throw mapTeamError(error);
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: result.id,
-      action: 'DELETE',
-      data: {
-        tool: 'team_delete',
-        team_id: result.id,
-        slug: result.slug,
-        removed_from_provider: result.removedFromProvider,
-        // Blast radius on the audit row: the repo records (and their grading
-        // history) are gone, so the trail is the only place left that says
-        // what the delete cost.
-        repos_deleted: result.reposDeleted,
-        deleted_repo_names: result.deletedRepoNames,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     const repoNote =
       result.reposDeleted > 0
@@ -439,23 +424,12 @@ export const teamRenameTool: ToolDefinition<TeamRenameArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         newName: args.new_name,
+        actor: serviceActor(ctx, 'team_rename'),
       });
     } catch (error) {
       throw mapTeamError(error);
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: result.teamId,
-      action: 'UPDATE',
-      data: {
-        tool: 'team_rename',
-        team_id: result.teamId,
-        new_slug: result.newSlug,
-        renamed_repos: result.renamedRepos.length,
-        failed_repos: result.failed.map(f => f.name),
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     const failed = result.failed.map(f => ({ name: f.name, ...describeFailure(f.error) }));
     return ok({
@@ -518,9 +492,9 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    // S1 + audit: resolve the team inside the authorized classroom first, so an
-    // unknown/foreign ref is the uniform not_found before anything else runs and
-    // the audit row can name the team (addTeamMembers returns no team id).
+    // S1: resolve the team inside the authorized classroom first, so an
+    // unknown/foreign ref is the uniform not_found before anything else runs,
+    // and the response can name the team (addTeamMembers returns no team id).
     const team = await resolveTeamInClassroom(args.team, ctx);
 
     // Every login must resolve to a member of THIS classroom (any role) or the
@@ -553,23 +527,14 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         logins: [...requested.values()],
+        // Recorded by the service when it added at least one member (with
+        // their user ids); a call that added nobody records nothing.
+        actor: serviceActor(ctx, 'team_members_add'),
       });
     } catch (error) {
       throw mapTeamError(error);
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: team.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'team_members_add',
-        team_id: team.id,
-        slug: team.slug,
-        succeeded: result.succeeded.map(s => s.login),
-        failed: result.failed.map(f => f.login),
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,
@@ -643,22 +608,14 @@ export const teamMemberRemoveTool: ToolDefinition<TeamMemberRemoveArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         login: args.login,
+        // Recorded by the service when a membership row was removed or the
+        // provider removal ran.
+        actor: serviceActor(ctx, 'team_member_remove'),
       });
     } catch (error) {
       throw mapTeamError(error);
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: result.teamId,
-      action: 'UPDATE',
-      data: {
-        tool: 'team_member_remove',
-        team_id: result.teamId,
-        login: result.login,
-        removed: result.removed,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,
@@ -723,21 +680,14 @@ export const tagCreateTool: ToolDefinition<TagCreateArgs> = {
     }
 
     // classroomId is ALWAYS the authorized classroom, never request input.
-    const { tag, created } = await ClassmojiService.organizationTag.findOrCreate(
+    // The service records a created tag; one that already existed is not a
+    // change and records nothing.
+    const { tag, created, audit } = await ClassmojiService.organizationTag.findOrCreate(
       classroom.classroomId,
-      name
+      name,
+      serviceActor(ctx, 'tag_create')
     );
-
-    // A tag that already existed is not a mutation, so it writes no audit row.
-    // `value` is the name created.
-    if (created) {
-      await writeAudit(ctx, {
-        resource_type: 'TAGS',
-        resource_id: tag.id,
-        action: 'CREATE',
-        data: { tool: 'tag_create', name: tag.name, value: tag.name },
-      });
-    }
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,
@@ -780,8 +730,8 @@ export const teamTagAddTool: ToolDefinition<TeamTagAddArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    // S1 + audit: same reason as team_members_add — addTeamTags returns per-tag
-    // results only, with no team id for the audit row.
+    // S1: same reason as team_members_add — addTeamTags returns per-tag
+    // results only, with no team id for the response.
     const team = await resolveTeamInClassroom(args.team, ctx);
 
     let result;
@@ -790,22 +740,13 @@ export const teamTagAddTool: ToolDefinition<TeamTagAddArgs> = {
         classroomId: classroom.classroomId,
         slugOrId: args.team,
         tagIds: args.tag_ids,
+        // Recorded by the service when it attached at least one tag.
+        actor: serviceActor(ctx, 'team_tag_add'),
       });
     } catch (error) {
       throw mapTeamError(error);
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: team.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'team_tag_add',
-        team_id: team.id,
-        added: result.added,
-        failed: result.failed.map(f => f.tagId),
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,
@@ -895,22 +836,12 @@ export const teamTagRemoveTool: ToolDefinition<TeamTagRemoveArgs> = {
       result = await ClassmojiService.teamAdmin.removeTeamTag({
         classroomId: classroom.classroomId,
         teamTagId: matches[0].id,
+        actor: serviceActor(ctx, 'team_tag_remove'),
       });
     } catch (error) {
       throw mapTeamError(error, 'remove');
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'TEAMS',
-      resource_id: result.teamId,
-      action: 'UPDATE',
-      data: {
-        tool: 'team_tag_remove',
-        team_id: result.teamId,
-        tag_id: result.tagId,
-        team_tag_id: result.teamTagId,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,

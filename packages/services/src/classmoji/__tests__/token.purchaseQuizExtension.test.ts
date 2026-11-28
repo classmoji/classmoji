@@ -73,6 +73,7 @@ const purchase = (hours = 2, over: { classroomId?: string; studentId?: string } 
     studentId: over.studentId ?? 'student-1',
     assignmentId: 'asg-quiz',
     hours,
+    actor: null,
     now: NOW,
   });
 
@@ -217,6 +218,7 @@ describe('token.purchaseQuizExtensionHours', () => {
         studentId: undefined as unknown as string,
         assignmentId: 'asg-quiz',
         hours: 2,
+        actor: null,
         now: NOW,
       })
     ).rejects.toThrow('Invalid student ID.');
@@ -260,7 +262,7 @@ describe('token.cancelPurchase on a quiz purchase', () => {
   });
 
   it('keeps the assignment link and names the live title with the hours taken back', async () => {
-    await cancelPurchase('tx-9');
+    await cancelPurchase('tx-9', { actor: null });
 
     expect(created().data).toMatchObject({
       type: 'REFUND',
@@ -279,7 +281,7 @@ describe('token.cancelPurchase on a quiz purchase', () => {
       assignment_id: null,
       assignment: null,
     });
-    await cancelPurchase('tx-9');
+    await cancelPurchase('tx-9', { actor: null });
 
     expect(created().data).toMatchObject({
       assignment_id: null,

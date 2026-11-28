@@ -6,6 +6,13 @@ import { GITLAB_PROJECTS_SUBGROUP, parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
 import {
+  NO_SERVICE_AUDIT,
+  addServiceAudit,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from '../classmoji/audit.service.ts';
+import {
   StaffServiceError,
   type RemoveStaffResult,
   type StaffRole,
@@ -36,6 +43,12 @@ export interface MoveGraderSlotPayload {
    * the slot with someone who can no longer grade it.
    */
   fallbackToUnassign?: boolean;
+  /**
+   * Who the add and the removal are recorded for, when the move belongs to a
+   * person's action (the owner removing a grader). Absent in runs queued
+   * before it existed: those record nothing.
+   */
+  actor?: AuditActor | null;
 }
 
 export type MoveGraderSlotResult =
@@ -69,6 +82,8 @@ export interface UngradedSlotsOutcome {
   failed: number;
   queued: boolean;
   fallback: 'no_eligible_graders' | null;
+  /** The grader rows the moves made in this request owed (queued runs write their own). */
+  audit: ServiceAudit;
 }
 
 /** What `startStaffRemoval` hands back: the queued removal plus what is at stake. */
@@ -85,6 +100,19 @@ export interface StaffRemovalStart extends RemoveStaffResult {
   choice: UngradedChoice | null;
 }
 
+interface ResolveUngradedSlotsArgs {
+  classroomId: string;
+  graderId: string;
+  choice: UngradedChoice;
+  departingName?: string;
+  /**
+   * Who the slot moves are recorded for (a grader row for each add and each
+   * removal), made here or by the `move_grader_slot` runs, which carry it in
+   * their payload; null records none.
+   */
+  actor: AuditActor | null;
+}
+
 const emptyOutcome = (choice: UngradedChoice, total: number): UngradedSlotsOutcome => ({
   choice,
   total,
@@ -96,6 +124,7 @@ const emptyOutcome = (choice: UngradedChoice, total: number): UngradedSlotsOutco
   failed: 0,
   queued: false,
   fallback: null,
+  audit: NO_SERVICE_AUDIT,
 });
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -136,6 +165,27 @@ interface DeleteRepositoryPayload {
    * only removed if it belongs to this classroom.
    */
   classroomId?: string;
+  /** The Repository the student repo was made from, for the audit row. */
+  repositoryId?: string | null;
+  /**
+   * Who the delete is recorded for, once the row is gone in `classroomId`:
+   * REPOSITORY / DELETE on the student repo, with `repository_id` and
+   * `deleted_from_provider`. `null` (or no classroom): no row.
+   */
+  actor: AuditActor | null;
+}
+
+interface DeleteSubmissionPayload {
+  classroomId: string;
+  /** The submission as the caller loaded it from this classroom. */
+  submission: { id: string; assignment_id: string; git_repo: { id: string; name: string } };
+  /**
+   * Also delete the student's repository, on the provider too. Its row goes
+   * with it, and every submission on it by cascade, not just this one.
+   */
+  repository?: { gitOrganization: HelperGitOrganization } | null;
+  /** Who the deletion is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
 }
 
 /**
@@ -158,14 +208,17 @@ interface ClassroomGraderPayload {
    * sends one summary instead). Defaults to true.
    */
   notify?: boolean;
+  /** Who the change is recorded for; null writes no audit row (no person acting). */
+  actor: AuditActor | null;
 }
 
 export type AddGraderInClassroomResult =
-  | { status: 'added' | 'already_assigned'; graderLogin: string }
+  | { status: 'added'; graderLogin: string; audit: ServiceAudit }
+  | { status: 'already_assigned'; graderLogin: string }
   | { status: 'submission_not_found' | 'grader_not_eligible' };
 
 export type RemoveGraderInClassroomResult =
-  | { status: 'removed'; graderLogin: string }
+  | { status: 'removed'; graderLogin: string; audit: ServiceAudit }
   | { status: 'submission_not_found' | 'grader_not_assigned' };
 
 interface GitRepoAssignmentGraderPayload {
@@ -197,6 +250,8 @@ interface GradeAssignmentPayload {
   grade: string;
   studentId?: string;
   teamId?: string;
+  /** Who the change is recorded for; null writes no audit row (no person acting). */
+  actor: AuditActor | null;
 }
 
 interface EmojiMappingWithTokens {
@@ -232,12 +287,23 @@ export interface RemovedGrade {
 export interface AddGradeOutcome {
   removed: RemovedGrade[];
   created: { id: string; emoji: string } | null;
+  /** The audit row of the change (none when nothing changed or `actor` is null). */
+  audit: ServiceAudit;
 }
 
 interface RemoveGradePayload {
   classroom: HelperClassroomRef;
   gitRepoAssignment: GitRepoAssignmentRef;
   grade: GradeWithTokenTransaction;
+  /** Who the removal is recorded for; null writes no audit row (no person acting). */
+  actor: AuditActor | null;
+}
+
+/** What one `removeGradeFromGitRepoAssignment` call did. */
+export interface RemoveGradeOutcome {
+  /** False, having changed nothing, when the grade was already gone. */
+  removed: boolean;
+  audit: ServiceAudit;
 }
 
 /**
@@ -302,19 +368,11 @@ async function openGradeScope(
 
 /**
  * Delete one grade of the scope's submission and reverse its token reward for
- * every recipient. The delete is conditional: when the grade is already gone
- * (another request removed it first), nothing is reversed and this returns
- * false. The reward amount is read here, inside the transaction.
+ * every recipient, answering the row it removed. The delete is conditional:
+ * when the grade is already gone (another request removed it first), nothing
+ * is reversed and this returns null. The reward amount is read here, inside
+ * the transaction.
  */
-async function removeGradeInScope(
-  tx: Prisma.TransactionClient,
-  scope: GradeScope,
-  gradeId: string
-): Promise<boolean> {
-  return (await removeGradeRowInScope(tx, scope, gradeId)) !== null;
-}
-
-/** `removeGradeInScope`, answering the row it removed (null when it was already gone). */
 async function removeGradeRowInScope(
   tx: Prisma.TransactionClient,
   scope: GradeScope,
@@ -378,7 +436,10 @@ async function clearStaleGradesInScope(
 }
 
 class HelperService {
-  static async deleteRepository(payload: DeleteRepositoryPayload): Promise<unknown> {
+  static async deleteRepository(
+    payload: DeleteRepositoryPayload
+  ): Promise<{ audit: ServiceAudit }> {
+    let deleted = false;
     try {
       const { name: repoName, gitOrganization, deleteFromGithub } = payload;
       if (deleteFromGithub) {
@@ -398,13 +459,66 @@ class HelperService {
         await gitProvider.deleteRepository(owner, repoName);
       }
       if (payload?.id && payload.classroomId) {
-        return ClassmojiService.gitRepo.deleteInClassroom(payload.id, payload.classroomId);
+        await ClassmojiService.gitRepo.deleteInClassroom(payload.id, payload.classroomId);
+        deleted = true;
+      } else if (payload?.id) {
+        await ClassmojiService.gitRepo.deleteById(payload.id);
       }
-      if (payload?.id) return ClassmojiService.gitRepo.deleteById(payload.id);
     } catch (error: unknown) {
       console.error('Error deleting git_repo:', error);
       throw error;
     }
+    if (!deleted || !payload.id || !payload.classroomId) return { audit: NO_SERVICE_AUDIT };
+    const audit = await recordForActor(payload.actor, {
+      classroomId: payload.classroomId,
+      resourceType: 'REPOSITORY',
+      resourceId: payload.id,
+      action: 'DELETE',
+      data: {
+        repository_id: payload.repositoryId ?? null,
+        deleted_from_provider: Boolean(payload.deleteFromGithub),
+      },
+    });
+    return { audit };
+  }
+
+  /**
+   * Delete one submission (Classmoji's record of an assignment on a student's
+   * repository; its grades go with it by cascade), or, with `repository`, the
+   * whole student repository. Then one audit row for `actor`
+   * (GIT_REPO_ASSIGNMENT, DELETE: the assignment, the repository row and
+   * whether the repository went too).
+   */
+  static async deleteSubmission(
+    payload: DeleteSubmissionPayload
+  ): Promise<{ audit: ServiceAudit }> {
+    const { classroomId, submission, repository, actor } = payload;
+    if (repository) {
+      await this.deleteRepository({
+        id: submission.git_repo.id,
+        name: submission.git_repo.name,
+        gitOrganization: repository.gitOrganization,
+        deleteFromGithub: true,
+        // The row goes only if it belongs to this classroom.
+        classroomId,
+        // The submission's own row below records the repository's delete.
+        actor: null,
+      });
+    } else {
+      await ClassmojiService.gitRepoAssignment.deleteById(submission.id);
+    }
+    const audit = await recordForActor(actor, {
+      classroomId,
+      resourceType: 'GIT_REPO_ASSIGNMENT',
+      resourceId: submission.id,
+      action: 'DELETE',
+      data: {
+        assignment_id: submission.assignment_id,
+        git_repo_id: submission.git_repo.id,
+        repository_deleted: Boolean(repository),
+      },
+    });
+    return { audit };
   }
 
   static async addGraderToGitRepoAssignment(
@@ -468,6 +582,9 @@ class HelperService {
    * is the one assigned. Nothing reaches the provider or the database unless
    * both checks pass. Someone already on the submission is left as is,
    * including when a concurrent add inserts the row first (P2002).
+   *
+   * An added grader is recorded for `actor` after the write
+   * (GIT_REPO_ASSIGNMENT_GRADER on the submission, CREATE); nothing else is.
    */
   static async addGraderInClassroom(
     payload: ClassroomGraderPayload
@@ -511,7 +628,15 @@ class HelperService {
       }
       throw error;
     }
-    return { status: 'added', graderLogin: grader.login };
+    const audit = await recordForActor(payload.actor, {
+      classroomId,
+      resourceType: 'GIT_REPO_ASSIGNMENT_GRADER',
+      resourceId: submission.id,
+      action: 'CREATE',
+      // `value`: the grader assigned.
+      data: { value: grader.id, grader_id: grader.id, grader_login: grader.login },
+    });
+    return { status: 'added', graderLogin: grader.login, audit };
   }
 
   /**
@@ -521,6 +646,9 @@ class HelperService {
    * the grader is taken from the submission's own grader rows (so someone who
    * has since left the grader pool can still be removed), and their stored
    * login is the one unassigned on the provider.
+   *
+   * A removed grader is recorded for `actor` after the write
+   * (GIT_REPO_ASSIGNMENT_GRADER on the submission, DELETE).
    */
   static async removeGraderInClassroom(
     payload: ClassroomGraderPayload
@@ -548,7 +676,18 @@ class HelperService {
       graderId: assigned.grader_id,
       gitRepoAssignmentId: submission.id,
     });
-    return { status: 'removed', graderLogin: assigned.grader.login };
+    const audit = await recordForActor(payload.actor, {
+      classroomId,
+      resourceType: 'GIT_REPO_ASSIGNMENT_GRADER',
+      resourceId: submission.id,
+      action: 'DELETE',
+      data: {
+        value: assigned.grader_id,
+        grader_id: assigned.grader_id,
+        grader_login: assigned.grader.login,
+      },
+    });
+    return { status: 'removed', graderLogin: assigned.grader.login, audit };
   }
 
   /**
@@ -569,9 +708,27 @@ class HelperService {
    * No per-submission notification: the caller sends one summary per grader.
    */
   static async moveGraderSlot(
-    payload: MoveGraderSlotPayload & { gitOrganization?: HelperGitOrganization | null }
+    payload: MoveGraderSlotPayload & {
+      gitOrganization?: HelperGitOrganization | null;
+      /** Who the add and the removal are recorded for; null records neither. */
+      actor: AuditActor | null;
+    }
+  ): Promise<MoveGraderSlotResult & { audit: ServiceAudit }> {
+    let audit = NO_SERVICE_AUDIT;
+    const result = await this.moveGraderSlotRecorded(payload, owed => {
+      audit = addServiceAudit(audit, owed);
+    });
+    return { ...result, audit };
+  }
+
+  private static async moveGraderSlotRecorded(
+    payload: MoveGraderSlotPayload & {
+      gitOrganization?: HelperGitOrganization | null;
+      actor: AuditActor | null;
+    },
+    owed: (audit: ServiceAudit) => void
   ): Promise<MoveGraderSlotResult> {
-    const { classroomId, gitRepoAssignmentId, fromGraderId, toGraderId } = payload;
+    const { classroomId, gitRepoAssignmentId, fromGraderId, toGraderId, actor } = payload;
 
     let gitOrganization = payload.gitOrganization ?? null;
     if (!gitOrganization) {
@@ -594,7 +751,9 @@ class HelperService {
         gitRepoAssignmentId,
         graderId: toGraderId,
         notify: false,
+        actor,
       });
+      if ('audit' in added) owed(added.audit);
       if ('graderLogin' in added) {
         toLogin = added.graderLogin;
       } else if (added.status === 'grader_not_eligible') {
@@ -627,7 +786,9 @@ class HelperService {
       gitOrganization,
       gitRepoAssignmentId,
       graderId: fromGraderId,
+      actor,
     });
+    if ('audit' in removed) owed(removed.audit);
     if (removed.status === 'submission_not_found') return { status: 'submission_not_found' };
     if (removed.status === 'grader_not_assigned') {
       // Already gone (a retry, or a concurrent move). With the new grader on the
@@ -695,18 +856,28 @@ class HelperService {
    * try so one provider failure does not abort the rest; above it they go out
    * as one `move_grader_slot` run per slot and the outcome reports the plan
    * with `queued: true`. Each receiving grader gets ONE summary notification.
+   * `audit` counts every grader row attempted in this request, including the
+   * add of a slot whose removal then failed.
    */
-  static async resolveUngradedSlots({
-    classroomId,
-    graderId,
-    choice,
-    departingName = 'a departing grader',
-  }: {
-    classroomId: string;
-    graderId: string;
-    choice: UngradedChoice;
-    departingName?: string;
-  }): Promise<UngradedSlotsOutcome> {
+  static async resolveUngradedSlots(args: ResolveUngradedSlotsArgs): Promise<UngradedSlotsOutcome> {
+    return this.resolveUngradedSlotsRecorded(args, () => {});
+  }
+
+  /**
+   * `resolveUngradedSlots`, also handing each grader row's audit result to
+   * `owed` as soon as it is attempted, so a caller that catches a later
+   * failure still knows every row written or missed before it.
+   */
+  private static async resolveUngradedSlotsRecorded(
+    {
+      classroomId,
+      graderId,
+      choice,
+      departingName = 'a departing grader',
+      actor,
+    }: ResolveUngradedSlotsArgs,
+    owed: (audit: ServiceAudit) => void
+  ): Promise<UngradedSlotsOutcome> {
     const slots = await ClassmojiService.gitRepoAssignmentGrader.findUngradedSlotsForGrader(
       classroomId,
       graderId
@@ -784,6 +955,7 @@ class HelperService {
                 fromGraderId: graderId,
                 toGraderId: move.toGraderId,
                 fallbackToUnassign: choice === 'reassign',
+                ...(actor ? { actor } : {}),
               } satisfies MoveGraderSlotPayload,
             }))
           );
@@ -811,14 +983,23 @@ class HelperService {
 
     await mapPool(moves, UNGRADED_INLINE_CONCURRENCY, async move => {
       try {
-        const result = await this.moveGraderSlot({
-          classroomId,
-          gitOrganization,
-          gitRepoAssignmentId: move.gitRepoAssignmentId,
-          fromGraderId: graderId,
-          toGraderId: move.toGraderId,
-          fallbackToUnassign: choice === 'reassign',
-        });
+        // Each row is counted as it is attempted, so a move that fails after
+        // its add still reports the add's row.
+        const result = await this.moveGraderSlotRecorded(
+          {
+            classroomId,
+            gitOrganization,
+            gitRepoAssignmentId: move.gitRepoAssignmentId,
+            fromGraderId: graderId,
+            toGraderId: move.toGraderId,
+            fallbackToUnassign: choice === 'reassign',
+            actor,
+          },
+          audit => {
+            outcome.audit = addServiceAudit(outcome.audit, audit);
+            owed(audit);
+          }
+        );
         if (result.status === 'moved') record(move, result.toLogin);
         else if (result.status === 'unassigned' && result.reason === 'grader_not_eligible') {
           outcome.unassigned += 1;
@@ -865,18 +1046,19 @@ class HelperService {
     role,
     ungradedSubmissions,
     requireChoice = false,
-    actorUserId = null,
-    impersonatedBy = null,
+    actor,
   }: {
     classroomId: string;
     login: string;
     role: StaffRole;
     ungradedSubmissions?: UngradedChoice | null;
     requireChoice?: boolean;
-    /** The owner asking for the removal, for the audit of any plan-owner hand-off. */
-    actorUserId?: string | null;
-    /** The platform admin viewing as that owner ("View as"), for the same row. */
-    impersonatedBy?: string | null;
+    /**
+     * The owner asking for the removal, for the audit of any plan-owner
+     * hand-off it causes. The removal's own row is the caller's, written with
+     * `staff.recordStaffRemoval` once it knows the outcome.
+     */
+    actor: AuditActor | null;
   }): Promise<StaffRemovalStart> {
     const preview = await ClassmojiService.staff.previewRemoval({ classroomId, login, role });
 
@@ -892,8 +1074,7 @@ class HelperService {
       classroomId,
       login,
       role,
-      actorUserId,
-      impersonatedBy,
+      actor,
     });
 
     return {
@@ -916,15 +1097,25 @@ class HelperService {
     choice,
     departingName,
     expectedCount,
+    actor,
   }: {
     classroomId: string;
     graderId: string;
     choice: UngradedChoice;
     departingName: string;
     expectedCount: number;
+    /** See `resolveUngradedSlots`. */
+    actor: AuditActor | null;
   }): Promise<UngradedSlotsOutcome> {
+    // The rows attempted before a failure are still reported with it.
+    let audit = NO_SERVICE_AUDIT;
     try {
-      return await this.resolveUngradedSlots({ classroomId, graderId, choice, departingName });
+      return await this.resolveUngradedSlotsRecorded(
+        { classroomId, graderId, choice, departingName, actor },
+        owed => {
+          audit = addServiceAudit(audit, owed);
+        }
+      );
     } catch (error) {
       console.error(`[staff] ungraded slots of ${graderId} were not handled:`, error);
       reportError(error, {
@@ -932,7 +1123,7 @@ class HelperService {
         tags: { step: 'settle' },
         extra: { classroomId, slots: expectedCount },
       });
-      return { ...emptyOutcome(choice, expectedCount), failed: expectedCount };
+      return { ...emptyOutcome(choice, expectedCount), failed: expectedCount, audit };
     }
   }
 
@@ -960,11 +1151,44 @@ class HelperService {
    * either all commit or none do. The recipients come from the submission's
    * repo; `studentId`/`teamId` in the payload are accepted but not used.
    * Answers what this call changed (see `AddGradeOutcome`), read inside the
-   * transaction, so a caller records only what it did.
+   * transaction.
+   *
+   * Once the transaction has committed, and only when it changed something,
+   * one audit row is written for `actor` (GIT_REPO_ASSIGNMENT, CREATE): the
+   * grade given, the created grade's id, the caller's own grades it replaced
+   * and every grade it removed. A failed write is logged and reported in
+   * `audit`; the grade stands.
    */
   static async addGradeToGitRepoAssignment(
     payload: GradeAssignmentPayload
   ): Promise<AddGradeOutcome> {
+    const { classroom, gitRepoAssignment, graderId, grade, actor } = payload;
+    const change = await this.addGradeInTransaction(payload);
+    if (!change.created && change.removed.length === 0) {
+      return { ...change, audit: NO_SERVICE_AUDIT };
+    }
+    // The grader's own grades this call removed (their previous score on the
+    // numeric scale, their pre-regrade grades), so the change reads back.
+    const replaced = change.removed.filter(g => g.grader_id === graderId).map(g => g.emoji);
+    const audit = await recordForActor(actor, {
+      classroomId: classroom.id,
+      resourceType: 'GIT_REPO_ASSIGNMENT',
+      resourceId: gitRepoAssignment.id,
+      action: 'CREATE',
+      data: {
+        emoji: grade,
+        ...(change.created ? { grade_id: change.created.id } : {}),
+        ...(replaced.length > 0 ? { replaced } : {}),
+        ...(change.removed.length > 0 ? { removed_grade_ids: change.removed.map(g => g.id) } : {}),
+      },
+    });
+    return { ...change, audit };
+  }
+
+  /** `addGradeToGitRepoAssignment`'s scale check and transaction, without the audit row. */
+  private static async addGradeInTransaction(
+    payload: GradeAssignmentPayload
+  ): Promise<Omit<AddGradeOutcome, 'audit'>> {
     const { classroom, gitRepoAssignment, graderId, grade } = payload;
 
     // Only emojis in the classroom's grading scale are grades. A classroom
@@ -978,7 +1202,7 @@ class HelperService {
     }
     const reward = scale.find(mapping => mapping.emoji === grade)?.extra_tokens ?? 0;
 
-    return getPrisma().$transaction(async (tx): Promise<AddGradeOutcome> => {
+    return getPrisma().$transaction(async (tx): Promise<Omit<AddGradeOutcome, 'audit'>> => {
       const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
 
       // When a submission has an open resubmit (regrade) request, a new grade
@@ -1051,18 +1275,34 @@ class HelperService {
 
   /**
    * Remove a grade and reverse its token reward for the submission's student
-   * or every member of its team, as one transaction. Returns false, having
-   * changed nothing, when the grade was already removed (a concurrent remove
-   * got there first); the reversal is written exactly once. The recipients and
-   * the reward amount are read from the database, not from the payload.
+   * or every member of its team, as one transaction. `removed` is false,
+   * having changed nothing, when the grade was already removed (a concurrent
+   * remove got there first); the reversal is written exactly once. The
+   * recipients and the reward amount are read from the database, not from the
+   * payload.
+   *
+   * After the commit, when the grade was removed, one audit row is written for
+   * `actor` (GIT_REPO_ASSIGNMENT, DELETE: the grade's id and emoji, as stored).
    */
-  static async removeGradeFromGitRepoAssignment(payload: RemoveGradePayload): Promise<boolean> {
-    const { classroom, gitRepoAssignment, grade } = payload;
+  static async removeGradeFromGitRepoAssignment(
+    payload: RemoveGradePayload
+  ): Promise<RemoveGradeOutcome> {
+    const { classroom, gitRepoAssignment, grade, actor } = payload;
 
-    return getPrisma().$transaction(async tx => {
+    const row = await getPrisma().$transaction(async tx => {
       const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
-      return removeGradeInScope(tx, scope, grade.id);
+      return removeGradeRowInScope(tx, scope, grade.id);
     }, GRADE_TX);
+    if (!row) return { removed: false, audit: NO_SERVICE_AUDIT };
+
+    const audit = await recordForActor(actor, {
+      classroomId: classroom.id,
+      resourceType: 'GIT_REPO_ASSIGNMENT',
+      resourceId: gitRepoAssignment.id,
+      action: 'DELETE',
+      data: { emoji: row.emoji, grade_id: row.id },
+    });
+    return { removed: true, audit };
   }
 }
 

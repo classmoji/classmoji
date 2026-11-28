@@ -20,7 +20,8 @@
  * lists team assignments in the dropdown — MCP mirrors the action. The
  * `previous_grade` String[] snapshot is built HERE from the submission's
  * current grades, exactly as the route builds it (plan §5.1). The task's run
- * is regradeRequest.create (fires the in-app grader notifications); its
+ * is regradeRequest.create (fires the in-app grader notifications, and writes
+ * the REGRADE_REQUEST row for the actor this tool puts in the payload); its
  * onSuccess emails the assigned graders.
  *
  * regrade_resolve mirrors api.$operation?action=updateRegradeRequest:
@@ -41,9 +42,11 @@
  * grader_comment), then triggers `quiz_regrade_resolved`, which emails the
  * student from the database. Both services write their own audit rows
  * (`data.tool` = the tool name, impersonation included), so the quiz paths
- * write none here; a repo resolution is audited by `regradeRequest.resolveRepo`
- * in the task, which gets this tool's name beside its data. Asking and
- * resolving are both refused where the classroom shows no quizzes (the
+ * write none here; a repo request is audited by `regradeRequest.create` in the
+ * `request_regrade` run, for the `serviceActor` this tool puts in its payload,
+ * and a repo resolution by `regradeRequest.resolveRepo` in the task, which
+ * gets this tool's name beside its data. No tool here writes a row itself.
+ * Asking and resolving are both refused where the classroom shows no quizzes (the
  * service's refusal, the one every quiz tool gives); such a classroom lists no
  * quiz requests either. A request already resolved is reported as such
  * before its arguments are checked, so a retry reads as already_resolved.
@@ -61,12 +64,13 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
   loadGitRepoAssignmentInClassroom,
   loadRegradeRequestInClassroom,
+  noteServiceAudit,
   ok,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   submissionIdSchema,
   TEACHING_TEAM,
-  writeAudit,
 } from './shared.ts';
 import { mapQuizGradeError } from './quizAttemptAdjust.ts';
 
@@ -269,12 +273,27 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
       student_id: ctx.viewer.userId,
       student_comment: args.comment,
       previous_grade: previousGrade,
+      // The run's regradeRequest.create records the request for this caller.
+      auditActor: serviceActor(ctx, 'regrade_create'),
     });
     const output = (await waitForRunCompletion(run.id)) as {
       id?: string;
       status?: string;
       previous_grade?: string[];
+      audit?: { written?: unknown; missed?: unknown };
     } | null;
+    // The run says whether the row it owed was written. A request the run
+    // returned without `audit` came from a worker that records none, so the
+    // row is missing; no output at all (read back from the database below)
+    // says nothing either way and leaves the call unmarked.
+    if (output && typeof output.audit?.missed === 'number') {
+      noteServiceAudit(ctx, {
+        written: Number(output.audit.written) || 0,
+        missed: output.audit.missed,
+      });
+    } else if (output && output.id) {
+      noteServiceAudit(ctx, { written: 0, missed: 1 });
+    }
 
     // The run returns the created RegradeRequest; fall back to the DB if the
     // output was not materialized in the retrieve response.
@@ -292,13 +311,6 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
       }
       request = { id: newest.id, status: newest.status, previous_grade: newest.previous_grade };
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'REGRADE_REQUEST',
-      resource_id: request.id,
-      action: 'CREATE',
-      data: { tool: 'regrade_create', git_repo_assignment_id: gra.id },
-    });
 
     return ok({
       success: true,

@@ -3,16 +3,17 @@ import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { addClassroomAuditLog } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'bulk_add_students',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = (await request.json()) as { students: Array<{ email: string; name?: string }> };
@@ -23,24 +24,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     signInvite: email => signInviteToken({ email, classroomId: classroom.id }),
     classroomId: classroom.id,
     students: data.students,
-  });
-
-  // Audit before the emails, as the MCP tool does: the rows are committed, so
-  // a failing email send must not leave the change unrecorded.
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership!.role,
-    action: 'CREATE',
-    resourceType: 'STUDENT_ROSTER',
-    metadata: {
-      tool: 'web:students.add',
-      added: result.addedExistingUsers,
-      invited: result.invitedNewUsers,
-      already_enrolled: result.alreadyEnrolled.length,
-      invalid: result.invalid.length,
-    },
+    // The service records the add for this owner once the rows are
+    // committed, before the emails below, as for the MCP tool.
+    actor: await auditActor(request, gate, 'web:students.add'),
   });
 
   if (result.emails.length > 0) {

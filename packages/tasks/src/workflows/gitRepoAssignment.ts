@@ -7,6 +7,7 @@ import {
   type GitLabProvider,
 } from '@classmoji/services';
 import type { MoveGraderSlotPayload } from '@classmoji/services';
+import { parseAuditActor } from '@classmoji/services/audit';
 import {
   GITLAB_PROJECTS_SUBGROUP,
   gitTerms,
@@ -623,7 +624,9 @@ export const removeGraderFromRepositoryAssignmentTask = task({
  * than UNGRADED_INLINE_LIMIT in packages/services/src/helper). Ids only: the classroom's git
  * organization, the repo, the issue and both logins are read from stored rows
  * by the classroom-scoped helpers, and the new grader is re-checked against the
- * pool when the run executes. Add-then-remove inside one run. The project
+ * pool when the run executes; the payload's `actor` (the owner removing the
+ * grader: ids, role and tool) is who the grader rows are recorded for.
+ * Add-then-remove inside one run. The project
  * default is a single attempt, so this task sets its own retry: a provider
  * error throws and the run is retried up to MOVE_GRADER_SLOT_RETRY.maxAttempts
  * times with exponential backoff — safe because a repeated add reports
@@ -641,9 +644,23 @@ export const moveGraderSlotTask = task({
   id: 'move_grader_slot',
   retry: MOVE_GRADER_SLOT_RETRY,
   run: async (payload: MoveGraderSlotPayload) => {
-    const result = await HelperService.moveGraderSlot(payload);
+    // The grader rows are recorded for the person whose action queued the
+    // move (an owner removing a grader), when the payload names one; a run
+    // queued without one (before it existed) records nothing. The actor is
+    // read field by field, never spread from the stored payload.
+    const actor = parseAuditActor(payload?.actor);
+    const result = await HelperService.moveGraderSlot({ ...payload, actor });
     if (result.status !== 'moved' && result.status !== 'unassigned') {
-      logger.info('move_grader_slot finished without a move', { ...payload, ...result });
+      // Ids and counts only: never the actor.
+      logger.info('move_grader_slot finished without a move', {
+        classroomId: payload.classroomId,
+        gitRepoAssignmentId: payload.gitRepoAssignmentId,
+        fromGraderId: payload.fromGraderId,
+        toGraderId: payload.toGraderId,
+        fallbackToUnassign: payload.fallbackToUnassign,
+        status: result.status,
+        audit: { written: result.audit.written, missed: result.audit.missed },
+      });
     }
     return result;
   },

@@ -31,7 +31,12 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { reportError } from '@classmoji/utils/error-report';
-import { withImpersonator, type AuditResourceType } from '@classmoji/services/audit';
+import {
+  withImpersonator,
+  type AuditActor,
+  type AuditResourceType,
+  type ServiceAudit,
+} from '@classmoji/services/audit';
 import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
@@ -79,6 +84,39 @@ function rowData(ctx: ToolContext, data: AuditData): Prisma.InputJsonValue {
 export function viewingAs(ctx: ToolContext): { impersonatedBy?: string } {
   const by = ctx.viewer.impersonatedBy;
   return by ? { impersonatedBy: by } : {};
+}
+
+/**
+ * Who a shared service records a change for when it writes the row itself
+ * (the grading services: grades, graders, late overrides): the caller, as
+ * the enforcing membership's role, under `tool`, with `via: 'mcp'`, the
+ * client and, under View as, the admin, exactly as `writeAudit` would have.
+ * The tool then writes no row of its own and passes the service's answer to
+ * `noteServiceAudit`.
+ */
+export function serviceActor(ctx: ToolContext, tool: string): AuditActor {
+  const classroom = ctx.classroom;
+  if (!classroom) {
+    throw new ToolError('internal', 'Classroom context missing (tool misregistered?)');
+  }
+  return {
+    userId: ctx.viewer.userId,
+    role: classroom.role,
+    tool,
+    impersonatedBy: ctx.viewer.impersonatedBy ?? null,
+    clientId: ctx.viewer.clientId,
+    via: 'mcp',
+  };
+}
+
+/**
+ * A shared service's answer about the rows it owed this call: when one could
+ * not be written, the call is marked as `writeAudit` marks it, so the registry
+ * adds `audit_incomplete: true` to the result. A call that owed no row
+ * (nothing changed) is not marked.
+ */
+export function noteServiceAudit(ctx: ToolContext, audit: ServiceAudit): void {
+  if (audit.missed > 0) ctx.auditIncomplete = true;
 }
 
 /** The row `entry` stands for, from the request's validated context. */

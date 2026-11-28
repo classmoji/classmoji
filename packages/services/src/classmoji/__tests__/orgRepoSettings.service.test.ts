@@ -113,6 +113,8 @@ describe('parseOrgRepoSettingsInput', () => {
 describe('updateOrgRepoSettings', () => {
   it('uses the requesting user token for every GitHub call, never the App installation', async () => {
     await updateOrgRepoSettings({
+      classroomId: 'class-1',
+      actor: null,
       gitOrganization: ORG,
       userToken: USER_TOKEN,
       input: { default_repository_permission: 'read' },
@@ -127,6 +129,8 @@ describe('updateOrgRepoSettings', () => {
 
   it('sends exactly the validated fields to the classroom organization', async () => {
     await updateOrgRepoSettings({
+      classroomId: 'class-1',
+      actor: null,
       gitOrganization: ORG,
       userToken: USER_TOKEN,
       input: { members_can_create_repositories: true },
@@ -141,6 +145,8 @@ describe('updateOrgRepoSettings', () => {
   it('refuses input that names an organization, and sends nothing to GitHub', async () => {
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read', org: 'other-org' },
@@ -151,6 +157,8 @@ describe('updateOrgRepoSettings', () => {
 
   it('returns old and new values and a scalar value digest', async () => {
     const result = await updateOrgRepoSettings({
+      classroomId: 'class-1',
+      actor: null,
       gitOrganization: ORG,
       userToken: USER_TOKEN,
       input: { default_repository_permission: 'read', members_can_create_repositories: true },
@@ -164,6 +172,7 @@ describe('updateOrgRepoSettings', () => {
       },
       settings: { default_repository_permission: 'read', members_can_create_repositories: true },
       value: 'default_repository_permission=read;members_can_create_repositories=true',
+      audit: { written: 0, missed: 0 },
     });
   });
 
@@ -174,6 +183,8 @@ describe('updateOrgRepoSettings', () => {
     });
 
     const result = await updateOrgRepoSettings({
+      classroomId: 'class-1',
+      actor: null,
       gitOrganization: ORG,
       userToken: USER_TOKEN,
       input: { default_repository_permission: 'write' },
@@ -184,6 +195,8 @@ describe('updateOrgRepoSettings', () => {
   it('asks the user to sign in again when there is no token, without calling GitHub', async () => {
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: null,
         input: { default_repository_permission: 'read' },
@@ -195,6 +208,8 @@ describe('updateOrgRepoSettings', () => {
   it('refuses a classroom without a GitHub organization or App installation', async () => {
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: null,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -202,6 +217,8 @@ describe('updateOrgRepoSettings', () => {
     ).rejects.toMatchObject({ code: 'NO_ORGANIZATION' });
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: { ...ORG, provider: 'GITLAB' },
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -209,6 +226,8 @@ describe('updateOrgRepoSettings', () => {
     ).rejects.toMatchObject({ code: 'NO_ORGANIZATION' });
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: { ...ORG, github_installation_id: null },
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -224,6 +243,8 @@ describe('updateOrgRepoSettings', () => {
     });
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -239,6 +260,8 @@ describe('updateOrgRepoSettings', () => {
     mocks.request.mockRejectedValue(httpError(401, 'Bad credentials'));
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -259,6 +282,8 @@ describe('updateOrgRepoSettings', () => {
     });
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },
@@ -273,6 +298,8 @@ describe('updateOrgRepoSettings', () => {
     });
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: USER_TOKEN,
         input: { default_repository_permission: 'read' },

@@ -110,6 +110,8 @@ function parse(result: { content: Array<{ text: string }> }) {
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
+  // A call that reports a missed row marks its context; start every test clean.
+  delete CTX.auditIncomplete;
   mocks.findById.mockResolvedValue(GRA);
   mocks.auditCreate.mockResolvedValue(undefined);
 });
@@ -167,6 +169,100 @@ describe('regrade_create idempotency (F1)', () => {
       idempotentHint: false,
       openWorldHint: false,
     });
+  });
+});
+
+describe('regrade_create on a submission: the run records the request', () => {
+  const ACTOR = {
+    userId: 'student-1',
+    role: 'STUDENT',
+    tool: 'regrade_create',
+    impersonatedBy: null,
+    clientId: 'c',
+    via: 'mcp',
+  };
+
+  const createdBy = (output: Record<string, unknown>) => {
+    mocks.findOpenByAssignmentId.mockResolvedValue(null);
+    mocks.trigger.mockResolvedValue({ id: 'run-1' });
+    mocks.retrieve.mockResolvedValue({ status: 'COMPLETED', output });
+  };
+
+  it('puts its actor in the payload, writes no row of its own, keeps its answer', async () => {
+    createdBy({
+      id: 'rr-new',
+      status: 'IN_REVIEW',
+      previous_grade: ['🎯', '✅'],
+      audit: { written: 1, missed: 0 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await regradeCreateTool.handler(ARGS, ctx));
+
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+    expect(mocks.trigger.mock.calls[0][1].auditActor).toEqual(ACTOR);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(ctx.auditIncomplete).toBeFalsy();
+    expect(payload).toEqual({
+      success: true,
+      created: true,
+      regrade_request: { id: 'rr-new', status: 'IN_REVIEW', previous_grade: ['🎯', '✅'] },
+    });
+  });
+
+  it('names the viewing admin under View as', async () => {
+    createdBy({ id: 'rr-new', status: 'IN_REVIEW', previous_grade: [] });
+    const ctx = { ...CTX, viewer: { ...CTX.viewer, impersonatedBy: 'admin-1' } } as ToolContext;
+
+    await regradeCreateTool.handler(ARGS, ctx);
+
+    expect(mocks.trigger.mock.calls[0][1].auditActor).toEqual({
+      ...ACTOR,
+      impersonatedBy: 'admin-1',
+    });
+  });
+
+  it('marks the call audit_incomplete when the run reports a missed row', async () => {
+    createdBy({
+      id: 'rr-new',
+      status: 'IN_REVIEW',
+      previous_grade: [],
+      audit: { written: 0, missed: 1 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await regradeCreateTool.handler(ARGS, ctx));
+
+    expect(payload).toMatchObject({ success: true, created: true });
+    expect(ctx.auditIncomplete).toBe(true);
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the call audit_incomplete when the run returned a request without audit', async () => {
+    // A worker that records no row for this request.
+    createdBy({ id: 'rr-new', status: 'IN_REVIEW', previous_grade: [] });
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await regradeCreateTool.handler(ARGS, ctx));
+
+    expect(payload).toMatchObject({ success: true, created: true });
+    expect(ctx.auditIncomplete).toBe(true);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('leaves the call unmarked when the run handed back no output (read from the database)', async () => {
+    createdBy({});
+    mocks.retrieve.mockResolvedValue({ status: 'COMPLETED', output: null });
+    mocks.findMany.mockResolvedValue([
+      { id: 'rr-new', status: 'IN_REVIEW', previous_grade: [], created_at: new Date() },
+    ]);
+    const ctx = { ...CTX } as ToolContext;
+
+    const payload = parse(await regradeCreateTool.handler(ARGS, ctx));
+
+    expect(payload.regrade_request.id).toBe('rr-new');
+    expect(ctx.auditIncomplete).toBeFalsy();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 

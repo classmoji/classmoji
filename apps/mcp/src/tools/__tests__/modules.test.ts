@@ -131,6 +131,19 @@ const MODULE_ROW = {
 
 const ITEM_ROW = { id: 'item-1', item_type: 'FORM', position: 3 };
 
+/** What a service answers about its row: written, or owed and not written. */
+const WRITTEN = { written: 1, missed: 0 };
+
+/** The actor `serviceActor` builds for CTX: the module service records each change for it. */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+});
+
 /** The generic Error `module.service.assertTargetInClassroom` throws (S1). */
 const foreignTarget = () => new Error('Module item target not found in classroom');
 
@@ -146,11 +159,17 @@ beforeEach(() => {
   mocks.assertProTier.mockResolvedValue(undefined);
   mocks.quizzesVisible.mockResolvedValue(true);
   mocks.auditCreate.mockResolvedValue(undefined);
-  mocks.moduleCreate.mockResolvedValue(MODULE_ROW);
-  mocks.moduleUpdateForClassroom.mockResolvedValue(MODULE_ROW);
-  mocks.moduleSetPublished.mockResolvedValue({ ...MODULE_ROW, is_published: true });
-  mocks.moduleAddItem.mockResolvedValue(ITEM_ROW);
+  mocks.moduleCreate.mockResolvedValue({ module: MODULE_ROW, audit: WRITTEN });
+  mocks.moduleUpdateForClassroom.mockResolvedValue({ module: MODULE_ROW, audit: WRITTEN });
+  mocks.moduleSetPublished.mockResolvedValue({
+    module: { ...MODULE_ROW, is_published: true },
+    audit: WRITTEN,
+  });
+  mocks.moduleAddItem.mockResolvedValue({ item: ITEM_ROW, audit: WRITTEN });
   mocks.moduleFindOtherModulesHolding.mockResolvedValue([]);
+  mocks.moduleReorderModules.mockResolvedValue({ audit: WRITTEN });
+  mocks.moduleReorderItems.mockResolvedValue({ audit: WRITTEN });
+  mocks.assignmentReorderInModule.mockResolvedValue({ audit: WRITTEN });
 });
 
 // ─── Definition-level guarantees (the registry enforces these pre-handler) ───
@@ -268,23 +287,21 @@ describe('module_item_remove', () => {
 
   beforeEach(() => {
     mocks.moduleRemoveItem.mockResolvedValue({
-      id: 'item-1',
-      module_id: 'mod-1',
-      item_type: 'PAGE',
+      item: { id: 'item-1', module_id: 'mod-1', item_type: 'PAGE' },
+      audit: WRITTEN,
     });
   });
 
-  it('removes the item inside the AUTHORIZED classroom and audits the delete', async () => {
+  it('removes the item inside the AUTHORIZED classroom; the service records the delete', async () => {
     const payload = parse(await moduleItemRemoveTool.handler(ARGS as never, CTX));
 
-    expect(mocks.moduleRemoveItem).toHaveBeenCalledWith('item-1', 'class-1');
+    expect(mocks.moduleRemoveItem).toHaveBeenCalledWith(
+      'item-1',
+      'class-1',
+      actorFor('module_item_remove')
+    );
     expect(payload).toEqual({ success: true, removed: { id: 'item-1', module_id: 'mod-1' } });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      action: 'DELETE',
-      resource_type: 'MODULE_ITEM',
-      resource_id: 'item-1',
-      data: { tool: 'module_item_remove', module_id: 'mod-1', item_type: 'PAGE' },
-    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('answers an item of another classroom like a missing one', async () => {
@@ -312,29 +329,27 @@ describe('module_item_move', () => {
 
   beforeEach(() => {
     mocks.moduleMoveItemToModuleEnd.mockResolvedValue({
-      id: 'item-1',
-      item_type: 'PAGE',
-      position: 4,
-      from_module_id: 'mod-1',
+      item: { id: 'item-1', item_type: 'PAGE', position: 4, from_module_id: 'mod-1' },
+      audit: WRITTEN,
     });
   });
 
   it('moves within the AUTHORIZED classroom and reports where it came from', async () => {
     const payload = parse(await moduleItemMoveTool.handler(ARGS as never, CTX));
 
-    expect(mocks.moduleMoveItemToModuleEnd).toHaveBeenCalledWith('item-1', 'mod-2', 'class-1');
+    expect(mocks.moduleMoveItemToModuleEnd).toHaveBeenCalledWith(
+      'item-1',
+      'mod-2',
+      'class-1',
+      actorFor('module_item_move')
+    );
     expect(payload).toEqual({
       success: true,
       item: { id: 'item-1', item_type: 'PAGE', position: 4 },
       module_id: 'mod-2',
       moved_from_module_id: 'mod-1',
     });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      action: 'UPDATE',
-      resource_type: 'MODULE_ITEM',
-      resource_id: 'item-1',
-      data: { tool: 'module_item_move', module_id: 'mod-2', from_module_id: 'mod-1' },
-    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -367,7 +382,13 @@ describe('module_item_add with a FORM target', () => {
   it('passes FORM, the form id and the AUTHORIZED classroom id to the service', async () => {
     const payload = parse(await moduleItemAddTool.handler(ARGS as never, CTX));
 
-    expect(mocks.moduleAddItem).toHaveBeenCalledWith('mod-1', 'FORM', 'form-1', 'class-1');
+    expect(mocks.moduleAddItem).toHaveBeenCalledWith(
+      'mod-1',
+      'FORM',
+      'form-1',
+      'class-1',
+      actorFor('module_item_add')
+    );
     expect(payload).toEqual({
       success: true,
       item: { id: 'item-1', item_type: 'FORM', position: 3 },
@@ -379,34 +400,11 @@ describe('module_item_add with a FORM target', () => {
     expect(mocks.moduleAddItem.mock.calls[0][3]).toBe('class-1');
   });
 
-  it('writes the MODULE_ITEM audit row with the item type and target', async () => {
+  it('writes no MODULE_ITEM row of its own: the module service records the add', async () => {
     await moduleItemAddTool.handler(ARGS as never, CTX);
 
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      action: string;
-      user_id: string;
-      classroom_id: string;
-      role: string;
-      resource_type: string;
-      resource_id: string;
-      data: { tool: string; module_id: string; item_type: string; target_id: string };
-    };
-    expect(audit).toMatchObject({
-      action: 'CREATE',
-      user_id: 'owner-1',
-      classroom_id: 'class-1',
-      role: 'OWNER',
-      resource_type: 'MODULE_ITEM',
-      resource_id: 'item-1',
-    });
-    expect(audit.data).toEqual({
-      tool: 'module_item_add',
-      via: 'mcp',
-      client_id: 'c',
-      module_id: 'mod-1',
-      item_type: 'FORM',
-      target_id: 'form-1',
-    });
+    expect(mocks.moduleAddItem.mock.calls[0][4]).toEqual(actorFor('module_item_add'));
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports a second identical add as a duplicate, not a silent success', async () => {
@@ -587,7 +585,7 @@ describe('Pro gating of FORM items', () => {
     for (const item_type of ['PAGE', 'SLIDE']) {
       mocks.moduleAddItem.mockClear();
       mocks.assertProTier.mockClear();
-      mocks.moduleAddItem.mockResolvedValue({ ...ITEM_ROW, item_type });
+      mocks.moduleAddItem.mockResolvedValue({ item: { ...ITEM_ROW, item_type }, audit: WRITTEN });
 
       const payload = parse(
         await moduleItemAddTool.handler(
@@ -597,7 +595,13 @@ describe('Pro gating of FORM items', () => {
       );
 
       expect(payload.success, item_type).toBe(true);
-      expect(mocks.moduleAddItem).toHaveBeenCalledWith('mod-1', item_type, 'target-1', 'class-1');
+      expect(mocks.moduleAddItem).toHaveBeenCalledWith(
+        'mod-1',
+        item_type,
+        'target-1',
+        'class-1',
+        actorFor('module_item_add')
+      );
       // The branch is what proves the gates are scoped: a page or slide never
       // even asks either of them.
       expect(mocks.assertProTier, item_type).not.toHaveBeenCalled();
@@ -677,7 +681,11 @@ describe('module_delete', () => {
 
   beforeEach(() => {
     mocks.moduleFindById.mockResolvedValue(owning([]));
-    mocks.moduleDeleteById.mockResolvedValue({ id: 'mod-1', deleted_quiz_assignment_ids: [] });
+    mocks.moduleDeleteById.mockResolvedValue({
+      module: { id: 'mod-1' },
+      deleted_quiz_assignment_ids: [],
+      audit: WRITTEN,
+    });
   });
 
   it('is destructive, closed-world, and says what goes and what stays', () => {
@@ -702,9 +710,12 @@ describe('module_delete', () => {
     const payload = parse(await run());
 
     expect(mocks.moduleFindById).toHaveBeenCalledWith('mod-1');
-    expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1', {
-      quizzesHidden: false,
-    });
+    expect(mocks.moduleDeleteById).toHaveBeenCalledWith(
+      'mod-1',
+      'class-1',
+      { quizzesHidden: false },
+      actorFor('module_delete')
+    );
     expect(payload).toEqual({
       success: true,
       deleted_module_id: 'mod-1',
@@ -724,24 +735,13 @@ describe('module_delete', () => {
     expect(mocks.moduleDeleteById).toHaveBeenCalledTimes(1);
   });
 
-  it('audits the delete with what the module was', async () => {
+  it('leaves the delete row to the module service, for its actor', async () => {
     mocks.moduleFindById.mockResolvedValue({ ...owning([], [pageItem]), is_published: true });
 
     await run();
 
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      resource_type: 'MODULES',
-      resource_id: 'mod-1',
-      action: 'DELETE',
-      data: {
-        tool: 'module_delete',
-        title: 'starterpack',
-        slug: 'starterpack',
-        was_published: true,
-        items_removed: 1,
-      },
-    });
+    expect(mocks.moduleDeleteById.mock.calls[0][3]).toEqual(actorFor('module_delete'));
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a module that still owns assignments, names them, and deletes nothing', async () => {
@@ -795,15 +795,19 @@ describe('module_delete', () => {
       // them.
       mocks.moduleFindById.mockResolvedValue(owning([quizAssignment], [pageItem]));
       mocks.moduleDeleteById.mockResolvedValue({
-        id: 'mod-1',
+        module: { id: 'mod-1' },
         deleted_quiz_assignment_ids: ['asg-quiz'],
+        audit: WRITTEN,
       });
 
       const payload = parse(await run());
 
-      expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1', {
-        quizzesHidden: true,
-      });
+      expect(mocks.moduleDeleteById).toHaveBeenCalledWith(
+        'mod-1',
+        'class-1',
+        { quizzesHidden: true },
+        actorFor('module_delete')
+      );
       expect(payload).toEqual({
         success: true,
         deleted_module_id: 'mod-1',
@@ -811,9 +815,6 @@ describe('module_delete', () => {
         items_removed: 1,
       });
       expect(JSON.stringify(payload)).not.toMatch(/quiz/i);
-      expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-        data: { tool: 'module_delete', quiz_assignment_ids: ['asg-quiz'] },
-      });
     });
 
     it('refuses a module that also owns a listed assignment, naming only that one', async () => {
@@ -847,17 +848,15 @@ describe('module_delete', () => {
     expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
   });
 
-  it('leaves a legacy QUIZ item out of the count it reports, not out of the audit row', async () => {
+  it('leaves a legacy QUIZ item out of the count it reports', async () => {
     // A quiz is in a module through its assignment; the old item is listed
-    // for nobody, whether or not the classroom shows quizzes.
+    // for nobody, whether or not the classroom shows quizzes. (The service's
+    // row counts every item row that went.)
     mocks.moduleFindById.mockResolvedValue(owning([], [pageItem, quizItem]));
 
     const payload = parse(await run());
 
     expect(payload.items_removed).toBe(1);
-    expect(
-      (mocks.auditCreate.mock.calls[0][0] as { data: { items_removed: number } }).data.items_removed
-    ).toBe(2);
   });
 
   it('names a quiz assignment where quizzes are visible', async () => {
@@ -1005,7 +1004,8 @@ describe('module_reorder', () => {
       expect(mocks.assignmentReorderInModule).toHaveBeenCalledWith(
         MODULE_ID,
         [C, B, Q, A],
-        'class-1'
+        'class-1',
+        actorFor('module_reorder')
       );
       expect(mocks.moduleReorderItems).not.toHaveBeenCalled();
       expect(payload).toEqual({
@@ -1021,21 +1021,11 @@ describe('module_reorder', () => {
       });
     });
 
-    it('audits the new order', async () => {
+    it('leaves the row of the new order to the service, for its actor', async () => {
       await run(args([C, B, Q, A]));
 
-      expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-      expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-        resource_type: 'MODULES',
-        resource_id: MODULE_ID,
-        action: 'UPDATE',
-        data: {
-          tool: 'module_reorder',
-          kind: 'ASSIGNMENTS',
-          ordered_ids: [C, B, Q, A],
-          value: `ASSIGNMENTS:${[C, B, Q, A].join(',')}`,
-        },
-      });
+      expect(mocks.assignmentReorderInModule.mock.calls[0][3]).toEqual(actorFor('module_reorder'));
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     });
 
     it('refuses a partial list, names what was left out, and reorders nothing', async () => {
@@ -1098,20 +1088,13 @@ describe('module_reorder', () => {
         expect(mocks.assignmentReorderInModule).toHaveBeenCalledWith(
           MODULE_ID,
           [C, A, Q, B],
-          'class-1'
+          'class-1',
+          actorFor('module_reorder')
         );
-        // Neither the response nor the audit row names the hidden row, by
-        // title or by id.
+        // The response does not name the hidden row, by title or by id.
         expect(payload.order.map((row: { id: string }) => row.id)).toEqual([C, A, B]);
-        const audit = mocks.auditCreate.mock.calls[0][0] as {
-          data: { ordered_ids: string[]; value: string };
-        };
-        expect(audit.data.ordered_ids).toEqual([C, A, B]);
-        expect(audit.data.value).toBe(`ASSIGNMENTS:${[C, A, B].join(',')}`);
-        for (const text of [JSON.stringify(payload), JSON.stringify(audit.data)]) {
-          expect(text.toLowerCase()).not.toContain('quiz');
-          expect(text).not.toContain(Q);
-        }
+        expect(JSON.stringify(payload).toLowerCase()).not.toContain('quiz');
+        expect(JSON.stringify(payload)).not.toContain(Q);
         expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
         expect(mocks.moduleFindById).toHaveBeenCalledWith(MODULE_ID);
       });
@@ -1171,7 +1154,7 @@ describe('module_reorder', () => {
         'a batch Postgres aborted (P2034)',
         Object.assign(new Error('write conflict or deadlock'), { code: 'P2034' }),
       ],
-    ])('reports %s as a retry, with no audit row', async (_label, thrown) => {
+    ])('reports %s as a retry', async (_label, thrown) => {
       mocks.assignmentReorderInModule.mockRejectedValue(thrown);
 
       const error = await refusal(args([C, B, Q, A]));
@@ -1206,7 +1189,12 @@ describe('module_reorder', () => {
 
       // The service orders the content items around the legacy REPOSITORY and
       // QUIZ rows (a quiz sits in a module through its assignment).
-      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, B, A], 'class-1');
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(
+        MODULE_ID,
+        [C, B, A],
+        'class-1',
+        actorFor('module_reorder')
+      );
       expect(mocks.assignmentReorderInModule).not.toHaveBeenCalled();
       expect(payload.order).toEqual([
         { id: C, title: 'Survey' },
@@ -1249,7 +1237,12 @@ describe('module_reorder', () => {
       const payload = parse(await run(args([C, A])));
 
       // B goes back after A, the row it follows now.
-      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, A, B], 'class-1');
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(
+        MODULE_ID,
+        [C, A, B],
+        'class-1',
+        actorFor('module_reorder')
+      );
       expect(JSON.stringify(payload)).not.toContain('Foreign deck');
       const error = await refusal(args([C]));
       expect(JSON.stringify(error.data)).not.toContain('Foreign deck');
@@ -1283,7 +1276,11 @@ describe('module_reorder', () => {
       const payload = parse(await run(args([C, A, B])));
 
       expect(mocks.moduleListContents).toHaveBeenCalledWith('class-1');
-      expect(mocks.moduleReorderModules).toHaveBeenCalledWith('class-1', [C, A, B]);
+      expect(mocks.moduleReorderModules).toHaveBeenCalledWith(
+        'class-1',
+        [C, A, B],
+        actorFor('module_reorder')
+      );
       expect(mocks.moduleFindById).not.toHaveBeenCalled();
       expect(payload).toEqual({
         success: true,
@@ -1294,9 +1291,7 @@ describe('module_reorder', () => {
           { id: B, title: 'Week 2' },
         ],
       });
-      expect(
-        (mocks.auditCreate.mock.calls[0][0] as { resource_id: string | null }).resource_id
-      ).toBeNull();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     });
 
     it('refuses a list that leaves a module out, or names one from elsewhere', async () => {
