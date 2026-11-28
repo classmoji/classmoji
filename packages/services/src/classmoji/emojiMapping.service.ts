@@ -7,7 +7,7 @@ import {
   type AuditActor,
   type ServiceAudit,
 } from './audit.service.ts';
-import { describeSettingsChange, settingsChangeData } from './settingsAudit.ts';
+import { describeSettingsChange, settingsChangeData, settingsValues } from './settingsAudit.ts';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
 
@@ -72,8 +72,7 @@ export const saveEmojiMapping = async (
       resourceId: mapping.id,
       action: 'UPDATE',
       data: {
-        emoji: mapping.emoji,
-        grade: mapping.grade,
+        ...settingsValues('EmojiMapping', mapping, ['emoji', 'grade']),
         ...settingsChangeData(change),
         ...(before ? {} : { created: true }),
       },
@@ -220,7 +219,9 @@ export const deleteEmojiMapping = async (
     action: 'DELETE',
     data: {
       emoji,
-      ...(before ? { previous: { grade: before.grade, extra_tokens: before.extra_tokens } } : {}),
+      ...(before
+        ? { previous: settingsValues('EmojiMapping', before, ['grade', 'extra_tokens']) }
+        : {}),
     },
   });
   return { count, audit };

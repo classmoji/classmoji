@@ -10,6 +10,7 @@ import {
   SETTINGS_AUDIT_FIELDS,
   describeSettingsChange,
   settingsFieldRule,
+  settingsValues,
   type SettingsAuditModel,
 } from '../settingsAudit.ts';
 
@@ -183,5 +184,23 @@ describe('describeSettingsChange', () => {
         'timezone',
       ])
     ).toEqual({ fields: ['show_pages'], values: { show_pages: false }, previous: {}, markers: {} });
+  });
+});
+
+describe('settingsValues', () => {
+  it('keeps the safe columns with a recordable value and leaves the rest out', () => {
+    expect(
+      settingsValues(
+        'EmojiMapping',
+        { emoji: '⭐', grade: 90, description: 'Great work, Ada', extra_tokens: 1 },
+        ['emoji', 'grade', 'description', 'extra_tokens']
+      )
+    ).toEqual({ emoji: '⭐', grade: 90, extra_tokens: 1 });
+    expect(
+      settingsValues('ClassroomSettings', { anthropic_api_key: 'sk-x', theme: 'Not A Theme!' }, [
+        'anthropic_api_key',
+        'theme',
+      ])
+    ).toEqual({});
   });
 });

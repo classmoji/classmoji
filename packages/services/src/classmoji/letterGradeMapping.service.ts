@@ -5,7 +5,7 @@ import {
   type AuditActor,
   type ServiceAudit,
 } from './audit.service.ts';
-import { describeSettingsChange, settingsChangeData } from './settingsAudit.ts';
+import { describeSettingsChange, settingsChangeData, settingsValues } from './settingsAudit.ts';
 
 /** The fields one letter grade threshold is saved with; nothing else is written. */
 export interface LetterGradeMappingFields {
@@ -60,8 +60,7 @@ export const save = async (
       resourceId: mapping.id,
       action: 'UPDATE',
       data: {
-        letter_grade: mapping.letter_grade,
-        min_grade: mapping.min_grade,
+        ...settingsValues('LetterGradeMapping', mapping, ['letter_grade', 'min_grade']),
         ...settingsChangeData(change),
         ...(before ? {} : { created: true }),
       },
@@ -113,7 +112,7 @@ const deleteMapping = async (
     action: 'DELETE',
     data: {
       letter_grade: letterGrade,
-      ...(before ? { previous: { min_grade: before.min_grade } } : {}),
+      ...(before ? { previous: settingsValues('LetterGradeMapping', before, ['min_grade']) } : {}),
     },
   });
   return { count, audit };

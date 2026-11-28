@@ -267,6 +267,24 @@ export function mergeSettingsChanges(
   };
 }
 
+/**
+ * The values of `fields` in `row` that a row may carry under the allow-list
+ * (a deleted row's `previous`, say): each safe column with a recordable value;
+ * every other column is left out.
+ */
+export function settingsValues(
+  model: SettingsAuditModel,
+  row: Readonly<Record<string, unknown>>,
+  fields: Iterable<string>
+): Record<string, AuditScalar> {
+  const values: Record<string, AuditScalar> = {};
+  for (const field of fields) {
+    const shown = recordable(settingsFieldRule(model, field), row[field]);
+    if (shown !== undefined) values[field] = shown;
+  }
+  return values;
+}
+
 /** The `data` keys a change adds to its row: `fields`, `values`, `previous`, then the markers. */
 export function settingsChangeData(change: SettingsChange): Record<string, unknown> {
   return {

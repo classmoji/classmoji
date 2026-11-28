@@ -19,7 +19,7 @@ import {
   type AuditActor,
   type ServiceAudit,
 } from './audit.service.ts';
-import { describeSettingsChange, settingsChangeData } from './settingsAudit.ts';
+import { describeSettingsChange, settingsChangeData, settingsValues } from './settingsAudit.ts';
 import type { ModuleItemType, Prisma, Role } from '@classmoji/database/client';
 
 /**
@@ -485,7 +485,7 @@ export async function deleteSiteForClassroom(classroomId: string, actor: AuditAc
         resourceId: existing.id,
         action: 'DELETE',
         data: {
-          previous: { subdomain: existing.subdomain, custom_domain: existing.custom_domain },
+          previous: settingsValues('ClassroomSite', existing, ['subdomain', 'custom_domain']),
         },
       })
     : NO_SERVICE_AUDIT;
