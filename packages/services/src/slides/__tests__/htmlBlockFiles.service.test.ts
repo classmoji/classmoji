@@ -209,9 +209,20 @@ describe('writeHtmlBlockFile', () => {
       surface: 'slides',
       impersonatedBy: 'admin-1',
     });
-    expect(auditCreate.mock.calls[0][0]).toMatchObject({
+    expect(auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-x',
       user_id: 'teacher-x',
-      data: { tool: 'slides:html_block.save', impersonated_by: 'admin-1' },
+      role: 'TEACHER',
+      resource_type: 'SLIDES',
+      resource_id: 'deck-x',
+      action: 'UPDATE',
+      data: {
+        tool: 'slides:html_block.save',
+        slide_id: 'deck-x',
+        path: 'slides/deck-x/blocks/0a0b0c0d.html',
+        rev: NEW_REV,
+        impersonated_by: 'admin-1',
+      },
     });
   });
 
@@ -519,6 +530,32 @@ describe('deleteHtmlBlockFile', () => {
         slide_id: 'deck-x',
         path: 'slides/deck-x/blocks/0a0b0c0d.html',
         block_id: 'b1',
+      },
+    });
+  });
+
+  it('names the admin viewing as the author on the delete row', async () => {
+    content.delete.mockResolvedValue({ commit: 'commit-d' });
+    await deleteHtmlBlockFile({
+      slideId: 'deck-x',
+      actorUserId: 'teacher-x',
+      src: 'blocks/0a0b0c0d.html',
+      blockId: 'b1',
+      impersonatedBy: 'admin-1',
+    });
+    expect(auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-x',
+      user_id: 'teacher-x',
+      role: 'TEACHER',
+      resource_type: 'SLIDES',
+      resource_id: 'deck-x',
+      action: 'DELETE',
+      data: {
+        tool: 'slides:html_block.delete',
+        slide_id: 'deck-x',
+        path: 'slides/deck-x/blocks/0a0b0c0d.html',
+        block_id: 'b1',
+        impersonated_by: 'admin-1',
       },
     });
   });

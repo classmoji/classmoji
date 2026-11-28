@@ -305,8 +305,13 @@ describe('audit', () => {
     a.destroy();
     await waitFor(() => server.audit.entries.some(e => e.action === 'COLLAB_LEAVE'), 3000, 'leave');
     for (const action of ['COLLAB_JOIN', 'COLLAB_LEAVE']) {
-      expect(server.audit.entries.find(e => e.action === action)).toMatchObject({
+      expect(server.audit.entries.find(e => e.action === action)).toEqual({
+        action,
         userId: 'teacher-1',
+        classroomId: CLASSROOM_ID,
+        role: 'TEACHER',
+        resourceType: 'PAGES',
+        resourceId: PAGE,
         data: { tool: 'collab' },
         impersonatedBy: 'admin-1',
       });
@@ -317,8 +322,13 @@ describe('audit', () => {
     const own = open();
     await own.synced;
     await waitFor(() => server.audit.entries.length > 0, 3000, 'own join');
-    expect(server.audit.entries[0]).toMatchObject({
+    expect(server.audit.entries[0]).toEqual({
       action: 'COLLAB_JOIN',
+      userId: 'teacher-1',
+      classroomId: CLASSROOM_ID,
+      role: 'TEACHER',
+      resourceType: 'PAGES',
+      resourceId: PAGE,
       data: { tool: 'collab' },
     });
     expect(server.audit.entries[0].impersonatedBy).toBeUndefined();
@@ -330,12 +340,18 @@ describe('audit', () => {
     server.sessions.viewedAs.set('stranger', 'admin-1');
     const student = open(ROOM, { userId: 'student-1' });
     await waitFor(() => server.audit.entries.length > 0, 3000, 'member refusal');
-    expect(server.audit.entries[0]).toMatchObject({
-      action: 'ACCESS_DENIED',
-      userId: 'student-1',
-      data: { tool: 'collab', reason: 'forbidden' },
-      impersonatedBy: 'admin-1',
-    });
+    expect(server.audit.entries).toEqual([
+      {
+        action: 'ACCESS_DENIED',
+        userId: 'student-1',
+        classroomId: CLASSROOM_ID,
+        role: 'STUDENT',
+        resourceType: 'collab_page',
+        resourceId: PAGE,
+        data: { tool: 'collab', reason: 'forbidden' },
+        impersonatedBy: 'admin-1',
+      },
+    ]);
     const stranger = open(ROOM, { userId: 'stranger' });
     await waitFor(() => server.audit.nonMemberRefusals.length > 0, 3000, 'non-member refusal');
     expect(server.audit.nonMemberRefusals).toEqual([

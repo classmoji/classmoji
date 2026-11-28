@@ -177,10 +177,21 @@ describe('the audit row for a structural edit', () => {
 
     deleteSlide(client.doc, 'aaaa0002');
     await waitFor(() => updates().length > 0, 3000, 'structural audit row');
-    expect(updates()[0]).toMatchObject({
-      userId: 'teacher-1',
-      data: { tool: 'live_editor' },
-      impersonatedBy: 'admin-1',
-    });
+    expect(updates()).toEqual([
+      {
+        userId: 'teacher-1',
+        classroomId: CLASSROOM_ID,
+        role: 'TEACHER',
+        action: 'UPDATE',
+        resourceType: 'SLIDES',
+        resourceId: 'deck-1',
+        data: {
+          tool: 'live_editor',
+          ops: [{ op: 'delete', id: 'aaaa0002' }],
+          value: 'delete aaaa0002',
+        },
+        impersonatedBy: 'admin-1',
+      },
+    ]);
   });
 });

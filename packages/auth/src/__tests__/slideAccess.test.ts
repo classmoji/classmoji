@@ -185,10 +185,27 @@ describe('draft deck — who may VIEW', () => {
       session: { impersonatedBy: 'admin-1' },
     });
     await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      user_id: 'student-1',
-      data: { tool: 'gate', impersonated_by: 'admin-1' },
-    });
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          classroom_id: 'class-1',
+          user_id: 'student-1',
+          role: 'STUDENT',
+          resource_id: SLIDE_ID,
+          resource_type: 'SLIDE',
+          action: 'ACCESS_DENIED',
+          data: {
+            tool: 'gate',
+            attempted_action: 'view',
+            is_draft: true,
+            is_public: false,
+            is_creator: false,
+            allow_team_edit: false,
+            impersonated_by: 'admin-1',
+          },
+        },
+      ],
+    ]);
 
     signedInAs(null, 'outsider-1');
     mocks.getSession.mockResolvedValue({

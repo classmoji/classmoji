@@ -336,13 +336,28 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
 
     await accessAs(['OWNER']).catch(() => {});
 
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      user_id: 'user-1',
-      role: 'STUDENT',
-      action: 'ACCESS_DENIED',
-      data: { tool: 'gate', impersonated_by: 'admin-1' },
-    });
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          classroom_id: CLASSROOM.id,
+          user_id: 'user-1',
+          role: 'STUDENT',
+          resource_id: CLASSROOM.id,
+          resource_type: 'STUDENT_ROSTER',
+          action: 'ACCESS_DENIED',
+          data: {
+            tool: 'gate',
+            attempted_action: 'view_roster',
+            required_roles: ['OWNER'],
+            has_membership: true,
+            denial_reasons: ['insufficient_role'],
+            is_resource_owner: false,
+            self_access_attempted: false,
+            impersonated_by: 'admin-1',
+          },
+        },
+      ],
+    ]);
   });
 
   it('keeps a caller-named tool on a refused member row', async () => {

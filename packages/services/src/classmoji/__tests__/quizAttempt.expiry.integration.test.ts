@@ -658,11 +658,18 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       data: { completed_at: new Date() },
     });
 
+    const closed = await attemptRow(expired);
     const [audit] = await auditRows(expired);
     expect(audit.user_id).toBe(studentA);
-    expect(audit.data).toMatchObject({
+    expect(audit.data).toEqual({
       tool: 'quiz_chat.expired_close',
       surface: 'create_new',
+      quiz_id: quizId,
+      owner_user_id: studentA,
+      session_expires_at: closed.session_expires_at!.toISOString(),
+      completed_at: closed.completed_at!.toISOString(),
+      partial_credit_percentage: closed.partial_credit_percentage,
+      skipped_by_end: [2, 3],
       impersonated_by: studentB,
     });
   });

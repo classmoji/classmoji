@@ -289,6 +289,49 @@ describe('swapActive', () => {
     );
   });
 
+  it('names the admin viewing as the actor on both rows, and on the repair', async () => {
+    rows(row('new', 'LOCKED', 'deleted-user'), row('old', 'ACTIVE'));
+    const tool = 'web:classroom.create_archive_and_continue';
+
+    await lifecycle.swapActive({
+      activateClassroomId: 'new',
+      archiveClassroomId: 'old',
+      actorUserId: 'alice',
+      tool,
+      impersonatedBy: 'admin-1',
+    });
+
+    const lifecycleRow = (classroomId: string, from: object, to: object) => ({
+      user_id: 'alice',
+      classroom_id: classroomId,
+      role: 'OWNER',
+      resource_type: 'CLASSROOM',
+      resource_id: classroomId,
+      action: 'UPDATE',
+      data: { tool, from, to, impersonated_by: 'admin-1' },
+    });
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        lifecycleRow(
+          'old',
+          { status: 'ACTIVE', is_archived: false },
+          { status: 'LOCKED', is_archived: true }
+        ),
+      ],
+      [
+        lifecycleRow(
+          'new',
+          { status: 'LOCKED', is_archived: true },
+          { status: 'ACTIVE', is_archived: false }
+        ),
+      ],
+    ]);
+    expect(mocks.auditPlanOwnerChange).toHaveBeenCalledExactlyOnceWith(
+      { classroomId: 'new', from: 'deleted-user', to: 'alice' },
+      expect.objectContaining({ actorUserId: 'alice', impersonatedBy: 'admin-1' })
+    );
+  });
+
   it('locks both rows in one statement, in id order', async () => {
     rows(row('new', 'LOCKED'), row('old', 'ACTIVE'));
 
