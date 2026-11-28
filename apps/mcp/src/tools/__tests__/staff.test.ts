@@ -496,16 +496,29 @@ describe('staff_remove', () => {
       actor: ACTOR('staff_remove'),
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('DELETE');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.resource_type).toBe('STAFF');
-    expect(audit.resource_id).toBe('ta-1');
-    expect(audit.data).toMatchObject({
-      tool: 'staff_remove',
-      login: 'ta-ann',
-      role: 'ASSISTANT',
-    });
+    // The whole row, as staging's staff_remove wrote it.
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          user_id: 'owner-1',
+          classroom_id: 'class-1',
+          role: 'OWNER',
+          resource_type: 'STAFF',
+          resource_id: 'ta-1',
+          action: 'DELETE',
+          data: {
+            via: 'mcp',
+            client_id: 'c',
+            tool: 'staff_remove',
+            value: 'ASSISTANT:none',
+            user_id: 'ta-1',
+            login: 'ta-ann',
+            role: 'ASSISTANT',
+            removal: 'queued',
+          },
+        },
+      ],
+    ]);
   });
 
   it.each(['ASSISTANT', 'TEACHER', 'OWNER'] as const)(
@@ -630,6 +643,25 @@ describe('staff_remove — ungraded submissions', () => {
     ...over,
   });
 
+  /**
+   * The one STAFF row the call wrote, whole: who wrote it, about whom, and
+   * every `data` key (staging's staff_remove wrote these same rows itself).
+   */
+  const expectOneStaffRow = (action: 'DELETE' | 'UPDATE', data: Record<string, unknown>) =>
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          user_id: 'owner-1',
+          classroom_id: 'class-1',
+          role: 'OWNER',
+          resource_type: 'STAFF',
+          resource_id: 'ta-1',
+          action,
+          data,
+        },
+      ],
+    ]);
+
   it('refuses without a choice, with the count and the three options, and audits nothing', async () => {
     mocks.removeStaff.mockRejectedValue(
       new StaffServiceError('ungraded_choice_required', '[staff] 9 ungraded', {
@@ -712,16 +744,23 @@ describe('staff_remove — ungraded submissions', () => {
       queued: false,
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('DELETE');
-    expect(audit.data).toMatchObject({
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
       tool: 'staff_remove',
       value: 'ASSISTANT:reassign',
+      user_id: 'ta-1',
+      login: 'ta-ann',
       role: 'ASSISTANT',
       removal: 'completed',
       ungraded_submissions: {
         choice: 'reassign',
+        total: 9,
         reassigned_to: { 'ta-bob': 5, 'ta-cat': 4 },
+        unassigned: 0,
+        kept: 0,
+        failed: 0,
+        queued: false,
       },
     });
   });
@@ -767,7 +806,25 @@ describe('staff_remove — ungraded submissions', () => {
     );
     const payload = parse(await staffRemoveTool.handler(withChoice('unassign'), CTX));
     expect(payload.ungraded_submissions).toMatchObject({ choice: 'unassign', unassigned: 3 });
-    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:unassign' });
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:unassign',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      removal: 'completed',
+      ungraded_submissions: {
+        choice: 'unassign',
+        total: 3,
+        reassigned_to: {},
+        unassigned: 3,
+        kept: 0,
+        failed: 0,
+        queued: false,
+      },
+    });
   });
 
   it('keep: reports the kept count', async () => {
@@ -776,7 +833,25 @@ describe('staff_remove — ungraded submissions', () => {
     mocks.settleUngradedSlots.mockResolvedValue(outcome({ choice: 'keep', total: 4, kept: 4 }));
     const payload = parse(await staffRemoveTool.handler(withChoice('keep'), CTX));
     expect(payload.ungraded_submissions).toMatchObject({ choice: 'keep', kept: 4 });
-    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:keep' });
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:keep',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      removal: 'completed',
+      ungraded_submissions: {
+        choice: 'keep',
+        total: 4,
+        reassigned_to: {},
+        unassigned: 0,
+        kept: 4,
+        failed: 0,
+        queued: false,
+      },
+    });
   });
 
   it('a removal still running after the wait: removal_pending, nothing moved', async () => {
@@ -793,7 +868,18 @@ describe('staff_remove — ungraded submissions', () => {
     });
     expect(payload.message).toContain('NOT changed');
     expect(payload.message).toContain('call staff_remove again');
-    expect(auditRow().data).toMatchObject({ removal: 'pending' });
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:reassign',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      // A follow-up marker: kept on this tool's rows.
+      removal: 'pending',
+      ungraded_submissions: { choice: 'reassign', pending: true, count: 9 },
+    });
   });
 
   it('a removal that failed: an error, nothing moved', async () => {
@@ -804,7 +890,17 @@ describe('staff_remove — ungraded submissions', () => {
       kind: 'internal',
     });
     expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
-    expect(auditRow().data).toMatchObject({ removal: 'failed' });
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:reassign',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      removal: 'failed',
+      ungraded_submissions: { choice: 'reassign', total: 9, moved: 0 },
+    });
   });
 
   it('no ungraded slots held: no wait, no param needed, no ungraded_submissions field', async () => {
@@ -813,8 +909,16 @@ describe('staff_remove — ungraded submissions', () => {
     expect(mocks.waitForRunOutcome).not.toHaveBeenCalled();
     expect(payload).toMatchObject({ queued: true });
     expect(payload).not.toHaveProperty('ungraded_submissions');
-    expect(auditRow().data).toMatchObject({ value: 'ASSISTANT:none', removal: 'queued' });
-    expect(auditRow().data).not.toHaveProperty('ungraded_submissions');
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:none',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      removal: 'queued',
+    });
   });
 
   it('slots held but not at stake (another grader role remains): waits, moves nothing', async () => {
@@ -912,13 +1016,23 @@ describe('staff_remove — ungraded submissions', () => {
       role: 'ASSISTANT',
       ungraded_submissions: { reassigned_to: { 'ta-bob': 9 } },
     });
-    expect(auditRow()).toMatchObject({
-      action: 'UPDATE',
-      data: {
-        tool: 'staff_remove',
-        role: 'ASSISTANT',
-        value: 'leftover:ASSISTANT:reassign',
-        removal: 'already_done',
+    expectOneStaffRow('UPDATE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'leftover:ASSISTANT:reassign',
+      user_id: 'ta-1',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      removal: 'already_done',
+      ungraded_submissions: {
+        choice: 'reassign',
+        total: 9,
+        reassigned_to: { 'ta-bob': 9 },
+        unassigned: 0,
+        kept: 0,
+        failed: 0,
+        queued: false,
       },
     });
   });
@@ -983,7 +1097,18 @@ describe('staff_remove — ungraded submissions', () => {
         ungraded_submissions: { choice: 'reassign', pending: true, count: 9 },
       });
       expect(payload.message).toContain('call staff_remove again');
-      expect(auditRow().data).toMatchObject({ removal: 'completed', settle_deferred: true });
+      expectOneStaffRow('DELETE', {
+        via: 'mcp',
+        client_id: 'c',
+        tool: 'staff_remove',
+        value: 'ASSISTANT:reassign',
+        user_id: 'ta-1',
+        login: 'ta-ann',
+        role: 'ASSISTANT',
+        removal: 'completed',
+        settle_deferred: true,
+        ungraded_submissions: { choice: 'reassign', pending: true, count: 9 },
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1002,10 +1127,17 @@ describe('staff_remove — ungraded submissions', () => {
       removal_completed: true,
       ungraded_submissions: { needs_decision: true, count: 9 },
     });
-    expect(auditRow().data).toMatchObject({
+    expectOneStaffRow('DELETE', {
+      via: 'mcp',
+      client_id: 'c',
+      tool: 'staff_remove',
+      value: 'ASSISTANT:none',
+      user_id: 'ta-1',
+      login: 'ta-ann',
       role: 'ASSISTANT',
       removal: 'completed',
       needs_decision: true,
+      ungraded_submissions: { needs_decision: true, count: 9 },
     });
   });
 

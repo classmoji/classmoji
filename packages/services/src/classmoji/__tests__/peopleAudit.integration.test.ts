@@ -638,10 +638,29 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
         followup: 'settle_deferred',
         ungraded: { choice: 'unassign', pending: true, count: 1 },
       });
-      expect((await rowsFor(otherId))[0].data).toMatchObject({
-        removal: 'completed',
-        settle_deferred: true,
-      });
+      expect(await rowsFor(otherId)).toEqual([
+        {
+          user_id: X.ownerId,
+          classroom_id: X.classroomId,
+          role: 'OWNER',
+          resource_type: 'STAFF',
+          resource_id: otherId,
+          action: 'DELETE',
+          data: {
+            via: 'mcp',
+            tool: 'staff_remove',
+            value: 'ASSISTANT:unassign',
+            user_id: otherId,
+            login: login('mcp-deferred'),
+            role: 'ASSISTANT',
+            removal: 'completed',
+            settle_deferred: true,
+            ungraded_submissions: { choice: 'unassign', pending: true, count: 1 },
+            client_id: 'client-1',
+            impersonated_by: ADMIN,
+          },
+        },
+      ]);
       await expect(
         staff.previewLeftoverSlots({
           classroomId: X.classroomId,
