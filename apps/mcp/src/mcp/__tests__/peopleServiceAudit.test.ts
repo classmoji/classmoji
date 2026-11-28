@@ -369,6 +369,47 @@ describe('staff_remove', () => {
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
+
+  it('a slot whose removal failed after its add, with the add row missed: audit_incomplete', async () => {
+    mocks.startStaffRemoval.mockResolvedValue({
+      ...STARTED,
+      ungradedCount: 1,
+      heldUngradedCount: 1,
+      choice: 'reassign',
+    });
+    mocks.waitForRunOutcome.mockResolvedValue({ outcome: 'completed' });
+    // What settleUngradedSlots reports for it: the slot failed, its add row missed.
+    mocks.settleUngradedSlots.mockResolvedValue({
+      choice: 'reassign',
+      total: 1,
+      reassigned: [],
+      unassigned: 0,
+      unassignedIneligible: 0,
+      alreadyCovered: 0,
+      kept: 0,
+      failed: 1,
+      queued: false,
+      fallback: null,
+      audit: { written: 0, missed: 1 },
+    });
+    mocks.recordStaffRemoval.mockResolvedValue(WRITTEN);
+
+    const result = await call('staff_remove', {
+      classroom: 'o/c',
+      login: 'ta-ann',
+      role: 'ASSISTANT',
+      confirm: true,
+      ungraded_submissions: 'reassign',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(parse(result)).toMatchObject({
+      success: true,
+      removal_completed: true,
+      ungraded_submissions: { failed: 1 },
+      audit_incomplete: true,
+    });
+  });
 });
 
 describe('roster_remove_student', () => {

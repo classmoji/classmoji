@@ -17,7 +17,8 @@
  *     and a chunk that fails to queue fails only itself and what follows;
  *   - each receiving grader gets ONE summary notification;
  *   - startStaffRemoval refuses (requireChoice) before anything is queued and
- *     moves nothing itself; settleUngradedSlots never throws.
+ *     moves nothing itself; settleUngradedSlots never throws;
+ *   - every grader row attempted before a failure is in the outcome's audit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +38,14 @@ const mocks = vi.hoisted(() => ({
   removeStaff: vi.fn(),
   batchTrigger: vi.fn(),
   createNotifications: vi.fn(),
+  recordForActor: vi.fn(),
+}));
+
+// The grader rows: `actor: null` owes none (as the real rule), and a test
+// with an actor decides whether each row is written or missed.
+vi.mock('../../classmoji/audit.service.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../classmoji/audit.service.ts')>()),
+  recordForActor: (...a: unknown[]) => mocks.recordForActor(...a),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -137,6 +146,9 @@ beforeEach(() => {
   seed(3);
 
   mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: ORG });
+  mocks.recordForActor.mockImplementation((actor: unknown) =>
+    Promise.resolve(actor ? { written: 1, missed: 0 } : { written: 0, missed: 0 })
+  );
   mocks.gradesFor.mockResolvedValue([]);
   mocks.findSubmission.mockImplementation((id: string, classroomId: string) => {
     const sub = submissions.get(id);
@@ -519,6 +531,67 @@ describe('resolveUngradedSlots', () => {
     expect(outcome.failed).toBe(501);
   });
 
+  describe('a move that fails after its add', () => {
+    const actor = {
+      userId: 'owner-1',
+      role: 'OWNER' as const,
+      tool: 'web:staff.remove',
+      impersonatedBy: null,
+    };
+    const failRemoval = () => {
+      seed(1);
+      mocks.removeIssueAssignees.mockRejectedValue(new Error('GitHub 502'));
+    };
+
+    it('still reports the add row it missed, and the slot as failed', async () => {
+      failRemoval();
+      mocks.recordForActor.mockResolvedValue({ written: 0, missed: 1 });
+      const outcome = await HelperService.resolveUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        actor,
+      });
+      expect(outcome).toMatchObject({
+        failed: 1,
+        reassigned: [],
+        audit: { written: 0, missed: 1 },
+      });
+      // Only the add was attempted: the removal threw before its row.
+      expect(mocks.recordForActor).toHaveBeenCalledTimes(1);
+      expect(mocks.recordForActor.mock.calls[0][1]).toMatchObject({ action: 'CREATE' });
+    });
+
+    it('still reports the add row it wrote, and the slot as failed', async () => {
+      failRemoval();
+      const outcome = await HelperService.resolveUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        actor,
+      });
+      expect(outcome).toMatchObject({
+        failed: 1,
+        reassigned: [],
+        audit: { written: 1, missed: 0 },
+      });
+    });
+
+    it('settleUngradedSlots reports the same', async () => {
+      failRemoval();
+      mocks.recordForActor.mockResolvedValue({ written: 0, missed: 1 });
+      const outcome = await HelperService.settleUngradedSlots({
+        classroomId: 'class-1',
+        graderId: 'u-gone',
+        choice: 'reassign',
+        departingName: 'Gone Person',
+        expectedCount: 1,
+        actor,
+      });
+      expect(outcome).toMatchObject({ failed: 1, audit: { written: 0, missed: 1 } });
+    });
+  });
+
   it('when the first chunk fails, nothing is reported queued and nobody is notified', async () => {
     seed(helper.UNGRADED_INLINE_LIMIT + 1);
     mocks.batchTrigger.mockRejectedValue(new Error('trigger down'));
@@ -643,5 +716,31 @@ describe('settleUngradedSlots', () => {
       expectedCount: 3,
     });
     expect(outcome).toMatchObject({ choice: 'unassign', failed: 3 });
+  });
+
+  it('a failure after some moves still reports the rows those moves wrote or missed', async () => {
+    // Every slot moves (an add and a removal each), then the summary fails.
+    mocks.recordForActor
+      .mockResolvedValueOnce({ written: 0, missed: 1 })
+      .mockResolvedValue({ written: 1, missed: 0 });
+    mocks.createNotifications.mockRejectedValue(new Error('notifications down'));
+    const outcome = await HelperService.settleUngradedSlots({
+      actor: { userId: 'owner-1', role: 'OWNER', tool: 'web:staff.remove', impersonatedBy: null },
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice: 'reassign',
+      departingName: 'Gone Person',
+      expectedCount: 3,
+    });
+    expect([...submissions.values()].map(s => s.graderIds)).toEqual([
+      ['u-ann'],
+      ['u-bob'],
+      ['u-ann'],
+    ]);
+    expect(outcome).toMatchObject({
+      choice: 'reassign',
+      failed: 3,
+      audit: { written: 5, missed: 1 },
+    });
   });
 });

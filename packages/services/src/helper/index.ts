@@ -99,6 +99,19 @@ export interface StaffRemovalStart extends RemoveStaffResult {
   choice: UngradedChoice | null;
 }
 
+interface ResolveUngradedSlotsArgs {
+  classroomId: string;
+  graderId: string;
+  choice: UngradedChoice;
+  departingName?: string;
+  /**
+   * Who the slot moves are recorded for (a grader row for each add and each
+   * removal), made here or by the `move_grader_slot` runs, which carry it in
+   * their payload; null records none.
+   */
+  actor: AuditActor | null;
+}
+
 const emptyOutcome = (choice: UngradedChoice, total: number): UngradedSlotsOutcome => ({
   choice,
   total,
@@ -815,25 +828,28 @@ class HelperService {
    * try so one provider failure does not abort the rest; above it they go out
    * as one `move_grader_slot` run per slot and the outcome reports the plan
    * with `queued: true`. Each receiving grader gets ONE summary notification.
+   * `audit` counts every grader row attempted in this request, including the
+   * add of a slot whose removal then failed.
    */
-  static async resolveUngradedSlots({
-    classroomId,
-    graderId,
-    choice,
-    departingName = 'a departing grader',
-    actor,
-  }: {
-    classroomId: string;
-    graderId: string;
-    choice: UngradedChoice;
-    departingName?: string;
-    /**
-     * Who the slot moves are recorded for (a grader row for each add and each
-     * removal), made here or by the `move_grader_slot` runs, which carry it in
-     * their payload; null records none.
-     */
-    actor: AuditActor | null;
-  }): Promise<UngradedSlotsOutcome> {
+  static async resolveUngradedSlots(args: ResolveUngradedSlotsArgs): Promise<UngradedSlotsOutcome> {
+    return this.resolveUngradedSlotsRecorded(args, () => {});
+  }
+
+  /**
+   * `resolveUngradedSlots`, also handing each grader row's audit result to
+   * `owed` as soon as it is attempted, so a caller that catches a later
+   * failure still knows every row written or missed before it.
+   */
+  private static async resolveUngradedSlotsRecorded(
+    {
+      classroomId,
+      graderId,
+      choice,
+      departingName = 'a departing grader',
+      actor,
+    }: ResolveUngradedSlotsArgs,
+    owed: (audit: ServiceAudit) => void
+  ): Promise<UngradedSlotsOutcome> {
     const slots = await ClassmojiService.gitRepoAssignmentGrader.findUngradedSlotsForGrader(
       classroomId,
       graderId
@@ -934,16 +950,23 @@ class HelperService {
 
     await mapPool(moves, UNGRADED_INLINE_CONCURRENCY, async move => {
       try {
-        const result = await this.moveGraderSlot({
-          classroomId,
-          gitOrganization,
-          gitRepoAssignmentId: move.gitRepoAssignmentId,
-          fromGraderId: graderId,
-          toGraderId: move.toGraderId,
-          fallbackToUnassign: choice === 'reassign',
-          actor,
-        });
-        outcome.audit = addServiceAudit(outcome.audit, result.audit);
+        // Each row is counted as it is attempted, so a move that fails after
+        // its add still reports the add's row.
+        const result = await this.moveGraderSlotRecorded(
+          {
+            classroomId,
+            gitOrganization,
+            gitRepoAssignmentId: move.gitRepoAssignmentId,
+            fromGraderId: graderId,
+            toGraderId: move.toGraderId,
+            fallbackToUnassign: choice === 'reassign',
+            actor,
+          },
+          audit => {
+            outcome.audit = addServiceAudit(outcome.audit, audit);
+            owed(audit);
+          }
+        );
         if (result.status === 'moved') record(move, result.toLogin);
         else if (result.status === 'unassigned' && result.reason === 'grader_not_eligible') {
           outcome.unassigned += 1;
@@ -1050,17 +1073,18 @@ class HelperService {
     /** See `resolveUngradedSlots`. */
     actor: AuditActor | null;
   }): Promise<UngradedSlotsOutcome> {
+    // The rows attempted before a failure are still reported with it.
+    let audit = NO_SERVICE_AUDIT;
     try {
-      return await this.resolveUngradedSlots({
-        classroomId,
-        graderId,
-        choice,
-        departingName,
-        actor,
-      });
+      return await this.resolveUngradedSlotsRecorded(
+        { classroomId, graderId, choice, departingName, actor },
+        owed => {
+          audit = addServiceAudit(audit, owed);
+        }
+      );
     } catch (error) {
       console.error(`[staff] ungraded slots of ${graderId} were not handled:`, error);
-      return { ...emptyOutcome(choice, expectedCount), failed: expectedCount };
+      return { ...emptyOutcome(choice, expectedCount), failed: expectedCount, audit };
     }
   }
 
