@@ -166,4 +166,32 @@ describe('the audit row for a structural edit', () => {
     await waitFor(() => !deckSlides(client.doc).has('aaaa0003'), 3000, 'agent delete synced');
     expect(updates()).toHaveLength(1);
   });
+
+  it('names the admin viewing as the editor on a structural edit', async () => {
+    server = await startServer({ deck: deckAdapter() });
+    server.sessions.viewedAs.set('teacher-1', 'admin-1');
+    const client = connect(server, roomName('deck', 'deck-1', 1), { schemaVersion: 1 });
+    clients.push(client);
+    await client.synced;
+    const updates = () => server.audit.entries.filter(e => e.action === 'UPDATE');
+
+    deleteSlide(client.doc, 'aaaa0002');
+    await waitFor(() => updates().length > 0, 3000, 'structural audit row');
+    expect(updates()).toEqual([
+      {
+        userId: 'teacher-1',
+        classroomId: CLASSROOM_ID,
+        role: 'TEACHER',
+        action: 'UPDATE',
+        resourceType: 'SLIDES',
+        resourceId: 'deck-1',
+        data: {
+          tool: 'live_editor',
+          ops: [{ op: 'delete', id: 'aaaa0002' }],
+          value: 'delete aaaa0002',
+        },
+        impersonatedBy: 'admin-1',
+      },
+    ]);
+  });
 });

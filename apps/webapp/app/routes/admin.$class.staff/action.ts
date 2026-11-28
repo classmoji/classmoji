@@ -173,10 +173,14 @@ const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
-    resourceType: 'TEACHING_STAFF',
-    action: 'manage_staff',
-  });
+  const { userId, classroom, membership, impersonatedBy } = await requireClassroomAdmin(
+    request,
+    classSlug,
+    {
+      resourceType: 'TEACHING_STAFF',
+      action: 'manage_staff',
+    }
+  );
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   const isGitLab = classroom.git_organization?.provider === 'GITLAB';
 
@@ -347,6 +351,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           role,
           ungradedSubmissions,
           actorUserId: userId,
+          impersonatedBy,
         });
 
         finalStatus = (await waitForRunCompletion(started.runId))?.status as string | undefined;

@@ -38,6 +38,8 @@ export interface RemoveUserPayload {
   role: string;
   /** Who asked for the removal: a plan-owner hand-off it causes is audited as them. */
   actorUserId: string | null;
+  /** The platform admin viewing as that person ("View as"), only when there is one. */
+  impersonatedBy?: string;
 }
 
 /**
@@ -53,6 +55,7 @@ export const buildRemoveUserPayload = ({
   classroom,
   role,
   actorUserId = null,
+  impersonatedBy = null,
 }: {
   user: { id: string; login: string | null; has_accepted_invite: boolean };
   classroom: {
@@ -71,6 +74,7 @@ export const buildRemoveUserPayload = ({
   };
   role: string;
   actorUserId?: string | null;
+  impersonatedBy?: string | null;
 }): RemoveUserPayload => {
   const gitOrganization = classroom.git_organization;
 
@@ -96,5 +100,6 @@ export const buildRemoveUserPayload = ({
       : null,
     role,
     actorUserId,
+    ...(impersonatedBy ? { impersonatedBy } : {}),
   };
 };

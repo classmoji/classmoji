@@ -340,6 +340,8 @@ export interface CollabConnectionContext {
   docId: string;
   /** The user's classroom role (audit rows). */
   role?: string;
+  /** The platform admin viewing as the user ("View as"), for its audit rows. */
+  impersonatedBy?: string;
 }
 
 // ─── Loader data for a collab-enabled editor ────────────────────────────────

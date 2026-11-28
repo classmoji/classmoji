@@ -84,10 +84,12 @@ vi.mock('@classmoji/services', () => ({
 
 const {
   assertClassroomAccess,
+  requireAuth,
   requireClassroomAdmin,
   requireClassroomTeachingTeam,
   resolveHighestMembership,
 } = await import('../server.ts');
+const { requestImpersonator } = await import('../requestImpersonator.ts');
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 
@@ -311,6 +313,7 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
           resource_type: 'TOKEN_BALANCE',
           action: 'ACCESS_DENIED',
           data: {
+            tool: 'gate',
             attempted_action: 'purchase_extension',
             required_roles: ['OWNER'],
             has_membership: true,
@@ -322,6 +325,80 @@ describe('assertClassroomAccess — denial wording and audit data for a real mem
         },
       ],
     ]);
+  });
+
+  it('names the admin viewing as a refused member on their row', async () => {
+    signedInHolding(['STUDENT']);
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+
+    await accessAs(['OWNER']).catch(() => {});
+
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          classroom_id: CLASSROOM.id,
+          user_id: 'user-1',
+          role: 'STUDENT',
+          resource_id: CLASSROOM.id,
+          resource_type: 'STUDENT_ROSTER',
+          action: 'ACCESS_DENIED',
+          data: {
+            tool: 'gate',
+            attempted_action: 'view_roster',
+            required_roles: ['OWNER'],
+            has_membership: true,
+            denial_reasons: ['insufficient_role'],
+            is_resource_owner: false,
+            self_access_attempted: false,
+            impersonated_by: 'admin-1',
+          },
+        },
+      ],
+    ]);
+  });
+
+  it('keeps a caller-named tool on a refused member row', async () => {
+    signedInHolding(['STUDENT']);
+
+    await assertClassroomAccess({
+      request: request(),
+      classroomSlug: CLASS_SLUG,
+      allowedRoles: ['OWNER'],
+      resourceType: 'FORMS',
+      attemptedAction: 'mutate_form',
+      metadata: { tool: 'forms.list' },
+    }).catch(() => {});
+
+    expect(mocks.auditCreate.mock.calls[0][0].data.tool).toBe('forms.list');
+    expect(mocks.auditCreate.mock.calls[0][0].data).not.toHaveProperty('impersonated_by');
+  });
+
+  it('hands a refused non-member under View as to recordNonMemberRefusal with the admin', async () => {
+    signedInHolding([]);
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+
+    await accessAs(['STUDENT']).catch(() => {});
+
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'user-1', classroomId: CLASSROOM.id, impersonatedBy: 'admin-1' }],
+    ]);
+  });
+
+  it('returns the admin viewing as the caller, and null for their own session', async () => {
+    signedInHolding(['OWNER']);
+    await expect(accessAs(['OWNER'])).resolves.toMatchObject({ impersonatedBy: null });
+
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: 'admin-1' },
+    });
+    await expect(accessAs(['OWNER'])).resolves.toMatchObject({ impersonatedBy: 'admin-1' });
   });
 
   it('still answers 403 when writing the refusal fails', async () => {
@@ -491,5 +568,66 @@ describe('resolveHighestMembership', () => {
     signedInHolding([]);
 
     await expect(resolveHighestMembership('class-1', 'user-1', null)).resolves.toBeNull();
+  });
+});
+
+// ─── Who is viewing as the user, remembered per request ─────────────────────
+
+describe('requestImpersonator — the answer a gate left for its request', () => {
+  const viewedAs = (by: string) =>
+    mocks.getSession.mockResolvedValue({
+      user: { id: 'user-1', name: 'user-1' },
+      session: { impersonatedBy: by },
+    });
+
+  it("answers from the gate's session read, without reading the session again", async () => {
+    signedInHolding(['OWNER']);
+    viewedAs('admin-1');
+    const req = request();
+
+    await assertClassroomAccess({
+      request: req,
+      classroomSlug: CLASS_SLUG,
+      allowedRoles: ['OWNER'],
+      resourceType: 'STUDENT_ROSTER',
+      attemptedAction: 'view_roster',
+    });
+    expect(mocks.getSession).toHaveBeenCalledTimes(1);
+
+    await expect(requestImpersonator(req)).resolves.toBe('admin-1');
+    await expect(requestImpersonator(req)).resolves.toBe('admin-1');
+    expect(mocks.getSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers the user's own session as nobody, after requireAuth too", async () => {
+    signedInHolding(['OWNER']);
+    const req = request();
+
+    await requireAuth(req);
+    await expect(requestImpersonator(req)).resolves.toBeNull();
+    expect(mocks.getSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('keys by the Request object: a clone, or a request no gate read, is read on its own', async () => {
+    signedInHolding(['OWNER']);
+    viewedAs('admin-1');
+    const req = request();
+    await requireAuth(req);
+
+    await expect(requestImpersonator(req.clone())).resolves.toBe('admin-1');
+    await expect(requestImpersonator(request())).resolves.toBe('admin-1');
+    expect(mocks.getSession).toHaveBeenCalledTimes(3);
+  });
+
+  it('answers null and logs when that read fails', async () => {
+    mocks.getSession.mockRejectedValue(new Error('session store away'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(requestImpersonator(request())).resolves.toBeNull();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to read the session'),
+      expect.any(Error)
+    );
+    error.mockRestore();
   });
 });

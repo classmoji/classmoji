@@ -295,6 +295,8 @@ describe('submission_late_override (quiz) — set and clear', () => {
         action: 'UPDATE',
         data: {
           tool: 'submission_late_override',
+          via: 'mcp',
+          client_id: 'c',
           kind: 'quiz',
           field: 'quiz_late_waiver',
           value: true,

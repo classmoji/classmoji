@@ -86,6 +86,7 @@ type RemovePayload = {
   classroom: typeof CLASSROOM;
   role: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
   actorUserId?: string | null;
+  impersonatedBy?: string | null;
 };
 
 const run = (overrides: Partial<RemovePayload> = {}) =>
@@ -146,6 +147,15 @@ describe('remove_user_from_organization — the shared staff team', () => {
     // The delete is where a plan-owner hand-off happens, and it is audited as them.
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'OWNER', {
       actorUserId: 'owner-9',
+    });
+  });
+
+  it('also hands it the admin viewing as that owner, when there is one', async () => {
+    await run({ role: 'OWNER', actorUserId: 'owner-9', impersonatedBy: 'admin-1' });
+
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'OWNER', {
+      actorUserId: 'owner-9',
+      impersonatedBy: 'admin-1',
     });
   });
 

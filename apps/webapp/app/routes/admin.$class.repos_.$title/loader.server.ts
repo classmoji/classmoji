@@ -45,6 +45,7 @@ export const buildLoader =
       repos.map(r => r.id)
     );
     const { repos: reposWithContributions, contributors } = await withContributions({
+      request,
       classroom,
       userId,
       role: membership?.role,

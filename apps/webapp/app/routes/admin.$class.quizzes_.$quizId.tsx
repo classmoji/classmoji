@@ -185,6 +185,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     action: 'VIEW',
     resourceType: 'QUIZ_DETAILS',
     resourceId: quiz.id.toString(),
+    metadata: { tool: 'web:quiz.view' },
   });
 
   // Rows carry the fields this page renders and nothing else — see
@@ -295,6 +296,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       // Scoped to one quiz, so the quiz is the affected resource — which is
       // what distinguishes it from the classroom-wide clear on the quiz list.
       await addClassroomAuditLog({
+        request,
         classroomId: classroom.id,
         userId,
         role: membership!.role,

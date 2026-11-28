@@ -55,7 +55,7 @@ export interface LiveEditingDeps {
     action: string;
     resourceType: string;
     resourceId: string;
-    metadata: Record<string, unknown>;
+    metadata: { tool: string } & Record<string, unknown>;
   }) => Promise<unknown>;
 }
 

@@ -21,7 +21,6 @@ import {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
-import { impersonationAuditFields } from '../admin.$class.ask-moji/impersonation.server';
 import {
   AI_SETTINGS_AUDIT_TOOL,
   INSTRUCTIONS_ERROR_COPY,
@@ -565,6 +564,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // for the instructions their length. One row per save.
   const audit = async (fields: string[], extra: Record<string, unknown> = {}) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -575,7 +575,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         tool: AI_SETTINGS_AUDIT_TOOL,
         fields,
         ...extra,
-        ...(await impersonationAuditFields(request)),
       },
     });
 

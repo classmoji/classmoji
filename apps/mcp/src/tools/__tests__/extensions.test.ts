@@ -181,7 +181,14 @@ describe('extension_purchase on a quiz (assignment_id)', () => {
       resource_type: 'TOKEN_PURCHASE',
       resource_id: 'tx-1',
       action: 'CREATE',
-      data: { tool: 'extension_purchase', assignment_id: QUIZ_ASSIGNMENT, hours: 2, amount: -4 },
+      data: {
+        tool: 'extension_purchase',
+        via: 'mcp',
+        client_id: 'c',
+        assignment_id: QUIZ_ASSIGNMENT,
+        hours: 2,
+        amount: -4,
+      },
     });
   });
 
@@ -335,6 +342,8 @@ describe('extension_purchase on a submission (git_repo_assignment_id)', () => {
     expect(result).toMatchObject({ success: true, git_repo_assignment_id: SUBMISSION });
     expect(mocks.auditCreate.mock.calls[0][0].data).toEqual({
       tool: 'extension_purchase',
+      via: 'mcp',
+      client_id: 'c',
       git_repo_assignment_id: SUBMISSION,
       hours: 1,
       amount: -2,

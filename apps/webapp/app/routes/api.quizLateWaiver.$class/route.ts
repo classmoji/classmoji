@@ -5,7 +5,6 @@ import { ActionTypes } from '~/constants';
 import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { mutationRefusal } from '~/utils/mutationRefusal.server';
-import { impersonationAuditFields } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import type { Route } from './+types/route';
 
 /** The audit `data.tool` of this surface (the MCP's is `submission_late_override`). */
@@ -39,8 +38,8 @@ export const QUIZ_LATE_WAIVER_TOOL = 'web:quiz_late_waiver';
  * Nobody waives their own late penalty (the service's `self`, 403).
  *
  * Impersonation: allowed and recorded, as the quiz grade adjustment does
- * (`impersonated_by` on the audit row), and as the repo shield (which records
- * nothing) does not refuse either.
+ * (`impersonated_by` on the audit row, added by the audit funnel), and as the
+ * repo shield (which records nothing) does not refuse either.
  *
  * Audit: one row per actual change (`changed`); the resource id names the
  * assignment and not the student, so two students waived on one quiz are
@@ -109,6 +108,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   if (result.changed) {
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -123,7 +123,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         assignment_id: assignmentId,
         quiz_id: result.quizId,
         student_id: studentId,
-        ...(await impersonationAuditFields(request)),
       },
     });
   }

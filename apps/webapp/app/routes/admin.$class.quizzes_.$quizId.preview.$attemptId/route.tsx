@@ -65,6 +65,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (
     membership &&
     (await closeIfExpired(attemptData.attempt, {
+      request,
       userId: String(userId),
       role: membership.role,
       surface: 'preview_attempt_view',

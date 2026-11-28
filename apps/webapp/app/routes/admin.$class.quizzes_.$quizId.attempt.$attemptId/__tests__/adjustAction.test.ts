@@ -63,8 +63,9 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: vi.fn(),
 }));
 // A platform admin's "View As" session, read from the request's session.
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => session.impersonatedBy,
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => session.impersonatedBy,
 }));
 vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisible(...a),

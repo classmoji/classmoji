@@ -5,17 +5,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   remapGradeEmojis: vi.fn(),
   replaceScale: vi.fn(),
   addClassroomAuditLog: vi.fn(),
-  impersonatedBy: null as string | null,
-}));
-
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: async () =>
-    mocks.impersonatedBy ? { impersonated_by: mocks.impersonatedBy } : {},
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -40,11 +39,11 @@ const { DEFAULT_EMOJI_MAPPINGS, SCORE_EMOJI_MAPPINGS } = await import('@classmoj
 const post = (name: string, body: unknown) =>
   action({
     params: { class: 'cs52' },
-    request: new Request(`http://localhost/admin/cs52/settings/grades?/${name}`, {
+    request: (routeRequest = new Request(`http://localhost/admin/cs52/settings/grades?/${name}`, {
       method: 'POST',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
-    }),
+    })),
   } as unknown as Parameters<typeof action>[0]) as Promise<Record<string, unknown>>;
 
 class RemapGradeEmojisError extends Error {
@@ -56,7 +55,6 @@ class RemapGradeEmojisError extends Error {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.impersonatedBy = null;
   mocks.requireClassroomAdmin.mockResolvedValue({
     classroom: { id: 'class-x', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
@@ -88,6 +86,7 @@ describe('remapOrphanedEmojis', () => {
     });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'owner-1',
       role: 'OWNER',
@@ -104,16 +103,13 @@ describe('remapOrphanedEmojis', () => {
     });
   });
 
-  it('records the platform admin behind a View As session', async () => {
-    mocks.impersonatedBy = 'admin-1';
+  it('hands the audit funnel the request, whose session names any View As admin', async () => {
     await post('remapOrphanedEmojis', { mappings: [{ oldEmoji: '+1', newEmoji: 'score-90' }] });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
+        request: sameObject(routeRequest),
         userId: 'owner-1',
-        metadata: expect.objectContaining({
-          tool: 'web:settings.grades.remap_orphaned_emojis',
-          impersonated_by: 'admin-1',
-        }),
+        metadata: expect.objectContaining({ tool: 'web:settings.grades.remap_orphaned_emojis' }),
       })
     );
   });

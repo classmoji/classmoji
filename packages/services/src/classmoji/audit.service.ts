@@ -88,16 +88,58 @@ export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> 
   }
 }
 
-/** The one `data` a non-member's refusal row carries. */
-const NON_MEMBER_REFUSAL_DATA = JSON.stringify({ reason: 'not_classroom_member', tool: 'gate' });
+/**
+ * A row's `data` with `impersonated_by` (the platform admin's user id) added
+ * when the action was taken while that admin was viewing as the user ("View
+ * as"); unchanged otherwise, so a row written outside View as has no such key.
+ * Every funnel that writes rows for a request runs its `data` through this,
+ * so the key is set in one place per surface. A non-object `data` is kept
+ * under `value` rather than lose the admin.
+ */
+export function withImpersonator<T extends object>(
+  data: T,
+  impersonatedBy: string | null | undefined
+): T & { impersonated_by?: string };
+export function withImpersonator(data: unknown, impersonatedBy: string | null | undefined): unknown;
+export function withImpersonator(
+  data: unknown,
+  impersonatedBy: string | null | undefined
+): unknown {
+  if (typeof impersonatedBy !== 'string' || !impersonatedBy) return data;
+  if (data === undefined || data === null) return { impersonated_by: impersonatedBy };
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    return { ...(data as Record<string, unknown>), impersonated_by: impersonatedBy };
+  }
+  return { value: data, impersonated_by: impersonatedBy };
+}
+
+/** The `data` a non-member's refusal row carries (plus the admin under View as). */
+const nonMemberRefusalData = (impersonatedBy: string | null) =>
+  JSON.stringify(
+    impersonatedBy
+      ? { reason: 'not_classroom_member', tool: 'gate', impersonated_by: impersonatedBy }
+      : { reason: 'not_classroom_member', tool: 'gate' }
+  );
 
 /**
  * The id of a person's refusal row in a classroom on one UTC day: a SHA-256
  * of the three, laid out as a UUID (version 8), so every refusal that day
- * lands on the same row.
+ * lands on the same row. A refusal while a platform admin was viewing as the
+ * person also hashes that admin's id, so it lands on a row of its own (one
+ * per person, classroom, day and admin); without one the key is the three
+ * alone, as it always was.
  */
-async function nonMemberRefusalId(userId: string, classroomId: string, day: string) {
-  const key = JSON.stringify(['not_classroom_member', userId, classroomId, day]);
+async function nonMemberRefusalId(
+  userId: string,
+  classroomId: string,
+  day: string,
+  impersonatedBy: string | null
+) {
+  const key = JSON.stringify(
+    impersonatedBy
+      ? ['not_classroom_member', userId, classroomId, day, impersonatedBy]
+      : ['not_classroom_member', userId, classroomId, day]
+  );
   const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
   const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(
     ''
@@ -114,6 +156,11 @@ async function nonMemberRefusalId(userId: string, classroomId: string, day: stri
  * nothing taken from the request. A further refusal that day raises the
  * row's `count` and moves `updated_at` to it; `timestamp` stays the first.
  *
+ * `impersonatedBy`: the platform admin viewing as the person, when the
+ * refused session is a "View as" one. The row's data then also carries
+ * `impersonated_by`, and it is a row of its own for that admin, never counted
+ * on the person's own.
+ *
  * One statement, `INSERT … ON CONFLICT (id) DO UPDATE` on an id derived from
  * the three, so parallel refusals add up on the one row. Never throws: a
  * failed write (an unknown user or classroom, the database away) leaves one
@@ -122,9 +169,15 @@ async function nonMemberRefusalId(userId: string, classroomId: string, day: stri
  * `now` is for tests; the gates leave it out.
  */
 export async function recordNonMemberRefusal(
-  { userId, classroomId }: { userId: string; classroomId: string },
+  {
+    userId,
+    classroomId,
+    impersonatedBy,
+  }: { userId: string; classroomId: string; impersonatedBy?: string | null },
   { now = new Date() }: { now?: Date } = {}
 ): Promise<void> {
+  const by = typeof impersonatedBy === 'string' && impersonatedBy ? impersonatedBy : null;
+  const data = nonMemberRefusalData(by);
   const row = {
     user_id: userId,
     classroom_id: classroomId,
@@ -132,7 +185,7 @@ export async function recordNonMemberRefusal(
     action: 'ACCESS_DENIED',
     resource_type: 'CLASSROOM',
     resource_id: classroomId,
-    data: JSON.parse(NON_MEMBER_REFUSAL_DATA) as unknown,
+    data: JSON.parse(data) as unknown,
   };
   if (!userId || !classroomId) {
     logAuditMiss(!userId ? 'missing user_id' : 'missing classroom_id', row);
@@ -140,7 +193,7 @@ export async function recordNonMemberRefusal(
   }
   try {
     const at = now.toISOString();
-    const id = await nonMemberRefusalId(userId, classroomId, at.slice(0, 10));
+    const id = await nonMemberRefusalId(userId, classroomId, at.slice(0, 10), by);
     // `timestamp` and `updated_at` are UTC wall times (timestamp without time
     // zone), written from `now` so the row does not depend on the session's zone.
     await getPrisma().$executeRaw`
@@ -149,7 +202,7 @@ export async function recordNonMemberRefusal(
          "data", "count", "timestamp", "updated_at")
       VALUES
         (${id}, ${classroomId}, ${userId}, NULL, 'ACCESS_DENIED', 'CLASSROOM', ${classroomId},
-         ${NON_MEMBER_REFUSAL_DATA}::jsonb, 1,
+         ${data}::jsonb, 1,
          ${at}::timestamptz AT TIME ZONE 'UTC', ${at}::timestamptz AT TIME ZONE 'UTC')
       ON CONFLICT ("id") DO UPDATE SET
         "count" = audit_logs."count" + 1,

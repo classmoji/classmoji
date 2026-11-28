@@ -263,6 +263,8 @@ describe('grader_assign — who can be a grader (the web rule)', () => {
         role: 'OWNER',
         data: {
           tool: 'grader_assign',
+          via: 'mcp',
+          client_id: 'c',
           value: U.taGrader,
           grader_id: U.taGrader,
           grader_login: 'ta-g',
@@ -411,6 +413,8 @@ describe('grader_unassign', () => {
         action: 'DELETE',
         data: {
           tool: 'grader_unassign',
+          via: 'mcp',
+          client_id: 'c',
           value: U.taGrader,
           grader_id: U.taGrader,
           grader_login: 'ta-g',

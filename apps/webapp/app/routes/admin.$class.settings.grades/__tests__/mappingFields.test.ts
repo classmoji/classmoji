@@ -51,10 +51,6 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: async () => ({}),
-}));
-
 const { action } = await import('../action');
 
 const post = (intent: string, body: unknown) =>

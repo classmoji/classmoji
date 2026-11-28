@@ -221,6 +221,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
     // MCP page_create tool writes. The two creation flows this action serves
     // differ in what they put on disk, so `tool` distinguishes them.
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

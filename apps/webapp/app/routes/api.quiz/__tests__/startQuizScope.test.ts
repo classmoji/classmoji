@@ -186,6 +186,11 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
   it('creates a new attempt when none is named, leaving the resume path alone', async () => {
     await start(undefined);
 
-    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
+    expect(createNewMock).toHaveBeenCalledWith(
+      QUIZ_ID,
+      'student-1',
+      { role: 'STUDENT' },
+      { impersonatedBy: null }
+    );
   });
 });

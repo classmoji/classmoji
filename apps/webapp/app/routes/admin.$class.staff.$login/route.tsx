@@ -75,6 +75,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'VIEW',
     resourceType: 'TEACHING_STAFF_DETAILS',
     resourceId: String(staffUser.id),
+    metadata: { tool: 'web:staff.view' },
   });
 
   // Get their grading assignments

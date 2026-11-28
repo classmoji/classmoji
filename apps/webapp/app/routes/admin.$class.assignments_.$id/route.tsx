@@ -89,6 +89,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // submission row (null until the assignment is released to that repo).
   // Team repos also carry who wrote what (the last contributions calculation).
   const { repos: withStats, contributors } = await withContributions({
+    request,
     classroom,
     userId,
     role: membership?.role,

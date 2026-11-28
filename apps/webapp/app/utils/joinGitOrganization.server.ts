@@ -43,12 +43,20 @@ export const joinGitOrganization = async ({
   membership,
   classroom,
   tool,
+  impersonatedBy = null,
 }: {
   userId: string;
   membership: { id: string; role: string };
   classroom: { id: string; slug: string; name: string; git_organization: GitOrganizationRow };
   /** `data.tool` on the audit row: which surface the join came from. */
   tool: string;
+  /**
+   * The platform admin viewing as the user ("View as"), for the audit rows
+   * (the join's, and a plan-owner claim's when an owner is accepted).
+   * The join link and the class picker's automatic invites never run under
+   * View as; the picker's Accept can.
+   */
+  impersonatedBy?: string | null;
 }): Promise<GitJoinResult> => {
   const org = classroom.git_organization;
   const courseProvider = org.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB';
@@ -79,6 +87,7 @@ export const joinGitOrganization = async ({
         organization: org.login,
         login: studentLogin ?? null,
         ...detail,
+        ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
       } as Prisma.InputJsonValue,
     });
   };
@@ -180,9 +189,13 @@ export const joinGitOrganization = async ({
       // shows their role, not "Pending invite" until the task gets to it (the
       // task sets the same flag; its job is the repos). After the trigger, so a
       // failed trigger leaves them pending and able to try again.
-      await ClassmojiService.classroomMembership.updateById(membership.id, {
-        has_accepted_invite: true,
-      });
+      await ClassmojiService.classroomMembership.updateById(
+        membership.id,
+        { has_accepted_invite: true },
+        // The user accepts their own invite: a classroom an owner claims on
+        // the way is audited as them, naming any admin viewing as them.
+        { actorUserId: userId, impersonatedBy }
+      );
       await auditJoin('added_to_team');
       return {
         ok: true,

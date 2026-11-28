@@ -37,7 +37,9 @@ export async function createGitLabClassroom(
     timezone?: unknown;
     importConfig?: unknown;
     archiveClassroomId?: unknown;
-  }
+  },
+  /** The platform admin viewing as the user ("View as"), for the audit rows. */
+  { impersonatedBy = null }: { impersonatedBy?: string | null } = {}
 ) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) return { error: 'Classroom name is required' };
@@ -246,6 +248,7 @@ export async function createGitLabClassroom(
         newClassroomId: classroom.id,
         archiveClassroomId: gate.archiveClassroomId,
         userId,
+        impersonatedBy,
       })
     : null;
 

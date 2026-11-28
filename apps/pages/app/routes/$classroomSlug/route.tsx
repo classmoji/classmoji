@@ -20,6 +20,8 @@ import {
 } from './embedBridge.ts';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
+import { impersonatorOf } from '~/utils/pageSections.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import { closeLivePageForDelete } from '~/utils/collab.server.ts';
@@ -269,15 +271,18 @@ export const action = async ({
     tool: string,
     detail: Record<string, unknown> = {}
   ) => {
-    await ClassmojiService.audit.record({
-      user_id: authData.userId,
-      classroom_id: classroom.id,
-      role,
-      action,
-      resource_type: 'PAGES',
-      resource_id: pageId,
-      data: { tool, ...detail },
-    });
+    await recordAudit(
+      {
+        user_id: authData.userId,
+        classroom_id: classroom.id,
+        role,
+        action,
+        resource_type: 'PAGES',
+        resource_id: pageId,
+        data: { tool, ...detail },
+      },
+      { impersonatedBy: impersonatorOf(authData) }
+    );
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape

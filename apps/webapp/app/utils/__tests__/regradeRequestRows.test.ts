@@ -66,7 +66,12 @@ describe('regrade request rows', () => {
     await loadStaffRegradeRows({
       classroomId: 'class-x',
       scale: SCALE,
-      viewer: { userId: 'ta-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
+      viewer: {
+        request: new Request('http://localhost/admin/c/regrade-requests'),
+        userId: 'ta-1',
+        role: 'ASSISTANT',
+        tool: 'web:regrade_requests.view',
+      },
     });
     expect(mocks.findManyForDisplay).toHaveBeenCalledWith('class-x', {});
     expect(mocks.lateness).toHaveBeenCalledWith('class-x', [quizRow()], SCALE);
@@ -88,7 +93,12 @@ describe('regrade request rows', () => {
     const [row] = await loadStaffRegradeRows({
       classroomId: 'class-x',
       scale: SCALE,
-      viewer: { userId: 'ta-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
+      viewer: {
+        request: new Request('http://localhost/admin/c/regrade-requests'),
+        userId: 'ta-1',
+        role: 'ASSISTANT',
+        tool: 'web:regrade_requests.view',
+      },
     });
     expect(row.quiz).toMatchObject({ lateHours: 3, countedEmoji: 'eyes' });
   });

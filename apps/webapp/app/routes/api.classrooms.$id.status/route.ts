@@ -36,7 +36,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // updated below. `classroomId` makes them the same row by construction. It
   // also 404s an unknown id only after the session check, so ids stay
   // unenumerable to anonymous callers.
-  const { userId } = await assertClassroomAccess({
+  const { userId, impersonatedBy } = await assertClassroomAccess({
     request,
     classroomId,
     allowedRoles: ['OWNER'],
@@ -51,6 +51,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       status: body.status,
       actorUserId: userId,
       tool: 'web:classroom.status',
+      impersonatedBy,
     });
     return Response.json({ status: updated.status });
   } catch (error) {

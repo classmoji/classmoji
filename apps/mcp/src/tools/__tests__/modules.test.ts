@@ -401,6 +401,8 @@ describe('module_item_add with a FORM target', () => {
     });
     expect(audit.data).toEqual({
       tool: 'module_item_add',
+      via: 'mcp',
+      client_id: 'c',
       module_id: 'mod-1',
       item_type: 'FORM',
       target_id: 'form-1',

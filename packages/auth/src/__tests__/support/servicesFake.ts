@@ -15,6 +15,8 @@
  * the real module (no `importOriginal`): the subpath and the real package
  * import the same files.
  */
+
+import { vi } from 'vitest';
 export async function fromServicesFake(name: string): Promise<object> {
   const root = (await import('@classmoji/services')) as {
     ClassmojiService?: Record<string, unknown>;
@@ -26,5 +28,13 @@ export async function fromServicesFake(name: string): Promise<object> {
     // A fake without a ClassmojiService export.
     service = undefined;
   }
-  return (service as object | undefined) ?? {};
+  const fake = (service as object | undefined) ?? {};
+  if (name === 'audit' && !('withImpersonator' in fake)) {
+    // A pure helper the gates build rows with, not a write: the real one.
+    const { withImpersonator } = await vi.importActual<typeof import('@classmoji/services/audit')>(
+      '@classmoji/services/audit'
+    );
+    return { ...fake, withImpersonator };
+  }
+  return fake;
 }

@@ -32,7 +32,6 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -239,7 +238,7 @@ export const mediaDeleteTool: ToolDefinition<MediaDeleteArgs> = {
       resource_type: 'MEDIA',
       resource_id: result.mediaId,
       action: 'DELETE',
-      data: { tool: 'media_delete' } as Prisma.InputJsonValue,
+      data: { tool: 'media_delete' },
     });
     return ok({ success: true, media_id: result.mediaId, deleted: true });
   },
@@ -310,7 +309,7 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
         ...(args.folder !== undefined ? { folder: args.folder } : {}),
         size: args.size,
         destination: started.destination,
-      } as Prisma.InputJsonValue,
+      },
     });
     return ok({
       upload_id: started.uploadId,
@@ -364,7 +363,7 @@ export const fileUploadFinishTool: ToolDefinition<UploadIdArgs> = {
         tool: 'file_upload_finish',
         status: status.status,
         ...(status.status === 'placed' ? { ref: status.ref } : {}),
-      } as Prisma.InputJsonValue,
+      },
     });
     return ok(statusPayload(status));
   },
@@ -481,7 +480,7 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
         // to keep one.
         url: auditableUrl(args.url),
         filename: started.filename,
-      } as Prisma.InputJsonValue,
+      },
     });
     return ok({
       upload_id: started.uploadId,

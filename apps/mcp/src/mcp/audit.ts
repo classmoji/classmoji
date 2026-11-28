@@ -21,25 +21,34 @@
  * logged. The row names the surface and the ids the call was given, never
  * anything from the payload.
  *
- * Every row a request writes, through either path, carries `impersonated_by`
+ * Every row a request writes, through any of them, carries `impersonated_by`
  * (the platform admin's user id) when the request's Ask Moji token was
  * minted under View as (`Viewer.impersonatedBy`: the admin the token's row
- * names, routes/mcp.ts).
+ * names, routes/mcp.ts), and `via: 'mcp'` and `client_id` (the OAuth client,
+ * which tells a person's own MCP client from Ask Moji). Every row names its
+ * surface in `data.tool` (the type requires it).
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { withImpersonator } from '@classmoji/services/audit';
 import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
 import { jsonText } from './jsonText.ts';
 import type { ToolContext, ToolResult } from './registry.ts';
 
+/**
+ * A row's `data`: `tool` names the surface (the tool's name, or the web's
+ * vocabulary a tool shares); the rest is ids and values, never free text.
+ */
+export type AuditData = { tool: string } & { [key: string]: unknown };
+
 export interface AuditEntry {
   /** Web-route vocabulary, e.g. 'GIT_REPO_ASSIGNMENT', 'REGRADE_REQUEST'. */
   resource_type: string;
   resource_id?: string | null;
   action: AuditLogAction;
-  data?: Prisma.InputJsonValue;
+  data: AuditData;
   /**
    * The actor's role for this row when the tool decided it from something
    * stricter than the registry's membership (e.g. the ACCEPTED role a page
@@ -49,21 +58,26 @@ export interface AuditEntry {
 }
 
 /**
- * The row's `data`, with `impersonated_by` added when the request runs under
- * impersonation. Callers pass object literals (several typed through
- * `as Prisma.InputJsonValue`, which is why the type stays wide); a non-object
- * would be kept under `value` rather than lose the actor.
+ * The row's `data`: `via: 'mcp'` first (a tool that names its own `via`, as
+ * the forms tools do, keeps it: one key either way), then the entry's, then
+ * the server-resolved `client_id` and, when the request runs under View as,
+ * `impersonated_by`: neither can be set by a tool's data.
  */
-function withImpersonation(
-  data: Prisma.InputJsonValue | undefined,
-  impersonatedBy: string | null | undefined
-): { data?: Prisma.InputJsonValue } {
-  if (!impersonatedBy) return data !== undefined ? { data } : {};
-  if (data === undefined) return { data: { impersonated_by: impersonatedBy } };
-  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
-    return { data: { ...(data as Prisma.InputJsonObject), impersonated_by: impersonatedBy } };
-  }
-  return { data: { value: data, impersonated_by: impersonatedBy } };
+function rowData(ctx: ToolContext, data: AuditData): Prisma.InputJsonValue {
+  return withImpersonator(
+    { via: 'mcp', ...data, client_id: ctx.viewer.clientId },
+    ctx.viewer.impersonatedBy
+  ) as Prisma.InputJsonValue;
+}
+
+/**
+ * `{ impersonatedBy }` for a shared service that writes its own audit row
+ * (classroom status, staff removal, deck html-block files), only when the
+ * request runs under View as; nothing otherwise.
+ */
+export function viewingAs(ctx: ToolContext): { impersonatedBy?: string } {
+  const by = ctx.viewer.impersonatedBy;
+  return by ? { impersonatedBy: by } : {};
 }
 
 /** The row `entry` stands for, from the request's validated context. */
@@ -79,7 +93,7 @@ function auditRow(ctx: ToolContext, entry: AuditEntry) {
     resource_type: entry.resource_type,
     resource_id: entry.resource_id ?? null,
     action: entry.action,
-    ...withImpersonation(entry.data, ctx.viewer.impersonatedBy),
+    data: rowData(ctx, entry.data),
   };
 }
 
@@ -210,8 +224,6 @@ export async function auditRead(
       action: 'VIEW',
       data: {
         tool: surface,
-        via: 'mcp',
-        client_id: ctx.viewer.clientId,
         ...(ids.data ?? {}),
         ...(ids.data ? { filter_key: filterKey(ids.data) } : {}),
       },

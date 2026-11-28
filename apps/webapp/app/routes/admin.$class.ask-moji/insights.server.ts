@@ -12,13 +12,12 @@
  * VIEW row is written.
  *
  * Audit: every read of the classroom's Ask Moji activity is a VIEW row with
- * `data.tool` naming the surface, and `impersonated_by` while a platform
- * admin views as the user.
+ * `data.tool` naming the surface (and `impersonated_by` while a platform
+ * admin views as the user, which the audit funnel adds).
  */
 import { ClassmojiService } from '@classmoji/services';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
-import { impersonationAuditFields } from './impersonation.server';
 
 export const INSIGHT_VIEWER_ROLES = ['OWNER', 'TEACHER'] as const;
 
@@ -66,7 +65,6 @@ export async function requireAskMojiInsights(
   const viewerRole = membership!.role as InsightViewerRole;
   const settings = classroom.settings as { timezone?: string | null } | null | undefined;
   const timeZone = canonicalTimeZone(settings?.timezone) ?? 'UTC';
-  const impersonation = await impersonationAuditFields(request);
 
   return {
     userId,
@@ -75,13 +73,14 @@ export async function requireAskMojiInsights(
     timeZone,
     audit: ({ resourceType, resourceId, tool, data }) =>
       addClassroomAuditLog({
+        request,
         classroomId: classroom.id,
         userId,
         role: viewerRole,
         action: 'VIEW',
         resourceType,
         resourceId,
-        metadata: { tool, ...data, ...impersonation },
+        metadata: { tool, ...data },
       }),
   };
 }

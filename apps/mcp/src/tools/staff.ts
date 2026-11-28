@@ -33,7 +33,14 @@ import {
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  viewingAs,
+  writeAudit,
+} from './shared.ts';
 
 /** The three staff roles these tools manage; STUDENT belongs to the roster tools. */
 const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
@@ -466,6 +473,7 @@ export const staffRemoveTool: StaffRemoveTool = {
         ungradedSubmissions: choiceArg,
         requireChoice: true,
         actorUserId: ctx.viewer.userId,
+        ...viewingAs(ctx),
       });
     } catch (error) {
       // The follow-up to a removal that could not finish settling: the role is

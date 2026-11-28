@@ -35,7 +35,20 @@ const resolveRoleUpdate = (
 /** Who is acting on a membership, for the audit row a plan-owner change writes. */
 export interface MembershipActor {
   actorUserId?: string | null;
+  /** The platform admin viewing as the actor ("View as"), for that row. */
+  impersonatedBy?: string | null;
 }
+
+/**
+ * The View as admin for the rows of an accepted owner's claims, which are
+ * audited as the accepted user: only when that user is the actor, since the
+ * admin was viewing as the actor.
+ */
+const acceptedBy = (
+  { actorUserId, impersonatedBy }: MembershipActor,
+  acceptedUserId: string
+): { impersonatedBy?: string | null } =>
+  actorUserId === acceptedUserId && impersonatedBy ? { impersonatedBy } : {};
 
 /**
  * Run `write`, the step that ends `userId`'s OWNER membership (a removal or a
@@ -53,7 +66,7 @@ const leaveOwnership = async <T>(
   classroomId: string,
   userId: string,
   write: (tx: Prisma.TransactionClient) => Promise<T>,
-  { actorUserId }: MembershipActor = {}
+  { actorUserId, impersonatedBy }: MembershipActor = {}
 ): Promise<T> => {
   const { result, change } = await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR UPDATE`;
@@ -62,7 +75,11 @@ const leaveOwnership = async <T>(
     return { result: await write(tx), change };
   });
   if (change) {
-    await planOwnerService.auditPlanOwnerChange(change, { actorUserId, reason: 'owner_left' });
+    await planOwnerService.auditPlanOwnerChange(change, {
+      actorUserId,
+      impersonatedBy,
+      reason: 'owner_left',
+    });
   }
   return result;
 };
@@ -332,7 +349,7 @@ export const update = async (
       : await write(getPrisma());
 
   if (updated.role === 'OWNER' && acceptsInvite(updates))
-    await planOwnerService.onOwnerAccepted(userId);
+    await planOwnerService.onOwnerAccepted(userId, acceptedBy(actor, userId));
   return withLogins(updated);
 };
 
@@ -369,7 +386,7 @@ export const updateById = async (
       : await write(getPrisma());
 
   if (updated.role === 'OWNER' && acceptsInvite(updates))
-    await planOwnerService.onOwnerAccepted(updated.user_id);
+    await planOwnerService.onOwnerAccepted(updated.user_id, acceptedBy(actor, updated.user_id));
   return withLogins(updated);
 };
 

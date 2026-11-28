@@ -22,6 +22,7 @@ import {
 import { OPS_MALFORMED_ANSWER, readCanonicalSaveOps } from '~/utils/saveOps.server.ts';
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import {
@@ -647,21 +648,18 @@ export const loader = async ({
   // it is reported (`audit_miss`) and the page loads.
   const viewingAsUserId = isImpersonatedSession(authData) ? authData?.userId : null;
   if (viewingAsUserId && readerSections.member && request.method !== 'HEAD') {
-    const impersonatedBy = impersonatorOf(authData);
-    await ClassmojiService.audit.record({
-      user_id: viewingAsUserId,
-      classroom_id: page.classroom.id,
-      role: sectionViewer.acceptedRole as string,
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'VIEW',
-      data: {
-        tool: 'page_reader',
-        via: 'web',
-        page_id: page.id,
-        ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
+    await recordAudit(
+      {
+        user_id: viewingAsUserId,
+        classroom_id: page.classroom.id,
+        role: sectionViewer.acceptedRole as string,
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'VIEW',
+        data: { tool: 'page_reader', via: 'web', page_id: page.id },
       },
-    });
+      { impersonatedBy: impersonatorOf(authData) }
+    );
   }
 
   return {
