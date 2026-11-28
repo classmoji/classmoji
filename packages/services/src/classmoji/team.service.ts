@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY, USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import { sortNaturallyBy, withLogins } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@classmoji/database/client';
+import { recordForActor, type AuditActor } from './audit.service.ts';
 
 interface TeamCreatePayload {
   providerId?: string | number | null;
@@ -286,11 +287,19 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
   );
 };
 
+/**
+ * A team a student forms for themselves, with them as its first member and
+ * the repository's tag, in one create. Recorded for `actor` after the write:
+ * TEAMS / CREATE on the team, in team_create's shape (`team_id`, `slug`,
+ * `is_visible`, `tags_added`, `tags_failed`) plus the member, `user_id`.
+ * `actor: null`: no row.
+ */
 export const createWithMembershipAndTag = async (
-  payload: TeamCreateWithMembershipAndTagPayload
+  payload: TeamCreateWithMembershipAndTagPayload,
+  actor: AuditActor | null
 ) => {
   const { name, slug, classroomId, providerId, userId, tagId, provider = 'GITHUB' } = payload;
-  return getPrisma().team.create({
+  const team = await getPrisma().team.create({
     data: {
       name,
       slug,
@@ -306,6 +315,21 @@ export const createWithMembershipAndTag = async (
       },
     },
   });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'TEAMS',
+    resourceId: team.id,
+    action: 'CREATE',
+    data: {
+      team_id: team.id,
+      slug: team.slug,
+      is_visible: team.is_visible,
+      tags_added: 1,
+      tags_failed: 0,
+      user_id: userId,
+    },
+  });
+  return { team, audit };
 };
 
 /**

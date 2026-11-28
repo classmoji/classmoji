@@ -131,6 +131,9 @@ const TEAM = {
   classroom_id: 'class-1',
 };
 
+/** What a call with `actor: null` answers about its row: none owed. */
+const NO_AUDIT = { written: 0, missed: 0 };
+
 const notFound = (message = 'Not Found') => Object.assign(new Error(message), { status: 404 });
 
 beforeEach(() => {
@@ -154,6 +157,7 @@ beforeEach(() => {
   createTeam.mockResolvedValue({ id: 7, slug: 'blue-team', name: 'Blue Team' });
   teamCreate.mockResolvedValue(TEAM);
   removeMemberFromTeam.mockResolvedValue({ count: 1 });
+  addMemberToTeam.mockResolvedValue({ added: true });
 });
 
 describe('teamAdmin.createTeam', () => {
@@ -163,6 +167,7 @@ describe('teamAdmin.createTeam', () => {
     teamCreate.mockResolvedValue({ ...TEAM, is_visible: true });
 
     const result = await teamAdmin.createTeam({
+      actor: null,
       classroomId: 'class-1',
       name: '  Blue Team  ',
       isVisible: true,
@@ -190,7 +195,12 @@ describe('teamAdmin.createTeam', () => {
   });
 
   it('defaults is_visible to false rather than always storing a visible team', async () => {
-    await teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] });
+    await teamAdmin.createTeam({
+      actor: null,
+      classroomId: 'class-1',
+      name: 'Blue Team',
+      tagIds: ['tag-1'],
+    });
 
     expect(teamCreate.mock.calls[0][0]).toMatchObject({ isVisible: false });
   });
@@ -198,7 +208,7 @@ describe('teamAdmin.createTeam', () => {
   it('refuses a name whose slug would collide with the classroom teams', async () => {
     for (const name of ['cs1 25f students', 'CS1-25F-Assistants']) {
       await expect(
-        teamAdmin.createTeam({ classroomId: 'class-1', name, tagIds: ['tag-1'] })
+        teamAdmin.createTeam({ actor: null, classroomId: 'class-1', name, tagIds: ['tag-1'] })
       ).rejects.toMatchObject({ code: 'reserved_name' });
     }
     expect(getTeam).not.toHaveBeenCalled();
@@ -207,7 +217,7 @@ describe('teamAdmin.createTeam', () => {
 
   it('rejects an empty name before anything else runs', async () => {
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: '   ', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({ actor: null, classroomId: 'class-1', name: '   ', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'invalid_name' });
     expect(classroomFindById).not.toHaveBeenCalled();
   });
@@ -216,7 +226,12 @@ describe('teamAdmin.createTeam', () => {
     getTeam.mockResolvedValue({ id: 3, slug: 'blue-team', name: 'Blue Team' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'name_collision' });
     expect(createTeam).not.toHaveBeenCalled();
   });
@@ -225,7 +240,12 @@ describe('teamAdmin.createTeam', () => {
     getTeam.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 403 }));
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toThrow('rate limited');
     expect(createTeam).not.toHaveBeenCalled();
   });
@@ -234,6 +254,7 @@ describe('teamAdmin.createTeam', () => {
     tagFindMany.mockResolvedValue([{ id: 'tag-ok' }]);
 
     const result = await teamAdmin.createTeam({
+      actor: null,
       classroomId: 'class-1',
       name: 'Blue Team',
       tagIds: ['tag-ok', 'tag-elsewhere'],
@@ -256,7 +277,7 @@ describe('teamAdmin.createTeam', () => {
 
   it('refuses with tag_required before any provider call when no tag is given', async () => {
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: [] })
+      teamAdmin.createTeam({ actor: null, classroomId: 'class-1', name: 'Blue Team', tagIds: [] })
     ).rejects.toMatchObject({ code: 'tag_required' });
 
     expect(getTeam).not.toHaveBeenCalled();
@@ -268,7 +289,12 @@ describe('teamAdmin.createTeam', () => {
     tagFindMany.mockResolvedValue([]);
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-elsewhere'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-elsewhere'],
+      })
     ).rejects.toMatchObject({ code: 'tag_required' });
 
     expect(getTeam).not.toHaveBeenCalled();
@@ -281,7 +307,12 @@ describe('teamAdmin.createTeam', () => {
     teamCreate.mockRejectedValue(writeError);
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toBe(writeError);
 
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
@@ -296,7 +327,12 @@ describe('teamAdmin.createTeam', () => {
     deleteTeam.mockRejectedValueOnce(new Error('rollback failed'));
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toBe(writeError);
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
   });
@@ -307,7 +343,12 @@ describe('teamAdmin.createTeam', () => {
     teamCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'name_collision' });
     expect(deleteTeam).not.toHaveBeenCalled();
   });
@@ -316,7 +357,12 @@ describe('teamAdmin.createTeam', () => {
     classroomFindById.mockResolvedValue({ ...CLASSROOM, git_organization: null });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'no_org_configured' });
   });
 
@@ -329,7 +375,12 @@ describe('teamAdmin.createTeam', () => {
     createTeam.mockResolvedValue({ id: 9, slug: 'cs1-25f-students', name: 'CS1-25F Students!' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1-25F Students!', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'CS1-25F Students!',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'reserved_name' });
 
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'cs1-25f-students');
@@ -341,7 +392,12 @@ describe('teamAdmin.createTeam', () => {
     teamFindBySlug.mockResolvedValue({ id: 'other-team', slug: 'blue-team' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team!', tagIds: ['tag-1'] })
+      teamAdmin.createTeam({
+        actor: null,
+        classroomId: 'class-1',
+        name: 'Blue Team!',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'name_collision' });
 
     expect(teamFindBySlug).toHaveBeenCalledWith('blue-team', 'class-1');
@@ -356,6 +412,7 @@ describe('teamAdmin.createTeam', () => {
 
     await expect(
       teamAdmin.createTeam({
+        actor: null,
         classroomId: 'class-1',
         name: 'CS1 25F.Assistants',
         tagIds: ['tag-1'],
@@ -398,7 +455,11 @@ describe('team.create', () => {
 
 describe('teamAdmin.deleteTeam', () => {
   it('leaves the provider team alone unless asked, and removes the local row', async () => {
-    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    const result = await teamAdmin.deleteTeam({
+      actor: null,
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+    });
     expect(deleteTeam).not.toHaveBeenCalled();
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
     expect(result.removedFromProvider).toBe(false);
@@ -406,6 +467,7 @@ describe('teamAdmin.deleteTeam', () => {
 
   it('deletes on the provider and locally once the local row resolves', async () => {
     const result = await teamAdmin.deleteTeam({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       deleteOnProvider: true,
@@ -420,6 +482,7 @@ describe('teamAdmin.deleteTeam', () => {
       removedFromProvider: true,
       reposDeleted: 0,
       deletedRepoNames: [],
+      audit: NO_AUDIT,
     });
   });
 
@@ -431,7 +494,11 @@ describe('teamAdmin.deleteTeam', () => {
       ],
     });
 
-    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    const result = await teamAdmin.deleteTeam({
+      actor: null,
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+    });
 
     expect(result.reposDeleted).toBe(2);
     expect(result.deletedRepoNames).toEqual(['hw1-blue-team', 'hw2-blue-team']);
@@ -442,7 +509,11 @@ describe('teamAdmin.deleteTeam', () => {
       git_repos: Array.from({ length: 25 }, (_, i) => ({ id: `r${i}`, name: `hw${i}-blue-team` })),
     });
 
-    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    const result = await teamAdmin.deleteTeam({
+      actor: null,
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+    });
 
     expect(result.reposDeleted).toBe(25);
     expect(result.deletedRepoNames).toHaveLength(20);
@@ -453,6 +524,7 @@ describe('teamAdmin.deleteTeam', () => {
 
     await expect(
       teamAdmin.deleteTeam({
+        actor: null,
         classroomId: 'class-1',
         slugOrId: 'cs1-25f-students',
         deleteOnProvider: true,
@@ -465,6 +537,7 @@ describe('teamAdmin.deleteTeam', () => {
 
   it('scopes the lookup to the classroom, by slug or id', async () => {
     await teamAdmin.deleteTeam({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       deleteOnProvider: true,
@@ -480,6 +553,7 @@ describe('teamAdmin.deleteTeam', () => {
     deleteTeam.mockRejectedValue(notFound());
 
     const result = await teamAdmin.deleteTeam({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       deleteOnProvider: true,
@@ -495,6 +569,7 @@ describe('teamAdmin.deleteTeam', () => {
 
     await expect(
       teamAdmin.deleteTeam({
+        actor: null,
         classroomId: 'class-1',
         slugOrId: 'blue-team',
         deleteOnProvider: true,
@@ -513,7 +588,12 @@ describe('teamAdmin.renameTeam', () => {
     teamFindBySlug.mockResolvedValue({ id: 'other-team', slug: 'green-team' });
 
     await expect(
-      teamAdmin.renameTeam({ classroomId: 'class-1', slugOrId: 'blue-team', newName: 'Green Team' })
+      teamAdmin.renameTeam({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        newName: 'Green Team',
+      })
     ).rejects.toMatchObject({ code: 'name_collision' });
 
     // The predicted slug is what catches it — GitHub is never asked to rename.
@@ -527,7 +607,12 @@ describe('teamAdmin.renameTeam', () => {
     teamFindBySlug.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'other-team' });
 
     await expect(
-      teamAdmin.renameTeam({ classroomId: 'class-1', slugOrId: 'blue-team', newName: 'Green Team' })
+      teamAdmin.renameTeam({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        newName: 'Green Team',
+      })
     ).rejects.toMatchObject({ code: 'name_collision' });
     expect(teamRenameAndRepos).not.toHaveBeenCalled();
   });
@@ -539,7 +624,12 @@ describe('teamAdmin.renameTeam', () => {
     });
 
     await expect(
-      teamAdmin.renameTeam({ classroomId: 'class-1', slugOrId: 'blue-team', newName: 'Green Team' })
+      teamAdmin.renameTeam({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        newName: 'Green Team',
+      })
     ).rejects.toMatchObject({ code: 'provider_unsupported' });
     expect(updateTeam).not.toHaveBeenCalled();
   });
@@ -548,7 +638,12 @@ describe('teamAdmin.renameTeam', () => {
     teamFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.renameTeam({ classroomId: 'class-1', slugOrId: 'nope', newName: 'Green Team' })
+      teamAdmin.renameTeam({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'nope',
+        newName: 'Green Team',
+      })
     ).rejects.toMatchObject({ code: 'team_not_found' });
     expect(updateTeam).not.toHaveBeenCalled();
   });
@@ -564,6 +659,7 @@ describe('teamAdmin.renameTeam', () => {
     updateRepo.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('repo is archived'));
 
     const result = await teamAdmin.renameTeam({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       newName: 'Green Team',
@@ -593,6 +689,7 @@ describe('teamAdmin.renameTeam', () => {
 
     await expect(
       teamAdmin.renameTeam({
+        actor: null,
         classroomId: 'class-1',
         slugOrId: 'blue-team',
         newName: 'CS1-25F Students!',
@@ -610,6 +707,7 @@ describe('teamAdmin.renameTeam', () => {
   it('rejects renaming onto a reserved classroom-team name', async () => {
     await expect(
       teamAdmin.renameTeam({
+        actor: null,
         classroomId: 'class-1',
         slugOrId: 'blue-team',
         newName: 'cs1 25f students',
@@ -620,7 +718,12 @@ describe('teamAdmin.renameTeam', () => {
 
   it('rejects an empty new name', async () => {
     await expect(
-      teamAdmin.renameTeam({ classroomId: 'class-1', slugOrId: 'blue-team', newName: '  ' })
+      teamAdmin.renameTeam({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        newName: '  ',
+      })
     ).rejects.toMatchObject({ code: 'invalid_name' });
   });
 });
@@ -630,14 +733,19 @@ describe('teamAdmin.addTeamMembers', () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
 
     const result = await teamAdmin.addTeamMembers({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       logins: ['ada'],
     });
 
     expect(addTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
-    expect(addMemberToTeam).toHaveBeenCalledWith('team-1', 'u-1');
-    expect(result).toEqual({ succeeded: [{ login: 'ada' }], failed: [] });
+    expect(addMemberToTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'team-1' }),
+      'u-1',
+      null
+    );
+    expect(result).toEqual({ succeeded: [{ login: 'ada' }], failed: [], audit: NO_AUDIT });
   });
 
   it('reports per-member failures instead of swallowing them, and keeps going', async () => {
@@ -648,6 +756,7 @@ describe('teamAdmin.addTeamMembers', () => {
     addTeamMember.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not in org'));
 
     const result = await teamAdmin.addTeamMembers({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       logins: ['ada', 'ghost', 'grace'],
@@ -669,6 +778,7 @@ describe('teamAdmin.addTeamMembers', () => {
       .mockResolvedValueOnce({ id: 'u-other-class', login: 'lin' });
 
     const result = await teamAdmin.addTeamMembers({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       logins: ['ada', 'lin'],
@@ -681,6 +791,7 @@ describe('teamAdmin.addTeamMembers', () => {
     expect(result).toEqual({
       succeeded: [{ login: 'ada' }],
       failed: [{ login: 'lin', error: 'invalid' }],
+      audit: NO_AUDIT,
     });
     expect(addTeamMember).toHaveBeenCalledTimes(1);
     expect(addTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
@@ -692,7 +803,12 @@ describe('teamAdmin.addTeamMembers', () => {
     teamFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.addTeamMembers({ classroomId: 'class-1', slugOrId: 'nope', logins: ['ada'] })
+      teamAdmin.addTeamMembers({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'nope',
+        logins: ['ada'],
+      })
     ).rejects.toMatchObject({ code: 'team_not_found' });
     expect(addTeamMember).not.toHaveBeenCalled();
   });
@@ -703,7 +819,12 @@ describe('teamAdmin.removeTeamMember', () => {
     userFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.removeTeamMember({ classroomId: 'class-1', slugOrId: 'blue-team', login: 'ghost' })
+      teamAdmin.removeTeamMember({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        login: 'ghost',
+      })
     ).rejects.toMatchObject({ code: 'user_not_found' });
     expect(removeTeamMember).not.toHaveBeenCalled();
   });
@@ -713,19 +834,21 @@ describe('teamAdmin.removeTeamMember', () => {
     removeMemberFromTeam.mockResolvedValue({ count: 0 });
 
     const result = await teamAdmin.removeTeamMember({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       login: 'ada',
     });
 
     expect(removeTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
-    expect(result).toEqual({ teamId: 'team-1', login: 'ada', removed: false });
+    expect(result).toEqual({ teamId: 'team-1', login: 'ada', removed: false, audit: NO_AUDIT });
   });
 
   it('uses the stored login casing for the provider call', async () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
 
     await teamAdmin.removeTeamMember({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       login: 'Ada',
@@ -745,6 +868,7 @@ describe('teamAdmin.addTeamTags', () => {
     tagFindMany.mockResolvedValue([{ id: 'tag-ok' }]);
 
     await teamAdmin.addTeamTags({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       tagIds: ['tag-ok'],
@@ -758,6 +882,7 @@ describe('teamAdmin.addTeamTags', () => {
     tagFindMany.mockResolvedValue([{ id: 'tag-ok' }]);
 
     const result = await teamAdmin.addTeamTags({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       tagIds: ['tag-ok', 'tag-elsewhere'],
@@ -773,19 +898,25 @@ describe('teamAdmin.addTeamTags', () => {
     teamTagCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 
     const result = await teamAdmin.addTeamTags({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       tagIds: ['tag-ok'],
     });
 
-    expect(result).toEqual({ added: ['tag-ok'], failed: [] });
+    expect(result).toEqual({ added: ['tag-ok'], failed: [], audit: NO_AUDIT });
   });
 
   it('rejects an unknown team', async () => {
     teamFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.addTeamTags({ classroomId: 'class-1', slugOrId: 'nope', tagIds: ['tag-ok'] })
+      teamAdmin.addTeamTags({
+        actor: null,
+        classroomId: 'class-1',
+        slugOrId: 'nope',
+        tagIds: ['tag-ok'],
+      })
     ).rejects.toMatchObject({ code: 'team_not_found' });
     expect(teamTagCreate).not.toHaveBeenCalled();
   });
@@ -795,21 +926,30 @@ describe('teamAdmin.removeTeamTag', () => {
   it('resolves the TeamTag row through its team classroom before deleting', async () => {
     teamTagFindFirst.mockResolvedValue({ id: 'tt-1', team_id: 'team-1', tag_id: 'tag-1' });
 
-    const result = await teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-1' });
+    const result = await teamAdmin.removeTeamTag({
+      actor: null,
+      classroomId: 'class-1',
+      teamTagId: 'tt-1',
+    });
 
     expect(teamTagFindFirst.mock.calls[0][0].where).toEqual({
       id: 'tt-1',
       team: { classroom_id: 'class-1' },
     });
     expect(teamTagRowDelete).toHaveBeenCalledWith({ where: { id: 'tt-1' } });
-    expect(result).toEqual({ teamTagId: 'tt-1', teamId: 'team-1', tagId: 'tag-1' });
+    expect(result).toEqual({
+      teamTagId: 'tt-1',
+      teamId: 'team-1',
+      tagId: 'tag-1',
+      audit: NO_AUDIT,
+    });
   });
 
   it('does not delete a TeamTag that lives in another classroom', async () => {
     teamTagFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-elsewhere' })
+      teamAdmin.removeTeamTag({ actor: null, classroomId: 'class-1', teamTagId: 'tt-elsewhere' })
     ).rejects.toMatchObject({ code: 'tag_not_found' });
     expect(teamTagRowDelete).not.toHaveBeenCalled();
   });
@@ -819,7 +959,7 @@ describe('teamAdmin.removeTeamTag', () => {
     teamTagCount.mockResolvedValue(1);
 
     await expect(
-      teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-1' })
+      teamAdmin.removeTeamTag({ actor: null, classroomId: 'class-1', teamTagId: 'tt-1' })
     ).rejects.toMatchObject({ code: 'tag_required' });
     expect(teamTagCount).toHaveBeenCalledWith({ where: { team_id: 'team-1' } });
     expect(teamTagRowDelete).not.toHaveBeenCalled();
@@ -828,7 +968,7 @@ describe('teamAdmin.removeTeamTag', () => {
   it('counts the tags inside the transaction, behind a row lock on the team', async () => {
     teamTagFindFirst.mockResolvedValue({ id: 'tt-1', team_id: 'team-1', tag_id: 'tag-1' });
 
-    await teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-1' });
+    await teamAdmin.removeTeamTag({ actor: null, classroomId: 'class-1', teamTagId: 'tt-1' });
 
     expect(transaction).toHaveBeenCalledTimes(1);
     const [strings, ...values] = queryRaw.mock.calls[0] as [string[], ...unknown[]];
@@ -891,6 +1031,7 @@ describe('teamAdmin — a stale Github login', () => {
     getLoginById.mockResolvedValue('ada-renamed');
 
     const result = await teamAdmin.addTeamMembers({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       logins: ['ada'],
@@ -905,6 +1046,7 @@ describe('teamAdmin — a stale Github login', () => {
     getLoginById.mockResolvedValue(null);
 
     const result = await teamAdmin.addTeamMembers({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       logins: ['ada'],
@@ -920,13 +1062,18 @@ describe('teamAdmin — a stale Github login', () => {
     removeMemberFromTeam.mockResolvedValue({ count: 1 });
 
     const result = await teamAdmin.removeTeamMember({
+      actor: null,
       classroomId: 'class-1',
       slugOrId: 'blue-team',
       login: 'ada',
     });
 
     expect(removeTeamMember).not.toHaveBeenCalled();
-    expect(removeMemberFromTeam).toHaveBeenCalledWith('team-1', 'u-1');
-    expect(result).toEqual({ teamId: 'team-1', login: 'ada', removed: true });
+    expect(removeMemberFromTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'team-1' }),
+      'u-1',
+      null
+    );
+    expect(result).toEqual({ teamId: 'team-1', login: 'ada', removed: true, audit: NO_AUDIT });
   });
 });

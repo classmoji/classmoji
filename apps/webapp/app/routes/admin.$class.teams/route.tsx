@@ -14,6 +14,7 @@ import { useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 interface Team {
@@ -222,20 +223,23 @@ const DELETE_ERRORS: Partial<Record<TeamServiceError['code'], string>> = {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'manage_teams',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { team, deleteOnGitHub } = data;
 
   try {
+    // The team service records the delete (TEAMS / DELETE).
     await ClassmojiService.teamAdmin.deleteTeam({
       classroomId: classroom.id,
       slugOrId: team.slug,
       deleteOnProvider: deleteOnGitHub === true,
+      actor: await auditActor(request, gate, 'web:teams.delete'),
     });
   } catch (error: unknown) {
     if (error instanceof TeamServiceError) {

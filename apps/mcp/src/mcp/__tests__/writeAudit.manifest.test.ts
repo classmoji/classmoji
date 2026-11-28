@@ -137,6 +137,22 @@ const WRITES: Record<string, Entry> = {
   // ITEMS: module.reorderItems; MODULES: module.reorderModules; ASSIGNMENTS:
   // assignment.reorderInModule. Each records the moved rows when the order changed.
   module_reorder: { kind: 'service', fn: 'module.reorderItems', actor: 'serviceActor' },
+  // ── teams: the team service writes the row for the actor ──
+  team_create: { kind: 'service', fn: 'teamAdmin.createTeam', actor: 'serviceActor' },
+  team_delete: { kind: 'service', fn: 'teamAdmin.deleteTeam', actor: 'serviceActor' },
+  // Only when the name, the slug or a repository changed.
+  team_rename: { kind: 'service', fn: 'teamAdmin.renameTeam', actor: 'serviceActor' },
+  // Only when a membership was created (with the members' user ids).
+  team_members_add: { kind: 'service', fn: 'teamAdmin.addTeamMembers', actor: 'serviceActor' },
+  // Only when a membership row was removed.
+  team_member_remove: {
+    kind: 'service',
+    fn: 'teamAdmin.removeTeamMember',
+    actor: 'serviceActor',
+  },
+  // Only when a link was written.
+  team_tag_add: { kind: 'service', fn: 'teamAdmin.addTeamTags', actor: 'serviceActor' },
+  team_tag_remove: { kind: 'service', fn: 'teamAdmin.removeTeamTag', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -193,13 +209,6 @@ const WRITES: Record<string, Entry> = {
   slide_create: TOOL,
   slide_update: TOOL,
   slide_delete: TOOL,
-  team_create: TOOL,
-  team_delete: TOOL,
-  team_rename: TOOL,
-  team_members_add: TOOL,
-  team_member_remove: TOOL,
-  team_tag_add: TOOL,
-  team_tag_remove: TOOL,
   // ── no row ──
   feedback_write: {
     kind: 'exempt',

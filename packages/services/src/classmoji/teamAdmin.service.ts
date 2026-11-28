@@ -23,6 +23,11 @@
  *
  * Authorization is NOT re-checked here. Callers (route auth gates / MCP tool
  * scopes) own that, exactly as in roster.service.ts and staff.service.ts.
+ *
+ * Every function takes a required `actor` and records what it saved in the
+ * database, after the save, in the TEAMS row the MCP team tools wrote before
+ * (one row per call, only when something was saved; `actor: null`: no row),
+ * and answers `audit`. Provider calls that saved nothing locally write none.
  */
 import { queue } from 'async';
 
@@ -44,6 +49,12 @@ import * as userService from './user.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamTagService from './teamTag.service.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 /** Throttle between provider calls in the sequential queues (ms). */
 const PROVIDER_THROTTLE_MS = 250;
@@ -103,6 +114,7 @@ export interface RepoRenameFailure {
 
 export interface CreateTeamResult {
   team: TeamSummary;
+  audit: ServiceAudit;
   /** Tag ids attached to the team, written together with its row. */
   tagsAdded: string[];
   /** Requested ids that are not tags of this classroom; they were not attached. */
@@ -123,6 +135,7 @@ export interface DeleteTeamResult {
   reposDeleted: number;
   /** Names of those repositories, capped at MAX_REPORTED_REPO_NAMES. */
   deletedRepoNames: string[];
+  audit: ServiceAudit;
 }
 
 export interface RenameTeamResult {
@@ -132,11 +145,13 @@ export interface RenameTeamResult {
   /** New names of the repositories that were successfully renamed. */
   renamedRepos: string[];
   failed: RepoRenameFailure[];
+  audit: ServiceAudit;
 }
 
 export interface AddTeamMembersResult {
   succeeded: { login: string }[];
   failed: MemberFailure[];
+  audit: ServiceAudit;
 }
 
 export interface RemoveTeamMemberResult {
@@ -144,17 +159,20 @@ export interface RemoveTeamMemberResult {
   login: string;
   /** false when no membership row existed (the removal is idempotent). */
   removed: boolean;
+  audit: ServiceAudit;
 }
 
 export interface AddTeamTagsResult {
   added: string[];
   failed: TagFailure[];
+  audit: ServiceAudit;
 }
 
 export interface RemoveTeamTagResult {
   teamTagId: string;
   teamId: string;
   tagId: string;
+  audit: ServiceAudit;
 }
 
 /** A git provider 404 — the resource genuinely is not there. */
@@ -372,16 +390,19 @@ const partitionClassroomTags = async (classroomId: string, tagIds: string[]) => 
  * Attach tags one at a time so a single bad id cannot abort the rest (the
  * routes used to Promise.all these and lose every result on the first reject).
  * A unique-constraint violation means the tag is already on the team — that is
- * the desired end state, so it counts as added.
+ * the desired end state, so it counts as added; `attached` lists only the
+ * links this call wrote.
  */
 const attachTags = async (teamId: string, tagIds: string[]) => {
   const added: string[] = [];
+  const attached: string[] = [];
   const failed: TagFailure[] = [];
 
   for (const tagId of tagIds) {
     try {
       await teamTagService.create(teamId, tagId);
       added.push(tagId);
+      attached.push(tagId);
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         added.push(tagId);
@@ -394,7 +415,7 @@ const attachTags = async (teamId: string, tagIds: string[]) => {
     }
   }
 
-  return { added, failed };
+  return { added, attached, failed };
 };
 
 const toSummary = (team: { id: string; name: string; slug: string; is_visible: boolean }) => ({
@@ -437,17 +458,22 @@ const toSummary = (team: { id: string; name: string; slug: string; is_visible: b
  * are reported in `tagsFailed` and the rest are used. The tags are written in
  * the same create as the local row: if that write fails the provider team is
  * deleted again and the error is thrown, so a team never exists untagged.
+ *
+ * Recorded for `actor`: TEAMS / CREATE on the team, with `team_id`, `slug`,
+ * `is_visible` and the `tags_added` / `tags_failed` counts.
  */
 export const createTeam = async ({
   classroomId,
   name,
   isVisible = false,
   tagIds,
+  actor,
 }: {
   classroomId: string;
   name: string;
   isVisible?: boolean;
   tagIds: string[];
+  actor: AuditActor | null;
 }): Promise<CreateTeamResult> => {
   const trimmedName = requireName(name);
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
@@ -536,10 +562,25 @@ export const createTeam = async ({
     throw error;
   }
 
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'TEAMS',
+    resourceId: team.id,
+    action: 'CREATE',
+    data: {
+      team_id: team.id,
+      slug: team.slug,
+      is_visible: team.is_visible,
+      tags_added: validTagIds.length,
+      tags_failed: tagsFailed.length,
+    },
+  });
+
   return {
     team: toSummary(team),
     tagsAdded: validTagIds,
     tagsFailed,
+    audit,
   };
 };
 
@@ -555,11 +596,15 @@ export const createTeam = async ({
  * The linked repository records go with the team (and take their submissions,
  * grades and analytics with them), so they are counted BEFORE the delete and
  * reported back: callers cannot describe what a delete cost afterwards.
+ *
+ * Recorded for `actor`: TEAMS / DELETE on the team, with `team_id`, `slug`,
+ * `removed_from_provider`, `repos_deleted` and `deleted_repo_names`.
  */
 export const deleteTeam = async ({
   classroomId,
   slugOrId,
   deleteOnProvider = false,
+  actor,
 }: {
   classroomId: string;
   slugOrId: string;
@@ -569,6 +614,7 @@ export const deleteTeam = async ({
    * GitHub is the instructor's call to remove.
    */
   deleteOnProvider?: boolean;
+  actor: AuditActor | null;
 }): Promise<DeleteTeamResult> => {
   const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
@@ -600,6 +646,20 @@ export const deleteTeam = async ({
 
   await teamService.deleteBySlug(classroomId, team.slug);
 
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'TEAMS',
+    resourceId: team.id,
+    action: 'DELETE',
+    data: {
+      team_id: team.id,
+      slug: team.slug,
+      removed_from_provider: removedFromProvider,
+      repos_deleted: repositories.length,
+      deleted_repo_names: deletedRepoNames,
+    },
+  });
+
   return {
     id: team.id,
     name: team.name,
@@ -607,6 +667,7 @@ export const deleteTeam = async ({
     removedFromProvider,
     reposDeleted: repositories.length,
     deletedRepoNames,
+    audit,
   };
 };
 
@@ -626,15 +687,21 @@ export const deleteTeam = async ({
  * again. The team already carries the new slug, so the old `-{oldSlug}` suffix
  * no longer matches anything on a second pass — those repositories have to be
  * renamed by hand on the provider. Callers must surface `failed`.
+ *
+ * Recorded for `actor` when the name, the slug or a repository changed:
+ * TEAMS / UPDATE on the team, with `team_id`, `new_slug`, `previous_slug`,
+ * the `renamed_repos` count and the names of the `failed_repos`.
  */
 export const renameTeam = async ({
   classroomId,
   slugOrId,
   newName,
+  actor,
 }: {
   classroomId: string;
   slugOrId: string;
   newName: string;
+  actor: AuditActor | null;
 }): Promise<RenameTeamResult> => {
   const trimmedName = requireName(newName);
   const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
@@ -735,12 +802,30 @@ export const renameTeam = async ({
       .map(repo => (repo as { repository_id?: string | null }).repository_id)
   );
 
+  const changed = updated.name !== team.name || newSlug !== team.slug || succeeded.length > 0;
+  const audit = changed
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'TEAMS',
+        resourceId: team.id,
+        action: 'UPDATE',
+        data: {
+          team_id: team.id,
+          new_slug: newSlug,
+          previous_slug: team.slug,
+          renamed_repos: succeeded.length,
+          failed_repos: failed.map(f => f.name),
+        },
+      })
+    : NO_SERVICE_AUDIT;
+
   return {
     teamId: team.id,
     newName: updated.name,
     newSlug,
     renamedRepos: succeeded.map(r => r.name),
     failed,
+    audit,
   };
 };
 
@@ -802,15 +887,23 @@ const assertSlugFree = async ({
  * remaining logins still run. The route used to let the whole queue die on the first bad login
  * and still report success. The local write is an upsert, so re-adding an
  * existing member is a no-op rather than an error.
+ *
+ * Recorded for `actor` when at least one membership was created: ONE TEAMS /
+ * UPDATE row on the team, with `team_id`, `slug`, the `succeeded` and
+ * `failed` logins (as team_members_add recorded them) and the `user_ids` of
+ * the members this call added. Nobody added (every login failed, or each was
+ * already on the team): no row.
  */
 export const addTeamMembers = async ({
   classroomId,
   slugOrId,
   logins,
+  actor,
 }: {
   classroomId: string;
   slugOrId: string;
   logins: string[];
+  actor: AuditActor | null;
 }): Promise<AddTeamMembersResult> => {
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
@@ -830,6 +923,7 @@ export const addTeamMembers = async ({
 
   const succeeded: { login: string }[] = [];
   const failed: MemberFailure[] = [];
+  const addedUserIds: string[] = [];
 
   const membersQueue = queue<string>(async login => {
     try {
@@ -849,7 +943,9 @@ export const addTeamMembers = async ({
       }
       gitProvider ??= getGitProvider(gitOrganization);
       await gitProvider.addTeamMember(orgLogin, team.slug, canonicalLogin);
-      await teamMembershipService.addMemberToTeam(team.id, user.id);
+      // This call's own row below records the added members.
+      const { added } = await teamMembershipService.addMemberToTeam(team, user.id, null);
+      if (added) addedUserIds.push(user.id);
       succeeded.push({ login: canonicalLogin });
     } catch (error: unknown) {
       failed.push({
@@ -865,7 +961,24 @@ export const addTeamMembers = async ({
     await membersQueue.drain();
   }
 
-  return { succeeded, failed };
+  const audit =
+    addedUserIds.length > 0
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'TEAMS',
+          resourceId: team.id,
+          action: 'UPDATE',
+          data: {
+            team_id: team.id,
+            slug: team.slug,
+            succeeded: succeeded.map(s => s.login),
+            failed: failed.map(f => f.login),
+            user_ids: addedUserIds,
+          },
+        })
+      : NO_SERVICE_AUDIT;
+
+  return { succeeded, failed, audit };
 };
 
 /**
@@ -875,15 +988,21 @@ export const addTeamMembers = async ({
  * used to fire the provider removal and only then blow up on a login that named
  * nobody. The local removal is a deleteMany, so a membership row that is already
  * gone is not an error.
+ *
+ * Recorded for `actor` when a membership was removed: TEAMS / UPDATE on the
+ * team, with `team_id`, `login`, `removed: true` and the member's `user_id`.
+ * No membership row to remove: no row.
  */
 export const removeTeamMember = async ({
   classroomId,
   slugOrId,
   login,
+  actor,
 }: {
   classroomId: string;
   slugOrId: string;
   login: string;
+  actor: AuditActor | null;
 }): Promise<RemoveTeamMemberResult> => {
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
@@ -900,9 +1019,22 @@ export const removeTeamMember = async ({
     await gitProvider.removeTeamMember(orgLogin, team.slug, canonicalLogin);
   }
 
-  const { count } = await teamMembershipService.removeMemberFromTeam(team.id, user.id);
+  // This call's own row below records the removal.
+  const { count } = await teamMembershipService.removeMemberFromTeam(team, user.id, null);
+  const recordedLogin = canonicalLogin ?? login;
 
-  return { teamId: team.id, login: canonicalLogin ?? login, removed: count > 0 };
+  const audit =
+    count > 0
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'TEAMS',
+          resourceId: team.id,
+          action: 'UPDATE',
+          data: { team_id: team.id, login: recordedLogin, removed: true, user_id: user.id },
+        })
+      : NO_SERVICE_AUDIT;
+
+  return { teamId: team.id, login: recordedLogin, removed: count > 0, audit };
 };
 
 /**
@@ -911,21 +1043,45 @@ export const removeTeamMember = async ({
  * The team is resolved through the classroom (the route trusted a client-sent
  * teamId with no classroom check) and every tag id is checked against this
  * classroom's tags before anything is written. Results are per tag.
+ *
+ * Recorded for `actor` when at least one link was written: TEAMS / UPDATE on
+ * the team, with `team_id`, `added` (every tag now on it from this call's
+ * list), the ids that `failed`, and `attached` (the links this call wrote).
+ * Every tag already there, or none valid: no row.
  */
 export const addTeamTags = async ({
   classroomId,
   slugOrId,
   tagIds,
+  actor,
 }: {
   classroomId: string;
   slugOrId: string;
   tagIds: string[];
+  actor: AuditActor | null;
 }): Promise<AddTeamTagsResult> => {
   const team = await resolveTeam(classroomId, slugOrId);
   const { valid, failed: invalid } = await partitionClassroomTags(classroomId, tagIds);
-  const { added, failed } = await attachTags(team.id, valid);
+  const { added, attached, failed } = await attachTags(team.id, valid);
+  const allFailed = [...invalid, ...failed];
 
-  return { added, failed: [...invalid, ...failed] };
+  const audit =
+    attached.length > 0
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'TEAMS',
+          resourceId: team.id,
+          action: 'UPDATE',
+          data: {
+            team_id: team.id,
+            added,
+            failed: allFailed.map(f => f.tagId),
+            attached,
+          },
+        })
+      : NO_SERVICE_AUDIT;
+
+  return { added, failed: allFailed, audit };
 };
 
 /**
@@ -938,19 +1094,24 @@ export const addTeamTags = async ({
  * A team keeps at least one tag: removing its last one is refused with
  * `tag_required`. Deleting a whole Tag still cascades to its TeamTag rows;
  * that is a different act and is not covered here.
+ *
+ * Recorded for `actor` after the commit: TEAMS / UPDATE on the team, with
+ * `team_id`, `tag_id` and `team_tag_id`.
  */
 export const removeTeamTag = async ({
   classroomId,
   teamTagId,
+  actor,
 }: {
   classroomId: string;
   teamTagId: string;
+  actor: AuditActor | null;
 }): Promise<RemoveTeamTagResult> => {
   // The count and the delete it authorizes must see the same state, so they run
   // in ONE transaction behind a row lock on the team. Two removals of the
   // team's last two tags serialize on that lock, and the second one counts the
   // tags the first one left behind.
-  return getPrisma().$transaction(async tx => {
+  const removed = await getPrisma().$transaction(async tx => {
     const teamTag = await tx.teamTag.findFirst({
       where: { id: teamTagId, team: { classroom_id: classroomId } },
       select: { id: true, team_id: true, tag_id: true },
@@ -972,6 +1133,14 @@ export const removeTeamTag = async ({
 
     return { teamTagId: teamTag.id, teamId: teamTag.team_id, tagId: teamTag.tag_id };
   });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'TEAMS',
+    resourceId: removed.teamId,
+    action: 'UPDATE',
+    data: { team_id: removed.teamId, tag_id: removed.tagId, team_tag_id: removed.teamTagId },
+  });
+  return { ...removed, audit };
 };
 
 /**

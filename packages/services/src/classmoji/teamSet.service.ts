@@ -5868,10 +5868,13 @@ export async function applyCreate({
       if (logins.length > 0) {
         let failures: { login: string; error: string }[] = [];
         try {
+          // The team set's create is recorded where it is asked for (the
+          // claim's own row); its teams and members write none of their own.
           const result = await teamAdminService.addTeamMembers({
             classroomId: set.classroom_id,
             slugOrId: teamId,
             logins,
+            actor: null,
           });
           membersAdded += result.succeeded.length;
           added = result.succeeded.length;
@@ -5924,6 +5927,7 @@ export async function applyCreate({
           name: team.name,
           isVisible: true,
           tagIds: [tagId],
+          actor: null,
         });
         entry = { team_id: created.team.id, name: created.team.name, n: team.n };
         state.teams.push(entry);
