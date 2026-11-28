@@ -130,7 +130,8 @@ beforeAll(() => {
       await writeAudit(ctx, {
         resource_type: 'GIT_REPO_ASSIGNMENT',
         action: 'UPDATE',
-        data: { tool: 't_staff_write.second', via: 'web' },
+        // A tool's own `via` stands; its own `client_id` does not.
+        data: { tool: 't_staff_write.second', via: 'web', client_id: 'from-the-tool' },
       });
       return text({ ok: true });
     },
@@ -629,7 +630,7 @@ describe('impersonated_by', () => {
     for (const row of rows()) expect(JSON.stringify(row)).not.toContain('impersonated_by');
   });
 
-  it('names the client and the MCP on a write row; a tool that names its own via keeps it', async () => {
+  it('names the client and the MCP on a write row; a tool keeps its own via, never its own client_id', async () => {
     await call(
       viewer('ta-a', { clientId: 'personal-client', scopes: new Set(['read', 'write']) }),
       't_staff_write',

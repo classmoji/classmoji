@@ -58,13 +58,14 @@ export interface AuditEntry {
 }
 
 /**
- * The row's `data`: `via: 'mcp'` and the client first (a tool that names its
- * own `via` keeps it), then the entry's, then `impersonated_by` when the
- * request runs under View as.
+ * The row's `data`: `via: 'mcp'` first (a tool that names its own `via`, as
+ * the forms tools do, keeps it: one key either way), then the entry's, then
+ * the server-resolved `client_id` and, when the request runs under View as,
+ * `impersonated_by`: neither can be set by a tool's data.
  */
 function rowData(ctx: ToolContext, data: AuditData): Prisma.InputJsonValue {
   return withImpersonator(
-    { via: 'mcp', client_id: ctx.viewer.clientId, ...data },
+    { via: 'mcp', ...data, client_id: ctx.viewer.clientId },
     ctx.viewer.impersonatedBy
   ) as Prisma.InputJsonValue;
 }
