@@ -42,7 +42,9 @@ const testKey = (t: Record<string, unknown>) =>
  * Replace the full set of tests for a repository (delete + recreate in order).
  * Position is derived from array order — the UI owns the ordering.
  *
- * The tests it replaces are read in the same transaction, and a set that
+ * The tests it replaces are read in the same transaction, under the
+ * repository row's lock (`FOR NO KEY UPDATE`), so overlapping saves of one
+ * repository run one after the other, and a set that
  * changed is recorded for `actor` after the commit: REPOSITORIES / UPDATE on
  * the repository, `fields: ['autograding_tests']` with the
  * `autograding_tests` and `previous_autograding_tests` counts (tests hold
@@ -58,6 +60,12 @@ export const replaceForRepository = async (
 ) => {
   const prisma = getPrisma();
   const { before, saved } = await prisma.$transaction(async tx => {
+    // The repository row's lock: a second save of this repository's tests
+    // waits here, so the set it reads as `before` is the one it replaces.
+    await tx.$queryRaw`
+      SELECT id FROM repositories
+      WHERE id = ${repositoryId} AND classroom_id = ${classroomId}
+      FOR NO KEY UPDATE`;
     const before = await tx.autogradingTest.findMany({
       where: { repository_id: repositoryId },
       orderBy: { position: 'asc' },

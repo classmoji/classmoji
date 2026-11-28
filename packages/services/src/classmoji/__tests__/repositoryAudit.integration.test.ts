@@ -336,6 +336,59 @@ describe.skipIf(!RUN)('repository services write their audit rows (integration)'
     expect(again.rows).toEqual([]);
   });
 
+  it('replaceForRepository waits for the repository row, so overlapping saves each read the set they replace', async () => {
+    const repo = await makeRepository(X);
+    const test = (name: string) => ({ name, run_command: 'make' });
+    const actor = webActor(X, 'web:repos.update');
+
+    // Another transaction holds the repository row: the save waits for it.
+    let settled = false;
+    let save: ReturnType<typeof autogradingTest.replaceForRepository> | undefined;
+    await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${repo.id} FOR UPDATE`;
+      save = autogradingTest.replaceForRepository(repo.id, [test('a')], X.classroomId, actor);
+      void save.then(() => {
+        settled = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(settled).toBe(false);
+    });
+    await save;
+    expect(settled).toBe(true);
+
+    // Two saves at once: one runs after the other, and the second reads the
+    // first one's set as what it replaced.
+    const { rows } = await newRows(X, () =>
+      Promise.all([
+        autogradingTest.replaceForRepository(
+          repo.id,
+          [test('b1'), test('b2')],
+          X.classroomId,
+          actor
+        ),
+        autogradingTest.replaceForRepository(
+          repo.id,
+          [test('c1'), test('c2'), test('c3')],
+          X.classroomId,
+          actor
+        ),
+      ])
+    );
+    const stored = await prisma.autogradingTest.count({ where: { repository_id: repo.id } });
+    expect([2, 3]).toContain(stored);
+    // Each row is written after its own commit, so they may land in either
+    // order: the one that replaced the single test above goes first here.
+    const counts = rows
+      .map(r => r.data as { autograding_tests: number; previous_autograding_tests: number })
+      .map(d => [d.previous_autograding_tests, d.autograding_tests])
+      .sort((p, q) => (p[0] === 1 ? -1 : q[0] === 1 ? 1 : 0));
+    // From the one test saved above to one set, then from that set to the other.
+    expect(counts).toHaveLength(2);
+    expect(counts[0][0]).toBe(1);
+    expect(counts[1][0]).toBe(counts[0][1]);
+    expect(counts[1][1]).toBe(stored);
+  });
+
   it('deleteIfUnprovisioned: what the cascade took; a refused delete writes none', async () => {
     const repo = await makeRepository(X, 'Doomed');
     const module = await prisma.module.create({
