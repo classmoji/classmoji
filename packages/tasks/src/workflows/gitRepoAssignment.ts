@@ -651,7 +651,16 @@ export const moveGraderSlotTask = task({
     const actor = parseAuditActor(payload?.actor);
     const result = await HelperService.moveGraderSlot({ ...payload, actor });
     if (result.status !== 'moved' && result.status !== 'unassigned') {
-      logger.info('move_grader_slot finished without a move', { ...payload, ...result });
+      // Ids and counts only: never the actor.
+      logger.info('move_grader_slot finished without a move', {
+        classroomId: payload.classroomId,
+        gitRepoAssignmentId: payload.gitRepoAssignmentId,
+        fromGraderId: payload.fromGraderId,
+        toGraderId: payload.toGraderId,
+        fallbackToUnassign: payload.fallbackToUnassign,
+        status: result.status,
+        audit: { written: result.audit.written, missed: result.audit.missed },
+      });
     }
     return result;
   },
