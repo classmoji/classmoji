@@ -754,4 +754,152 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       expect(await rowsFor(submissionId)).toHaveLength(0);
     });
   });
+
+  // ─── every function, every kind of actor ───────────────────────────────────
+
+  /**
+   * One change per function, made on a fresh submission and recorded for
+   * `actor`: what the call answered about its rows, and the rows written.
+   */
+  const CHANGES: Array<{
+    name: string;
+    run: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
+  }> = [
+    {
+      name: 'removeGradeFromGitRepoAssignment',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        const { created } = await addGrade(X, submissionId, '🟠', null);
+        const grade = await prisma.assignmentGrade.findUniqueOrThrow({
+          where: { id: created!.id },
+          include: { token_transaction: true },
+        });
+        return HelperService.removeGradeFromGitRepoAssignment({
+          classroom: { id: X.classroomId },
+          gitRepoAssignment: { id: submissionId },
+          grade,
+          actor,
+        });
+      },
+    },
+    {
+      name: 'addGraderInClassroom',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        const result = await grader('add', X, submissionId, X.teacherId, actor);
+        if (!('audit' in result)) throw new Error(`not added: ${result.status}`);
+        return result;
+      },
+    },
+    {
+      name: 'removeGraderInClassroom',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        await grader('add', X, submissionId, X.teacherId, null);
+        const result = await grader('remove', X, submissionId, X.teacherId, actor);
+        if (!('audit' in result)) throw new Error(`not removed: ${result.status}`);
+        return result;
+      },
+    },
+    {
+      name: 'assignGradersToAssignment',
+      run: async actor => {
+        const { assignmentId } = await makeSubmission(X);
+        return graderService.assignGradersToAssignment({
+          classroomId: X.classroomId,
+          assignmentId,
+          method: 'RANDOM',
+          actor,
+        });
+      },
+    },
+    {
+      name: 'setLateOverrideForSubmission',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        return gitRepoAssignmentService.setLateOverrideForSubmission({
+          classroomId: X.classroomId,
+          gitRepoAssignmentId: submissionId,
+          isLateOverride: true,
+          actor,
+        });
+      },
+    },
+    {
+      name: 'setGradesReleased',
+      run: async actor => {
+        const { assignmentId } = await makeSubmission(X);
+        return assignmentService.setGradesReleased({
+          assignmentId,
+          classroomId: X.classroomId,
+          released: true,
+          actor,
+        });
+      },
+    },
+    {
+      name: 'deleteSubmission',
+      run: async actor => {
+        const { submissionId, assignmentId, gitRepo } = await makeSubmission(X);
+        return HelperService.deleteSubmission({
+          classroomId: X.classroomId,
+          submission: { id: submissionId, assignment_id: assignmentId, git_repo: gitRepo },
+          actor,
+        });
+      },
+    },
+  ];
+
+  /**
+   * The rows `fn` writes in X: X's rows after it that were not there before
+   * (by id, so no clock is compared).
+   */
+  const rowsWrittenBy = async <T>(fn: () => Promise<T>) => {
+    const rowsOfX = () =>
+      prisma.auditLog.findMany({
+        where: { classroom_id: X.classroomId },
+        orderBy: { timestamp: 'asc' },
+        select: { id: true, user_id: true, role: true, data: true },
+      });
+    const before = new Set((await rowsOfX()).map(r => r.id));
+    const value = await fn();
+    return { value, rows: (await rowsOfX()).filter(r => !before.has(r.id)) };
+  };
+
+  describe.each(CHANGES)('$name', ({ run }) => {
+    it('a web actor: one row with its user, role and tool, nothing more', async () => {
+      const { value, rows } = await rowsWrittenBy(() => run(webActor(X, 'web:test')));
+      expect(value.audit).toEqual({ written: 1, missed: 0 });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ user_id: X.teacherId, role: 'TEACHER' });
+      expect(rows[0].data).toMatchObject({ tool: 'web:test' });
+      for (const key of ['via', 'client_id', 'impersonated_by']) {
+        expect(rows[0].data).not.toHaveProperty(key);
+      }
+    });
+
+    it('an MCP actor under View as: via, client and the admin', async () => {
+      const { rows } = await rowsWrittenBy(() => run(mcpActor(X, 'mcp_test')));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].data).toMatchObject({
+        tool: 'mcp_test',
+        via: 'mcp',
+        client_id: 'client-1',
+        impersonated_by: ADMIN,
+      });
+    });
+
+    it('actor null: no row and no throw', async () => {
+      const { value, rows } = await rowsWrittenBy(() => run(null));
+      expect(value.audit).toEqual({ written: 0, missed: 0 });
+      expect(rows).toHaveLength(0);
+    });
+
+    it('a row that cannot be written: the change stands, the call reports the miss', async () => {
+      const { value, rows } = await rowsWrittenBy(() => quietly(() => run(ghost('web:test'))));
+      expect(value.value.audit).toEqual({ written: 0, missed: 1 });
+      expect(value.misses).toHaveLength(1);
+      expect(rows).toHaveLength(0);
+    });
+  });
 });
