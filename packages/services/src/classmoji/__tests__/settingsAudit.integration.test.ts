@@ -243,8 +243,7 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
         )
       );
       expect(value.audit).toEqual({ written: 1, missed: 0 });
-      // The classroom's id and name only: nothing else of the row (its git
-      // organization carries credentials).
+      // The classroom's id and name only: nothing else of the row.
       expect(value.classroom).toEqual({ id: X.classroomId, name: `Renamed ${suite}` });
       expect(rows).toEqual([
         {
@@ -1112,8 +1111,7 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
     };
 
     /**
-     * The interleaving that loses a row when the previous value is read apart
-     * from the write: A saves X over X (no change) and B saves Y, A's read
+     * Two overlapping saves: A saves X over X and B saves Y, with A's read
      * before B's write and A's write after it. Here both start while the rows
      * are held, B first, so each save's read must wait for the one before it:
      * B records X → Y and A then records Y → X.
