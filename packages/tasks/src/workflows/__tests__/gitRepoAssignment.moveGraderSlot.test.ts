@@ -4,17 +4,24 @@
  * The project-wide default is a single attempt, so a task that relies on
  * retrying a transient GitHub failure has to say so itself. This pins that it
  * does, with backoff, and that the run hands its payload (ids only) straight
- * to the classroom-scoped HelperService.moveGraderSlot.
+ * to the classroom-scoped HelperService.moveGraderSlot, with the actor the
+ * payload names (read field by field) or none.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 const moveGraderSlot = vi.fn();
+const loggerInfo = vi.fn();
 
 vi.mock('@trigger.dev/sdk', () => ({
   task: (config: unknown) => config,
   schedules: { task: (config: unknown) => config },
   tasks: { trigger: vi.fn(), batchTrigger: vi.fn() },
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  logger: {
+    info: (...a: unknown[]) => loggerInfo(...a),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -62,8 +69,58 @@ describe('move_grader_slot', () => {
       status: 'moved',
       toLogin: 'ta-bob',
     });
-    // A background run acts for no person: no grader audit rows.
+    // A run queued without an actor (before it existed) records no grader rows.
     expect(moveGraderSlot).toHaveBeenCalledWith({ ...payload, actor: null });
+  });
+
+  it('records the moves for the person the payload names, field by field', async () => {
+    moveGraderSlot.mockResolvedValue({ status: 'moved', toLogin: 'ta-bob' });
+    const actor = {
+      userId: 'owner-1',
+      role: 'OWNER',
+      tool: 'web:staff.remove',
+      impersonatedBy: 'admin-1',
+    };
+    const payload = {
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-bob',
+      fallbackToUnassign: true,
+    };
+    await moveGraderSlotTask.run({ ...payload, actor: { ...actor, extra: 'dropped' } });
+    expect(moveGraderSlot).toHaveBeenCalledWith({ ...payload, actor });
+
+    // Not a valid actor: nothing recorded, the move still runs.
+    moveGraderSlot.mockClear();
+    await moveGraderSlotTask.run({ ...payload, actor: { ...actor, role: 'NOBODY' } });
+    expect(moveGraderSlot).toHaveBeenCalledWith({ ...payload, actor: null });
+  });
+
+  it('a run that moves nothing logs its ids and the row counts, never the actor', async () => {
+    moveGraderSlot.mockResolvedValue({ status: 'graded_since', audit: { written: 0, missed: 0 } });
+    loggerInfo.mockClear();
+    const payload = {
+      classroomId: 'class-1',
+      gitRepoAssignmentId: 's1',
+      fromGraderId: 'u-gone',
+      toGraderId: 'u-bob',
+      fallbackToUnassign: true,
+    };
+    await moveGraderSlotTask.run({
+      ...payload,
+      actor: {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:staff.remove',
+        impersonatedBy: 'admin-1',
+      },
+    });
+    expect(loggerInfo).toHaveBeenCalledExactlyOnceWith('move_grader_slot finished without a move', {
+      ...payload,
+      status: 'graded_since',
+      audit: { written: 0, missed: 0 },
+    });
   });
 
   it('lets a provider error throw so the retry policy runs', async () => {

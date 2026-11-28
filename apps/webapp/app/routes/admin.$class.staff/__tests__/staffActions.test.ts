@@ -12,6 +12,10 @@
  * THE MESSAGES. The route used to collapse every failure into one
  * "Failed to…" string, which hid the only useful part: each StaffServiceError
  * code is a different thing for the instructor to go and fix.
+ *
+ * THE ACTOR. Each intent hands the staff service the owner as the gate
+ * resolved them (with the admin viewing as them, read from this request) and
+ * its own tool name; the service writes the row, the route none.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +38,13 @@ const mocks = vi.hoisted(() => ({
   updateStaff: vi.fn(),
   removeStaff: vi.fn(),
   waitForRunCompletion: vi.fn(),
+  recordStaffRemoval: vi.fn(),
+  requestImpersonator: vi.fn(),
+  auditRecord: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -48,8 +59,12 @@ vi.mock('@classmoji/services', () => ({
     staff: {
       addStaff: (...a: unknown[]) => mocks.addStaff(...a),
       updateStaff: (...a: unknown[]) => mocks.updateStaff(...a),
+      recordStaffRemoval: (...a: unknown[]) => mocks.recordStaffRemoval(...a),
     },
+    audit: { record: (...a: unknown[]) => mocks.auditRecord(...a) },
   },
+  ungradedCountsBeforeSettling: () => ({}),
+  ungradedOutcomeCounts: () => ({}),
   // Removal goes through the shared entry point (startStaffRemoval);
   // `mocks.removeStaff` stands in for it. The ungraded-slot choices, settled
   // after the run succeeds, are pinned in routes/__tests__/staffRemoveUngraded.test.ts.
@@ -69,6 +84,14 @@ vi.mock('~/constants', () => ({
 }));
 
 const { action } = await import('../action');
+
+/** The owner, as the gate resolved them, under the intent's tool name. */
+const actor = (tool: string, impersonatedBy: string | null = null) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy,
+});
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
@@ -109,6 +132,7 @@ beforeEach(() => {
     name: 'Ada Lovelace',
     role: 'ASSISTANT',
     alreadyOrgMember: false,
+    audit: { written: 1, missed: 0 },
   });
   mocks.removeStaff.mockResolvedValue({
     userId: 'user-1',
@@ -116,6 +140,8 @@ beforeEach(() => {
     role: 'ASSISTANT',
     runId: 'run-1',
   });
+  mocks.recordStaffRemoval.mockResolvedValue({ written: 1, missed: 0 });
+  mocks.requestImpersonator.mockResolvedValue(null);
 });
 
 // ─── The gate ───────────────────────────────────────────────────────────────
@@ -173,6 +199,7 @@ describe('staff action — createStaff', () => {
       role,
       name: 'Ada',
       email: 'ada@school.test',
+      actor: actor('web:staff.create'),
     });
   });
 
@@ -298,6 +325,7 @@ describe('staff action — role-scoped update and removal', () => {
       login: 'ada',
       role: 'TEACHER',
       isGrader: true,
+      actor: actor('web:staff.update'),
     });
   });
 
@@ -314,7 +342,7 @@ describe('staff action — role-scoped update and removal', () => {
       ungradedSubmissions: null,
       // The signed-in owner, never a posted value: a plan-owner hand-off this
       // removal causes is audited as them.
-      actorUserId: 'owner-1',
+      actor: actor('web:staff.remove'),
     });
     expect(mocks.waitForRunCompletion).toHaveBeenCalledWith('run-1');
   });
@@ -460,5 +488,78 @@ describe('staff action — an unreadable body', () => {
     } as unknown as Parameters<typeof action>[0])) as { action?: string };
 
     expect(removed.action).toBe('remove-user');
+  });
+});
+
+// ─── Who the rows are recorded for ──────────────────────────────────────────
+
+describe('staff action — the actor each intent hands the service', () => {
+  const INTENTS = [
+    {
+      name: 'createStaff',
+      body: { login: 'ada', role: 'ASSISTANT' },
+      method: 'POST',
+      tool: 'web:staff.create',
+      service: () => mocks.addStaff,
+      answer: { success: 'Added ada as an assistant', action: 'save-user' },
+    },
+    {
+      name: 'updateStaff',
+      body: { login: 'ada', role: 'ASSISTANT', isGrader: false },
+      method: 'PUT',
+      tool: 'web:staff.update',
+      service: () => mocks.updateStaff,
+      answer: { success: 'Staff member updated', action: 'save-user' },
+    },
+    {
+      name: 'removeStaff',
+      body: { login: 'ada', role: 'ASSISTANT' },
+      method: 'DELETE',
+      tool: 'web:staff.remove',
+      service: () => mocks.removeStaff,
+      answer: { success: 'Staff member removed', action: 'remove-user' },
+    },
+  ];
+
+  it.each(INTENTS)(
+    '$name: the owner and its tool, no row of its own, the same answer',
+    async ({ name, body, method, tool, service, answer }) => {
+      const result = await run(name, body, method);
+      expect(result).toEqual(answer);
+      expect(service().mock.calls[0][0]).toMatchObject({ actor: actor(tool) });
+      expect(mocks.auditRecord).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(INTENTS)(
+    '$name under View as: the actor names the admin',
+    async ({ name, body, method, tool, service }) => {
+      mocks.requestImpersonator.mockResolvedValue('admin-1');
+      await run(name, body, method);
+      expect(service().mock.calls[0][0]).toMatchObject({ actor: actor(tool, 'admin-1') });
+    }
+  );
+
+  it('the removal row is the service’s, for the same actor', async () => {
+    await run('removeStaff', { login: 'ada', role: 'ASSISTANT' }, 'DELETE');
+    expect(mocks.recordStaffRemoval).toHaveBeenCalledExactlyOnceWith(actor('web:staff.remove'), {
+      classroomId: 'class-1',
+      userId: 'user-1',
+      role: 'ASSISTANT',
+      choice: undefined,
+      removal: 'in_progress',
+      ungraded: null,
+    });
+  });
+
+  it('a gate refusal (a non-owner, or one viewing as a non-owner) reaches no service', async () => {
+    mocks.requireClassroomAdmin.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+    for (const intent of INTENTS) {
+      await expect(run(intent.name, intent.body, intent.method)).rejects.toBeInstanceOf(Response);
+    }
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(mocks.updateStaff).not.toHaveBeenCalled();
+    expect(mocks.removeStaff).not.toHaveBeenCalled();
+    expect(mocks.recordStaffRemoval).not.toHaveBeenCalled();
   });
 });

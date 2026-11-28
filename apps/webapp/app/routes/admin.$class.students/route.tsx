@@ -13,6 +13,7 @@ import StudentsTable from './StudentsTable';
 import InviteLinkModal from './InviteLinkModal';
 import { ActionTypes } from '~/constants';
 import { addClassroomAuditLog, waitForRunCompletion } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import {
   requireClassroomAdmin,
   requireClassroomTeachingTeam,
@@ -257,10 +258,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // OWNER-only, deliberately narrower than the loader above: removing a student
   // and revoking an invite are owner operations. This gate is the action's own —
   // widening the roster read must never widen these.
-  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'remove_student',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -293,6 +295,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             },
             classroom,
             role: 'STUDENT',
+            // The run records the removal (STUDENT_ROSTER, DELETE) for this
+            // owner once it has deleted the membership; a failed run records
+            // nothing.
+            auditActor: await auditActor(request, gate, 'web:students.remove'),
           }),
         });
 
@@ -348,10 +354,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       try {
         // Only an invite of this classroom is deleted; any other id deletes
         // nothing and is answered as not found.
-        revoked = await ClassmojiService.classroomInvite.deleteInviteInClassroom(
+        // The service records the revoke for this owner once the invite is
+        // deleted; an id that deletes nothing records nothing.
+        const result = await ClassmojiService.classroomInvite.deleteInviteInClassroom(
           classroom.id,
-          data.inviteId
+          data.inviteId,
+          await auditActor(request, gate, 'web:roster.revoke_invite')
         );
+        revoked = result.deleted;
       } catch (error: unknown) {
         console.error('revokeInvite failed:', error);
         return {
@@ -362,19 +372,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!revoked) {
         return { action: 'REVOKE_INVITE', error: 'That invite was not found in this class.' };
       }
-
-      // The invite is gone either way: a failed audit write is reported
-      // (`audit_miss`), not as a failed revoke.
-      await addClassroomAuditLog({
-        request,
-        classroomId: classroom.id,
-        userId,
-        role: membership!.role,
-        action: 'DELETE',
-        resourceType: 'STUDENT_ROSTER',
-        resourceId: String(data.inviteId),
-        metadata: { tool: 'web:roster.revoke_invite' },
-      });
 
       return {
         success: 'Invite revoked',

@@ -5,7 +5,7 @@ import getPrisma, {
   whereGitUsername,
   type GitUsernameScope,
 } from '@classmoji/database';
-import { claimPendingInvites } from './classroomInvite.service.ts';
+import { claimPendingInvites, type InviteClaimAudit } from './classroomInvite.service.ts';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, Prisma, GitRepo } from '@classmoji/database/client';
 import {
@@ -143,7 +143,15 @@ export const findBy = ({ where }: { where: Prisma.UserWhereUniqueInput }) => {
   });
 };
 
-export const update = async (userId: string, updates: Prisma.UserUpdateInput) => {
+export const update = async (
+  userId: string,
+  updates: Prisma.UserUpdateInput,
+  /**
+   * Who an invite claimed after an email change is recorded for (see
+   * `claimPendingInvites`): the surface the person changed it on.
+   */
+  { inviteClaim = null }: { inviteClaim?: InviteClaimAudit | null } = {}
+) => {
   const user = await getPrisma().user.update({
     where: { id: userId },
     data: updates,
@@ -155,7 +163,7 @@ export const update = async (userId: string, updates: Prisma.UserUpdateInput) =>
   // (#307). Never let it fail the update it is following.
   if (updates.email !== undefined) {
     try {
-      await claimPendingInvites(userId);
+      await claimPendingInvites(userId, inviteClaim);
     } catch (error) {
       console.error('Failed to claim pending invites after email change:', error);
     }
