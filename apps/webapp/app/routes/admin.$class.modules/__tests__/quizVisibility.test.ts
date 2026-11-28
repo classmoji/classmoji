@@ -14,8 +14,9 @@
  * each hidden row back after the row it follows now.
  *
  * Deleting: a module whose only assignments are hidden quiz ones is deleted
- * with them (the service is told quizzes are hidden), and the audit log
- * records which assignments went. A module that lists some assignments and
+ * with them (the service is told quizzes are hidden), and the module service's
+ * audit row records which assignments went (the route passes its actor and
+ * writes no row of its own). A module that lists some assignments and
  * owns hidden ones as well cannot be deleted; the loader flags it (a boolean,
  * nothing else) so the page offers no Delete, and a delete posted from a stale
  * page gets a line naming nothing.
@@ -45,6 +46,17 @@ const mocks = vi.hoisted(() => ({
   reorderInModule: vi.fn(),
   moveToModule: vi.fn(),
   deleteById: vi.fn(),
+  requestImpersonator: vi.fn(),
+  moduleCreate: vi.fn(),
+  moduleUpdate: vi.fn(),
+  setPublished: vi.fn(),
+  setPublic: vi.fn(),
+  removeItem: vi.fn(),
+  reorderModules: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -70,6 +82,12 @@ vi.mock('@classmoji/services', () => ({
       reorderItems: (...a: unknown[]) => mocks.reorderItems(...a),
       moveItemToModule: (...a: unknown[]) => mocks.moveItemToModule(...a),
       deleteById: (...a: unknown[]) => mocks.deleteById(...a),
+      create: (...a: unknown[]) => mocks.moduleCreate(...a),
+      updateForClassroom: (...a: unknown[]) => mocks.moduleUpdate(...a),
+      setPublished: (...a: unknown[]) => mocks.setPublished(...a),
+      setPublic: (...a: unknown[]) => mocks.setPublic(...a),
+      removeItem: (...a: unknown[]) => mocks.removeItem(...a),
+      reorderModules: (...a: unknown[]) => mocks.reorderModules(...a),
     },
     assignment: {
       listForClassroom: (...a: unknown[]) => mocks.assignmentListForClassroom(...a),
@@ -98,6 +116,15 @@ const { loader, action } = await import('../route');
 const { withHiddenRows } = await import('../quizRows.server');
 
 const CLASSROOM_ID = 'class-1';
+
+/** The actor the route hands the module service for `tool` (`auditActor`). */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: `web:modules.${tool}`,
+  impersonatedBy: null,
+});
+const AUDIT = { written: 1, missed: 0 };
 
 const moduleRow = () => ({
   id: 'mod-1',
@@ -186,8 +213,13 @@ beforeEach(() => {
   ]);
   mocks.repositoryFindByClassroomId.mockResolvedValue([]);
   mocks.tagFindByClassroomId.mockResolvedValue([]);
-  mocks.deleteById.mockResolvedValue({ id: 'mod-x', deleted_quiz_assignment_ids: [] });
+  mocks.deleteById.mockResolvedValue({
+    module: { id: 'mod-x' },
+    deleted_quiz_assignment_ids: [],
+    audit: AUDIT,
+  });
   mocks.addClassroomAuditLog.mockResolvedValue(undefined);
+  mocks.requestImpersonator.mockResolvedValue(null);
   for (const m of [
     mocks.addItem,
     mocks.reorderItems,
@@ -195,7 +227,7 @@ beforeEach(() => {
     mocks.reorderInModule,
     mocks.moveToModule,
   ]) {
-    m.mockResolvedValue(undefined);
+    m.mockResolvedValue({ audit: AUDIT });
   }
 });
 
@@ -286,24 +318,28 @@ describe('Modules action — delete', () => {
 
   it('deletes a module the service lets go, telling it the classroom shows quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(true);
-    mocks.deleteById.mockResolvedValue({ id: 'mod-3', deleted_quiz_assignment_ids: [] });
     const result = await post('delete', { id: 'mod-3' });
 
     expect(result).toEqual({ success: 'Module deleted' });
-    expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID, {
-      quizzesHidden: false,
-    });
+    expect(mocks.deleteById).toHaveBeenCalledWith(
+      'mod-3',
+      CLASSROOM_ID,
+      { quizzesHidden: false },
+      actorFor('delete')
+    );
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('tells the service when the classroom hides quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
-    mocks.deleteById.mockResolvedValue({ id: 'mod-3', deleted_quiz_assignment_ids: [] });
-
     expect(await post('delete', { id: 'mod-3' })).toEqual({ success: 'Module deleted' });
     expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith(CLASSROOM_ID);
-    expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID, { quizzesHidden: true });
-    // Nothing went with it, so there is nothing to record.
+    expect(mocks.deleteById).toHaveBeenCalledWith(
+      'mod-3',
+      CLASSROOM_ID,
+      { quizzesHidden: true },
+      actorFor('delete')
+    );
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
@@ -319,33 +355,36 @@ describe('Modules action — delete', () => {
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('records the quiz assignments that went with the module, and says only "Module deleted"', async () => {
+  it('leaves the row naming the quiz assignments to the service, and says only "Module deleted"', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     mocks.deleteById.mockResolvedValue({
-      id: 'mod-2',
+      module: { id: 'mod-2' },
       deleted_quiz_assignment_ids: ['asg-quiz-2', 'asg-quiz-3'],
+      audit: AUDIT,
     });
 
     const result = await post('delete', { id: 'mod-2' });
 
     expect(result).toEqual({ success: 'Module deleted' });
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
-      request: sameObject(routeRequest),
-      classroomId: CLASSROOM_ID,
-      userId: 'owner-1',
-      role: 'OWNER',
-      action: 'DELETE',
-      resourceType: 'MODULES',
-      resourceId: 'mod-2',
-      metadata: {
-        tool: 'web:modules.delete',
-        quiz_assignment_ids: ['asg-quiz-2', 'asg-quiz-3'],
-      },
-    });
-    // The audit row is written once the delete has landed.
-    expect(mocks.deleteById.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.addClassroomAuditLog.mock.invocationCallOrder[0]
+    expect(mocks.deleteById).toHaveBeenCalledExactlyOnceWith(
+      'mod-2',
+      CLASSROOM_ID,
+      { quizzesHidden: true },
+      actorFor('delete')
     );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('under View as, the admin read from this request rides on the actor', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-1');
+
+    await post('delete', { id: 'mod-3' });
+
+    expect(mocks.requestImpersonator).toHaveBeenCalledWith(sameObject(routeRequest));
+    expect(mocks.deleteById.mock.calls[0][3]).toEqual({
+      ...actorFor('delete'),
+      impersonatedBy: 'admin-1',
+    });
   });
 
   it('records nothing when the delete is refused', async () => {
@@ -446,7 +485,13 @@ describe('Modules action — addItem', () => {
     const result = await post('addItem', { moduleId: 'mod-1', itemType, targetId: 't1' });
 
     expect(result.success).toBeDefined();
-    expect(mocks.addItem).toHaveBeenCalledWith('mod-1', itemType, 't1', CLASSROOM_ID);
+    expect(mocks.addItem).toHaveBeenCalledWith(
+      'mod-1',
+      itemType,
+      't1',
+      CLASSROOM_ID,
+      actorFor('add_item')
+    );
   });
 });
 
@@ -467,7 +512,8 @@ describe('Modules action — ordering around hidden quiz rows', () => {
       expect(mocks.reorderItems).toHaveBeenCalledWith(
         'mod-1',
         ['item-slide', 'item-page'],
-        CLASSROOM_ID
+        CLASSROOM_ID,
+        actorFor('reorder_items')
       );
     }
   );
@@ -488,7 +534,8 @@ describe('Modules action — ordering around hidden quiz rows', () => {
         'item-other',
         'mod-1',
         ['item-page', 'item-other', 'item-slide'],
-        CLASSROOM_ID
+        CLASSROOM_ID,
+        actorFor('move_item')
       );
     }
   );
@@ -503,7 +550,8 @@ describe('Modules action — ordering around hidden quiz rows', () => {
     expect(mocks.reorderInModule).toHaveBeenCalledWith(
       'mod-1',
       ['asg-form', 'asg-repo', 'asg-quiz'],
-      CLASSROOM_ID
+      CLASSROOM_ID,
+      actorFor('reorder_assignments')
     );
   });
 
@@ -513,7 +561,12 @@ describe('Modules action — ordering around hidden quiz rows', () => {
     await post('reorderAssignments', { moduleId: 'mod-1', orderedAssignmentIds: ordered });
 
     expect(mocks.listModuleContents).not.toHaveBeenCalled();
-    expect(mocks.reorderInModule).toHaveBeenCalledWith('mod-1', ordered, CLASSROOM_ID);
+    expect(mocks.reorderInModule).toHaveBeenCalledWith(
+      'mod-1',
+      ordered,
+      CLASSROOM_ID,
+      actorFor('reorder_assignments')
+    );
   });
 
   it('moveAssignment keeps the TARGET module’s hidden quiz assignment', async () => {
@@ -528,7 +581,8 @@ describe('Modules action — ordering around hidden quiz rows', () => {
       'asg-other',
       'mod-1',
       ['asg-repo', 'asg-quiz', 'asg-form', 'asg-other'],
-      CLASSROOM_ID
+      CLASSROOM_ID,
+      actorFor('move_assignment')
     );
   });
 
@@ -553,7 +607,8 @@ describe('Modules action — ordering around hidden quiz rows', () => {
       'asg-other',
       'mod-1',
       ['asg-other', 'asg-repo', 'asg-form', 'asg-quiz'],
-      CLASSROOM_ID
+      CLASSROOM_ID,
+      actorFor('move_assignment')
     );
   });
 });
@@ -586,5 +641,73 @@ describe('withHiddenRows', () => {
 
   it('leaves a hidden row the page did name where the page put it', () => {
     expect(withHiddenRows(rows('a q* b'), ['q', 'b', 'a'])).toEqual(['q', 'b', 'a']);
+  });
+});
+
+describe('Modules action — every other intent hands its actor to the module service', () => {
+  beforeEach(() => {
+    mocks.moduleCreate.mockResolvedValue({ module: { id: 'mod-9' }, audit: AUDIT });
+    for (const m of [
+      mocks.moduleUpdate,
+      mocks.setPublished,
+      mocks.setPublic,
+      mocks.removeItem,
+      mocks.reorderModules,
+    ]) {
+      m.mockResolvedValue({ audit: AUDIT });
+    }
+  });
+
+  it('create, update, publish, site visibility, remove item, reorder modules', async () => {
+    expect(await post('create', { title: 'Week 9' })).toEqual({
+      success: 'Module created',
+      module: { id: 'mod-9' },
+    });
+    expect(mocks.moduleCreate).toHaveBeenCalledExactlyOnceWith(
+      CLASSROOM_ID,
+      { title: 'Week 9', description: undefined },
+      actorFor('create')
+    );
+
+    expect(await post('update', { id: 'mod-1', title: 'Week 1b' })).toEqual({
+      success: 'Module updated',
+    });
+    expect(mocks.moduleUpdate).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      CLASSROOM_ID,
+      { title: 'Week 1b', description: undefined },
+      actorFor('update')
+    );
+
+    await post('setPublished', { id: 'mod-1', isPublished: true });
+    expect(mocks.setPublished).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      true,
+      CLASSROOM_ID,
+      actorFor('set_published')
+    );
+
+    await post('setPublic', { id: 'mod-1', isPublic: false });
+    expect(mocks.setPublic).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      false,
+      CLASSROOM_ID,
+      actorFor('set_public')
+    );
+
+    await post('removeItem', { moduleItemId: 'item-page' });
+    expect(mocks.removeItem).toHaveBeenCalledExactlyOnceWith(
+      'item-page',
+      CLASSROOM_ID,
+      actorFor('remove_item')
+    );
+
+    await post('reorderModules', { orderedModuleIds: ['mod-2', 'mod-1'] });
+    expect(mocks.reorderModules).toHaveBeenCalledExactlyOnceWith(
+      CLASSROOM_ID,
+      ['mod-2', 'mod-1'],
+      actorFor('reorder_modules')
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });

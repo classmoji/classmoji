@@ -83,10 +83,12 @@ import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
 import {
   loadRepositoryInClassroom,
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   writeAudit,
 } from './shared.ts';
 
@@ -612,31 +614,36 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
     await assertUsableTemplate(args.template, classroom.classroomId);
 
     let created;
+    let createAudit;
     try {
-      created = await ClassmojiService.repository.create({
-        // classroom_id is ALWAYS the authorized classroom, never request input.
-        classroom_id: classroom.classroomId,
-        title: args.title,
-        template: args.template,
-        type,
-        ...(args.description !== undefined ? { description: args.description } : {}),
-        ...(args.tag_id !== undefined ? { tag_id: args.tag_id } : {}),
-        ...(type === 'GROUP'
-          ? {
-              team_formation_mode: teamMode,
-              ...(args.team_formation_deadline !== undefined
-                ? { team_formation_deadline: new Date(args.team_formation_deadline) }
-                : {}),
-              ...(args.max_team_size !== undefined ? { max_team_size: args.max_team_size } : {}),
-            }
-          : {}),
-        ...(args.project_template_id !== undefined
-          ? { project_template_id: emptyToNull(args.project_template_id) }
-          : {}),
-        ...(args.project_template_title !== undefined
-          ? { project_template_title: emptyToNull(args.project_template_title) }
-          : {}),
-      });
+      // The repository service records the create (REPOSITORIES / CREATE).
+      ({ repository: created, audit: createAudit } = await ClassmojiService.repository.create(
+        {
+          // classroom_id is ALWAYS the authorized classroom, never request input.
+          classroom_id: classroom.classroomId,
+          title: args.title,
+          template: args.template,
+          type,
+          ...(args.description !== undefined ? { description: args.description } : {}),
+          ...(args.tag_id !== undefined ? { tag_id: args.tag_id } : {}),
+          ...(type === 'GROUP'
+            ? {
+                team_formation_mode: teamMode,
+                ...(args.team_formation_deadline !== undefined
+                  ? { team_formation_deadline: new Date(args.team_formation_deadline) }
+                  : {}),
+                ...(args.max_team_size !== undefined ? { max_team_size: args.max_team_size } : {}),
+              }
+            : {}),
+          ...(args.project_template_id !== undefined
+            ? { project_template_id: emptyToNull(args.project_template_id) }
+            : {}),
+          ...(args.project_template_title !== undefined
+            ? { project_template_title: emptyToNull(args.project_template_title) }
+            : {}),
+        },
+        serviceActor(ctx, 'repo_create')
+      ));
     } catch (error) {
       if (isUniqueTitleViolation(error)) {
         throw new ToolError(
@@ -646,13 +653,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       }
       throw error;
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'REPOSITORIES',
-      resource_id: created.id,
-      action: 'CREATE',
-      data: { tool: 'repo_create', title: args.title, type },
-    });
+    noteServiceAudit(ctx, createAudit);
 
     // Mirror the web create flow: refresh the content manifest.
     await refreshManifest(classroom.classroomId);
@@ -921,11 +922,16 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
     // zod-checked enums/strings/numbers, and the deadline is already a Date.
     let updated;
     try {
-      updated = await ClassmojiService.repository.update(
+      // The repository service records the columns that changed (their old
+      // and new values; a description by name and length).
+      const result = await ClassmojiService.repository.update(
         repository.id,
         patch as Parameters<typeof ClassmojiService.repository.update>[1],
-        classroom.classroomId
+        classroom.classroomId,
+        serviceActor(ctx, 'repo_update')
       );
+      updated = result.repository;
+      noteServiceAudit(ctx, result.audit);
     } catch (error) {
       if (isRepoGone(error)) throw scopedNotFound('Repo');
       throw error;
@@ -933,21 +939,6 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
     // Reachable: update() re-reads the row after writing it, and a delete can
     // land between the two queries.
     if (!updated) throw scopedNotFound('Repo');
-
-    // Every written key, auto-cleared team fields included, with its new value.
-    const fields = Object.keys(patch);
-    const values: Record<string, string | number | null> = {};
-    for (const [field, value] of Object.entries(patch)) {
-      values[field] = value instanceof Date ? value.toISOString() : (value ?? null);
-    }
-
-    await writeAudit(ctx, {
-      resource_type: 'REPOSITORIES',
-      resource_id: repository.id,
-      action: 'UPDATE',
-      // `value`: a digest of what was written, to tell edits apart in the log.
-      data: { tool: 'repo_update', fields, values, value: JSON.stringify(values) },
-    });
 
     await refreshManifest(classroom.classroomId);
 
@@ -1029,10 +1020,14 @@ export const repoDeleteTool: ToolDefinition<RepoDeleteArgs> = {
 
     // The DELETE itself carries "unpublished and nothing provisioned", so a
     // publish or a GitRepo landing since the checks above is refused, not lost.
+    // The repository service records the delete with its cascade
+    // (REPOSITORIES / DELETE), read under the delete's own lock.
     const outcome = await ClassmojiService.repository.deleteIfUnprovisioned(
       repository.id,
-      classroom.classroomId
+      classroom.classroomId,
+      serviceActor(ctx, 'repo_delete')
     );
+    noteServiceAudit(ctx, outcome.audit);
     if (outcome.status === 'not_found') throw scopedNotFound('Repo');
     if (outcome.status === 'published') {
       throw new ToolError(
@@ -1058,19 +1053,6 @@ export const repoDeleteTool: ToolDefinition<RepoDeleteArgs> = {
       autograding_tests_deleted: dependents._count.autograding_tests,
       quizzes_unlinked: dependents._count.quizzes,
     };
-
-    await writeAudit(ctx, {
-      resource_type: 'REPOSITORIES',
-      resource_id: repository.id,
-      action: 'DELETE',
-      data: {
-        tool: 'repo_delete',
-        title: repository.title,
-        slug: repository.slug,
-        assignments_deleted: assignmentsDeleted,
-        ...cascade,
-      },
-    });
 
     await refreshManifest(classroom.classroomId);
 

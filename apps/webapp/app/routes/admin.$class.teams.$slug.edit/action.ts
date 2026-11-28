@@ -8,6 +8,7 @@ import {
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import { GITLAB_UNSUPPORTED } from '~/utils/gitlabGuard.server';
 import type { Route } from './+types/route';
 
@@ -15,7 +16,8 @@ import type { Route } from './+types/route';
  * Every mutation here delegates to ClassmojiService.teamAdmin, which resolves
  * the team through the classroom before it touches GitHub. The route keeps the
  * auth gates and the callout payload shapes; the service owns validation,
- * ordering and per-item failure reporting.
+ * ordering and per-item failure reporting, and records each change for the
+ * actor every intent passes (`web:teams.<intent>`).
  */
 const errorMessage = (error: TeamServiceError, slug: string) => {
   switch (error.code) {
@@ -58,10 +60,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   invariant(slug, 'Team slug is required');
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'edit_team',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -86,11 +89,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async addMembersToTeam() {
       const { members } = data as { members?: string[] };
 
+      const actor = await auditActor(request, gate, 'web:teams.add_members');
       const result = await run(ActionTypes.ADD_TEAM_MEMBER, () =>
         ClassmojiService.teamAdmin.addTeamMembers({
           classroomId: classroom.id,
           slugOrId: slug,
           logins: members ?? [],
+          actor,
         })
       );
       if (!result.ok) return result.payload;
@@ -118,11 +123,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async removeMemberFromTeam() {
       const { login } = data as { login: string };
 
+      const actor = await auditActor(request, gate, 'web:teams.remove_member');
       const result = await run(ActionTypes.REMOVE_TEAM_MEMBER, () =>
         ClassmojiService.teamAdmin.removeTeamMember({
           classroomId: classroom.id,
           slugOrId: slug,
           login,
+          actor,
         })
       );
       if (!result.ok) return result.payload;
@@ -138,11 +145,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // used to send the teamId it wanted tagged.
       const { tags } = data as { tags?: string[] };
 
+      const actor = await auditActor(request, gate, 'web:teams.add_tags');
       const result = await run(ActionTypes.ADD_TEAM_TAG, () =>
         ClassmojiService.teamAdmin.addTeamTags({
           classroomId: classroom.id,
           slugOrId: slug,
           tagIds: tags ?? [],
+          actor,
         })
       );
       if (!result.ok) return result.payload;
@@ -164,8 +173,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async removeTeamTag() {
       const { id } = data as { id: string };
 
+      const actor = await auditActor(request, gate, 'web:teams.remove_tag');
       const result = await run(ActionTypes.REMOVE_TEAM_TAG, () =>
-        ClassmojiService.teamAdmin.removeTeamTag({ classroomId: classroom.id, teamTagId: id })
+        ClassmojiService.teamAdmin.removeTeamTag({
+          classroomId: classroom.id,
+          teamTagId: id,
+          actor,
+        })
       );
       if (!result.ok) return result.payload;
 
@@ -178,11 +192,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async renameTeam() {
       const { newName } = data as { newName?: string };
 
+      const actor = await auditActor(request, gate, 'web:teams.rename');
       const result = await run(ActionTypes.RENAME_TEAM, () =>
         ClassmojiService.teamAdmin.renameTeam({
           classroomId: classroom.id,
           slugOrId: slug,
           newName: newName ?? '',
+          actor,
         })
       );
       if (!result.ok) return result.payload;

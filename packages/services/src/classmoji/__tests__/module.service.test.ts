@@ -15,6 +15,7 @@ const assignmentFindMany = vi.fn();
 const assignmentDeleteMany = vi.fn();
 const queryRaw = vi.fn();
 const transaction = vi.fn();
+const targetFindFirst = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -33,6 +34,8 @@ vi.mock('@classmoji/database', () => ({
       update: itemUpdate,
       deleteMany: itemDeleteMany,
     },
+    page: { findFirst: targetFindFirst },
+    slide: { findFirst: targetFindFirst },
     $transaction: transaction,
   }),
 }));
@@ -150,18 +153,35 @@ describe('isItemPubliclyVisible', () => {
 });
 
 describe('setPublic', () => {
-  it('flips only is_public, leaving the in-app publish state alone', async () => {
-    moduleUpdate.mockResolvedValue({ id: 'mod1' });
-    await setPublic('mod1', true);
-    expect(moduleUpdate).toHaveBeenCalledWith({ where: { id: 'mod1' }, data: { is_public: true } });
+  // The flag is read and written in one transaction under the module row's
+  // lock; hand it a client whose calls are the mocks below.
+  const txModuleUpdate = vi.fn();
+  const tx = {
+    $queryRaw: queryRaw,
+    module: { findUnique: moduleFindUnique, update: txModuleUpdate },
+  };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    moduleFindUnique.mockResolvedValue({ is_published: false, is_public: false });
+    txModuleUpdate.mockResolvedValue({ id: 'mod1' });
   });
 
-  it('refuses a module from another classroom when a scope is given', async () => {
+  it('flips only is_public, leaving the in-app publish state alone', async () => {
+    await setPublic('mod1', true, 'class-1', null);
+    expect(txModuleUpdate).toHaveBeenCalledWith({
+      where: { id: 'mod1' },
+      data: { is_public: true },
+    });
+    expect(moduleUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a module from another classroom', async () => {
     moduleFindFirst.mockResolvedValue(null);
-    await expect(setPublic('mod1', true, 'class-2')).rejects.toThrow(
+    await expect(setPublic('mod1', true, 'class-2', null)).rejects.toThrow(
       'Module not found in classroom'
     );
-    expect(moduleUpdate).not.toHaveBeenCalled();
+    expect(txModuleUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -173,10 +193,12 @@ describe('deleteById', () => {
   // the lock, and has to fail these tests.
   const txModuleDelete = vi.fn();
   const txQuizUpdateMany = vi.fn();
+  const txItemCount = vi.fn();
   const tx = {
     $queryRaw: queryRaw,
     assignment: { findMany: assignmentFindMany, deleteMany: assignmentDeleteMany },
     module: { delete: txModuleDelete },
+    moduleItem: { count: txItemCount },
     quiz: { updateMany: txQuizUpdateMany },
   };
   beforeEach(() => {
@@ -184,6 +206,7 @@ describe('deleteById', () => {
     queryRaw.mockResolvedValue([{ id: 'mod1' }]);
     moduleFindFirst.mockResolvedValue({ id: 'mod1' });
     txModuleDelete.mockResolvedValue({ id: 'mod1' });
+    txItemCount.mockResolvedValue(0);
   });
 
   it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
@@ -192,7 +215,9 @@ describe('deleteById', () => {
     for (const type of ['REPO', 'QUIZ', 'FORM']) {
       assignmentFindMany.mockResolvedValue([{ id: 'a1', type }]);
 
-      await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
+      await expect(deleteById('mod1', 'class-1', {}, null)).rejects.toThrow(
+        'Module still has assignments'
+      );
     }
     expect(assignmentFindMany).toHaveBeenCalledWith({
       where: { module_id: 'mod1' },
@@ -210,7 +235,7 @@ describe('deleteById', () => {
       { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
     ]);
 
-    const deleted = await deleteById('mod1', 'class-1', { quizzesHidden: true });
+    const deleted = await deleteById('mod1', 'class-1', { quizzesHidden: true }, null);
 
     expect(assignmentDeleteMany).toHaveBeenCalledWith({
       where: { id: { in: ['q1', 'q2'] }, type: 'QUIZ' },
@@ -227,7 +252,7 @@ describe('deleteById', () => {
       { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
     ]);
 
-    await deleteById('mod1', 'class-1', { quizzesHidden: true });
+    await deleteById('mod1', 'class-1', { quizzesHidden: true }, null);
 
     expect(txQuizUpdateMany).toHaveBeenCalledWith({
       where: { id: { in: ['quiz-1', 'quiz-2'] } },
@@ -246,7 +271,7 @@ describe('deleteById', () => {
       { id: 'r1', type: 'REPO' },
     ]);
 
-    await expect(deleteById('mod1', 'class-1', { quizzesHidden: true })).rejects.toThrow(
+    await expect(deleteById('mod1', 'class-1', { quizzesHidden: true }, null)).rejects.toThrow(
       'Module still has assignments'
     );
     expect(assignmentDeleteMany).not.toHaveBeenCalled();
@@ -256,7 +281,7 @@ describe('deleteById', () => {
   it('deletes a module with no assignments, leaving its items to the cascade', async () => {
     assignmentFindMany.mockResolvedValue([]);
 
-    await deleteById('mod1', 'class-1');
+    await deleteById('mod1', 'class-1', {}, null);
 
     expect(moduleFindFirst).toHaveBeenCalledWith({
       where: { id: 'mod1', classroom_id: 'class-1' },
@@ -275,7 +300,7 @@ describe('deleteById', () => {
     // must be either counted or kept out, never cascade-deleted.
     assignmentFindMany.mockResolvedValue([]);
 
-    await deleteById('mod1', 'class-1');
+    await deleteById('mod1', 'class-1', {}, null);
 
     expect(transaction).toHaveBeenCalledTimes(1);
     const [lock] = queryRaw.mock.calls[0] as [TemplateStringsArray, string];
@@ -292,7 +317,9 @@ describe('deleteById', () => {
     // refusal as a module that was never there, not a failed DELETE.
     queryRaw.mockResolvedValue([]);
 
-    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module not found in classroom');
+    await expect(deleteById('mod1', 'class-1', {}, null)).rejects.toThrow(
+      'Module not found in classroom'
+    );
     expect(assignmentFindMany).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
   });
@@ -300,7 +327,9 @@ describe('deleteById', () => {
   it('refuses a module from another classroom before looking at it', async () => {
     moduleFindFirst.mockResolvedValue(null);
 
-    await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
+    await expect(deleteById('mod1', 'class-2', {}, null)).rejects.toThrow(
+      'Module not found in classroom'
+    );
     expect(transaction).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
   });
@@ -308,7 +337,7 @@ describe('deleteById', () => {
 
 describe('reorderModules', () => {
   const txModuleUpdate = vi.fn();
-  const tx = { $queryRaw: queryRaw, module: { update: txModuleUpdate } };
+  const tx = { $queryRaw: queryRaw, module: { update: txModuleUpdate, findMany: moduleFindMany } };
   beforeEach(() => {
     transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
     moduleFindMany.mockResolvedValue([{ id: 'b' }, { id: 'c' }, { id: 'a' }]);
@@ -317,7 +346,7 @@ describe('reorderModules', () => {
   it('locks every module in id order before writing any position', async () => {
     // A move locks the two modules it touches in id order; locking in the
     // caller's order here could deadlock against it.
-    await reorderModules('class-1', ['c', 'a', 'b']);
+    await reorderModules('class-1', ['c', 'a', 'b'], null);
 
     expect(queryRaw.mock.calls.map(call => call[1])).toEqual(['a', 'b', 'c']);
     expect(Math.max(...queryRaw.mock.invocationCallOrder)).toBeLessThan(
@@ -326,7 +355,7 @@ describe('reorderModules', () => {
   });
 
   it('writes each position as its index, scoped to the classroom', async () => {
-    await reorderModules('class-1', ['c', 'a', 'b']);
+    await reorderModules('class-1', ['c', 'a', 'b'], null);
 
     expect(txModuleUpdate.mock.calls.map(call => call[0])).toEqual([
       { where: { id: 'c', classroom_id: 'class-1' }, data: { position: 0 } },
@@ -336,7 +365,7 @@ describe('reorderModules', () => {
   });
 
   it('refuses an ordering that is not exactly the classroom modules, writing nothing', async () => {
-    await expect(reorderModules('class-1', ['a', 'b'])).rejects.toThrow(
+    await expect(reorderModules('class-1', ['a', 'b'], null)).rejects.toThrow(
       'Ordered module ids must match the classroom modules'
     );
     expect(transaction).not.toHaveBeenCalled();
@@ -351,7 +380,7 @@ describe('moveItemToModuleEnd', () => {
     $queryRaw: queryRaw,
     moduleItem: { findFirst: txItemFindFirst, update: txItemUpdate, findMany: txItemFindMany },
   };
-  const move = () => moveItemToModuleEnd('item-1', 'mod-b', 'class-1');
+  const move = () => moveItemToModuleEnd('item-1', 'mod-b', 'class-1', null);
 
   beforeEach(() => {
     transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
@@ -383,7 +412,7 @@ describe('moveItemToModuleEnd', () => {
       where: { id: 'left-2' },
       data: { position: 1 },
     });
-    expect(result).toEqual({
+    expect(result.item).toEqual({
       id: 'item-1',
       item_type: 'PAGE',
       position: 3,
@@ -478,11 +507,17 @@ describe('findOtherModulesHolding', () => {
 });
 
 describe('addItem', () => {
+  // The module and the target are both checked against the classroom first.
+  beforeEach(() => {
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    targetFindFirst.mockResolvedValue({ id: 'target' });
+  });
+
   it('appends at position 0 when the module is empty', async () => {
     itemFindFirst.mockResolvedValue(null);
     itemCreate.mockResolvedValue({ id: 'mi1' });
 
-    await addItem('mod1', 'SLIDE', 'slide1');
+    await addItem('mod1', 'SLIDE', 'slide1', 'class-1', null);
 
     expect(itemCreate).toHaveBeenCalledWith({
       data: { module_id: 'mod1', item_type: 'SLIDE', position: 0, slide_id: 'slide1' },
@@ -490,12 +525,14 @@ describe('addItem', () => {
   });
 
   it('refuses QUIZ: a quiz is placed in a module by its assignment', async () => {
-    await expect(addItem('mod1', 'QUIZ', 'quiz1')).rejects.toThrow('from the quiz form');
+    await expect(addItem('mod1', 'QUIZ', 'quiz1', 'class-1', null)).rejects.toThrow(
+      'from the quiz form'
+    );
     expect(itemCreate).not.toHaveBeenCalled();
   });
 
   it('refuses REPOSITORY: repositories are attached to assignments, not modules', async () => {
-    await expect(addItem('mod1', 'REPOSITORY' as never, 'repo1')).rejects.toThrow(
+    await expect(addItem('mod1', 'REPOSITORY' as never, 'repo1', 'class-1', null)).rejects.toThrow(
       'Repositories are attached to assignments'
     );
     expect(itemCreate).not.toHaveBeenCalled();
@@ -505,7 +542,7 @@ describe('addItem', () => {
     itemFindFirst.mockResolvedValue({ position: 4 });
     itemCreate.mockResolvedValue({ id: 'mi2' });
 
-    await addItem('mod1', 'PAGE', 'page9');
+    await addItem('mod1', 'PAGE', 'page9', 'class-1', null);
 
     expect(itemCreate).toHaveBeenCalledWith({
       data: { module_id: 'mod1', item_type: 'PAGE', position: 5, page_id: 'page9' },
@@ -526,12 +563,13 @@ describe('reorderItems', () => {
 
   it('sets each item position to its index, scoped to the module', async () => {
     txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
-    await reorderItems('mod1', ['b', 'a', 'c']);
+    await reorderItems('mod1', ['b', 'a', 'c'], 'class-1', null);
 
     expect(txItemFindMany).toHaveBeenCalledWith({
       // Legacy REPOSITORY and QUIZ items are not in the content list and keep
       // their positions; only content items take part in the exact-set check.
       where: { module_id: 'mod1', item_type: { notIn: ['REPOSITORY', 'QUIZ'] } },
+      orderBy: { position: 'asc' },
       select: { id: true },
     });
     expect(txItemUpdate.mock.calls.map(call => call[0])).toEqual([
@@ -547,7 +585,7 @@ describe('reorderItems', () => {
   // two items on one position.
   it('locks the module row before reading the items it checks', async () => {
     txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
-    await reorderItems('mod1', ['b', 'a']);
+    await reorderItems('mod1', ['b', 'a'], 'class-1', null);
 
     expect(queryRaw).toHaveBeenCalledOnce();
     expect(queryRaw.mock.calls[0][1]).toBe('mod1');
@@ -559,7 +597,7 @@ describe('reorderItems', () => {
   it('rejects incomplete item order payloads, writing nothing', async () => {
     txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
 
-    await expect(reorderItems('mod1', ['b'])).rejects.toThrow(
+    await expect(reorderItems('mod1', ['b'], 'class-1', null)).rejects.toThrow(
       'Ordered item ids must match module items'
     );
     expect(txItemUpdate).not.toHaveBeenCalled();
@@ -568,7 +606,7 @@ describe('reorderItems', () => {
   it('rejects duplicate item ids in order payloads, writing nothing', async () => {
     txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
 
-    await expect(reorderItems('mod1', ['a', 'a'])).rejects.toThrow(
+    await expect(reorderItems('mod1', ['a', 'a'], 'class-1', null)).rejects.toThrow(
       'Ordered item ids must match module items'
     );
     expect(txItemUpdate).not.toHaveBeenCalled();
@@ -729,7 +767,7 @@ describe('moveItemToModule', () => {
   it('refuses a QUIZ item: a quiz moves with its assignment', async () => {
     itemFindFirst.mockResolvedValue({ id: 'mi-quiz', module_id: 'from', item_type: 'QUIZ' });
 
-    await expect(moveItemToModule('mi-quiz', 'to', ['mi-quiz'], 'cls')).rejects.toThrow(
+    await expect(moveItemToModule('mi-quiz', 'to', ['mi-quiz'], 'cls', null)).rejects.toThrow(
       QUIZ_ITEM_REFUSAL
     );
     expect(itemUpdate).not.toHaveBeenCalled();
@@ -740,7 +778,7 @@ describe('moveItemToModule', () => {
   it('refuses a REPOSITORY item', async () => {
     itemFindFirst.mockResolvedValue({ id: 'mi-repo', module_id: 'from', item_type: 'REPOSITORY' });
 
-    await expect(moveItemToModule('mi-repo', 'to', ['mi-repo'], 'cls')).rejects.toThrow(
+    await expect(moveItemToModule('mi-repo', 'to', ['mi-repo'], 'cls', null)).rejects.toThrow(
       'Repository items cannot be moved'
     );
     expect(itemUpdate).not.toHaveBeenCalled();
@@ -752,7 +790,7 @@ describe('moveItemToModule', () => {
       where.module_id === 'to' ? [{ id: 'there' }, { id: 'mi-page' }] : [{ id: 'a' }, { id: 'b' }]
     );
 
-    await moveItemToModule('mi-page', 'to', ['mi-page', 'there'], 'cls');
+    await moveItemToModule('mi-page', 'to', ['mi-page', 'there'], 'cls', null);
 
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {
       where: { id: 'mi-page' },
@@ -762,6 +800,7 @@ describe('moveItemToModule', () => {
     // content items only: legacy REPOSITORY and QUIZ rows keep their positions.
     expect(itemFindMany).toHaveBeenCalledWith({
       where: { module_id: 'to', item_type: CONTENT_ONLY },
+      orderBy: { position: 'asc' },
       select: { id: true },
     });
     expect(itemFindMany).toHaveBeenCalledWith({
@@ -786,11 +825,12 @@ describe('moveItemToModule', () => {
     itemFindFirst.mockResolvedValue({ id: 'mi-page', module_id: 'same', item_type: 'PAGE' });
     itemFindMany.mockResolvedValue([{ id: 'mi-page' }, { id: 'other' }]);
 
-    await moveItemToModule('mi-page', 'same', ['other', 'mi-page'], 'cls');
+    await moveItemToModule('mi-page', 'same', ['other', 'mi-page'], 'cls', null);
 
     expect(itemFindMany).toHaveBeenCalledOnce();
     expect(itemFindMany).toHaveBeenCalledWith({
       where: { module_id: 'same', item_type: CONTENT_ONLY },
+      orderBy: { position: 'asc' },
       select: { id: true },
     });
     expect(transaction).toHaveBeenCalledOnce();

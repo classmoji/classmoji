@@ -6,6 +6,7 @@ import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { addClassroomAuditLog } from '~/utils/helpers';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { parseUpdateRequest } from '../admin.$class.repos.update/updateRequest.server';
@@ -98,7 +99,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'update_repository',
   });
@@ -159,6 +160,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 
   await tasks.batchTrigger('update_git_repo', payloads);
+  // One row per request, once the runs are queued: how many student repos get
+  // the template's changes (the branch, title and description are not kept).
+  if (payloads.length > 0) {
+    await addClassroomAuditLog({
+      request,
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action: 'UPDATE',
+      resourceType: 'REPOSITORIES',
+      resourceId: repository.id,
+      metadata: { tool: 'web:repos.update_student_repos', repos_to_update: payloads.length },
+    });
+  }
 
   return {
     triggerSession: {

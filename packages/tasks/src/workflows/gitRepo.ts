@@ -789,7 +789,8 @@ export const deleteRepoTask = task({
     concurrencyLimit: 6,
   },
   run: async (payload: DeleteRepositoryTaskPayload) => {
-    return HelperService.deleteRepository(payload);
+    // No caller triggers this run today; a delete it makes records nothing.
+    return HelperService.deleteRepository({ ...payload, actor: null });
   },
 });
 

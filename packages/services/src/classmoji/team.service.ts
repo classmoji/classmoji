@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY, USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import { sortNaturallyBy, withLogins } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@classmoji/database/client';
+import { recordForActor, type AuditActor } from './audit.service.ts';
 
 interface TeamCreatePayload {
   providerId?: string | number | null;
@@ -155,26 +156,51 @@ interface RepoRename {
   name: string;
 }
 
+/** What a rename replaced: the team's name and slug, and the repos whose name changed. */
+export interface RenameAndReposResult {
+  previousName: string;
+  previousSlug: string;
+  /** The repos of `repoRenames` whose stored name differed from the new one. */
+  changedRepos: RepoRename[];
+}
+
+/**
+ * Write a team's new name and slug and its repos' new names in one
+ * transaction. The team row is locked first (`FOR UPDATE`) and its
+ * name and slug read under that lock, as are the repos' names, so what this
+ * answers is exactly what the writes replaced, whatever another rename did
+ * before it.
+ */
 export const renameAndRepos = async (payload: {
   teamId: string;
   newName: string;
   newSlug: string;
   repoRenames: RepoRename[];
-}) => {
+}): Promise<RenameAndReposResult> => {
   const { teamId, newName, newSlug, repoRenames } = payload;
-  const prisma = getPrisma();
-  return prisma.$transaction([
-    prisma.team.update({
+  return getPrisma().$transaction(async tx => {
+    const [locked] = await tx.$queryRaw<Array<{ name: string; slug: string }>>`
+      SELECT name, slug FROM teams WHERE id = ${teamId} FOR UPDATE`;
+    const previous = repoRenames.length
+      ? await tx.gitRepo.findMany({
+          where: { id: { in: repoRenames.map(r => r.id) } },
+          select: { id: true, name: true },
+        })
+      : [];
+    await tx.team.update({
       where: { id: teamId },
       data: { name: newName, slug: newSlug },
-    }),
-    ...repoRenames.map(r =>
-      prisma.gitRepo.update({
-        where: { id: r.id },
-        data: { name: r.name },
-      })
-    ),
-  ]);
+    });
+    for (const r of repoRenames) {
+      await tx.gitRepo.update({ where: { id: r.id }, data: { name: r.name } });
+    }
+    const before = new Map(previous.map(repo => [repo.id, repo.name]));
+    return {
+      previousName: locked?.name ?? newName,
+      previousSlug: locked?.slug ?? newSlug,
+      changedRepos: repoRenames.filter(r => before.get(r.id) !== r.name),
+    };
+  });
 };
 
 export const findByTagId = async (classroomId: string, tagId: string) => {
@@ -286,11 +312,19 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
   );
 };
 
+/**
+ * A team a student forms for themselves, with them as its first member and
+ * the repository's tag, in one create. Recorded for `actor` after the write:
+ * TEAMS / CREATE on the team, in team_create's shape (`team_id`, `slug`,
+ * `is_visible`, `tags_added`, `tags_failed`) plus the member, `user_id`.
+ * `actor: null`: no row.
+ */
 export const createWithMembershipAndTag = async (
-  payload: TeamCreateWithMembershipAndTagPayload
+  payload: TeamCreateWithMembershipAndTagPayload,
+  actor: AuditActor | null
 ) => {
   const { name, slug, classroomId, providerId, userId, tagId, provider = 'GITHUB' } = payload;
-  return getPrisma().team.create({
+  const team = await getPrisma().team.create({
     data: {
       name,
       slug,
@@ -306,6 +340,21 @@ export const createWithMembershipAndTag = async (
       },
     },
   });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'TEAMS',
+    resourceId: team.id,
+    action: 'CREATE',
+    data: {
+      team_id: team.id,
+      slug: team.slug,
+      is_visible: team.is_visible,
+      tags_added: 1,
+      tags_failed: 0,
+      user_id: userId,
+    },
+  });
+  return { team, audit };
 };
 
 /**

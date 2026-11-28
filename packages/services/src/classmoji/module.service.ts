@@ -2,6 +2,13 @@ import getPrisma from '@classmoji/database';
 import { openToStudents, scheduledForStudents, titleToIdentifier } from '@classmoji/utils';
 import { uniqueViolationTarget } from './uniqueViolation.ts';
 import { ModuleItemType, type Prisma } from '@classmoji/database/client';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+import { reorderAuditData } from './orderAudit.ts';
 
 interface ModuleWriteInput {
   title: string;
@@ -382,7 +389,15 @@ export const getCandidateContent = async (classroomId: string) => {
   return { pages, slides, quizzes, forms };
 };
 
-export const create = async (classroomId: string, input: ModuleWriteInput) => {
+/**
+ * Create a module at the end of the classroom's list. Recorded for `actor`:
+ * MODULES / CREATE on the new module, with its `title` (`actor: null`: no row).
+ */
+export const create = async (
+  classroomId: string,
+  input: ModuleWriteInput,
+  actor: AuditActor | null
+) => {
   const prisma = getPrisma();
   // Position 0 is the top of the Modules page, so a new module has to be
   // placed explicitly at the end instead of taking the column default.
@@ -391,7 +406,7 @@ export const create = async (classroomId: string, input: ModuleWriteInput) => {
     orderBy: { position: 'desc' },
     select: { position: true },
   });
-  return prisma.module.create({
+  const module = await prisma.module.create({
     data: {
       classroom_id: classroomId,
       title: input.title,
@@ -400,15 +415,19 @@ export const create = async (classroomId: string, input: ModuleWriteInput) => {
       position: last ? last.position + 1 : 0,
     },
   });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'MODULES',
+    resourceId: module.id,
+    action: 'CREATE',
+    data: { title: module.title },
+  });
+  return { module, audit };
 };
 
-export const update = async (id: string, input: ModuleWriteInput) => {
-  // Slug is set once on creation and never updated, matching Repository/Assignment.
-  return getPrisma().module.update({
-    where: { id },
-    data: { title: input.title, description: input.description ?? null },
-  });
-};
+/** Lock one module row in a transaction (the lock every module writer takes). */
+const lockModuleTx = (tx: Prisma.TransactionClient, moduleId: string) =>
+  tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
 
 const assertModuleInClassroom = async (moduleId: string, classroomId: string) => {
   const module = await getPrisma().module.findFirst({
@@ -459,13 +478,53 @@ const assertTargetInClassroom = async (
   if (!target) throw new Error('Module item target not found in classroom');
 };
 
+/**
+ * Update a module's title and description (the slug never changes). The
+ * values it replaces are read in the same transaction, under the module row's
+ * lock, and the change is recorded for `actor` after the commit: MODULES /
+ * UPDATE with the new `title`, the changed `fields` and, when the title
+ * changed, `previous_title` (a description is recorded by name only). A save
+ * that changes nothing, or `actor: null`: no row.
+ */
 export const updateForClassroom = async (
   id: string,
   classroomId: string,
-  input: ModuleWriteInput
+  input: ModuleWriteInput,
+  actor: AuditActor | null
 ) => {
   await assertModuleInClassroom(id, classroomId);
-  return update(id, input);
+  const { before, module } = await getPrisma().$transaction(async tx => {
+    await lockModuleTx(tx, id);
+    const before = await tx.module.findUnique({
+      where: { id },
+      select: { title: true, description: true },
+    });
+    // Slug is set once on creation and never updated, matching Repository/Assignment.
+    const module = await tx.module.update({
+      where: { id },
+      data: { title: input.title, description: input.description ?? null },
+    });
+    return { before, module };
+  });
+  const fields = [
+    ...(before?.title !== module.title ? ['title'] : []),
+    ...((before?.description ?? null) !== (module.description ?? null) ? ['description'] : []),
+  ];
+  const audit =
+    fields.length > 0
+      ? await recordForActor(actor, {
+          classroomId,
+          resourceType: 'MODULES',
+          resourceId: module.id,
+          action: 'UPDATE',
+          data: {
+            title: module.title,
+            fields,
+            ...(fields.includes('title') ? { previous_title: before?.title ?? null } : {}),
+          },
+        })
+      : NO_SERVICE_AUDIT;
+  return { module, audit };
 };
 
 /**
@@ -478,15 +537,21 @@ export const updateForClassroom = async (
  * for a reason nobody can see. There those QUIZ assignment rows go with the
  * module; the quizzes and their attempts stay, and each quiz is set back to
  * DRAFT, so it shows as an unpublished quiz in no module once quizzes are
- * back. `deleted_quiz_assignment_ids` names them, so the caller can record it.
+ * back. `deleted_quiz_assignment_ids` names them.
+ *
+ * Recorded for `actor` after the commit: MODULES / DELETE on the module, with
+ * its `title`, `slug`, `was_published`, `items_removed` (every item row that
+ * went with it) and `quiz_assignment_ids` when quiz assignments went too.
+ * `actor: null`: no row.
  */
 export const deleteById = async (
   id: string,
-  classroomId?: string,
-  { quizzesHidden = false }: { quizzesHidden?: boolean } = {}
+  classroomId: string,
+  { quizzesHidden = false }: { quizzesHidden?: boolean },
+  actor: AuditActor | null
 ) => {
-  if (classroomId) await assertModuleInClassroom(id, classroomId);
-  return getPrisma().$transaction(async tx => {
+  await assertModuleInClassroom(id, classroomId);
+  const deleted = await getPrisma().$transaction(async tx => {
     // The module row is locked for the check and the delete together. An
     // assignment being moved in at the same moment (assignment.moveToModuleEnd
     // takes this lock; any other write of `module_id` needs a key-share on the
@@ -523,18 +588,69 @@ export const deleteById = async (
         await tx.quiz.updateMany({ where: { id: { in: quizIds } }, data: { status: 'DRAFT' } });
       }
     }
+    const itemsRemoved = await tx.moduleItem.count({ where: { module_id: id } });
     // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
-    const deleted = await tx.module.delete({ where: { id } });
-    return { ...deleted, deleted_quiz_assignment_ids: deletedQuizAssignmentIds };
+    const module = await tx.module.delete({ where: { id } });
+    return { module, deletedQuizAssignmentIds, itemsRemoved };
   });
+  const { module, deletedQuizAssignmentIds, itemsRemoved } = deleted;
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'MODULES',
+    resourceId: module.id,
+    action: 'DELETE',
+    data: {
+      title: module.title,
+      slug: module.slug,
+      was_published: module.is_published,
+      items_removed: itemsRemoved,
+      ...(deletedQuizAssignmentIds.length > 0
+        ? { quiz_assignment_ids: deletedQuizAssignmentIds }
+        : {}),
+    },
+  });
+  return { module, deleted_quiz_assignment_ids: deletedQuizAssignmentIds, audit };
 };
 
-export const setPublished = async (id: string, isPublished: boolean, classroomId?: string) => {
-  if (classroomId) await assertModuleInClassroom(id, classroomId);
-  return getPrisma().module.update({
-    where: { id },
-    data: { is_published: isPublished },
+/**
+ * Set one boolean column of a module, reading the value it replaces in the
+ * same transaction under the module row's lock. Whether it changed decides
+ * the audit row.
+ */
+const setFlag = async (id: string, column: 'is_published' | 'is_public', value: boolean) =>
+  getPrisma().$transaction(async tx => {
+    await lockModuleTx(tx, id);
+    const before = await tx.module.findUnique({
+      where: { id },
+      select: { is_published: true, is_public: true },
+    });
+    const module = await tx.module.update({ where: { id }, data: { [column]: value } });
+    return { module, changed: before?.[column] !== value };
   });
+
+/**
+ * Publish or unpublish a module. Recorded for `actor` when the flag changed:
+ * MODULES / UPDATE with `published`. Setting the value it already has, or
+ * `actor: null`: no row.
+ */
+export const setPublished = async (
+  id: string,
+  isPublished: boolean,
+  classroomId: string,
+  actor: AuditActor | null
+) => {
+  await assertModuleInClassroom(id, classroomId);
+  const { module, changed } = await setFlag(id, 'is_published', isPublished);
+  const audit = changed
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'MODULES',
+        resourceId: module.id,
+        action: 'UPDATE',
+        data: { published: isPublished },
+      })
+    : NO_SERVICE_AUDIT;
+  return { module, audit };
 };
 
 /**
@@ -543,13 +659,28 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
  * Independent of setPublished on purpose: the site shows a module only when
  * BOTH flags are true, so this can be turned on ahead of time without leaking
  * anything, and turning a site on never publishes coursework by itself.
+ *
+ * Recorded for `actor` when the flag changed: MODULES / UPDATE with `public`.
+ * Setting the value it already has, or `actor: null`: no row.
  */
-export const setPublic = async (id: string, isPublic: boolean, classroomId?: string) => {
-  if (classroomId) await assertModuleInClassroom(id, classroomId);
-  return getPrisma().module.update({
-    where: { id },
-    data: { is_public: isPublic },
-  });
+export const setPublic = async (
+  id: string,
+  isPublic: boolean,
+  classroomId: string,
+  actor: AuditActor | null
+) => {
+  await assertModuleInClassroom(id, classroomId);
+  const { module, changed } = await setFlag(id, 'is_public', isPublic);
+  const audit = changed
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'MODULES',
+        resourceId: module.id,
+        action: 'UPDATE',
+        data: { public: isPublic },
+      })
+    : NO_SERVICE_AUDIT;
+  return { module, audit };
 };
 
 /** Why a QUIZ item is not added: a quiz reaches a module through its assignment. */
@@ -563,22 +694,24 @@ export const QUIZ_ITEM_REFUSAL =
  * only through a REPO assignment (see the legacy block at the bottom). Nor is
  * QUIZ: a quiz is placed in a module by its assignment, which the quiz form
  * writes; QUIZ items are no longer written and are ignored when ordering.
+ *
+ * Recorded for `actor`: MODULE_ITEM / CREATE on the new item, with its
+ * `module_id`, `item_type`, `target_id` and `position`. `actor: null`: no row.
  */
 export const addItem = async (
   moduleId: string,
   type: ContentItemType,
   targetId: string,
-  classroomId?: string
+  classroomId: string,
+  actor: AuditActor | null
 ) => {
   const prisma = getPrisma();
   if (type === ModuleItemType.QUIZ) throw new Error(QUIZ_ITEM_REFUSAL);
   if (!CONTENT_ITEM_TYPES.includes(type)) {
     throw new Error('Repositories are attached to assignments, not placed in modules as items');
   }
-  if (classroomId) {
-    await assertModuleInClassroom(moduleId, classroomId);
-    await assertTargetInClassroom(type, targetId, classroomId);
-  }
+  await assertModuleInClassroom(moduleId, classroomId);
+  await assertTargetInClassroom(type, targetId, classroomId);
   const last = await prisma.moduleItem.findFirst({
     where: { module_id: moduleId },
     orderBy: { position: 'desc' },
@@ -586,7 +719,7 @@ export const addItem = async (
   });
   const position = last ? last.position + 1 : 0;
 
-  return prisma.moduleItem.create({
+  const item = await prisma.moduleItem.create({
     data: {
       module_id: moduleId,
       item_type: type,
@@ -594,17 +727,52 @@ export const addItem = async (
       [ITEM_TYPE_COLUMN[type]]: targetId,
     },
   });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'MODULE_ITEM',
+    resourceId: item.id,
+    action: 'CREATE',
+    data: { module_id: moduleId, item_type: type, target_id: targetId, position: item.position },
+  });
+  return { item, audit };
 };
 
-export const removeItem = async (moduleItemId: string, classroomId?: string) => {
-  if (classroomId) {
-    const moduleItem = await getPrisma().moduleItem.findFirst({
-      where: { id: moduleItemId, module: { classroom_id: classroomId } },
-      select: { id: true },
-    });
-    if (!moduleItem) throw new Error('Module item not found in classroom');
+/** The id a module item points at, whichever column holds it. */
+const itemTargetId = (item: Record<string, unknown>): string | null => {
+  for (const column of Object.values(ITEM_TYPE_COLUMN)) {
+    if (typeof item[column] === 'string') return item[column] as string;
   }
-  return getPrisma().moduleItem.delete({ where: { id: moduleItemId } });
+  return null;
+};
+
+/**
+ * Remove an item from its module (the page, slide or form stays). Recorded
+ * for `actor`: MODULE_ITEM / DELETE on the item, with its `module_id`,
+ * `item_type` and `target_id`. `actor: null`: no row.
+ */
+export const removeItem = async (
+  moduleItemId: string,
+  classroomId: string,
+  actor: AuditActor | null
+) => {
+  const moduleItem = await getPrisma().moduleItem.findFirst({
+    where: { id: moduleItemId, module: { classroom_id: classroomId } },
+    select: { id: true },
+  });
+  if (!moduleItem) throw new Error('Module item not found in classroom');
+  const item = await getPrisma().moduleItem.delete({ where: { id: moduleItemId } });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'MODULE_ITEM',
+    resourceId: item.id,
+    action: 'DELETE',
+    data: {
+      module_id: item.module_id,
+      item_type: item.item_type,
+      target_id: itemTargetId(item),
+    },
+  });
+  return { item, audit };
 };
 
 /**
@@ -626,15 +794,21 @@ const assertSameSet = (existing: string[], ordered: string[], message: string) =
  * Persist a new ordering for a module's items. `orderedItemIds` is the full
  * list of ModuleItem ids in their new order; each row's position becomes its
  * index.
+ *
+ * Recorded for `actor` when the order changed: MODULES / UPDATE on the
+ * module, `kind: 'ITEMS'`, with the rows that moved and their new places
+ * (`orderAudit.ts`), read against the order in place under the module row's
+ * lock. The same order again, or `actor: null`: no row.
  */
 export const reorderItems = async (
   moduleId: string,
   orderedItemIds: string[],
-  classroomId?: string
+  classroomId: string,
+  actor: AuditActor | null
 ) => {
-  if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
+  await assertModuleInClassroom(moduleId, classroomId);
 
-  await getPrisma().$transaction(async tx => {
+  const before = await getPrisma().$transaction(async tx => {
     // The module row lock a move into or out of this module takes (#567), so
     // the item set checked below is the one written: a move can't land
     // between the read and the writes and leave two items on one position.
@@ -645,6 +819,7 @@ export const reorderItems = async (
     // content items; those rows keep their positions.
     const existingItems = await tx.moduleItem.findMany({
       where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
+      orderBy: { position: 'asc' },
       select: { id: true },
     });
     assertSameSet(
@@ -659,7 +834,19 @@ export const reorderItems = async (
         data: { position: index },
       });
     }
+    return existingItems.map(item => item.id);
   });
+  const change = reorderAuditData('ITEMS', before, orderedItemIds);
+  const audit = change
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'MODULES',
+        resourceId: moduleId,
+        action: 'UPDATE',
+        data: change,
+      })
+    : NO_SERVICE_AUDIT;
+  return { audit };
 };
 
 /**
@@ -700,13 +887,21 @@ const compactItems = (moduleId: string) =>
  * caller hands over. `orderedItemIds` is the TARGET module's full list after
  * the move, the moved id included; the module the item came from is compacted
  * behind it. Passing the module the item is already in is a plain reorder.
+ *
+ * A move is recorded for `actor`: MODULE_ITEM / UPDATE on the item, with the
+ * `module_id` it moved to, `from_module_id` and its `position` there. When
+ * the move is saved and the reorder or compaction after it fails, the move is
+ * still recorded (without `position` when its place was not saved) and the
+ * error is thrown. A plain
+ * reorder is recorded as `reorderItems` records one. `actor: null`: no row.
  */
 export const moveItemToModule = async (
   moduleItemId: string,
   toModuleId: string,
   orderedItemIds: string[],
-  classroomId: string
-) => {
+  classroomId: string,
+  actor: AuditActor | null
+): Promise<{ audit: ServiceAudit }> => {
   const prisma = getPrisma();
   await assertModuleInClassroom(toModuleId, classroomId);
 
@@ -734,8 +929,36 @@ export const moveItemToModule = async (
     }
   }
 
-  await reorderItems(toModuleId, orderedItemIds, classroomId);
-  if (fromModuleId !== toModuleId) await compactItems(fromModuleId);
+  if (fromModuleId === toModuleId) {
+    return reorderItems(toModuleId, orderedItemIds, classroomId, actor);
+  }
+  // The move's own row says where the item went; the reorder that places it
+  // is part of that move. The move is saved by now, so it is recorded even
+  // when placing it fails (without a position, which was not saved), and the
+  // failure is then thrown as it came.
+  const recordMove = (placed: boolean) =>
+    recordForActor(actor, {
+      classroomId,
+      resourceType: 'MODULE_ITEM',
+      resourceId: item.id,
+      action: 'UPDATE',
+      data: {
+        module_id: toModuleId,
+        from_module_id: fromModuleId,
+        ...(placed ? { position: orderedItemIds.indexOf(item.id) } : {}),
+      },
+    });
+  let placed = false;
+  try {
+    await reorderItems(toModuleId, orderedItemIds, classroomId, null);
+    placed = true;
+    await compactItems(fromModuleId);
+  } catch (error: unknown) {
+    await recordMove(placed).catch(() => undefined);
+    throw error;
+  }
+  const audit = await recordMove(true);
+  return { audit };
 };
 
 /**
@@ -744,16 +967,22 @@ export const moveItemToModule = async (
  * single place in the curriculum instead of being added twice. Both module
  * rows are locked in id order, as `moveToModuleEnd` for assignments locks
  * them, so concurrent moves each land on their own position.
+ *
+ * Recorded for `actor`: MODULE_ITEM / UPDATE on the item, with the
+ * `module_id` it moved to, `from_module_id` and its `position` there.
+ * `actor: null`: no row.
  */
 export const moveItemToModuleEnd = async (
   moduleItemId: string,
   toModuleId: string,
-  classroomId: string
+  classroomId: string,
+  actor: AuditActor | null
 ) => {
   await assertModuleInClassroom(toModuleId, classroomId);
 
+  let item: { id: string; item_type: ModuleItemType; position: number; from_module_id: string };
   try {
-    return await getPrisma().$transaction(async tx => {
+    item = await getPrisma().$transaction(async tx => {
       const item = await tx.moduleItem.findFirst({
         where: { id: moduleItemId, module: { classroom_id: classroomId } },
         select: { module_id: true, item_type: true },
@@ -786,6 +1015,14 @@ export const moveItemToModuleEnd = async (
     if (isModuleItemDuplicate(error)) throw new Error('That module already has this item');
     throw error;
   }
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'MODULE_ITEM',
+    resourceId: item.id,
+    action: 'UPDATE',
+    data: { module_id: toModuleId, from_module_id: item.from_module_id, position: item.position },
+  });
+  return { item, audit };
 };
 
 /**
@@ -812,8 +1049,18 @@ export const findOtherModulesHolding = async (
  * Persist a new ordering for a classroom's modules. `orderedModuleIds` is the
  * full list of module ids in their new order; each row's position becomes its
  * index, which is what the Modules page and every student-facing tree read.
+ *
+ * Recorded for `actor` when the order changed: MODULES / UPDATE with no
+ * resource id (the list is the classroom's), `kind: 'MODULES'`, with the
+ * modules that moved and their new places (`orderAudit.ts`), read against the
+ * order in place once every module row is locked. The same order again, or
+ * `actor: null`: no row.
  */
-export const reorderModules = async (classroomId: string, orderedModuleIds: string[]) => {
+export const reorderModules = async (
+  classroomId: string,
+  orderedModuleIds: string[],
+  actor: AuditActor | null
+) => {
   const prisma = getPrisma();
 
   const existing = await prisma.module.findMany({
@@ -826,19 +1073,37 @@ export const reorderModules = async (classroomId: string, orderedModuleIds: stri
     'Ordered module ids must match the classroom modules'
   );
 
-  await prisma.$transaction(async tx => {
+  const before = await prisma.$transaction(async tx => {
     // Lock in id order, as an assignment move and module.deleteById do, so a
     // reorder and a move running together cannot deadlock.
     for (const id of [...orderedModuleIds].sort()) {
       await tx.$queryRaw`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
     }
+    // The order in place, read under the locks: what this write replaces.
+    const current = await tx.module.findMany({
+      where: { id: { in: orderedModuleIds }, classroom_id: classroomId },
+      orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
+      select: { id: true },
+    });
     for (const [index, id] of orderedModuleIds.entries()) {
       await tx.module.update({
         where: { id, classroom_id: classroomId },
         data: { position: index },
       });
     }
+    return current.map(m => m.id);
   });
+  const change = reorderAuditData('MODULES', before, orderedModuleIds);
+  const audit = change
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'MODULES',
+        resourceId: null,
+        action: 'UPDATE',
+        data: change,
+      })
+    : NO_SERVICE_AUDIT;
+  return { audit };
 };
 
 // The content item types callers (routes/UI) may add, without importing Prisma.

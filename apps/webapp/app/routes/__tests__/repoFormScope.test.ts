@@ -35,6 +35,16 @@ const mocks = vi.hoisted(() => ({
   checkTemplate: vi.fn(),
 }));
 
+vi.mock('@classmoji/auth/request-impersonator', () => ({ requestImpersonator: async () => null }));
+
+/** The actor the form hands the services for `tool`. */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+});
+
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
@@ -127,13 +137,19 @@ beforeEach(() => {
   mocks.slideFindMany.mockResolvedValue([{ id: 'slide-own' }]);
   mocks.pageLinkFindMany.mockResolvedValue([]);
   mocks.slideLinkFindMany.mockResolvedValue([]);
-  mocks.updateFromForm.mockResolvedValue({ id: OWN_REPO });
+  mocks.updateFromForm.mockResolvedValue({
+    repository: { id: OWN_REPO },
+    audit: { written: 1, missed: 0 },
+  });
   mocks.createFromFormData.mockImplementation((_values, classroomId, tagId) => ({
     classroom_id: classroomId,
     tag_id: tagId,
   }));
-  mocks.repositoryCreate.mockResolvedValue({ id: 'repo-new' });
-  mocks.replaceTests.mockResolvedValue([]);
+  mocks.repositoryCreate.mockResolvedValue({
+    repository: { id: 'repo-new' },
+    audit: { written: 1, missed: 0 },
+  });
+  mocks.replaceTests.mockResolvedValue({ tests: [], audit: { written: 0, missed: 0 } });
   mocks.saveManifest.mockResolvedValue(true);
   mocks.checkTemplate.mockResolvedValue({ ok: true });
 });
@@ -148,9 +164,15 @@ describe('repository form: update', () => {
     );
     expect(mocks.updateFromForm).toHaveBeenCalledWith(
       expect.objectContaining({ id: OWN_REPO, tag: OWN_TAG, title: 'lab-2' }),
-      'class-1'
+      'class-1',
+      actorFor('web:repos.update')
     );
-    expect(mocks.replaceTests).toHaveBeenCalledWith(OWN_REPO, []);
+    expect(mocks.replaceTests).toHaveBeenCalledWith(
+      OWN_REPO,
+      [],
+      'class-1',
+      actorFor('web:repos.update')
+    );
     expect(mocks.saveManifest).toHaveBeenCalledWith('class-1');
   });
 
@@ -216,7 +238,8 @@ describe('repository form: update', () => {
     expect(mocks.tagsByClassroom).not.toHaveBeenCalled();
     expect(mocks.updateFromForm).toHaveBeenCalledWith(
       expect.objectContaining({ id: OWN_REPO, type: 'INDIVIDUAL' }),
-      'class-1'
+      'class-1',
+      actorFor('web:repos.update')
     );
   });
 
@@ -260,10 +283,16 @@ describe('repository form: create', () => {
       'class-1',
       OWN_TAG
     );
-    expect(mocks.repositoryCreate).toHaveBeenCalledWith({
-      classroom_id: 'class-1',
-      tag_id: OWN_TAG,
-    });
+    expect(mocks.repositoryCreate).toHaveBeenCalledWith(
+      { classroom_id: 'class-1', tag_id: OWN_TAG },
+      actorFor('web:repos.create')
+    );
+    expect(mocks.replaceTests).toHaveBeenCalledWith(
+      'repo-new',
+      [],
+      'class-1',
+      actorFor('web:repos.create')
+    );
     expect(mocks.pageLinkCreateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: [{ page_id: 'page-own', repository_id: 'repo-new' }] })
     );
