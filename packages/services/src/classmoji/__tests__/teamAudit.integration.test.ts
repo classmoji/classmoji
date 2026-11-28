@@ -627,4 +627,182 @@ describe.skipIf(!RUN)('team services write their audit rows (integration)', () =
       expect(again.rows).toEqual([]);
     });
   });
+  describe('every recording function: no row for actor: null; a change that stands when its row cannot be written', () => {
+    interface Case {
+      name: string;
+      prepare: () => Promise<{
+        act: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
+        stood: () => Promise<boolean>;
+      }>;
+    }
+    const fresh = async () => (await createTeam(X, `Case ${randomUUID().slice(0, 6)}`, null)).team;
+    const member = (teamId: string, userId: string) =>
+      prisma.teamMembership.count({ where: { team_id: teamId, user_id: userId } });
+    const CASES: Case[] = [
+      {
+        name: 'teamAdmin.createTeam',
+        prepare: async () => {
+          const name = `Made ${randomUUID().slice(0, 6)}`;
+          return {
+            act: actor => createTeam(X, name, actor),
+            stood: async () =>
+              (await prisma.team.count({ where: { name: `${name} ${suite}` } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.deleteTeam',
+        prepare: async () => {
+          const team = await fresh();
+          return {
+            act: actor =>
+              teamAdmin.deleteTeam({ classroomId: X.classroomId, slugOrId: team.id, actor }),
+            stood: async () => (await prisma.team.findUnique({ where: { id: team.id } })) === null,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.renameTeam',
+        prepare: async () => {
+          const team = await fresh();
+          const newName = `Renamed ${randomUUID().slice(0, 6)} ${suite}`;
+          return {
+            act: actor =>
+              teamAdmin.renameTeam({
+                classroomId: X.classroomId,
+                slugOrId: team.id,
+                newName,
+                actor,
+              }),
+            stood: async () =>
+              (await prisma.team.findUniqueOrThrow({ where: { id: team.id } })).name === newName,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.addTeamMembers',
+        prepare: async () => {
+          const team = await fresh();
+          return {
+            act: actor =>
+              teamAdmin.addTeamMembers({
+                classroomId: X.classroomId,
+                slugOrId: team.id,
+                logins: [X.student.login],
+                actor,
+              }),
+            stood: async () => (await member(team.id, X.student.id)) === 1,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.removeTeamMember',
+        prepare: async () => {
+          const team = await fresh();
+          await prisma.teamMembership.create({ data: { team_id: team.id, user_id: X.student.id } });
+          return {
+            act: actor =>
+              teamAdmin.removeTeamMember({
+                classroomId: X.classroomId,
+                slugOrId: team.id,
+                login: X.student.login,
+                actor,
+              }),
+            stood: async () => (await member(team.id, X.student.id)) === 0,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.addTeamTags',
+        prepare: async () => {
+          const team = await fresh();
+          const tag = await prisma.tag.create({
+            data: { classroom_id: X.classroomId, name: `Tag ${randomUUID().slice(0, 6)}` },
+          });
+          return {
+            act: actor =>
+              teamAdmin.addTeamTags({
+                classroomId: X.classroomId,
+                slugOrId: team.id,
+                tagIds: [tag.id],
+                actor,
+              }),
+            stood: async () =>
+              (await prisma.teamTag.count({ where: { team_id: team.id, tag_id: tag.id } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'teamAdmin.removeTeamTag',
+        prepare: async () => {
+          const team = await fresh();
+          const tag = await prisma.tag.create({
+            data: { classroom_id: X.classroomId, name: `Tag ${randomUUID().slice(0, 6)}` },
+          });
+          const link = await prisma.teamTag.create({ data: { team_id: team.id, tag_id: tag.id } });
+          return {
+            act: actor =>
+              teamAdmin.removeTeamTag({ classroomId: X.classroomId, teamTagId: link.id, actor }),
+            stood: async () =>
+              (await prisma.teamTag.findUnique({ where: { id: link.id } })) === null,
+          };
+        },
+      },
+      {
+        name: 'team.createWithMembershipAndTag',
+        prepare: async () => {
+          const slug = `self-${randomUUID().slice(0, 6)}-${suite}`;
+          return {
+            act: actor =>
+              teamService.createWithMembershipAndTag(
+                {
+                  name: slug,
+                  slug,
+                  classroomId: X.classroomId,
+                  providerId: Math.floor(Math.random() * 1e9),
+                  userId: X.student.id,
+                  tagId: X.tagId,
+                },
+                actor
+              ),
+            stood: async () => (await prisma.team.count({ where: { slug } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'teamMembership.addMemberToTeam',
+        prepare: async () => {
+          const team = await prisma.team.findUniqueOrThrow({ where: { id: (await fresh()).id } });
+          return {
+            act: actor => teamMembership.addMemberToTeam(team, X.other.id, actor),
+            stood: async () => (await member(team.id, X.other.id)) === 1,
+          };
+        },
+      },
+      {
+        name: 'teamMembership.removeMemberFromTeam',
+        prepare: async () => {
+          const team = await prisma.team.findUniqueOrThrow({ where: { id: (await fresh()).id } });
+          await prisma.teamMembership.create({ data: { team_id: team.id, user_id: X.other.id } });
+          return {
+            act: actor => teamMembership.removeMemberFromTeam(team, X.other.id, actor),
+            stood: async () => (await member(team.id, X.other.id)) === 0,
+          };
+        },
+      },
+    ];
+
+    it.each(CASES.map(c => [c.name, c] as const))('%s', async (_name, c) => {
+      const nulled = await c.prepare();
+      const quiet = await newRows(X, () => nulled.act(null));
+      expect(quiet.value.audit).toEqual({ written: 0, missed: 0 });
+      expect(quiet.rows).toEqual([]);
+      expect(await nulled.stood()).toBe(true);
+
+      const lost = await c.prepare();
+      const value = await quietly(() => lost.act(ghost('web:teams.case')));
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(await lost.stood()).toBe(true);
+    });
+  });
 });

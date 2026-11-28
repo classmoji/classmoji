@@ -519,4 +519,139 @@ describe.skipIf(!RUN)('repository services write their audit rows (integration)'
       expect(refused.rows).toEqual([]);
     });
   });
+  describe('every recording function: no row for actor: null; a change that stands when its row cannot be written', () => {
+    interface Case {
+      name: string;
+      prepare: () => Promise<{
+        act: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
+        stood: () => Promise<boolean>;
+      }>;
+    }
+    const gitRepoOf = async (repositoryId: string) =>
+      prisma.gitRepo.create({
+        data: {
+          classroom_id: X.classroomId,
+          repository_id: repositoryId,
+          name: `case-${randomUUID().slice(0, 8)}`,
+          provider: 'GITHUB',
+          provider_id: randomUUID(),
+          student_id: X.studentId,
+        },
+        select: { id: true, name: true },
+      });
+    const CASES: Case[] = [
+      {
+        name: 'repository.create',
+        prepare: async () => {
+          const title = `Case ${randomUUID().slice(0, 6)} ${suite}`;
+          return {
+            act: actor =>
+              repository.create(
+                { classroom_id: X.classroomId, title, template: 'org/t', type: 'INDIVIDUAL' },
+                actor
+              ),
+            stood: async () => (await prisma.repository.count({ where: { title } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'repository.update',
+        prepare: async () => {
+          const repo = await makeRepository(X);
+          return {
+            act: actor => repository.update(repo.id, { max_team_size: 5 }, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } }))
+                .max_team_size === 5,
+          };
+        },
+      },
+      {
+        name: 'repository.updateFromForm',
+        prepare: async () => {
+          const repo = await makeRepository(X);
+          return {
+            act: actor =>
+              repository.updateFromForm(
+                { id: repo.id, type: 'INDIVIDUAL', max_team_size: 6 },
+                X.classroomId,
+                actor
+              ),
+            stood: async () =>
+              (await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } }))
+                .max_team_size === 6,
+          };
+        },
+      },
+      {
+        name: 'repository.deleteIfUnprovisioned',
+        prepare: async () => {
+          const repo = await makeRepository(X);
+          return {
+            act: actor => repository.deleteIfUnprovisioned(repo.id, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.repository.findUnique({ where: { id: repo.id } })) === null,
+          };
+        },
+      },
+      {
+        name: 'autogradingTest.replaceForRepository',
+        prepare: async () => {
+          const repo = await makeRepository(X);
+          return {
+            act: actor =>
+              autogradingTest.replaceForRepository(repo.id, [{ name: 't' }], X.classroomId, actor),
+            stood: async () =>
+              (await prisma.autogradingTest.count({ where: { repository_id: repo.id } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'HelperService.deleteRepository',
+        prepare: async () => {
+          const repo = await makeRepository(X);
+          const gitRepo = await gitRepoOf(repo.id);
+          return {
+            act: actor =>
+              HelperService.deleteRepository({
+                id: gitRepo.id,
+                name: gitRepo.name,
+                gitOrganization: { login: `ra-${suite}`, provider: 'GITHUB' },
+                classroomId: X.classroomId,
+                deleteFromGithub: false,
+                actor,
+              }),
+            stood: async () =>
+              (await prisma.gitRepo.findUnique({ where: { id: gitRepo.id } })) === null,
+          };
+        },
+      },
+      {
+        name: 'repoAnalytics.linkContributor',
+        prepare: async () => {
+          const gitRepo = await gitRepoOf((await makeRepository(X)).id);
+          return {
+            act: actor => repoAnalytics.linkContributor(gitRepo.id, 'octo', X.studentId, actor),
+            stood: async () =>
+              (await prisma.gitRepoContributorLink.count({
+                where: { git_repo_id: gitRepo.id },
+              })) === 1,
+          };
+        },
+      },
+    ];
+
+    it.each(CASES.map(c => [c.name, c] as const))('%s', async (_name, c) => {
+      const nulled = await c.prepare();
+      const quiet = await newRows(X, () => nulled.act(null));
+      expect(quiet.value.audit).toEqual({ written: 0, missed: 0 });
+      expect(quiet.rows).toEqual([]);
+      expect(await nulled.stood()).toBe(true);
+
+      const lost = await c.prepare();
+      const value = await quietly(() => lost.act(ghost('web:repos.case')));
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(await lost.stood()).toBe(true);
+    });
+  });
 });

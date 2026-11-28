@@ -705,4 +705,195 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
       expect(await prisma.module.findUnique({ where: { id: lost.id } })).toBeNull();
     });
   });
+  describe('every recording function: no row for actor: null; a change that stands when its row cannot be written', () => {
+    /** One change per function, on fresh fixtures: what it does, and how to see it stood. */
+    interface Case {
+      name: string;
+      prepare: () => Promise<{
+        act: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
+        stood: () => Promise<boolean>;
+      }>;
+    }
+    const itemIn = async (moduleId: string) =>
+      (await moduleService.addItem(moduleId, 'PAGE', (await makePage(X)).id, X.classroomId, null))
+        .item;
+    const CASES: Case[] = [
+      {
+        name: 'module.create',
+        prepare: async () => {
+          const title = `Case ${randomUUID().slice(0, 6)} ${suite}`;
+          return {
+            act: actor => moduleService.create(X.classroomId, { title }, actor),
+            stood: async () => (await prisma.module.count({ where: { title } })) === 1,
+          };
+        },
+      },
+      {
+        name: 'module.updateForClassroom',
+        prepare: async () => {
+          const module = await makeModule(X);
+          const title = `Renamed ${randomUUID().slice(0, 6)} ${suite}`;
+          return {
+            act: actor =>
+              moduleService.updateForClassroom(module.id, X.classroomId, { title }, actor),
+            stood: async () =>
+              (await prisma.module.findUniqueOrThrow({ where: { id: module.id } })).title === title,
+          };
+        },
+      },
+      {
+        name: 'module.setPublished',
+        prepare: async () => {
+          const module = await makeModule(X);
+          return {
+            act: actor => moduleService.setPublished(module.id, true, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.module.findUniqueOrThrow({ where: { id: module.id } })).is_published,
+          };
+        },
+      },
+      {
+        name: 'module.setPublic',
+        prepare: async () => {
+          const module = await makeModule(X);
+          return {
+            act: actor => moduleService.setPublic(module.id, true, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.module.findUniqueOrThrow({ where: { id: module.id } })).is_public,
+          };
+        },
+      },
+      {
+        name: 'module.addItem',
+        prepare: async () => {
+          const module = await makeModule(X);
+          const page = await makePage(X);
+          return {
+            act: actor => moduleService.addItem(module.id, 'PAGE', page.id, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.moduleItem.count({
+                where: { module_id: module.id, page_id: page.id },
+              })) === 1,
+          };
+        },
+      },
+      {
+        name: 'module.removeItem',
+        prepare: async () => {
+          const item = await itemIn((await makeModule(X)).id);
+          return {
+            act: actor => moduleService.removeItem(item.id, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.moduleItem.findUnique({ where: { id: item.id } })) === null,
+          };
+        },
+      },
+      {
+        name: 'module.moveItemToModuleEnd',
+        prepare: async () => {
+          const item = await itemIn((await makeModule(X)).id);
+          const to = await makeModule(X);
+          return {
+            act: actor => moduleService.moveItemToModuleEnd(item.id, to.id, X.classroomId, actor),
+            stood: async () =>
+              (await prisma.moduleItem.findUniqueOrThrow({ where: { id: item.id } })).module_id ===
+              to.id,
+          };
+        },
+      },
+      {
+        name: 'module.moveItemToModule',
+        prepare: async () => {
+          const item = await itemIn((await makeModule(X)).id);
+          const to = await makeModule(X);
+          return {
+            act: actor =>
+              moduleService.moveItemToModule(item.id, to.id, [item.id], X.classroomId, actor),
+            stood: async () =>
+              (await prisma.moduleItem.findUniqueOrThrow({ where: { id: item.id } })).module_id ===
+              to.id,
+          };
+        },
+      },
+      {
+        name: 'module.reorderItems',
+        prepare: async () => {
+          const module = await makeModule(X);
+          const a = await itemIn(module.id);
+          const b = await itemIn(module.id);
+          return {
+            act: actor => moduleService.reorderItems(module.id, [b.id, a.id], X.classroomId, actor),
+            stood: async () =>
+              (await prisma.moduleItem.findUniqueOrThrow({ where: { id: b.id } })).position === 0,
+          };
+        },
+      },
+      {
+        name: 'module.reorderModules',
+        prepare: async () => {
+          const Z = await makeClassroom(`r${++serial}`);
+          const a = await makeModule(Z);
+          const b = await makeModule(Z);
+          return {
+            act: actor => moduleService.reorderModules(Z.classroomId, [b.id, a.id], actor),
+            stood: async () =>
+              (await prisma.module.findUniqueOrThrow({ where: { id: b.id } })).position === 0,
+          };
+        },
+      },
+      {
+        name: 'assignment.reorderInModule',
+        prepare: async () => {
+          const module = await makeModule(X);
+          const a = await makeAssignment(X, module.id, 0);
+          const b = await makeAssignment(X, module.id, 1);
+          return {
+            act: actor =>
+              assignmentService.reorderInModule(module.id, [b.id, a.id], X.classroomId, actor),
+            stood: async () =>
+              (await prisma.assignment.findUniqueOrThrow({ where: { id: b.id } })).position === 0,
+          };
+        },
+      },
+      {
+        name: 'assignment.moveToModule',
+        prepare: async () => {
+          const from = await makeModule(X);
+          const to = await makeModule(X);
+          const a = await makeAssignment(X, from.id, 0);
+          return {
+            act: actor => assignmentService.moveToModule(a.id, to.id, [a.id], X.classroomId, actor),
+            stood: async () =>
+              (await prisma.assignment.findUniqueOrThrow({ where: { id: a.id } })).module_id ===
+              to.id,
+          };
+        },
+      },
+      {
+        name: 'module.deleteById',
+        prepare: async () => {
+          const module = await makeModule(X);
+          return {
+            act: actor => moduleService.deleteById(module.id, X.classroomId, {}, actor),
+            stood: async () =>
+              (await prisma.module.findUnique({ where: { id: module.id } })) === null,
+          };
+        },
+      },
+    ];
+
+    it.each(CASES.map(c => [c.name, c] as const))('%s', async (_name, c) => {
+      const nulled = await c.prepare();
+      const quiet = await newRows(X, () => nulled.act(null));
+      expect(quiet.value.audit).toEqual({ written: 0, missed: 0 });
+      expect(quiet.rows).toEqual([]);
+      expect(await nulled.stood()).toBe(true);
+
+      const lost = await c.prepare();
+      const { value, misses } = await quietly(() => lost.act(ghost('web:modules.case')));
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(misses).toHaveLength(1);
+      expect(await lost.stood()).toBe(true);
+    });
+  });
 });
