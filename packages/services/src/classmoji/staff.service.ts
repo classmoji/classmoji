@@ -40,6 +40,7 @@ import { accountProviderId, scopeGitlabId, withLogin } from '@classmoji/utils';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
+import { auditResourceTypeNames } from './auditResourceTypes.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
@@ -763,7 +764,8 @@ export const previewLeftoverSlots = async ({
   const openRemoval = await getPrisma().auditLog.findFirst({
     where: {
       classroom_id: classroomId,
-      resource_type: 'STAFF',
+      // Every name a staff row has been written under (TEACHING_STAFF before).
+      resource_type: { in: auditResourceTypeNames('STAFF') },
       resource_id: user.id,
       action: 'DELETE',
       timestamp: { gte: new Date(Date.now() - LEFTOVER_WINDOW_MS) },

@@ -321,9 +321,12 @@ describe('staff.previewLeftoverSlots', () => {
     const where = auditFindFirst.mock.calls[0][0].where;
     expect(where).toMatchObject({
       classroom_id: 'class-1',
-      resource_type: 'STAFF',
       resource_id: 'u-gone',
       action: 'DELETE',
+    });
+    // The STAFF row staff_remove writes, under every name staff rows have had.
+    expect(where.resource_type).toEqual({
+      in: ['STAFF', 'TEACHING_STAFF', 'TEACHING_STAFF_DETAILS'],
     });
     // Within the last 24h.
     const since = (where.timestamp.gte as Date).getTime();
