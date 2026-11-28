@@ -8,19 +8,20 @@
  *   - api.classrooms.$id.status / api.classrooms.$id.archive → ['OWNER']
  *   - admin.$class.settings.repos → ['OWNER']
  *
- * THE CENTRAL SAFETY PROPERTY: `ClassmojiService.classroom.updateClassroomSettings`
- * upserts settings as a bare upsert — it writes ANY key it is handed,
- * including `anthropic_api_key`, `openai_api_key` and the llm_* columns. The
- * web actions pick each tab's fields from the request body; this tool must
- * not pass its arguments either. Every handler here builds an EXPLICIT object
- * field-by-field from validated arguments and passes THAT, so an unknown or
- * secret key simply has no path to the database. The same rule covers the
- * classroom row (`name` only, mirroring the web route's PROFILE_FIELDS, which
- * exists to keep `slug` and `git_org_id` unwritable) and the GitHub
- * organization settings, which go through the same
- * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web route and
- * run with the caller's own GitHub account. The services write the audit rows
- * (`serviceActor`); the tools write none of their own.
+ * WHAT IS PASSED: `ClassmojiService.classroom.updateClassroomSettings` saves
+ * exactly the settings columns its caller names, so each caller chooses them:
+ * the web actions pick each tab's fields from the request body, and every
+ * handler here builds its object field by field from validated arguments
+ * (the display and feature switches, the token and late-penalty rates, grade
+ * visibility and release, the default page, theme, time zone and Ask Moji
+ * instructions, as the schema below lists them) and passes that. API keys,
+ * models and any column not in the schema are never among them (keys and
+ * models are set on the web AI settings tab). The classroom row gets `name`
+ * only, mirroring the web route's PROFILE_FIELDS, which keeps `slug` and
+ * `git_org_id` out of reach. The GitHub organization settings go through the
+ * same `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web
+ * route and run with the caller's own GitHub account. The services write the
+ * audit rows (`serviceActor`); the tools write none of their own.
  *
  * Responses echo only the fields the tool itself set — never the service
  * return, which carries the raw settings row (API keys included).

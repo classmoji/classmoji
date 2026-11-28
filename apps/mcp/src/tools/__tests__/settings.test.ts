@@ -222,7 +222,7 @@ describe('classroom_settings_update', () => {
     expect(JSON.stringify(mocks.updateSettings.mock.calls)).not.toContain('sk-should-never');
   });
 
-  it('sends name to classroom.update (PROFILE_FIELDS) and not to updateSettings', async () => {
+  it('passes name as the classroom half of the save (PROFILE_FIELDS), never among the settings', async () => {
     await classroomSettingsUpdateTool.handler(
       { classroom: 'org/w26', name: 'CS 52 — Winter', theme: 'sand' },
       CTX
