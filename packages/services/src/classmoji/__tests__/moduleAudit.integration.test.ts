@@ -603,7 +603,7 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
             X.classroomId,
             webActor(X, 'web:modules.move_item')
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow('Module not found in classroom');
         await expect(
           moduleService.moveItemToModuleEnd(
             item.id,
@@ -611,7 +611,7 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
             X.classroomId,
             webActor(X, 'web:modules.move_item')
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow('Module not found in classroom');
         await expect(
           moduleService.reorderItems(
             theirs.id,
@@ -619,7 +619,7 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
             X.classroomId,
             webActor(X, 'web:modules.reorder_items')
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow('Module not found in classroom');
       });
       expect(rows).toEqual([]);
       expect((await rowsIn(Y.classroomId)).length).toBe(beforeY);
