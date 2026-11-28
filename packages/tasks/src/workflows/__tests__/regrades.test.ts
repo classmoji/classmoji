@@ -15,12 +15,17 @@
  *     (`tool`) travels beside `data` for the audit row.
  *   - The quiz email reads the resolution's snapshot (`resolved_emoji`), and
  *     the attempt's grade now only for a request resolved before it.
+ *   - `request_regrade` creates the repo request through
+ *     `regradeRequest.create` with the actor its payload names (read field by
+ *     field; none for a payload queued without one), and returns the
+ *     request's own fields with the service's `audit` beside them.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
+  create: vi.fn(),
   resolveRepo: vi.fn(),
   classroomFindById: vi.fn(),
   findScaleByClassroomId: vi.fn(),
@@ -41,6 +46,7 @@ vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
     regradeRequest: {
       findMany: (...a: unknown[]) => mocks.findMany(...a),
+      create: (...a: unknown[]) => mocks.create(...a),
       resolveRepo: (...a: unknown[]) => mocks.resolveRepo(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
@@ -195,8 +201,58 @@ describe('quiz_regrade_resolved', () => {
 
 describe('request_regrade', () => {
   const requestTask = requestRegradeTask as unknown as {
+    run: (payload: unknown) => Promise<unknown>;
     onSuccess: (args: { payload: unknown }) => Promise<void>;
   };
+
+  const PAYLOAD = {
+    classroom_id: 'class-1',
+    gitRepoAssignment: { id: 'gra-1', provider_issue_number: null, git_repo: { name: 'r' } },
+    student_id: 'stu-1',
+    student_comment: 'please',
+    previous_grade: ['+1'],
+  };
+  const REQUEST = { id: 'rr-1', status: 'IN_REVIEW', previous_grade: ['+1'] };
+  const ACTOR = {
+    userId: 'stu-1',
+    role: 'STUDENT',
+    tool: 'regrade_create',
+    impersonatedBy: 'admin-1',
+    clientId: 'client-1',
+    via: 'mcp',
+  };
+
+  it('creates the request for the actor the payload names, field by field', async () => {
+    mocks.create.mockResolvedValue({ request: REQUEST, audit: { written: 1, missed: 0 } });
+
+    const output = await requestTask.run({
+      ...PAYLOAD,
+      auditActor: { ...ACTOR, extra: 'not an actor field' },
+    });
+
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.create).toHaveBeenCalledWith({
+      classroom_id: 'class-1',
+      git_repo_assignment_id: 'gra-1',
+      student_id: 'stu-1',
+      student_comment: 'please',
+      previous_grade: ['+1'],
+      actor: ACTOR,
+    });
+    // The request's own fields, as before, and what became of its row.
+    expect(output).toEqual({ ...REQUEST, audit: { written: 1, missed: 0 } });
+  });
+
+  it('records nothing for a payload queued without an actor, or with a malformed one', async () => {
+    mocks.create.mockResolvedValue({ request: REQUEST, audit: { written: 0, missed: 0 } });
+
+    await requestTask.run(PAYLOAD);
+    await requestTask.run({ ...PAYLOAD, auditActor: { userId: 'stu-1', role: 'NOBODY' } });
+
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(mocks.create.mock.calls[0][0].actor).toBeNull();
+    expect(mocks.create.mock.calls[1][0].actor).toBeNull();
+  });
 
   it('emails every assigned grader with an address, from the payload the callers build', async () => {
     mocks.classroomFindById.mockResolvedValue({

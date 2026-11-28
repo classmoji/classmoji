@@ -23,6 +23,7 @@ import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { appUrl, ClassmojiService, escapeHtml, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
 import { getEmojiSymbol, gitContextFor, gitWeb, quizAttemptGrade } from '@classmoji/utils';
+import { parseAuditActor } from '@classmoji/services/audit';
 
 /**
  * An assigned grader as the payload carries them (`regradeTaskSubmission` in
@@ -54,6 +55,12 @@ interface RequestRegradeTaskPayload {
   student_id: string;
   student_comment?: string | null;
   previous_grade: string[];
+  /**
+   * Who the request is recorded for (the student asking, as the web form or
+   * MCP `regrade_create` resolved them). A run queued without one records
+   * nothing.
+   */
+  auditActor?: unknown;
 }
 
 interface UpdateRegradeRequestTaskPayload {
@@ -98,13 +105,18 @@ export const requestRegradeTask = task({
     const { classroom_id, gitRepoAssignment, student_id, student_comment, previous_grade } =
       payload;
 
-    return ClassmojiService.regradeRequest.create({
+    // The actor is read field by field, never spread from the stored payload.
+    const { request, audit } = await ClassmojiService.regradeRequest.create({
       classroom_id,
       git_repo_assignment_id: gitRepoAssignment.id,
       student_id,
       student_comment,
       previous_grade,
+      actor: parseAuditActor(payload.auditActor),
     });
+    // The request's own fields, as before, with what became of its audit row
+    // beside them (the MCP reads `audit` to report a missed row).
+    return { ...request, audit };
   },
 
   onSuccess: async ({ payload }: TaskPayloadWrapper<RequestRegradeTaskPayload>) => {

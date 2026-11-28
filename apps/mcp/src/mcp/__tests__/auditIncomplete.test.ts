@@ -409,6 +409,45 @@ describe('token and regrade writes pass their actor through the registry', () =>
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
+
+  it('regrade_create on a submission: one run carrying the actor, no row of its own', async () => {
+    const result = await call('STUDENT', 'regrade_create', {
+      classroom: 'org/c',
+      git_repo_assignment_id: SUBMISSION,
+      comment: 'please look again',
+    });
+
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+    expect(mocks.trigger.mock.calls[0][0]).toBe('request_regrade');
+    expect(mocks.trigger.mock.calls[0][1]).toMatchObject({
+      classroom_id: 'class-1',
+      student_id: `user-${viewerSeq}`,
+      previous_grade: ['🎯'],
+      auditActor: actorFor('STUDENT', 'regrade_create'),
+    });
+    expect(parse(result)).toEqual({
+      success: true,
+      created: true,
+      regrade_request: { id: 'rr-1', status: 'IN_REVIEW', previous_grade: ['🎯'] },
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('regrade_create on a submission: audit_incomplete when the run missed its row', async () => {
+    mocks.retrieve.mockResolvedValue({
+      status: 'COMPLETED',
+      output: { id: 'rr-1', status: 'IN_REVIEW', previous_grade: ['🎯'], audit: MISSED },
+    });
+    const result = await call('STUDENT', 'regrade_create', {
+      classroom: 'org/c',
+      git_repo_assignment_id: SUBMISSION,
+      comment: 'please look again',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(parse(result)).toMatchObject({ success: true, created: true, audit_incomplete: true });
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('reads', () => {

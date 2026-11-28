@@ -1,7 +1,7 @@
 /**
- * The token services write the audit row of each change they make, against a
- * REAL Postgres: one row with exactly the actor's fields (a web actor, and an
- * MCP one under View as), written after the
+ * The token services, and a repo regrade request, write the audit row of each
+ * change they make, against a REAL Postgres: one row with exactly the actor's
+ * fields (a web actor, and an MCP one under View as), written after the
  * change and next to the ledger rows and balance the change left (the same as
  * before the row existed); none when the call was refused or found nothing to
  * change; none and no throw for `actor: null`; and a saved change that
@@ -11,7 +11,7 @@
  * X and user B in classroom Y never see each other's rows or tokens.
  *
  * Covers token.grantTokens, purchaseExtensionHours,
- * purchaseQuizExtensionHours and cancelPurchase.
+ * purchaseQuizExtensionHours, cancelPurchase and regradeRequest.create.
  *
  * Whether quizzes are shown (Pro, the quiz runtime configured) is not what
  * this file tests, so that one lookup is faked; everything else is the
@@ -30,6 +30,7 @@ import type { AuditActor } from '../audit.service.ts';
 vi.mock('../entitlement.service.ts', () => ({ quizzesVisibleOrThrow: async () => true }));
 
 const token = await import('../token.service.ts');
+const regradeRequest = await import('../regradeRequest.service.ts');
 
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(DATABASE_URL);
@@ -771,6 +772,101 @@ describe.skipIf(!RUN)('token services write their audit rows (integration)', () 
       expect(misses).toHaveLength(1);
       expect(value.refund.type).toBe('REFUND');
       expect(await token.getBalance(X.classroomId, student)).toBe(20);
+    });
+  });
+
+  // ─── repo regrade requests ─────────────────────────────────────────────────
+
+  describe('regradeRequest.create', () => {
+    const create = (f: Fixture, student: string, submission: string, actor: AuditActor | null) =>
+      regradeRequest.create({
+        classroom_id: f.classroomId,
+        git_repo_assignment_id: submission,
+        student_id: student,
+        student_comment: 'Please look at test 3 again',
+        previous_grade: ['+1'],
+        actor,
+      });
+
+    it('one row for the student on the web: the submission, never the comment', async () => {
+      const student = await makeStudent(X);
+      const submission = await makeSubmission(X, student);
+
+      const { request, audit } = await create(
+        X,
+        student,
+        submission,
+        webActor(student, 'STUDENT', 'web:regrade_requests.create')
+      );
+
+      expect(audit).toEqual({ written: 1, missed: 0 });
+      expect(request).toMatchObject({
+        status: 'IN_REVIEW',
+        classroom_id: X.classroomId,
+        git_repo_assignment_id: submission,
+        student_id: student,
+        previous_grade: ['+1'],
+      });
+      expect(await rowsFor(request.id)).toEqual([
+        {
+          user_id: student,
+          classroom_id: X.classroomId,
+          role: 'STUDENT',
+          resource_type: 'REGRADE_REQUEST',
+          resource_id: request.id,
+          action: 'CREATE',
+          data: { tool: 'web:regrade_requests.create', git_repo_assignment_id: submission },
+        },
+      ]);
+    });
+
+    it('an MCP student under View as: the row regrade_create wrote, plus the admin', async () => {
+      const student = await makeStudent(Y);
+      const submission = await makeSubmission(Y, student);
+
+      const { request } = await create(
+        Y,
+        student,
+        submission,
+        mcpActor(student, 'STUDENT', 'regrade_create')
+      );
+      expect(await rowsFor(request.id)).toEqual([
+        {
+          user_id: student,
+          classroom_id: Y.classroomId,
+          role: 'STUDENT',
+          resource_type: 'REGRADE_REQUEST',
+          resource_id: request.id,
+          action: 'CREATE',
+          data: {
+            via: 'mcp',
+            tool: 'regrade_create',
+            git_repo_assignment_id: submission,
+            client_id: 'client-1',
+            impersonated_by: ADMIN,
+          },
+        },
+      ]);
+      expect((await rowsIn(X.classroomId)).map(r => r.resource_id)).not.toContain(request.id);
+    });
+
+    it('writes no row for actor: null; keeps the request and reports a missed row', async () => {
+      const student = await makeStudent(X);
+      const submission = await makeSubmission(X, student);
+
+      const quiet = await create(X, student, submission, null);
+      expect(quiet.audit).toEqual({ written: 0, missed: 0 });
+      expect(await rowsFor(quiet.request.id)).toEqual([]);
+
+      const other = await makeSubmission(X, student);
+      const { value, misses } = await quietly(() =>
+        create(X, student, other, ghost('STUDENT', 'regrade_create'))
+      );
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(misses).toHaveLength(1);
+      expect(
+        await prisma.regradeRequest.findUnique({ where: { id: value.request.id } })
+      ).not.toBeNull();
     });
   });
 });

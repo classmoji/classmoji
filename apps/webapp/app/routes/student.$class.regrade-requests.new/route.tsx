@@ -12,6 +12,7 @@ import {
   waitForRunCompletion,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { userId } = await requireStudentAccess(request, params.class!, {
@@ -111,10 +112,11 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
-  const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
+  const gate = await requireStudentAccess(request, params.class!, {
     resourceType: 'REGRADE_REQUEST',
     action: 'submit_regrade_request',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -131,6 +133,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     throw new Response('Assignment not found or not yours', { status: 403 });
   }
 
+  // The run records the request (REGRADE_REQUEST, CREATE) for the student
+  // the gate admitted, once it is saved.
+  const actor = await auditActor(request, gate, 'web:regrade_requests.create');
+
   try {
     // Payload key must match the task's contract (`gitRepoAssignment` —
     // packages/tasks/src/workflows/regrades.ts); the old `repositoryAssignment`
@@ -143,6 +149,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       student_id: userId, // Use authenticated userId, NOT data.student_id
       student_comment: data.student_comment,
       previous_grade: repositoryAssignment.grades.map(grade => grade.emoji),
+      auditActor: actor,
     });
 
     await waitForRunCompletion(run.id);

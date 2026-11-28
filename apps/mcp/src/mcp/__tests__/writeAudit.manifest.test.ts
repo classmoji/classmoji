@@ -75,9 +75,9 @@ const WRITES: Record<string, Entry> = {
     actor: 'own',
   },
   // A quiz attempt: regradeRequest.createForQuizAttempt writes the
-  // REGRADE_REQUEST row for the caller; a submission: the tool writes it after
-  // the request_regrade run.
-  regrade_create: { kind: 'both', fn: 'regradeRequest.createForQuizAttempt', actor: 'own' },
+  // REGRADE_REQUEST row for the caller; a submission: the request_regrade run
+  // (regradeRequest.create) writes it for the serviceActor in its payload.
+  regrade_create: { kind: 'service', fn: 'regradeRequest.createForQuizAttempt', actor: 'own' },
   // ── tokens: the token service writes the row for the actor ──
   token_grant: { kind: 'service', fn: 'token.grantTokens', actor: 'serviceActor' },
   // A submission: token.purchaseExtensionHours; a quiz: the same row from
