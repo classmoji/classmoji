@@ -47,6 +47,12 @@ const mocks = vi.hoisted(() => ({
   moveToModule: vi.fn(),
   deleteById: vi.fn(),
   requestImpersonator: vi.fn(),
+  moduleCreate: vi.fn(),
+  moduleUpdate: vi.fn(),
+  setPublished: vi.fn(),
+  setPublic: vi.fn(),
+  removeItem: vi.fn(),
+  reorderModules: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/request-impersonator', () => ({
@@ -76,6 +82,12 @@ vi.mock('@classmoji/services', () => ({
       reorderItems: (...a: unknown[]) => mocks.reorderItems(...a),
       moveItemToModule: (...a: unknown[]) => mocks.moveItemToModule(...a),
       deleteById: (...a: unknown[]) => mocks.deleteById(...a),
+      create: (...a: unknown[]) => mocks.moduleCreate(...a),
+      updateForClassroom: (...a: unknown[]) => mocks.moduleUpdate(...a),
+      setPublished: (...a: unknown[]) => mocks.setPublished(...a),
+      setPublic: (...a: unknown[]) => mocks.setPublic(...a),
+      removeItem: (...a: unknown[]) => mocks.removeItem(...a),
+      reorderModules: (...a: unknown[]) => mocks.reorderModules(...a),
     },
     assignment: {
       listForClassroom: (...a: unknown[]) => mocks.assignmentListForClassroom(...a),
@@ -629,5 +641,73 @@ describe('withHiddenRows', () => {
 
   it('leaves a hidden row the page did name where the page put it', () => {
     expect(withHiddenRows(rows('a q* b'), ['q', 'b', 'a'])).toEqual(['q', 'b', 'a']);
+  });
+});
+
+describe('Modules action — every other intent hands its actor to the module service', () => {
+  beforeEach(() => {
+    mocks.moduleCreate.mockResolvedValue({ module: { id: 'mod-9' }, audit: AUDIT });
+    for (const m of [
+      mocks.moduleUpdate,
+      mocks.setPublished,
+      mocks.setPublic,
+      mocks.removeItem,
+      mocks.reorderModules,
+    ]) {
+      m.mockResolvedValue({ audit: AUDIT });
+    }
+  });
+
+  it('create, update, publish, site visibility, remove item, reorder modules', async () => {
+    expect(await post('create', { title: 'Week 9' })).toEqual({
+      success: 'Module created',
+      module: { id: 'mod-9' },
+    });
+    expect(mocks.moduleCreate).toHaveBeenCalledExactlyOnceWith(
+      CLASSROOM_ID,
+      { title: 'Week 9', description: undefined },
+      actorFor('create')
+    );
+
+    expect(await post('update', { id: 'mod-1', title: 'Week 1b' })).toEqual({
+      success: 'Module updated',
+    });
+    expect(mocks.moduleUpdate).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      CLASSROOM_ID,
+      { title: 'Week 1b', description: undefined },
+      actorFor('update')
+    );
+
+    await post('setPublished', { id: 'mod-1', isPublished: true });
+    expect(mocks.setPublished).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      true,
+      CLASSROOM_ID,
+      actorFor('set_published')
+    );
+
+    await post('setPublic', { id: 'mod-1', isPublic: false });
+    expect(mocks.setPublic).toHaveBeenCalledExactlyOnceWith(
+      'mod-1',
+      false,
+      CLASSROOM_ID,
+      actorFor('set_public')
+    );
+
+    await post('removeItem', { moduleItemId: 'item-page' });
+    expect(mocks.removeItem).toHaveBeenCalledExactlyOnceWith(
+      'item-page',
+      CLASSROOM_ID,
+      actorFor('remove_item')
+    );
+
+    await post('reorderModules', { orderedModuleIds: ['mod-2', 'mod-1'] });
+    expect(mocks.reorderModules).toHaveBeenCalledExactlyOnceWith(
+      CLASSROOM_ID,
+      ['mod-2', 'mod-1'],
+      actorFor('reorder_modules')
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });

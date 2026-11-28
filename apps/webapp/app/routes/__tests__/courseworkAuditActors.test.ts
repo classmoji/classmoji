@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   tagFindOrCreate: vi.fn(),
   tagsByClassroom: vi.fn(),
   repositoryBySlugs: vi.fn(),
+  repositoryByTitle: vi.fn(),
+  repositoryCreate: vi.fn(),
+  assignmentCreate: vi.fn(),
   classroomFindById: vi.fn(),
   teamBySlug: vi.fn(),
   userTeamByTag: vi.fn(),
@@ -72,7 +75,10 @@ vi.mock('@classmoji/services', () => ({
     },
     repository: {
       findByClassroomSlugAndModuleSlug: (...a: unknown[]) => mocks.repositoryBySlugs(...a),
+      findByClassroomAndTitle: (...a: unknown[]) => mocks.repositoryByTitle(...a),
+      create: (...a: unknown[]) => mocks.repositoryCreate(...a),
     },
+    assignment: { createInClassroom: (...a: unknown[]) => mocks.assignmentCreate(...a) },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     team: {
       findBySlugAndClassroomId: (...a: unknown[]) => mocks.teamBySlug(...a),
@@ -266,6 +272,42 @@ describe('inline tag pickers', () => {
       actorFor('web:repos.create_tag')
     );
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('the assignment form, making a repository for a new REPO assignment', () => {
+  it('records the repository through the repository service and the assignment itself', async () => {
+    mocks.repositoryByTitle.mockResolvedValue(null);
+    mocks.repositoryCreate.mockResolvedValue({ repository: { id: 'repo-new' }, audit: AUDIT });
+    mocks.assignmentCreate.mockResolvedValue({
+      id: 'asg-1',
+      title: 'Lab 2',
+      type: 'REPO',
+      is_published: false,
+      repository_id: 'repo-new',
+    });
+    const result = await postJson(
+      assignments.action as Action,
+      '/admin/cs1/assignments?/create',
+      { class: 'cs1' },
+      { type: 'REPO', title: 'Lab 2', template: 'acme/lab-template', module_id: 'mod-1' }
+    );
+    expect(result).toEqual({ success: 'Assignment "Lab 2" created' });
+    expect(mocks.repositoryCreate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: 'Lab 2', classroom_id: 'class-1', type: 'INDIVIDUAL' }),
+      actorFor('web:assignments.create')
+    );
+    // The assignment's own row names the repository it was made with.
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        resourceType: 'ASSIGNMENT',
+        resourceId: 'asg-1',
+        metadata: expect.objectContaining({
+          tool: 'web:assignments.create',
+          repository_id: 'repo-new',
+        }),
+      })
+    );
   });
 });
 
