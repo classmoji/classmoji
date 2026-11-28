@@ -1063,7 +1063,10 @@ export async function keyVersion(classroomId: string): Promise<number> {
 export async function bumpKeyVersion(classroomId: string): Promise<number> {
   assertWritableDatabase(`bump content_key_version on classroom ${classroomId}`);
   const service = await services();
-  const { content_key_version } = await service.contentDelivery.bumpContentKeyVersion(classroomId);
+  const { content_key_version } = await service.contentDelivery.bumpContentKeyVersion(
+    classroomId,
+    null
+  );
   return content_key_version;
 }
 

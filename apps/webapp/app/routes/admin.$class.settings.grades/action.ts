@@ -8,7 +8,8 @@ import {
 } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { pickSettings } from '~/utils/pickSettings';
-import { addClassroomAuditLog, type AuditMetadata } from '~/utils/helpers';
+import { addClassroomAuditLog } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 /** The remap body's `mappings` (client JSON): a non-empty list of emoji pairs, else null. */
@@ -66,42 +67,33 @@ export const parseLetterGradeInput = (
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_grade_settings',
   });
+  const { classroom, membership, userId } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 
-  /** One audit row per scale change, as the MCP mapping tools write. */
-  const auditScale = async (
-    action: 'UPDATE' | 'DELETE',
-    resourceId: string | null,
-    metadata: AuditMetadata
-  ) =>
-    addClassroomAuditLog({
-      request,
-      classroomId: classroom.id,
-      userId,
-      role: membership!.role,
-      action,
-      resourceType: 'SETTINGS',
-      ...(resourceId ? { resourceId } : {}),
-      metadata,
-    });
+  /** Who the settings and scale services record each change for. */
+  const actor = (tool: string) => auditActor(request, gate, tool);
 
   return namedAction(request, {
     async saveGradingSettings() {
       const { late_penalty_points_per_hour: penalty, show_grades_to_students: showEstimate } =
         pickSettings(data, ['late_penalty_points_per_hour', 'show_grades_to_students']);
-      await ClassmojiService.classroom.updateSettings(classroom.id, {
-        // A cleared number box sends null; keep the stored value then.
-        ...(typeof penalty === 'number' &&
-          Number.isFinite(penalty) && { late_penalty_points_per_hour: penalty }),
-        // Stored as a real boolean whatever the body sent.
-        ...(showEstimate !== undefined && { show_grades_to_students: showEstimate === true }),
-      });
+      await ClassmojiService.classroom.updateSettings(
+        classroom.id,
+        {
+          // A cleared number box sends null; keep the stored value then.
+          ...(typeof penalty === 'number' &&
+            Number.isFinite(penalty) && { late_penalty_points_per_hour: penalty }),
+          // Stored as a real boolean whatever the body sent.
+          ...(showEstimate !== undefined && { show_grades_to_students: showEstimate === true }),
+        },
+        await actor('web:settings.grades.grading')
+      );
       return {
         action: 'SAVE_GRADING_SETTINGS',
         success: 'Saved grading settings successfully.',
@@ -111,59 +103,52 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async saveEmojiToGradeMapping() {
       const input = parseEmojiMappingInput(data);
       if (!input) return { error: 'Enter an emoji and a numeric grade.' };
-      const mapping = await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, input);
-      await auditScale('UPDATE', mapping.id, {
-        tool: 'web:settings.grades.emoji_mapping_upsert',
-        emoji: input.emoji,
-        grade: input.grade,
-      });
+      // The service records the change (none when nothing changed).
+      const { mapping } = await ClassmojiService.emojiMapping.saveEmojiMapping(
+        classroom.id,
+        input,
+        await actor('web:settings.grades.emoji_mapping_upsert')
+      );
       return mapping;
     },
 
     async deleteEmojiToGradeMapping() {
       const { count } = await ClassmojiService.emojiMapping.deleteEmojiMapping(
         classroom.id,
-        data?.emoji
+        data?.emoji,
+        await actor('web:settings.grades.emoji_mapping_delete')
       );
-      if (count > 0) {
-        await auditScale('DELETE', null, {
-          tool: 'web:settings.grades.emoji_mapping_delete',
-          emoji: data.emoji,
-        });
-      }
       return { deleted: count };
     },
 
     async saveLetterGradeMapping() {
       const input = parseLetterGradeInput(data);
       if (!input) return { error: 'Enter a letter grade and a numeric minimum.' };
-      const mapping = await ClassmojiService.letterGradeMapping.save(classroom.id, input);
-      await auditScale('UPDATE', mapping.id, {
-        tool: 'web:settings.grades.letter_grade_mapping_upsert',
-        letter_grade: input.letter_grade,
-        min_grade: input.min_grade,
-      });
+      const { mapping } = await ClassmojiService.letterGradeMapping.save(
+        classroom.id,
+        input,
+        await actor('web:settings.grades.letter_grade_mapping_upsert')
+      );
       return mapping;
     },
 
     async deleteLetterGradeMapping() {
-      const { count } = await ClassmojiService.letterGradeMapping.delete(
+      await ClassmojiService.letterGradeMapping.delete(
         classroom.id,
-        data?.letter_grade
+        data?.letter_grade,
+        await actor('web:settings.grades.letter_grade_mapping_delete')
       );
-      if (count > 0) {
-        await auditScale('DELETE', null, {
-          tool: 'web:settings.grades.letter_grade_mapping_delete',
-          letter_grade: data.letter_grade,
-        });
-      }
       return { success: 'Deleted mapping successfully.' };
     },
 
     async populateDefaultMappings() {
       // Wipe and replace in one transaction under the scale lock, so a quiz
       // re-seeding an empty scale meanwhile cannot leave a mixed one.
-      await ClassmojiService.emojiMapping.replaceScale(classroom.id, DEFAULT_EMOJI_MAPPINGS);
+      await ClassmojiService.emojiMapping.replaceScale(
+        classroom.id,
+        DEFAULT_EMOJI_MAPPINGS,
+        await actor('web:settings.grades.populate_default_mappings')
+      );
 
       return {
         action: 'POPULATE_DEFAULT_MAPPINGS',
@@ -175,7 +160,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Same shape as populateDefaultMappings: replace with the 11-step 0–100
       // scale. Grades and quiz adjustments on the old emojis surface in the
       // orphaned-grades banner, where the remap flow handles them.
-      await ClassmojiService.emojiMapping.replaceScale(classroom.id, SCORE_EMOJI_MAPPINGS);
+      await ClassmojiService.emojiMapping.replaceScale(
+        classroom.id,
+        SCORE_EMOJI_MAPPINGS,
+        await actor('web:settings.grades.populate_score_scale')
+      );
 
       return {
         action: 'POPULATE_SCORE_SCALE_MAPPINGS',
@@ -184,18 +173,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async populateDefaultLetterGradeMappings() {
-      // Remove existing letter grade mappings first
-      const existingMappings = await ClassmojiService.letterGradeMapping.findByClassroomId(
-        classroom.id
+      // Every existing letter removed, then the shared defaults added; one row.
+      await ClassmojiService.letterGradeMapping.replaceAll(
+        classroom.id,
+        DEFAULT_LETTER_GRADE_MAPPINGS,
+        await actor('web:settings.grades.populate_default_letter_grades')
       );
-      for (const mapping of existingMappings) {
-        await ClassmojiService.letterGradeMapping.delete(classroom.id, mapping.letter_grade);
-      }
-
-      // Add defaults from shared constant
-      for (const mapping of DEFAULT_LETTER_GRADE_MAPPINGS) {
-        await ClassmojiService.letterGradeMapping.save(classroom.id, mapping);
-      }
 
       return {
         action: 'POPULATE_DEFAULT_LETTER_GRADE_MAPPINGS',

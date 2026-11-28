@@ -13,6 +13,7 @@ import TimeZoneSection from './TimeZoneSection';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { pickSettings } from '~/utils/pickSettings';
 import { classroomForClient } from '~/utils/classroomForClient';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -118,13 +119,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify general settings
-  const { classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SETTINGS',
     attemptedAction: 'modify_general_settings',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -135,7 +137,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       if (Object.keys(fields).length === 0) {
         return { error: 'Nothing to update' };
       }
-      await ClassmojiService.classroom.update(classroom.id, fields);
+      // The service records the save (name changed: field name only).
+      await ClassmojiService.classroom.updateClassroomSettings(
+        classroom.id,
+        { classroom: fields as { name?: string } },
+        await auditActor(request, gate, 'web:settings.general.profile')
+      );
       return {
         success: 'Classroom profile updated',
         action: ActionTypes.SAVE_PROFILE,
@@ -145,7 +152,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async saveRecentViewers() {
       await ClassmojiService.classroom.updateSettings(
         classroom.id,
-        pickSettings(data, RECENT_VIEWERS_FIELDS)
+        pickSettings(data, RECENT_VIEWERS_FIELDS),
+        await auditActor(request, gate, 'web:settings.general.recent_viewers')
       );
       return {
         success: 'Recent viewers updated',
@@ -160,9 +168,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         return { error: 'Nothing to update' };
       }
       try {
-        await ClassmojiService.classroom.updateSettings(classroom.id, {
-          timezone: (data as { timezone: unknown }).timezone as string | null,
-        });
+        await ClassmojiService.classroom.updateSettings(
+          classroom.id,
+          { timezone: (data as { timezone: unknown }).timezone as string | null },
+          await auditActor(request, gate, 'web:settings.general.time_zone')
+        );
       } catch (error: unknown) {
         if (error instanceof ClassroomSettingsValidationError) {
           return { error: error.message };
@@ -176,9 +186,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async saveDefaultPage() {
-      await ClassmojiService.classroom.updateSettings(classroom.id, {
-        default_student_page: data.default_student_page,
-      });
+      await ClassmojiService.classroom.updateSettings(
+        classroom.id,
+        { default_student_page: data.default_student_page },
+        await auditActor(request, gate, 'web:settings.general.default_page')
+      );
       return {
         success: 'Default page updated',
         action: ActionTypes.SAVE_DEFAULT_PAGE,

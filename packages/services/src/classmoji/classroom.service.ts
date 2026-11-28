@@ -7,7 +7,20 @@ import {
 import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
-import { recordPlatformAudit } from './audit.service.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  recordPlatformAudit,
+  type AuditActor,
+  type AuditResourceType,
+  type ServiceAudit,
+} from './audit.service.ts';
+import {
+  describeSettingsChange,
+  mergeSettingsChanges,
+  settingsChangeData,
+  settingsValues,
+} from './settingsAudit.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
 // classroom is actually deleted.
 import { purgeClassroomMedia } from '../media/index.ts';
@@ -1035,16 +1048,58 @@ export const getClassroomSettingsForServer = async (classroomId: string) => {
   });
 };
 
+/** What `updateClassroomSettings` writes: settings columns and the classroom's display name. */
+export interface ClassroomSettingsSave {
+  /** Columns of `classroom_settings`, upserted; omit to leave the row alone. */
+  settings?: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput;
+  /** The classroom row's own columns a settings save may write: its name only. */
+  classroom?: { name?: string };
+}
+
+/** How the row of one settings save is filed, for a surface that keeps its own. */
+export interface ClassroomSettingsAuditOptions {
+  /** Default SETTINGS; the gradebook's release keeps GRADES. */
+  resourceType?: AuditResourceType;
+  /**
+   * Saved settings columns the row also carries at its top level, as the
+   * surface's rows did before (the release's `final_grades_released`). Each
+   * goes through the allow-list like `values`: only a safe column's value,
+   * in its shape, is added.
+   */
+  topLevelFields?: readonly (keyof Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput)[];
+}
+
 /**
- * Update Classroom settings
- * @param {string} classroomId - Classroom UUID
- * @param {Object} updates - Settings to update
- * @returns {Promise<Object>}
+ * Save classroom settings and/or the classroom's name, and record the save.
+ *
+ * The settings half is an upsert of exactly the columns in `save.settings`
+ * (the callers pick them; see the gates below), the name half an update of
+ * `name` alone. Settings go first: a refused Pro-only field throws before the
+ * name is written.
+ *
+ * Recorded for `actor` after both writes, as ONE row (`resourceType`, default
+ * SETTINGS, on the classroom, action UPDATE) and only when a column actually
+ * changed: `fields` (the changed columns), `values` / `previous` (new and old
+ * values of the columns `settingsAudit.ts` allows), `<key>_set` /
+ * `<key>_cleared` for a key, and `instructions_length` for the Ask Moji
+ * instructions, after the saved values of `topLevelFields` (allow-listed the
+ * same way). Nothing else goes into the row. `actor: null` records nothing.
+ * The previous values are read
+ * in the transaction that writes, under a lock on the classroom row, so two
+ * overlapping saves are recorded one after the other, each against what the
+ * other left. The row is written after the commit.
+ *
+ * Answers the saved settings row (API keys included: never hand it to a
+ * client), the classroom's `id` and `name` when the name was saved (nothing
+ * else of the classroom row), and the audit outcome.
  */
-export const updateSettings = async (
+export const updateClassroomSettings = async (
   classroomId: string,
-  updates: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput
+  save: ClassroomSettingsSave,
+  actor: AuditActor | null,
+  { resourceType = 'SETTINGS', topLevelFields = [] }: ClassroomSettingsAuditOptions = {}
 ) => {
+  let updates = save.settings;
   // Turning the syllabus bot ON is Pro-only. Enforced here rather than in the
   // callers because this upsert is the write path shared by the web settings
   // actions and the MCP classroom_settings_update tool. Turning it OFF is
@@ -1059,7 +1114,7 @@ export const updateSettings = async (
   // Tested against anything other than `false`/absent rather than `=== true`,
   // so a JSON body carrying the string "true" cannot slip past a strict
   // comparison into Prisma.
-  if (updates.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
+  if (updates?.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
     const entitlement = await entitlementService.canUseSyllabusBot(classroomId);
     if (!entitlement.allowed) {
       throw new ClassroomSettingsEntitlementError('Ask Moji requires a Pro subscription.');
@@ -1076,7 +1131,7 @@ export const updateSettings = async (
   // `assertProTier` on the quiz routes, not this flag. Config import needs no
   // gate of its own: its only caller copies onto a newly created classroom,
   // which is already `true`, so copying `true` changes nothing.
-  if (updates.quizzes_enabled !== undefined && updates.quizzes_enabled !== false) {
+  if (updates?.quizzes_enabled !== undefined && updates.quizzes_enabled !== false) {
     const entitlement = await entitlementService.canUseQuizzes(classroomId);
     if (!entitlement.allowed) {
       throw new ClassroomSettingsEntitlementError('AI Quizzes requires a Pro subscription.');
@@ -1087,28 +1142,107 @@ export const updateSettings = async (
   // BEFORE the write so a refused zone costs nothing, and here rather than in
   // the callers because the web Settings page, classroom creation/import and the
   // MCP tool all write through this upsert.
-  if (updates.timezone !== undefined) {
+  if (updates?.timezone !== undefined) {
     updates = { ...updates, timezone: normalizeTimeZoneSetting(updates.timezone) };
   }
 
   // The owner's Ask Moji instructions: trimmed, blank = cleared, at most
   // INSTRUCTIONS_MAX_CHARS. Owner-only to read and write (the callers gate
   // it); never in SAFE_SETTINGS_FIELDS, never copied by an import.
-  if (updates.syllabus_bot_instructions !== undefined) {
+  if (updates?.syllabus_bot_instructions !== undefined) {
     updates = {
       ...updates,
       syllabus_bot_instructions: normalizeInstructionsSetting(updates.syllabus_bot_instructions),
     };
   }
 
-  return getPrisma().classroomSettings.upsert({
-    where: { classroom_id: classroomId },
-    create: {
-      classroom_id: classroomId,
-      ...updates,
-    },
-    update: updates,
+  const name = save.classroom?.name;
+  const settingsUpdates = updates;
+  // The read of the values before the save and the writes are one
+  // transaction under a lock on the classroom row, so `previous` is exactly
+  // what this save replaced: a save that overlaps another waits for it, then
+  // reads what it wrote. FOR NO KEY UPDATE, not FOR UPDATE: it waits for
+  // another settings save (and for an update of the classroom row) but not for
+  // an insert of a row that references the classroom.
+  const { before, settings, classroom } = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR NO KEY UPDATE`;
+    // The values before the save, only when the save is recorded.
+    const before = actor
+      ? await tx.classroom.findUnique({
+          where: { id: classroomId },
+          select: { name: true, settings: true },
+        })
+      : null;
+
+    const settings = settingsUpdates
+      ? await tx.classroomSettings.upsert({
+          where: { classroom_id: classroomId },
+          create: {
+            classroom_id: classroomId,
+            ...settingsUpdates,
+          },
+          update: settingsUpdates,
+        })
+      : null;
+
+    const classroom =
+      name !== undefined
+        ? await tx.classroom.update({
+            where: { id: classroomId },
+            data: { name },
+            select: { id: true, name: true },
+          })
+        : null;
+    return { before, settings, classroom };
   });
+
+  let audit: ServiceAudit = NO_SERVICE_AUDIT;
+  if (actor) {
+    const change = mergeSettingsChanges(
+      settings && updates
+        ? describeSettingsChange(
+            'ClassroomSettings',
+            before?.settings ?? null,
+            settings,
+            Object.keys(updates)
+          )
+        : null,
+      classroom ? describeSettingsChange('Classroom', before, classroom, ['name']) : null
+    );
+    if (change) {
+      audit = await recordForActor(actor, {
+        classroomId,
+        resourceType,
+        resourceId: classroomId,
+        action: 'UPDATE',
+        data: {
+          ...(settings ? settingsValues('ClassroomSettings', settings, topLevelFields) : {}),
+          ...settingsChangeData(change),
+        },
+      });
+    }
+  }
+  return { settings, classroom, audit };
+};
+
+/**
+ * Save classroom settings (`updateClassroomSettings` with no name), recorded
+ * for `actor` as one row when a column changed. Answers the saved row (API
+ * keys included: never hand it to a client) and the audit outcome.
+ */
+export const updateSettings = async (
+  classroomId: string,
+  updates: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput,
+  actor: AuditActor | null,
+  options?: ClassroomSettingsAuditOptions
+) => {
+  const { settings, audit } = await updateClassroomSettings(
+    classroomId,
+    { settings: updates },
+    actor,
+    options
+  );
+  return { settings: settings!, audit };
 };
 
 /**

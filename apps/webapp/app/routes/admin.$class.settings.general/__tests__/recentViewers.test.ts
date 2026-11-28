@@ -6,8 +6,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  requestImpersonator: vi.fn(),
   assertClassroomAccess: vi.fn(),
   updateSettings: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -37,9 +42,19 @@ const save = (body: unknown, name = 'saveRecentViewers') =>
     }),
   } as never) as Promise<{ success?: string; error?: string; action?: string }>;
 
+/** The actor the route hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.general.recent_viewers',
+  impersonatedBy: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.assertClassroomAccess.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
@@ -56,14 +71,22 @@ describe('saveRecentViewers', () => {
 
   it('writes the switch, on and off', async () => {
     const result = await save({ recent_viewers_enabled: false });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { recent_viewers_enabled: false });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      { recent_viewers_enabled: false },
+      ACTOR
+    );
     expect(result).toMatchObject({
       success: 'Recent viewers updated',
       action: 'save-recent-viewers',
     });
 
     await save({ recent_viewers_enabled: true });
-    expect(mocks.updateSettings).toHaveBeenLastCalledWith('c1', { recent_viewers_enabled: true });
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith(
+      'c1',
+      { recent_viewers_enabled: true },
+      ACTOR
+    );
   });
 
   it('ignores every other settings field in the body', async () => {
@@ -73,7 +96,11 @@ describe('saveRecentViewers', () => {
       show_grades_to_students: true,
       anthropic_api_key: 'sk-x',
     });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { recent_viewers_enabled: true });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      { recent_viewers_enabled: true },
+      ACTOR
+    );
   });
 
   it('no longer answers to the old saveExtensionSettings name', async () => {

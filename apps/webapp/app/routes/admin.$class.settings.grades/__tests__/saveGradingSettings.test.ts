@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  requestImpersonator: vi.fn(),
   requireClassroomAdmin: vi.fn(),
   updateSettings: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -38,9 +43,19 @@ const save = (body: unknown) =>
     }),
   } as unknown as Parameters<typeof action>[0]);
 
+/** The actor the route hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.grades.grading',
+  impersonatedBy: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.requireClassroomAdmin.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: 'class-1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
@@ -51,34 +66,50 @@ describe('saveGradingSettings', () => {
   it('stores the late penalty and the estimate switch', async () => {
     await save({ late_penalty_points_per_hour: 2, show_grades_to_students: true });
 
-    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
-      late_penalty_points_per_hour: 2,
-      show_grades_to_students: true,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'class-1',
+      {
+        late_penalty_points_per_hour: 2,
+        show_grades_to_students: true,
+      },
+      ACTOR
+    );
   });
 
   it('stores the switch as a real boolean', async () => {
     await save({ late_penalty_points_per_hour: 0, show_grades_to_students: 'true' });
 
-    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
-      late_penalty_points_per_hour: 0,
-      show_grades_to_students: false,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'class-1',
+      {
+        late_penalty_points_per_hour: 0,
+        show_grades_to_students: false,
+      },
+      ACTOR
+    );
   });
 
   it('keeps the stored late penalty when the box is cleared', async () => {
     await save({ late_penalty_points_per_hour: null, show_grades_to_students: true });
 
-    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
-      show_grades_to_students: true,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'class-1',
+      {
+        show_grades_to_students: true,
+      },
+      ACTOR
+    );
   });
 
   it('writes no other settings field', async () => {
     await save({ late_penalty_points_per_hour: 1, syllabus_bot_enabled: true });
 
-    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
-      late_penalty_points_per_hour: 1,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'class-1',
+      {
+        late_penalty_points_per_hour: 1,
+      },
+      ACTOR
+    );
   });
 });

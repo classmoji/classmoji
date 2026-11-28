@@ -20,6 +20,7 @@ import { collabServerEnv, notifyCollabFlag } from '~/utils/collab.server';
 import { pickSettings } from '~/utils/pickSettings';
 import { classroomForClient } from '~/utils/classroomForClient';
 import { setLiveEditing } from './liveEditing.server';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -259,13 +260,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify content settings
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'CONTENT_SETTINGS',
     attemptedAction: 'modify',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -278,9 +280,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(formData, {
     async saveContentRepo() {
       const { content_repo_name } = data;
-      await ClassmojiService.classroom.updateSettings(classroom.id, {
-        content_repo_name: content_repo_name || null,
-      });
+      await ClassmojiService.classroom.updateSettings(
+        classroom.id,
+        { content_repo_name: content_repo_name || null },
+        await auditActor(request, gate, 'web:settings.content.repo')
+      );
       return {
         success: 'Content repository updated',
         action: ActionTypes.SAVE_CONTENT_SETTINGS,
@@ -295,7 +299,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     // authorized.
     async resetContentCache() {
       const { content_key_version } = await ClassmojiService.contentDelivery.bumpContentKeyVersion(
-        classroom.id
+        classroom.id,
+        await auditActor(request, gate, 'web:settings.content.reset_cache')
       );
       return {
         success: 'Content cache reset',
@@ -329,7 +334,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       // updateSettings is the hard gate; catching here only turns the refusal
       // into a readable message instead of a 500.
       try {
-        await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+        await ClassmojiService.classroom.updateSettings(
+          classroom.id,
+          updateData,
+          await auditActor(request, gate, 'web:settings.content.features')
+        );
       } catch (error: unknown) {
         if (error instanceof ClassroomSettingsEntitlementError) {
           return {

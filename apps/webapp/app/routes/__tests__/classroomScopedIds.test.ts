@@ -3,7 +3,8 @@
  * rows of the URL's classroom (the one the gate authorized):
  *
  *   - settings.team ?/deleteTag deletes a tag only where it belongs to this
- *     classroom, and audits the delete;
+ *     classroom, and hands the tag service the owner as the actor its delete
+ *     is recorded for (?/createTag the same for a new tag);
  *   - tokens.new ?/assignTokens grants tokens only to this classroom's
  *     students, naming each from the classroom's own records, and hands
  *     each run the owner as the actor its grant is recorded for.
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   deleteInClassroom: vi.fn(),
+  findOrCreate: vi.fn(),
   auditCreate: vi.fn(),
   studentsInClassroomByIds: vi.fn(),
   batchTrigger: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     organizationTag: {
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
+      findOrCreate: (...a: unknown[]) => mocks.findOrCreate(...a),
       findByClassroomId: vi.fn(),
     },
     audit: {
@@ -105,33 +108,39 @@ beforeEach(() => {
   mocks.batchTrigger.mockResolvedValue(undefined);
 });
 
-describe('settings.team — deleteTag', () => {
-  it('deletes a tag of this classroom and audits it', async () => {
-    mocks.deleteInClassroom.mockResolvedValue({ id: 'tag-x', name: 'Section A' });
+describe('settings.team — deleteTag and createTag', () => {
+  const TAG_ACTOR = (tool: string) => ({
+    userId: 'owner-x',
+    role: 'OWNER',
+    tool,
+    impersonatedBy: null,
+  });
+
+  it('deletes a tag of this classroom, recorded by the service for the owner', async () => {
+    mocks.deleteInClassroom.mockResolvedValue({
+      tag: { id: 'tag-x', name: 'Section A' },
+      audit: { written: 1, missed: 0 },
+    });
 
     const result = await post(teamSettings.action, 'settings/team', 'deleteTag', {
       tagId: 'tag-x',
     });
 
-    expect(mocks.deleteInClassroom).toHaveBeenCalledWith(CLASS_X.id, 'tag-x');
+    expect(mocks.deleteInClassroom).toHaveBeenCalledWith(
+      CLASS_X.id,
+      'tag-x',
+      TAG_ACTOR('web:settings.team.delete_tag')
+    );
     expect(result).toEqual({ deleted: 'tag-x' });
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      user_id: 'owner-x',
-      classroom_id: CLASS_X.id,
-      role: 'OWNER',
-      action: 'DELETE',
-      // A tag row is about the tag: TAGS, as the MCP's tag_create writes.
-      resource_type: 'TAGS',
-      resource_id: 'tag-x',
-      data: { tool: 'web:settings.team.delete_tag', name: 'Section A' },
-    });
+    // The route writes no row of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports a delete that happened even when its audit row cannot be written', async () => {
-    mocks.deleteInClassroom.mockResolvedValue({ id: 'tag-x', name: 'Section A' });
-    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.deleteInClassroom.mockResolvedValue({
+      tag: { id: 'tag-x', name: 'Section A' },
+      audit: { written: 0, missed: 1 },
+    });
 
     const result = await post(teamSettings.action, 'settings/team', 'deleteTag', {
       tagId: 'tag-x',
@@ -140,16 +149,38 @@ describe('settings.team — deleteTag', () => {
     expect(result).toEqual({ deleted: 'tag-x' });
   });
 
-  it("answers another classroom's tag id as not found and audits nothing", async () => {
+  it("answers another classroom's tag id as not found", async () => {
     // The service deletes only where the tag's classroom matches.
-    mocks.deleteInClassroom.mockResolvedValue(null);
+    mocks.deleteInClassroom.mockResolvedValue({ tag: null, audit: { written: 0, missed: 0 } });
 
     const result = await post(teamSettings.action, 'settings/team', 'deleteTag', {
       tagId: 'tag-of-class-y',
     });
 
-    expect(mocks.deleteInClassroom).toHaveBeenCalledWith(CLASS_X.id, 'tag-of-class-y');
+    expect(mocks.deleteInClassroom).toHaveBeenCalledWith(
+      CLASS_X.id,
+      'tag-of-class-y',
+      TAG_ACTOR('web:settings.team.delete_tag')
+    );
     expect(result).toMatchObject({ error: expect.any(String) });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('creates a trimmed tag in this classroom and answers the tag', async () => {
+    const tag = { id: 'tag-n', name: 'Section B', classroom_id: CLASS_X.id };
+    mocks.findOrCreate.mockResolvedValue({ tag, created: true, audit: { written: 1, missed: 0 } });
+
+    const result = await post(teamSettings.action, 'settings/team', 'createTag', {
+      name: '  Section B ',
+      classroom_id: 'class-y',
+    });
+
+    expect(mocks.findOrCreate).toHaveBeenCalledExactlyOnceWith(
+      CLASS_X.id,
+      'Section B',
+      TAG_ACTOR('web:settings.team.create_tag')
+    );
+    expect(result).toEqual(tag);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });

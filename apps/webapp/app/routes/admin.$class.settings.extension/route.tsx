@@ -10,6 +10,7 @@ import { useGlobalFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { classroomForClient } from '~/utils/classroomForClient';
 import { pickSettings } from '~/utils/pickSettings';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -88,13 +89,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify extension settings
-  const { classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SETTINGS',
     attemptedAction: 'modify_extension_settings',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -103,7 +105,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async saveExtensionSettings() {
       await ClassmojiService.classroom.updateSettings(
         classroom.id,
-        pickSettings(data, EXTENSION_SETTINGS_FIELDS)
+        pickSettings(data, EXTENSION_SETTINGS_FIELDS),
+        await auditActor(request, gate, 'web:settings.extension')
       );
       return {
         success: 'Extension settings updated',

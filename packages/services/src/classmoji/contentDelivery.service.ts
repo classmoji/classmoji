@@ -49,6 +49,7 @@ import {
 } from '../slides/frameRefs.ts';
 // The pure slide-source policy — no Prisma, no GitHub, no cycle back to here.
 import { slideFileSourceProblem } from '../slides/slideSource.ts';
+import { recordForActor, NO_SERVICE_AUDIT, type AuditActor } from './audit.service.ts';
 
 /** Where shared slide themes live in a content repo. Mirrors contentAssets. */
 const THEMES_FOLDER = '.slidesthemes';
@@ -86,17 +87,33 @@ const THEMES_FOLDER = '.slidesthemes';
  * read-then-write, so two owners clicking at the same moment produce two bumps
  * instead of one lost update. Both land, which is harmless — the version is
  * only ever compared for equality with itself.
+ *
+ * Recorded for `actor` after the bump: CONTENT_SETTINGS / UPDATE on the
+ * classroom, `fields: ['content_key_version']` with the new and previous
+ * version. `actor: null` records nothing.
  */
-export async function bumpContentKeyVersion(
-  classroomId: string
-): Promise<{ content_key_version: number }> {
+export async function bumpContentKeyVersion(classroomId: string, actor: AuditActor | null) {
   const updated = await getPrisma().classroom.update({
     where: { id: classroomId },
     data: { content_key_version: { increment: 1 } },
     select: { content_key_version: true },
   });
+  const version = updated.content_key_version;
 
-  return { content_key_version: updated.content_key_version };
+  const audit = actor
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'CONTENT_SETTINGS',
+        resourceId: classroomId,
+        action: 'UPDATE',
+        data: {
+          fields: ['content_key_version'],
+          values: { content_key_version: version },
+          previous: { content_key_version: version - 1 },
+        },
+      })
+    : NO_SERVICE_AUDIT;
+  return { content_key_version: version, audit };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
