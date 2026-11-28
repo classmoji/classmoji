@@ -8,17 +8,19 @@
  *   - api.classrooms.$id.status / api.classrooms.$id.archive → ['OWNER']
  *   - admin.$class.settings.repos → ['OWNER']
  *
- * THE CENTRAL SAFETY PROPERTY: `ClassmojiService.classroom.updateSettings` is a
- * bare upsert — it writes ANY key it is handed, including `anthropic_api_key`,
- * `openai_api_key` and the llm_* columns. The web actions forward the whole
- * request body into it; this tool must not. Every handler here builds an
- * EXPLICIT object field-by-field from validated arguments and passes THAT, so
- * an unknown or secret key simply has no path to the database. The same rule
- * covers `classroom.update` (whitelisted to `name`, mirroring the web route's
- * PROFILE_FIELDS, which exists to keep `slug` and `git_org_id` unwritable) and
- * the GitHub organization settings, which go through the same
+ * THE CENTRAL SAFETY PROPERTY: `ClassmojiService.classroom.updateClassroomSettings`
+ * upserts settings as a bare upsert — it writes ANY key it is handed,
+ * including `anthropic_api_key`, `openai_api_key` and the llm_* columns. The
+ * web actions pick each tab's fields from the request body; this tool must
+ * not pass its arguments either. Every handler here builds an EXPLICIT object
+ * field-by-field from validated arguments and passes THAT, so an unknown or
+ * secret key simply has no path to the database. The same rule covers the
+ * classroom row (`name` only, mirroring the web route's PROFILE_FIELDS, which
+ * exists to keep `slug` and `git_org_id` unwritable) and the GitHub
+ * organization settings, which go through the same
  * `ClassmojiService.orgRepoSettings.updateOrgRepoSettings` as the web route and
- * run with the caller's own GitHub account.
+ * run with the caller's own GitHub account. The services write the audit rows
+ * (`serviceActor`); the tools write none of their own.
  *
  * Responses echo only the fields the tool itself set — never the service
  * return, which carries the raw settings row (API keys included).
