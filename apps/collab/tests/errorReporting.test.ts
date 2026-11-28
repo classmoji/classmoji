@@ -210,7 +210,7 @@ describe('recordAudit', () => {
       classroomId: 'c1',
       role: 'TEACHER',
       action: 'COLLAB_JOIN' as const,
-      resourceType: 'PAGE',
+      resourceType: 'PAGES' as const,
       resourceId: 'page-1',
       data: { tool: 'collab' },
     };

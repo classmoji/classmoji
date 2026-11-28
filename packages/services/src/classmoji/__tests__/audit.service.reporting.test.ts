@@ -51,7 +51,7 @@ const entry = {
   user_id: 'user-1',
   classroom_id: 'class-1',
   role: 'TEACHER' as string | null,
-  resource_type: 'SLIDES',
+  resource_type: 'SLIDES' as const,
   resource_id: 'slide-1',
   action: 'UPDATE' as const,
   data: { tool: 'web:slides.save', note_length: 12 },
