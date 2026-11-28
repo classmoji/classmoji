@@ -450,6 +450,8 @@ class HelperService {
         name: submission.git_repo.name,
         gitOrganization: repository.gitOrganization,
         deleteFromGithub: true,
+        // The row goes only if it belongs to this classroom.
+        classroomId,
       });
     } else {
       await ClassmojiService.gitRepoAssignment.deleteById(submission.id);

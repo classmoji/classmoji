@@ -742,6 +742,31 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       expect((await rowsFor(submissionId))[0].data).toMatchObject({ repository_deleted: true });
     });
 
+    it("with the repository, named with Y's classroom: X's rows stay and nothing is recorded", async () => {
+      const { submissionId, assignmentId, gitRepo } = await makeSubmission(X);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await expect(
+          HelperService.deleteSubmission({
+            classroomId: Y.classroomId,
+            submission: { id: submissionId, assignment_id: assignmentId, git_repo: gitRepo },
+            repository: { gitOrganization: ORG },
+            actor: webActor(Y, 'web:grades.delete_submission'),
+          })
+        ).rejects.toThrow('Git repo not found in classroom');
+      } finally {
+        logged.mockRestore();
+      }
+      expect(await prisma.gitRepo.count({ where: { id: gitRepo.id } })).toBe(1);
+      expect(await prisma.gitRepoAssignment.count({ where: { id: submissionId } })).toBe(1);
+      expect(await rowsFor(submissionId)).toHaveLength(0);
+      expect(
+        await prisma.auditLog.count({
+          where: { classroom_id: Y.classroomId, resource_id: submissionId },
+        })
+      ).toBe(0);
+    });
+
     it('actor null deletes and writes nothing', async () => {
       const { submissionId, assignmentId, gitRepo } = await makeSubmission(X);
       expect(
