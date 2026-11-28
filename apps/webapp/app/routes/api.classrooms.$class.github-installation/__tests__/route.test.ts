@@ -109,7 +109,7 @@ describe('POST /api/classrooms/:class/github-installation', () => {
     expect(mocks.repairInstallation).not.toHaveBeenCalled();
   });
 
-  it('reports the outcome and audits the attempt', async () => {
+  it('reports the outcome and audits the reconnection', async () => {
     const result = unwrap(await action(args()));
 
     expect(mocks.repairInstallation).toHaveBeenCalledWith('org-1');
@@ -134,13 +134,11 @@ describe('POST /api/classrooms/:class/github-installation', () => {
     ['suspended'],
     ['wrong-app'],
     ['not-found'],
-  ])('passes the %s status straight through', async status => {
+  ])('passes the %s status straight through, and writes no row: nothing changed', async status => {
     mocks.repairInstallation.mockResolvedValue({ status });
     const result = unwrap(await action(args()));
     expect(result.data).toEqual({ status, login: 'cs52-org' });
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ outcome: status }) })
-    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('keeps the retry hint on a rate-limited answer', async () => {
@@ -151,6 +149,7 @@ describe('POST /api/classrooms/:class/github-installation', () => {
       login: 'cs52-org',
       retryAfterSeconds: 12,
     });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('never leaks the internal error message to the client', async () => {
@@ -160,6 +159,7 @@ describe('POST /api/classrooms/:class/github-installation', () => {
     });
     const result = unwrap(await action(args()));
     expect(result.data).toEqual({ status: 'error', login: 'cs52-org' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('refuses a non-GitHub org without calling GitHub', async () => {

@@ -56,23 +56,25 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const result = await ClassmojiService.gitOrganization.repairInstallation(org.id);
 
-  // Audit the attempt, not just the success: a run of `not-installed` against
-  // one org is the trail that explains why an instructor filed a ticket. This
+  // An UPDATE row only when this check reconnected the org: every other answer
+  // (already connected, not installed, rate limited, …) changed nothing. This
   // never fails the request — `addClassroomAuditLog` contains its write errors.
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership?.role,
-    action: 'UPDATE',
-    resourceType: 'GIT_ORGANIZATION',
-    resourceId: org.id,
-    metadata: {
-      tool: 'api.classrooms.github-installation',
-      git_org_login: org.login,
-      outcome: result.status,
-    },
-  });
+  if (result.status === 'connected') {
+    await addClassroomAuditLog({
+      request,
+      classroomId: classroom.id,
+      userId,
+      role: membership?.role,
+      action: 'UPDATE',
+      resourceType: 'GIT_ORGANIZATION',
+      resourceId: org.id,
+      metadata: {
+        tool: 'api.classrooms.github-installation',
+        git_org_login: org.login,
+        outcome: result.status,
+      },
+    });
+  }
 
   return data({
     status: result.status,
