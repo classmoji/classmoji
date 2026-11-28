@@ -251,21 +251,19 @@ describe('roster_remove_student', () => {
       has_accepted_invite: true,
       user: { id: 'stu-1', login: 'alice', name: 'Alice' },
     });
-    // The task has not run when the row is written (it is never awaited).
-    let enqueued = false;
-    mocks.taskTrigger.mockImplementation(async () => {
-      enqueued = true;
-      return { id: 'run-1' };
-    });
-    mocks.auditCreate.mockImplementation(async () => {
-      expect(enqueued).toBe(false);
-      return { id: 'audit-1' };
-    });
+    mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
+    mocks.auditCreate.mockResolvedValue({ id: 'audit-1' });
 
     const payload = parse(await rosterRemoveStudentTool.handler(ARGS, CTX));
 
     expect(payload).toMatchObject({ success: true, queued: true });
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.taskTrigger).toHaveBeenCalledTimes(1);
+    // The row is written before the task is triggered (it is never awaited),
+    // so it records the request, not the removal.
+    expect(mocks.auditCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.taskTrigger.mock.invocationCallOrder[0]
+    );
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
       resource_type: 'STUDENT_ROSTER',
       resource_id: 'stu-1',
