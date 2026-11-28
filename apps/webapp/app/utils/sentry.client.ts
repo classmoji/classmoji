@@ -21,10 +21,15 @@ import {
   withScope,
 } from '@sentry/react-router';
 import { SENTRY_CONFIG_ELEMENT_ID, parseSentryConfig } from '@classmoji/utils/sentry';
+import {
+  scrubBrowserBreadcrumb,
+  scrubBrowserEvent,
+  scrubSpan,
+} from '@classmoji/utils/sentry-scrub';
 
 let enabled = false;
 
-/** Header and query keys Sentry 10 scrubbed by default (addresses and user names). */
+/** Header keys Sentry 10 scrubbed by default (addresses and user names). */
 const SCRUBBED_KEYS = ['forwarded', '-ip', 'remote-', 'via', '-user'];
 
 /**
@@ -42,7 +47,9 @@ const firstReport = (error: unknown): boolean => {
 
 /**
  * Start Sentry if the server sent a config; null when it is off. The three
- * apps share one Sentry project, so every event is tagged with its app.
+ * apps share one Sentry project, so every event is tagged with its app
+ * (and `runtime_kind: browser`; not `runtime`, which Sentry derives itself
+ * from `contexts.runtime` on server events).
  *
  * Returns React Router's instrumentation for `HydratedRouter`'s
  * `instrumentations`: navigations are then named by their full route
@@ -68,7 +75,8 @@ export const initSentry = (
         response: { deny: SCRUBBED_KEYS },
       },
       httpBodies: [],
-      urlQueryParams: { deny: SCRUBBED_KEYS },
+      // No query string at all: search terms, tokens and codes live there.
+      urlQueryParams: false,
       genAI: { inputs: false, outputs: false },
       mcp: { inputs: false, outputs: false },
       databaseQueryData: false,
@@ -76,11 +84,23 @@ export const initSentry = (
       graphQL: { document: false, variables: false },
     },
     tracesSampleRate: 0.05,
-    // No server SDK continues a trace, so no sentry-trace/baggage headers.
+    // The server reports errors only and continues no trace, so no
+    // sentry-trace/baggage headers.
     tracePropagationTargets: [],
+    // One scrubber for browser and server events (`@classmoji/utils/sentry-scrub`):
+    // URLs lose their query and the path segments that name a person or hold
+    // a code, the user stays `{ id }`, click targets lose their attribute
+    // values, and the sampled spans go through the same rules.
+    beforeSend: event => scrubBrowserEvent(event),
+    beforeBreadcrumb: breadcrumb => scrubBrowserBreadcrumb(breadcrumb),
+    beforeSendSpan: span => scrubSpan(span),
     integrations: [reactRouterTracingIntegration()],
-    // Errors carry tags, streamed spans carry attributes: both name the app.
-    initialScope: { tags: { app }, attributes: { app } },
+    // Errors carry tags, streamed spans carry attributes: both name the app
+    // and the runtime.
+    initialScope: {
+      tags: { app, runtime_kind: 'browser' },
+      attributes: { app, runtime_kind: 'browser' },
+    },
   });
   enabled = true;
   return { instrumentations: [createSentryClientInstrumentation({ captureErrors: false })] };
@@ -203,11 +223,14 @@ export const captureHandledError = (error: unknown, surface: string): void => {
 };
 
 /**
- * Tie events to the signed-in user by internal id only. A staff "view as"
- * session is marked with a tag, never with who is viewing.
+ * Tie events to the signed-in user by internal id only. A "View as"
+ * session carries no user id at all (neither the viewed person's nor the
+ * admin's), only the tag `impersonating`.
  */
 export const setSentryUser = (id: string | null | undefined, impersonating = false): void => {
   if (!enabled) return;
-  setUser(id ? { id } : null);
+  // Under "View as" the person acting is not the one signed in: no id at
+  // all (neither theirs nor the admin's), only the tag, as on the server.
+  setUser(id && !impersonating ? { id } : null);
   setTag('impersonating', impersonating ? 'true' : undefined);
 };

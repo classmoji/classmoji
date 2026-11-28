@@ -1,3 +1,6 @@
+// First: error tracking must be running before the server is built.
+import './sentry.ts';
+
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 import githubRoutes from './routes/github.ts';
@@ -5,10 +8,15 @@ import gitlabRoutes from './routes/gitlab.ts';
 import autogradeRoutes from './routes/autograde.ts';
 import stripeRoutes from './routes/stripe.ts';
 import resendRoutes from './routes/resend.ts';
+import { flushErrorReports, reportError } from '@classmoji/utils/error-report';
+import { registerErrorReporting } from './errorReporting.ts';
 
 const fastify = Fastify({
   logger: true,
 });
+
+// Before any route, so every route's thrown 5xx is reported.
+registerErrorReporting(fastify);
 
 await fastify.register(fastifyRawBody, {
   field: 'rawBody',
@@ -40,6 +48,8 @@ const PORT = Number(process.env.PORT) || 4000;
     console.log(`🪝 Webhook server listening on port ${PORT}`);
   } catch (err: unknown) {
     fastify.log.error(err);
+    reportError(err, { surface: 'hook_station.listen', level: 'fatal', handled: false });
+    await flushErrorReports(2000);
     // eslint-disable-next-line no-process-exit
     process.exit(1);
   }

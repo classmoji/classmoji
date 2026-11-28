@@ -97,6 +97,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { tasks } from '@trigger.dev/sdk';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
 import { gitUsername, titleToIdentifier } from '@classmoji/utils';
 import { Prisma } from '@classmoji/database/client';
@@ -2643,6 +2644,7 @@ export async function startRun({
     } catch (error) {
       if (triggered) throw error;
       console.error(`[teamSet] could not queue solve for run ${inserted.id}`, error);
+      reportError(error, { surface: 'team_set.queue', tags: { task: 'solve' } });
     }
   }
   if (!triggered) {
@@ -5099,6 +5101,12 @@ async function githubPreflight({
       `[teamSet] GitHub pre-flight failed for classroom ${classroomId}`,
       statusOf(error) ?? (error instanceof Error ? error.name : 'unknown')
     );
+    // The cause, before the refusal that replaces it.
+    reportError(error, {
+      surface: 'team_set.preflight',
+      tags: { status: statusOf(error) },
+      extra: { classroomId },
+    });
     throw githubUnavailable();
   } finally {
     clearTimeout(timer);
@@ -5519,6 +5527,7 @@ export async function claimCreate({
     );
   } catch (error) {
     console.error(`[teamSet] could not queue create for set ${plan.set.id}`, error);
+    reportError(error, { surface: 'team_set.queue', tags: { task: 'apply' } });
     await prisma.teamSet.updateMany({
       where: { id: plan.set.id, created_run_id: plan.run.id, AND: [attemptWhere(state)] },
       data: previous
@@ -5832,6 +5841,7 @@ export async function applyCreate({
       }
     } catch (error) {
       console.error(`[teamSet] could not ensure tag for set ${set.id}`, error);
+      reportError(error, { surface: 'team_set.apply', tags: { step: 'tag' } });
       state.failed.push({ team: '*', reason: 'tag_failed' });
       return await finish('FAILED');
     }
@@ -5933,6 +5943,10 @@ export async function applyCreate({
         state.teams.push(entry);
       } catch (error) {
         console.error(`[teamSet] could not create team ${team.n} of set ${set.id}`, error);
+        // A refusal (name taken, tag gone) is recorded on the run, not a fault.
+        if (!(error instanceof TeamServiceError)) {
+          reportError(error, { surface: 'team_set.apply', tags: { step: 'create_team' } });
+        }
         state.failed.push({ team: team.name, reason: teamFailureReason(error) });
         state.done += 1;
         if (!(await report())) return await stored();
@@ -5952,6 +5966,7 @@ export async function applyCreate({
     // the same way. Let it out, so the task's catch marks the create stopped.
     if (error instanceof CreateStateWriteError) throw error;
     console.error(`[teamSet] create for set ${set.id} stopped`, error);
+    reportError(error, { surface: 'team_set.apply', tags: { step: 'stopped' } });
     state.failed.push({ team: '*', reason: 'internal_error' });
     return finish('FAILED');
   }

@@ -38,6 +38,9 @@ export default async () => {
     : [];
 
   return defineConfig({
+    // Strips the Sentry SDKs' debug logging (the browser's and, on Workers,
+    // @sentry/cloudflare's) from the bundles.
+    define: { __SENTRY_DEBUG__: false },
     css: { lightningcss: { include: LOWER_MEDIA_RANGE_SYNTAX } },
     resolve: {
       dedupe: ['react', 'react-dom', 'react-router'],

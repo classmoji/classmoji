@@ -206,12 +206,14 @@ export async function renderDeckFor(
     });
   } catch (error) {
     if (error instanceof RenderError) {
-      throw new ToolError('internal', error.message, error.code);
+      throw new ToolError('internal', error.message, error.code, undefined, { cause: error });
     }
     throw new ToolError(
       'internal',
       `The deck could not be rendered: ${error instanceof Error ? error.message : String(error)}`,
-      'RENDER_FAILED'
+      'RENDER_FAILED',
+      undefined,
+      { cause: error }
     );
   }
 

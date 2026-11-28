@@ -1,4 +1,5 @@
 import type { CollabKind } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 
 import type { CollabAdapter } from './types.ts';
 
@@ -35,6 +36,7 @@ export function createAdapterRegistry(
       if (!pending) {
         pending = DEFAULT_LOADERS[kind]().catch(err => {
           console.error(`[collab] ${kind} adapter unavailable; ${kind} rooms are refused:`, err);
+          reportError(err, { surface: 'collab.adapter_load', tags: { kind } });
           loaded.delete(kind); // try again on the next request
           return null;
         });

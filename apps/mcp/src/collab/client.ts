@@ -25,6 +25,7 @@ import {
 } from '@classmoji/collab';
 import { resolveCollabEnv, type CollabEnv } from '@classmoji/collab/env';
 import { ClassmojiService } from '@classmoji/services';
+import { markReported, reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
 
@@ -55,9 +56,10 @@ export function liveStateFor(classroom: unknown): { env: CollabEnv | null } | nu
   const env = resolveCollabEnv();
   if (!env && !warnedMissingEnv) {
     warnedMissingEnv = true;
-    console.error(
-      '[mcp] Live editing is on for a classroom but COLLAB_URL / COLLAB_INTERNAL_SECRET are unset.'
-    );
+    const message =
+      'Live editing is on for a classroom but COLLAB_URL / COLLAB_INTERNAL_SECRET are unset.';
+    console.error(`[mcp] ${message}`);
+    reportError(new Error(message), { surface: 'mcp.collab.config', level: 'warning' });
   }
   return { env };
 }
@@ -516,6 +518,34 @@ export function liveWriteError(
   if (!(error instanceof CollabRequestError)) {
     return error instanceof Error ? error : new Error(String(error));
   }
+  const mapped = mapLiveWriteError(error, what, options);
+  // The refusal keeps the collab error as its cause, so the registry reports
+  // that (once) rather than the refusal.
+  if (mapped.cause === undefined) mapped.cause = error;
+  // Every refusal but an `internal` one is an answer (a lock, a conflict, bad
+  // ops); the `internal` ones (the service down, a document it cannot read, a
+  // status nothing maps) are faults.
+  if (mapped.kind === 'internal') reportLiveFailure(error, 'write', what);
+  return mapped;
+}
+
+/** Report a collab failure behind a live read or write (status and code only). */
+function reportLiveFailure(
+  error: CollabRequestError,
+  action: 'read' | 'write',
+  what: 'page' | 'deck'
+): void {
+  reportError(error, {
+    surface: `mcp.collab.${action}`,
+    tags: { status: error.status, ...(error.code ? { code: error.code } : {}), kind: what },
+  });
+}
+
+function mapLiveWriteError(
+  error: CollabRequestError,
+  what: 'page' | 'deck',
+  options: { previewHint?: boolean; expectedSha?: string }
+): ToolError {
   const previewHint = options.previewHint ?? true;
   const preview = previewHint ? " Retry, or use mode: 'preview'." : ' Retry shortly.';
   if (error.unavailable) {
@@ -625,6 +655,19 @@ export function liveWriteError(
  * it — never a bare internal error.
  */
 export function liveReadError(error: CollabRequestError, what: 'page' | 'deck'): ToolError {
+  const mapped = mapLiveReadError(error, what);
+  if (mapped.cause === undefined) mapped.cause = error;
+  if (error.status === 409 && error.code === 'stale-epoch') {
+    // The document was being reloaded from git as it was read: transient and
+    // expected, so neither this nor the registry reports it.
+    markReported(error);
+  } else {
+    reportLiveFailure(error, 'read', what);
+  }
+  return mapped;
+}
+
+function mapLiveReadError(error: CollabRequestError, what: 'page' | 'deck'): ToolError {
   if (error.status === 409 && error.code === 'unreadable-live-doc') {
     return new ToolError(
       'internal',

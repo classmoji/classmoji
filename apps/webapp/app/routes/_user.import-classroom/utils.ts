@@ -310,3 +310,35 @@ export function slugify(str: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
+
+/** What the import action answers, as far as the wizard's next step needs it. */
+export interface ImportOutcome {
+  classroomSlug?: string;
+  results?: { existingAccountsNotEnrolled?: number }[];
+  errors?: unknown[];
+}
+
+/**
+ * Something the importer must read before leaving the page: a classroom that
+ * was not imported, or people left out of a roster because they are already
+ * on Classmoji (the owner adds them from Students).
+ */
+export function importNeedsReading(data: ImportOutcome | undefined): boolean {
+  if (!data) return false;
+  return (
+    (data.errors?.length ?? 0) > 0 ||
+    (data.results ?? []).some(r => (r.existingAccountsNotEnrolled ?? 0) > 0)
+  );
+}
+
+/**
+ * Where the wizard goes once the import answers: one imported classroom → its
+ * dashboard, several → the landing page; null stays on the page (nothing
+ * imported, or something to read first, which the page links onward from).
+ */
+export function importDestination(data: ImportOutcome | undefined): string | null {
+  if (!data || importNeedsReading(data)) return null;
+  if (data.classroomSlug) return `/admin/${data.classroomSlug}/dashboard`;
+  if (data.results && data.results.length > 0) return '/';
+  return null;
+}

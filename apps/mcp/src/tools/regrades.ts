@@ -58,6 +58,7 @@ import { QUIZ_REGRADE_REPLY_MAX_LENGTH } from '@classmoji/utils';
 import { runs, tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
+import { reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -393,6 +394,10 @@ async function resolveQuizRegrade(
       console.error('[mcp regrade_resolve] resolution email enqueue failed', {
         requestId: request.id,
         error,
+      });
+      reportError(error, {
+        surface: 'mcp.trigger.quiz_regrade_resolved',
+        tags: { request_id: request.id },
       });
     }
   }

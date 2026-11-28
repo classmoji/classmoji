@@ -64,6 +64,7 @@ import {
   type ItemView,
   type TargetOp,
 } from '@classmoji/collab/hash';
+import { reportError } from '@classmoji/utils/error-report';
 
 import { CollabAuthError } from './auth.ts';
 import { agentViewsFor, type AgentViews } from './agentViews.ts';
@@ -310,6 +311,21 @@ export async function handleInternal(
       return send(response, status, body);
     }
     console.error(`[collab] internal ${request.method} ${url.pathname} failed:`, err);
+    // A caller that hung up mid-body is not a failure of ours. (`destroyed`
+    // would not tell: a body read to its end destroys the request too.)
+    if (request.complete !== false) {
+      const route = parseRoute(url.pathname);
+      reportError(err, {
+        surface: 'collab.internal',
+        handled: false,
+        tags: {
+          method: request.method,
+          scope: route?.scope,
+          kind: route?.scope === 'doc' ? route.kind : undefined,
+          action: route?.action,
+        },
+      });
+    }
     return send(response, 500, { error: 'internal-error' });
   }
 }

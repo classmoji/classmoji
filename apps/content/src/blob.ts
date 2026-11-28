@@ -5,6 +5,7 @@ import {
   blobKey,
   contentHeaders,
   errorResponse,
+  reportCachePutFailure,
   variantKey,
 } from './cache.ts';
 import { contentTypeForExtension, isRasterExtension } from './content-type.ts';
@@ -22,6 +23,7 @@ import {
   type ByteRange,
   type RangeOutcome,
 } from './range.ts';
+import { reportError } from '@classmoji/utils/error-report';
 import { withOriginRetry } from './token.ts';
 import type { OriginTokenTiming } from './token.ts';
 import {
@@ -39,6 +41,22 @@ import { cacheControlFor, nowSeconds, type BlobVerification } from './verify.ts'
  */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Report an origin blob read that answered without usable bytes. A 404 is a
+ * blob the repo no longer has, which the app falls back from; every other
+ * status (rate limit, rejected token after the retry, a 5xx) is the origin
+ * failing. The message names the status only, so one status groups as one
+ * issue.
+ */
+function reportOriginBlobStatus(status: number, classroomId: string): void {
+  if (status === 404) return;
+  reportError(new Error(`origin blob read answered ${status}`), {
+    surface: 'content.origin',
+    level: 'warning',
+    tags: { kind: 'blob', classroom: classroomId, status },
+  });
 }
 
 /** The success half of the verification union. */
@@ -247,6 +265,7 @@ async function putCacheBranch(
     // The message, not the error: Workers Logs renders a thrown object as a
     // stack, and the stack of a caught R2 rejection says nothing about why.
     console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+    await reportCachePutFailure(error);
   }
 }
 
@@ -480,6 +499,7 @@ async function serveRangeFromOrigin(
     env.CACHE.put(key, bytes, { httpMetadata: { contentType: options.contentType } }).catch(
       error => {
         console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+        return reportCachePutFailure(error);
       }
     )
   );
@@ -544,6 +564,7 @@ export async function serveBlobBySha(
 
   if (!response.ok || !response.body) {
     console.warn(`[content] origin blob ${options.sha}: ${response.status}`);
+    reportOriginBlobStatus(response.status, options.classroomId);
     return errorResponse(502, 'origin unavailable');
   }
 
@@ -591,6 +612,7 @@ async function loadOriginalBytes(
   const response = await pullBlobFromOrigin(env, options.classroomId, options.sha);
   if (!response.ok || !response.body) {
     console.warn(`[content] origin blob ${options.sha}: ${response.status}`);
+    reportOriginBlobStatus(response.status, options.classroomId);
     return errorResponse(502, 'origin unavailable');
   }
 
@@ -621,6 +643,7 @@ async function loadOriginalBytes(
     env.CACHE.put(key, bytes, { httpMetadata: { contentType: options.contentType } }).catch(
       error => {
         console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+        return reportCachePutFailure(error);
       }
     )
   );
@@ -673,6 +696,7 @@ async function serveVariant(
     env.CACHE.put(key, transformed, { httpMetadata: { contentType: mediaTypeFor(format) } }).catch(
       error => {
         console.warn(`[content] failed to cache ${key}: ${messageOf(error)}`);
+        return reportCachePutFailure(error);
       }
     )
   );

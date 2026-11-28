@@ -3,6 +3,7 @@ import { canonicalTimeZone } from '@classmoji/utils';
 import { addClassroomAuditLog, checkAuth } from '~/utils/helpers';
 import { auditActor } from '~/utils/auditActor.server';
 import { ActionTypes } from '~/constants';
+import { verifyImportOrganizations } from './organizations.server';
 
 type ImportInputs = Parameters<
   typeof ClassmojiService.githubClassroomImport.importGithubClassrooms
@@ -12,9 +13,12 @@ type ImportInputs = Parameters<
  * Import one or more GitHub Classroom classrooms from an uploaded export bundle.
  *
  * The bundle is parsed client-side; the request body carries the normalized,
- * already-selected classrooms (each with a resolved slug). The import is fast,
- * GitHub-free DB work, so it runs synchronously here (no background job) and
- * records a durable `AuditLog` row per classroom for observability.
+ * already-selected classrooms (each with a resolved slug). Before the import,
+ * Github is asked, with the importer's own token, whether they administer each
+ * organization (`organizations.server.ts`); a new classroom is created only in
+ * one they do. The import itself is fast DB work, so it runs synchronously
+ * here (no background job) and records a durable `AuditLog` row per classroom
+ * for observability.
  */
 export const action = checkAuth(async ({ request, user }) => {
   let body: { classrooms?: ImportInputs; timezone?: unknown };
@@ -29,6 +33,10 @@ export const action = checkAuth(async ({ request, user }) => {
     return { error: 'No classrooms selected to import.' };
   }
 
+  // Built here from the session's token and Github's answers only, never from
+  // the request body.
+  const organizations = await verifyImportOrganizations(user.token as string | null, classrooms);
+
   let results: Awaited<
     ReturnType<typeof ClassmojiService.githubClassroomImport.importGithubClassrooms>
   >['results'];
@@ -38,7 +46,8 @@ export const action = checkAuth(async ({ request, user }) => {
   try {
     ({ results, errors } = await ClassmojiService.githubClassroomImport.importGithubClassrooms(
       user.id,
-      classrooms
+      classrooms,
+      { organizations }
     ));
   } catch (error: unknown) {
     console.error('github classroom import failed:', error);
@@ -102,6 +111,7 @@ export const action = checkAuth(async ({ request, user }) => {
         teamsImported: r.teamsImported,
         teamMembershipsImported: r.teamMembershipsImported,
         groupReposLinked: r.groupReposLinked,
+        existingAccountsNotEnrolled: r.existingAccountsNotEnrolled,
         warnings: r.warnings,
       },
     });

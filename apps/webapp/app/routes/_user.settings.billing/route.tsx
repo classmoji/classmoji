@@ -2,6 +2,7 @@ import { Spin } from 'antd';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { namedAction } from '~/utils/namedAction.server';
+import { reportError } from '@classmoji/utils/error-report';
 
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
@@ -14,6 +15,9 @@ import type { Route } from './+types/route';
 
 /** `data.tool` / `source` for every billing event written from this page. */
 const SOURCE = 'web:billing';
+
+/** Reported once per process (one object): a deployment without a Pro price. */
+const PRICE_NOT_SET = /* @__PURE__ */ new Error('STRIPE_PRO_PRICE_ID is not set');
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
@@ -137,6 +141,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
       const priceId = ClassmojiService.billing.checkoutPriceId();
       if (!priceId) {
         console.error('STRIPE_PRO_PRICE_ID is not set — cannot start a Pro checkout.');
+        reportError(PRICE_NOT_SET, { surface: 'billing.config' });
         return {
           error: 'Upgrades are not available right now. Please contact support.',
         };

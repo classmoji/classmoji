@@ -1,4 +1,5 @@
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 
 /**
@@ -20,13 +21,8 @@ export const loader = async ({
     return Response.json({ error: 'Classroom not found' }, { status: 404 });
   }
 
-  // Get auth (optional for public access)
-  let authData = null;
-  try {
-    authData = await getAuthSession(request);
-  } catch {
-    // Not authenticated - will show public pages only
-  }
+  // Get auth (optional for public access; a failed read shows public pages only)
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
 
   let pages: Awaited<ReturnType<typeof ClassmojiService.page.findByClassroomId>> = [];
 

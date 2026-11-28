@@ -20,6 +20,7 @@
  * for no API call, and its CSP allows none.
  */
 
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import {
   VIEW_HEADERS,
@@ -138,6 +139,12 @@ async function loadViewBlocks(
     console.warn(
       `[render-page] could not load ${at} for ${page.id}: ${error instanceof Error ? error.message : String(error)}`
     );
+    // A copy that is not there or a document that does not parse is the
+    // content, not a fault of the service.
+    const unreadable = (error as { code?: unknown } | null)?.code === 'PAGE_CONTENT_UNREADABLE';
+    if (!unreadable && (error as { status?: unknown } | null)?.status !== 404) {
+      reportError(error, { surface: 'pages.render_page.load', tags: { page_id: page.id, at } });
+    }
     return null;
   }
 }

@@ -102,6 +102,7 @@ import {
 import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
+import { reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -142,6 +143,10 @@ async function releaseIntoRepos(
     return { opened_in_repos: 0, release_note: releaseNote(reason, isPublished, releaseAt) };
   } catch (error) {
     console.error('[mcp] opening an assignment in student repos failed:', error);
+    reportError(error, {
+      surface: 'mcp.trigger.open_assignment_in_repos',
+      tags: { assignment_id: assignmentId },
+    });
     return {
       opened_in_repos: 0,
       failed: true,

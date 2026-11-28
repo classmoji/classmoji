@@ -13,6 +13,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes }
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { tasks } from '@trigger.dev/sdk';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { escapeHtml, appUrl } from '../emails/escape.ts';
 import {
@@ -678,6 +679,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     await tasks.trigger('send_email', { to, subject, html });
   } catch (error: unknown) {
     console.error('[gitlabInstance] could not queue email', error);
+    reportError(error, { surface: 'gitlab_instance.email' });
   }
 }
 

@@ -1,5 +1,6 @@
 /**
- * Browser error tracking (Sentry) for the webapp, pages and slides.
+ * Browser error tracking (Sentry) for the webapp, pages, slides and admin.
+ * (Server-side: `./sentryServer.ts` and `./sentryNode.ts`.)
  *
  * The DSN and environment are runtime settings, not build-time ones: they come
  * from the server's env (Infisical-synced Fly secrets), so nothing about Sentry

@@ -18,6 +18,7 @@
 
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import {
   generateDeckHtml,
   isDeckSlide,
@@ -97,6 +98,13 @@ async function loadViewDeck(
     console.warn(
       `[render-view] could not load ${at} for ${slide.id}: ${error instanceof Error ? error.message : String(error)}`
     );
+    // A copy that is not there (no preview branch, no deck yet) or a deck that
+    // does not parse is the content, not a fault of the service.
+    const missing = error instanceof Error && error.message.startsWith('Slide content not found');
+    const unparseable = (error as { code?: unknown } | null)?.code === 'DECK_PARSE_FAILED';
+    if (!missing && !unparseable && (error as { status?: unknown } | null)?.status !== 404) {
+      reportError(error, { surface: 'slides.render_view.load', tags: { slide_id: slide.id, at } });
+    }
     return null;
   }
 }

@@ -58,3 +58,30 @@ test('reads each membership classroom without its invite code, plan owner or cre
     created_by: true,
   });
 });
+
+test('says whether the session is "View as", so the browser names no user then', async () => {
+  const load = async (instance: string, session: object) => {
+    (globalThis as unknown as { __rootSession: object }).__rootSession = session;
+    const { loader } = await importWithStubs<{
+      loader: (args: { request: Request; url: URL }) => Promise<unknown>;
+    }>(new URL(`../../app/root.tsx?${instance}`, import.meta.url), {
+      '.css': stubModule(''),
+      '/app/utils/db.server.ts': stubModule(`
+export const GIT_IDENTITY = {};
+export const getAuthSession = async () => ({ userId: 'user-1', session: globalThis.__rootSession });
+export const prisma = {
+  page: { findUnique: async () => null },
+  user: { findUnique: async () => ({ id: 'user-1', accounts: [], classroom_memberships: [] }) },
+};
+`),
+      '/app/utils/sentry.client.ts': stubModule(
+        'export const captureRouteError = () => {}; export const setSentryUser = () => {};'
+      ),
+    });
+    return (await loader(routerArgs('http://localhost/'))) as { impersonating?: boolean };
+  };
+  const viewedAs = await load('viewAs', { session: { impersonatedBy: 'admin-1' } });
+  expect(viewedAs.impersonating).toBe(true);
+  const own = await load('own', { session: {} });
+  expect(own.impersonating).toBe(false);
+});

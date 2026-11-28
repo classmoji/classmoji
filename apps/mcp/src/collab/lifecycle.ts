@@ -10,6 +10,7 @@
 import getPrisma from '@classmoji/database';
 import type { CollabKind } from '@classmoji/collab';
 import { resolveCollabEnv } from '@classmoji/collab/env';
+import { reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import { CollabRequestError, notifyMetaChanged, postClose } from './client.ts';
 
@@ -46,11 +47,17 @@ export async function closeLiveDocBeforeDelete(
   } catch (error) {
     if (error instanceof CollabRequestError && error.status === 404) return;
     if (error instanceof CollabRequestError && error.unavailable) {
+      reportError(error, {
+        surface: 'mcp.collab.close',
+        tags: { status: error.status, ...(error.code ? { code: error.code } : {}), kind },
+      });
       throw new ToolError(
         'internal',
         `The live editing service did not answer, so the ${what} was not deleted (people ` +
           'editing it would keep writing to it). Retry shortly.',
-        'LIVE_UNAVAILABLE'
+        'LIVE_UNAVAILABLE',
+        undefined,
+        { cause: error }
       );
     }
     throw error;

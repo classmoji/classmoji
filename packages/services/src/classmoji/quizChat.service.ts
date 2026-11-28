@@ -19,6 +19,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { isReleased } from '@classmoji/utils';
 import { Prisma } from '@classmoji/database/client';
@@ -281,8 +282,10 @@ const preflight = async (attemptId: string) => {
   let visible: boolean;
   try {
     visible = await quizzesEntitled(attempt.quiz.classroom_id);
-  } catch {
-    // A failed lookup is not a verdict; the next turn tries again.
+  } catch (error: unknown) {
+    // A failed lookup is not a verdict; the next turn tries again. The cause
+    // is reported before the refusal replaces it.
+    reportError(error, { surface: 'quiz_chat.entitlement', extra: { attemptId } });
     throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
   }
   return { visible };

@@ -11,6 +11,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { tasks } from '@trigger.dev/sdk';
 import { randomUUID } from 'node:crypto';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 // The delivery layer's own predicate, not a copy of it: "can this classroom's
@@ -218,6 +219,7 @@ export async function onMediaReady(row: MediaRecord): Promise<void> {
       `[media] Could not enqueue ${VIDEO_PROCESS_TASK_ID} for ${row.id}:`,
       error instanceof Error ? error.message : error
     );
+    reportError(error, { surface: 'media.video_enqueue', extra: { mediaId: row.id } });
     // Only from the claim this call made: a job that did start (the trigger's
     // answer was lost) and already moved the row on is not overwritten.
     try {

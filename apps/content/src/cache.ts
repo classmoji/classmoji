@@ -5,7 +5,21 @@
  * that reference the same blob share one cached object. Access is decided by
  * the signature, not by the key.
  */
+import { flushErrorReports, reportError } from '@classmoji/utils/error-report';
 import { contentDispositionFor } from './verify.ts';
+
+/**
+ * Report a failed R2 write, then wait for the report to be sent.
+ *
+ * Every cache write runs in `ctx.waitUntil`, after the response (and the flush
+ * that follows it) has gone, so the returned promise is what keeps the
+ * invocation alive until the report is delivered. Resolves at once when no
+ * reporter is registered.
+ */
+export function reportCachePutFailure(error: unknown): Promise<void> {
+  reportError(error, { surface: 'content.cache_put', level: 'warning' });
+  return flushErrorReports(2000);
+}
 
 export function blobKey(sha: string): string {
   return `blobs/${sha}`;

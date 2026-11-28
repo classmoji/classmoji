@@ -12,6 +12,7 @@
 
 import type { PrismaClient } from '@classmoji/database/client';
 import { parseGitlabId, scopeGitlabId } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;
 
@@ -76,6 +77,7 @@ export async function mapGitHubProfile(
     // Never block sign-in on the claim; better-auth then treats this as a new
     // Github account.
     console.error('[auth] Github placeholder claim failed', error);
+    reportError(error, { surface: 'auth.github_placeholder_claim' });
   }
 
   await noteProviderProfile(prisma, 'github', githubId, note);

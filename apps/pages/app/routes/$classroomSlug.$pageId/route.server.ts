@@ -22,6 +22,9 @@ import {
 import { OPS_MALFORMED_ANSWER, readCanonicalSaveOps } from '~/utils/saveOps.server.ts';
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
+import { parseClientJson } from '~/utils/clientJson.server.ts';
+import { markReported, reportError } from '@classmoji/utils/error-report';
 import { recordAudit } from '~/utils/audit.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
@@ -203,7 +206,7 @@ export const loader = async ({
   }
 
   // Check user auth and membership
-  const authData = await getAuthSession(request).catch(() => null);
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
 
   // ── Who this reader is (page sections included) ──────────────────────────
   // ONE membership read, the reader rule every surface shares
@@ -794,6 +797,14 @@ export const action = async (args: PageActionArgs) => {
   }
 };
 
+/**
+ * Report an editor action that failed for a reason the editor cannot fix (the
+ * generic 5xx below each intent), beside its log line. `intent` is one of the
+ * names this action handles, never the posted value.
+ */
+const reportActionFailure = (error: unknown, intent: string, pageId: string) =>
+  reportError(error, { surface: 'pages.page_action', tags: { intent, page_id: pageId } });
+
 async function pageAction({ params, request }: PageActionArgs, slot: { held: boolean }) {
   const pageId = params.pageId!;
 
@@ -816,7 +827,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   );
 
   // Check if user can edit
-  const authData = await getAuthSession(request).catch(() => null);
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
   if (!authData?.userId) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -873,6 +884,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (error instanceof UploadTooLargeError) {
         return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
       }
+      // A body that is not JSON is the client's, not a fault (and its message
+      // quotes what was sent): thrown as before, never reported.
+      if (error instanceof SyntaxError) markReported(error);
       throw error;
     }
   }
@@ -914,6 +928,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       });
     } catch (error: unknown) {
       console.error('[pages] Save version failed:', error);
+      reportActionFailure(error, 'save-version', page.id);
       return Response.json(
         { error: 'The version could not be saved. Try again.' },
         { status: 502 }
@@ -967,6 +982,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       return Response.json({ error: result.error }, { status: result.status });
     } catch (error: unknown) {
       console.error('[pages] Live preview accept failed:', error);
+      reportActionFailure(error, 'preview-accept', page.id);
       return Response.json(
         { error: 'The preview could not be merged into the live page. Try again.' },
         { status: 502 }
@@ -1092,7 +1108,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         }
         const blocks = await canonicalizeDocumentAssets(
           actionAssetCtx,
-          JSON.parse(data.content as string)
+          parseClientJson(data.content as string)
         );
 
         if (!expectedSha) {
@@ -1213,6 +1229,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         );
       }
       console.error('Failed to save page:', error);
+      reportActionFailure(error, 'save', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1282,6 +1299,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
               // long to wait before redirecting. A repo we cannot read here
               // must not turn an accept that SUCCEEDED into an error response.
               console.error('[pages] Settle check failed after preview accept:', err);
+              reportError(err, { surface: 'pages.preview_settle', tags: { page_id: page.id } });
               break;
             }
             if (fresh.sha === result.sha) break;
@@ -1333,6 +1351,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         );
       }
       console.error('Failed to accept preview:', error);
+      reportActionFailure(error, 'preview-accept', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1347,6 +1366,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-discarded`);
     } catch (error: unknown) {
       console.error('Failed to discard preview:', error);
+      reportActionFailure(error, 'preview-discard', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1363,6 +1383,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (liveEnv) await notifyPageMeta(liveEnv, pageId, { title: data.title as string });
       return Response.json({ success: true });
     } catch (error: unknown) {
+      reportActionFailure(error, 'update-title', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1379,6 +1400,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (liveEnv) await notifyPageMeta(liveEnv, pageId, { width: data.width as number });
       return Response.json({ success: true });
     } catch (error: unknown) {
+      reportActionFailure(error, 'update-width', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1421,6 +1443,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
           { status: 409 }
         );
       }
+      reportActionFailure(error, 'set-header-image', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -1475,6 +1498,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         );
       }
       console.error('Failed to upload header image:', error);
+      reportActionFailure(error, 'upload-header-image', page.id);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }

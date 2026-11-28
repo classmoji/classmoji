@@ -178,12 +178,13 @@ test.describe('the page action answers unreadable ops so the editor falls back',
 });
 
 test.describe('a whole-document save is counted before it is parsed', () => {
-  test('the action checks the document before JSON.parse and answers 413', () => {
+  test('the action checks the document before parsing it and answers 413', () => {
     expect(ACTION_SOURCE).toMatch(
       /typeof data\.content === 'string' &&\s+textOverBytes\(data\.content, DOCUMENT_SAVE_MAX_BYTES\)/
     );
     const check = ACTION_SOURCE.indexOf('textOverBytes(data.content, DOCUMENT_SAVE_MAX_BYTES)');
-    const parse = ACTION_SOURCE.indexOf('JSON.parse(data.content as string)');
+    // Parsed by parseClientJson (JSON.parse, never reported: client input).
+    const parse = ACTION_SOURCE.indexOf('parseClientJson(data.content as string)');
     expect(check).toBeGreaterThan(-1);
     expect(parse).toBeGreaterThan(check);
     expect(ACTION_SOURCE.slice(check, parse)).toContain(

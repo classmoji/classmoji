@@ -25,6 +25,7 @@ import {
 } from '@classmoji/collab';
 import { resolveCollabEnv, type CollabEnv } from '@classmoji/collab/env';
 import getPrisma from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 
 export type { CollabEnv };
 
@@ -48,6 +49,13 @@ export function collabServerEnv(
 ): CollabEnv | null {
   return resolveCollabEnv(env);
 }
+
+/**
+ * Reported (once per process, since it is one object) when a live-editing act
+ * finds no collab server configured: a deployment missing COLLAB_URL or
+ * COLLAB_INTERNAL_SECRET.
+ */
+const COLLAB_NOT_CONFIGURED = new Error('No collab server configured (COLLAB_URL)');
 
 // ─── Internal API ────────────────────────────────────────────────────────────
 
@@ -131,6 +139,7 @@ export async function notifyCollabFlag(
 ): Promise<{ ok: boolean }> {
   if (!env) {
     console.error('[collab] No collab server configured; flag change not delivered', classroomId);
+    reportError(COLLAB_NOT_CONFIGURED, { surface: 'collab.config', level: 'warning' });
     return { ok: false };
   }
   try {
@@ -144,6 +153,13 @@ export async function notifyCollabFlag(
     return { ok: true };
   } catch (error) {
     console.error('[collab] Telling the collab server about the flag change failed:', error);
+    reportError(error, {
+      surface: 'collab.flag',
+      tags: {
+        classroom_id: classroomId,
+        status: error instanceof CollabRequestError ? error.status : undefined,
+      },
+    });
     return { ok: false };
   }
 }
@@ -192,6 +208,7 @@ export async function closeLivePageForDelete(
   }
   if (!env) {
     console.error('[collab] Cannot close the live room before deleting page', pageId);
+    reportError(COLLAB_NOT_CONFIGURED, { surface: 'collab.config', level: 'warning' });
     return { ok: false };
   }
   try {
@@ -201,6 +218,13 @@ export async function closeLivePageForDelete(
   } catch (error) {
     if (error instanceof CollabRequestError && error.status === 404) return { ok: true };
     console.error('[collab] Closing the live room before delete failed:', error);
+    reportError(error, {
+      surface: 'collab.page_close',
+      tags: {
+        page_id: pageId,
+        status: error instanceof CollabRequestError ? error.status : undefined,
+      },
+    });
     return { ok: false };
   }
 }

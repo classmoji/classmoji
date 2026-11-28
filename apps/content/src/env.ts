@@ -31,6 +31,10 @@ export interface Env {
   CONTENT_SIGNING_SECRET_PREVIOUS?: string;
   /** Bearer secret presented to the token endpoint (secret). */
   CONTENT_WORKER_SHARED_SECRET?: string;
+  /** Sentry DSN (secret, optional). Unset: error reporting is off. */
+  SENTRY_DSN?: string;
+  /** Sentry environment name: 'staging' | 'production' | 'development'. */
+  SENTRY_ENVIRONMENT?: string;
 }
 
 /**

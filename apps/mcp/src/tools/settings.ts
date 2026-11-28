@@ -514,7 +514,9 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
           case 'RATE_LIMITED':
             throw new ToolError('rate_limited', error.message, error.code);
           default:
-            throw new ToolError('internal', error.message, error.code);
+            throw new ToolError('internal', error.message, error.code, undefined, {
+              cause: error,
+            });
         }
       }
       throw error;

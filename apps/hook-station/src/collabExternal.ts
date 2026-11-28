@@ -36,9 +36,10 @@
  * on an unchanged file: a live or dirty doc 3-way merges to no change, an idle
  * clean doc is reseeded from git.
  *
- * Everything here is fire-and-forget: errors are logged, never thrown, and the
- * content-asset sync is triggered independently.
+ * Everything here is fire-and-forget: errors are logged and reported, never
+ * thrown, and the content-asset sync is triggered independently.
  */
+import { reportError } from '@classmoji/utils/error-report';
 
 /**
  * The checkpoint worker's commit trailer. `COLLAB_COMMIT_TRAILER` in
@@ -334,10 +335,17 @@ export async function notifyCollabOfPush(
         log.info(`[collab:external] ${kind}/${docId} @ ${after}: queued`);
       } catch (err) {
         log.error(`[collab:external] ${kind}/${docId} @ ${after}: trigger failed`, err);
+        // The live doc then never merges this push, and its next checkpoint
+        // overwrites it.
+        reportError(err, {
+          surface: 'collab_external.trigger',
+          tags: { classroom_id: classroomId, kind, doc_id: docId },
+        });
       }
     });
   } catch (err) {
     log.error(`[collab:external] ${classroomId}: notify failed`, err);
+    reportError(err, { surface: 'collab_external.notify', tags: { classroom_id: classroomId } });
   }
 }
 

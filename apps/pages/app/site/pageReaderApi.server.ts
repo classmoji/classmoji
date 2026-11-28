@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { recordAudit } from '~/utils/audit.server.ts';
 import { READER_API_JSON_HEADERS, isForeignFetch } from '~/utils/pageSections.server.ts';
@@ -105,6 +106,7 @@ export async function sitePageReaderResponse({
     return json({ payload });
   } catch (error) {
     console.error('[page-reader] failed:', error);
+    reportError(error, { surface: 'pages.site.page_reader' });
     return json({ error: 'Something went wrong' }, 500);
   }
 }

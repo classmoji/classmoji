@@ -56,6 +56,7 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '@classmoji/services';
 import {
   countingQuizScore,
@@ -450,6 +451,7 @@ async function myGradeSummary(ctx: ToolContext, submissions: SubmissionLike[]) {
     });
   } catch (error: unknown) {
     console.error('[mcp grades-mine] grade summary failed', { classroomId, userId }, error);
+    reportError(error, { surface: 'mcp.grades_mine.summary', tags: { classroom_id: classroomId } });
     return null;
   }
 }

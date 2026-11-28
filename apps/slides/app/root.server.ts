@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { sentryBrowserConfig } from '@classmoji/utils/sentry';
 import { getAuthSession } from '@classmoji/auth/server';
 import type { Prisma } from '@classmoji/database/client';
@@ -25,6 +26,16 @@ const ROOT_USER_INCLUDE = {
 type SlidesAppUser = ReturnType<
   typeof withLogin<Prisma.UserGetPayload<{ include: typeof ROOT_USER_INCLUDE }>>
 >;
+
+/**
+ * Whether this session is a platform admin viewing as someone (better-auth's
+ * admin plugin sets `session.impersonatedBy`): the browser then names no user.
+ */
+const isImpersonated = (authData: { session?: unknown }): boolean =>
+  Boolean(
+    (authData.session as { session?: { impersonatedBy?: unknown } } | undefined)?.session
+      ?.impersonatedBy
+  );
 
 const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   // Allow public access to /follow routes with valid shareCode
@@ -83,11 +94,13 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
     user = found ? withLogin(found) : null;
   } catch (error: unknown) {
     console.error('User lookup failed:', error);
+    // A database failure sends a signed-in user back to the web app: reported.
+    reportError(error, { surface: 'slides.root.user_lookup' });
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
     return redirect(webappUrl);
   }
 
-  return { user };
+  return { user, impersonating: isImpersonated(authData) };
 };
 
 export const loader = async (args: { request: Request; url: URL }) => {

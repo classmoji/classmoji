@@ -20,6 +20,8 @@ import {
 } from './embedBridge.ts';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
+import { reportError } from '@classmoji/utils/error-report';
 import { recordAudit } from '~/utils/audit.server.ts';
 import { impersonatorOf } from '~/utils/pageSections.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
@@ -72,12 +74,7 @@ export const loader = async ({
   };
 
   // Try to get auth (nullable for public access)
-  let authData = null;
-  try {
-    authData = await getAuthSession(request);
-  } catch {
-    // Not authenticated
-  }
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
 
   let view = 'public';
   let membership: { role: string } | null = null;
@@ -343,6 +340,7 @@ export const action = async ({
       if (ClassmojiService.planLimits.isContentLimitError(error)) {
         return Response.json({ error: error.message }, { status: 403 });
       }
+      reportError(error, { surface: 'pages.list_action', tags: { intent: 'create' } });
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -383,6 +381,7 @@ export const action = async ({
       // Return redirect instead of JSON response
       return redirect(`/${classroomSlug}`);
     } catch (error: unknown) {
+      reportError(error, { surface: 'pages.list_action', tags: { intent: 'delete' } });
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -405,6 +404,7 @@ export const action = async ({
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
+      reportError(error, { surface: 'pages.list_action', tags: { intent: 'toggle-menu' } });
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -432,6 +432,7 @@ export const action = async ({
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
+      reportError(error, { surface: 'pages.list_action', tags: { intent: 'update-status' } });
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }

@@ -197,11 +197,15 @@ export async function pageRenderResult(
         quality: JPEG_QUALITY,
       });
     } catch (error) {
-      if (error instanceof RenderError) throw new ToolError('internal', error.message, error.code);
+      if (error instanceof RenderError) {
+        throw new ToolError('internal', error.message, error.code, undefined, { cause: error });
+      }
       throw new ToolError(
         'internal',
         `The page could not be rendered: ${error instanceof Error ? error.message : String(error)}`,
-        'RENDER_FAILED'
+        'RENDER_FAILED',
+        undefined,
+        { cause: error }
       );
     }
     const { images, backend: _backend, ...rest } = result;

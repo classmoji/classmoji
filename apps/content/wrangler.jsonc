@@ -10,6 +10,12 @@
   "name": "classmoji-content-unconfigured",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-03",
+  // @sentry/cloudflare imports node:async_hooks (AsyncLocalStorage, for a
+  // scope per request), the only node: module in the bundle. `nodejs_als`
+  // provides just that, where `nodejs_compat` would also bring in every other
+  // Node API. If a new import needs more, the upload fails naming the module.
+  // Inherited by every env below.
+  "compatibility_flags": ["nodejs_als"],
   "workers_dev": false,
   "observability": {
     "enabled": true
@@ -36,6 +42,11 @@
   //     rotation ends with an explicit
   //     `npx wrangler secret delete CONTENT_SIGNING_SECRET_PREVIOUS --env <env>`.
   //     See "Rotating the signing secret" in README.md.
+  //   SENTRY_DSN                       optional: error reporting to Sentry,
+  //     off while unset. The CI sync allows it only as an optional key. As
+  //     with the previous key, removing it from Infisical leaves it on the
+  //     Worker; turning reporting off takes
+  //     `npx wrangler secret delete SENTRY_DSN --env <env>`.
   "env": {
     // LOCAL ONLY. Never deployed — `workers_dev` is false and there are no
     // routes, so a `wrangler deploy --env dev` would publish a script nothing
@@ -63,7 +74,8 @@
       "workers_dev": false,
       "vars": {
         "CONTENT_TOKEN_ENDPOINT": "http://localhost:3000/api/content/token",
-        "ENVIRONMENT": "development"
+        "ENVIRONMENT": "development",
+        "SENTRY_ENVIRONMENT": "development"
       },
       "r2_buckets": [
         {
@@ -107,7 +119,8 @@
       ],
       "vars": {
         "CONTENT_TOKEN_ENDPOINT": "https://staging.classmoji.io/api/content/token",
-        "ENVIRONMENT": "staging"
+        "ENVIRONMENT": "staging",
+        "SENTRY_ENVIRONMENT": "staging"
       },
       "r2_buckets": [
         {
@@ -146,7 +159,8 @@
       ],
       "vars": {
         "CONTENT_TOKEN_ENDPOINT": "https://app.classmoji.io/api/content/token",
-        "ENVIRONMENT": "production"
+        "ENVIRONMENT": "production",
+        "SENTRY_ENVIRONMENT": "production"
       },
       "r2_buckets": [
         {

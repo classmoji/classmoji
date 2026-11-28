@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getPrisma } from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 
 /**
  * Resend delivery webhooks — the only place this system learns that a
@@ -260,6 +261,10 @@ export default async function resendRoutes(fastify: FastifyInstance): Promise<vo
          * answer.
          */
         request.log.error({ emailId, error }, 'failed to record delivery state');
+        reportError(error, {
+          surface: 'resend.delivery_state',
+          tags: { provider: 'resend', event: event.type, email_id: emailId },
+        });
         return reply.status(500).send({ error: 'could not record delivery state' });
       }
 

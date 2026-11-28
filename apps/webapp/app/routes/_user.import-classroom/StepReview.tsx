@@ -80,8 +80,8 @@ export default function StepReview({
   return (
     <div>
       <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
-        Review and confirm. Imported classrooms start GitHub-free; install the Classmoji app later
-        to enable live syncing and grading.
+        Review and confirm. Each classroom&apos;s Github organization must have the Classmoji Github
+        app installed, and you must be one of its owners.
       </p>
 
       {bundleWarnings.length > 0 && (

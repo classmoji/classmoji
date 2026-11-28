@@ -1,3 +1,4 @@
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, { USER_STAFF_VIEW_SELECT } from '@classmoji/database';
 import {
   effectiveTokensPerHour,
@@ -284,6 +285,10 @@ export const purchaseExtensionHours = async ({
       console.error('[token] could not re-read the submission after an extension purchase', {
         gitRepoAssignmentId: repoAssignment.id,
         error: error instanceof Error ? error.message : String(error),
+      });
+      reportError(error, {
+        surface: 'token.extension_resubmit',
+        extra: { gitRepoAssignmentId: repoAssignment.id },
       });
     }
   }

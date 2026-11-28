@@ -4,6 +4,7 @@ import { redirect } from 'react-router';
 import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server';
 import { requestImpersonator, sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 export const sleep = async (ms: number) => {
@@ -236,6 +237,7 @@ export const addAuditLog = async ({
     };
   } catch (error: unknown) {
     console.error('[audit] Failed to resolve audit context', error);
+    reportError(error, { surface: 'audit.context' });
     ClassmojiService.audit.logAuditMiss(
       `audit context lookup failed: ${error instanceof Error ? error.message : String(error)}`,
       { ...known, user_id: userId ?? null }

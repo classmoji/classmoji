@@ -36,6 +36,7 @@
 
 import { createHash } from 'node:crypto';
 import { resolveCookieDomain } from '@classmoji/auth/secret';
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService, getContentUrl } from '@classmoji/services';
 import {
   rewriteDeckAssetUrls,
@@ -518,6 +519,7 @@ export async function resolveDeckDelivery(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn('[slides] Asset resolution failed, serving stored URLs:', message);
+    reportError(error, { surface: 'slides.deck_delivery.assets', level: 'warning' });
     const fallback = stripMediaRefs(stored);
     if (!frames) return { html: fallback, themeBase };
     try {

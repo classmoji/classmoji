@@ -7,9 +7,15 @@
  * best-effort close) only on a truly uncaught exception, where process state
  * may be corrupt.
  *
+ * Both also hand the error to the process's error reporter (`reportError`,
+ * Sentry when the server started it; nothing otherwise): a rejection as
+ * level 'error' (the server keeps serving), an uncaught exception as 'fatal'
+ * before `onFatal`, which flushes the report before exiting.
+ *
  * The handlers are exported and the event target is injectable so the behavior
  * can be unit-tested without touching the real process (§F2 test).
  */
+import { reportError } from '@classmoji/utils/error-report';
 
 /** Minimal logger surface both Pino (Fastify's default) and test fakes satisfy. */
 interface SafetyLogger {
@@ -54,9 +60,13 @@ export function registerProcessSafetyNets(
   logger: SafetyLogger,
   { onFatal = defaultOnFatal, target = process }: SafetyNetOptions = {}
 ): void {
-  target.on('unhandledRejection', (reason: unknown) => logUnhandledRejection(logger, reason));
+  target.on('unhandledRejection', (reason: unknown) => {
+    logUnhandledRejection(logger, reason);
+    reportError(reason, { surface: 'process.unhandled_rejection', level: 'error', handled: false });
+  });
   target.on('uncaughtException', (error: Error) => {
     logUncaughtException(logger, error);
+    reportError(error, { surface: 'process.uncaught_exception', level: 'fatal', handled: false });
     onFatal(1);
   });
 }

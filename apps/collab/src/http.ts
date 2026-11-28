@@ -1,5 +1,6 @@
 import type { onRequestPayload } from '@hocuspocus/server';
 import { COLLAB_INTERNAL_PREFIX } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 
 import { handleInternal } from './internal.ts';
 import type { CollabRuntime } from './server.ts';
@@ -24,6 +25,11 @@ export async function handleRequest(
     // Anything else must never escape: an unhandled rejection here would end
     // the only collab process and every open room with it.
     console.error('[collab] request failed:', error);
+    reportError(error, {
+      surface: 'collab.http',
+      handled: false,
+      tags: { method: payload.request.method },
+    });
     const { response } = payload;
     if (!response.headersSent) {
       response.writeHead(500, { 'Content-Type': 'text/plain' });
