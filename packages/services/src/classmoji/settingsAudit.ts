@@ -27,6 +27,9 @@
  * No database access: pure functions over rows the services already loaded.
  */
 
+import { SUBDOMAIN_REGEX } from '@classmoji/utils';
+import { CLASSROOM_THEMES } from '@classmoji/utils/themes';
+
 /** How one column of a settings model is recorded. */
 export type SettingsFieldRule =
   | { kind: 'value'; shape?: RegExp }
@@ -43,9 +46,25 @@ export type SettingsAuditModel =
   | 'LetterGradeMapping';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** A model id: lowercase letters, digits, dots and dashes. */
-const MODEL_ID = /^[a-z0-9][a-z0-9.-]{0,79}$/;
+/**
+ * A model id: a Claude model (`claude-sonnet-5-5`, with or without a date), or
+ * the OpenAI ids older rows hold (`gpt-4o`, `o1-mini`); lowercase words joined
+ * by dashes or dots, at most 80 characters.
+ */
+const MODEL_ID = /^(?=.{1,80}$)(?:claude|gpt|o[0-9])(?:[-.][a-z0-9]+)*$/;
 const EFFORT = /^(low|medium|high|xhigh|max)$/;
+/**
+ * A canonical IANA zone (`Area/City`, `Area/City/Sub`, `Etc/GMT+5`) or `UTC`:
+ * what `normalizeTimeZoneSetting` stores. A legacy zone outside these areas
+ * (`EST5EDT`) is recorded by name only.
+ */
+const TIME_ZONE =
+  /^(?:UTC|(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)(?:\/[A-Z][A-Za-z0-9_+-]{0,30}){1,2})$/;
+/** One of the product's themes (`CLASSROOM_THEMES`); a retired theme name is recorded by name only. */
+const THEME = new RegExp(`^(?:${CLASSROOM_THEMES.map(t => t.key).join('|')})$`);
+/** A bare host: two or more DNS labels, the last a top-level domain's shape (letters, or punycode). */
+const CUSTOM_DOMAIN =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
 
 const value = (shape?: RegExp): SettingsFieldRule =>
   shape ? { kind: 'value', shape } : { kind: 'value' };
@@ -72,7 +91,7 @@ export const SETTINGS_AUDIT_FIELDS: Readonly<
     syllabus_bot_model: value(MODEL_ID),
     syllabus_bot_effort: value(EFFORT),
     syllabus_bot_instructions: { kind: 'name', lengthKey: 'instructions_length' },
-    llm_provider: value(/^[a-z]{1,20}$/),
+    llm_provider: value(/^(?:anthropic|openai)$/),
     llm_model: value(MODEL_ID),
     llm_temperature: value(),
     llm_max_tokens: value(),
@@ -87,8 +106,8 @@ export const SETTINGS_AUDIT_FIELDS: Readonly<
     default_student_page: value(
       /^(dashboard|repositories|page:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
     ),
-    theme: value(/^[a-z]{1,20}$/),
-    timezone: value(/^[A-Za-z0-9_+\-/]{1,64}$/),
+    theme: value(THEME),
+    timezone: value(TIME_ZONE),
     created_at: value(),
     updated_at: value(),
   },
@@ -120,13 +139,13 @@ export const SETTINGS_AUDIT_FIELDS: Readonly<
   ClassroomSite: {
     id: value(UUID),
     classroom_id: value(UUID),
-    // Stored only after the shape checks in site.service (a DNS label, a host).
-    subdomain: value(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/),
+    // Stored only after the shape checks in site.service: the product's own rule.
+    subdomain: value(SUBDOMAIN_REGEX),
     is_enabled: value(),
     home_page_id: value(UUID),
     show_schedule: value(),
-    timezone: value(/^[A-Za-z0-9_+\-/]{1,64}$/),
-    custom_domain: value(/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/),
+    timezone: value(TIME_ZONE),
+    custom_domain: value(CUSTOM_DOMAIN),
     custom_domain_verified_at: value(),
     created_at: value(),
     updated_at: value(),

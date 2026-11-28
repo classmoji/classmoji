@@ -6,6 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { SCHEMA_MODELS } from '@classmoji/database/testing/schema-dmmf';
+import { ALLOWED_MODELS, FALLBACK_MODEL } from '@classmoji/utils/quiz-agent';
+import { CLASSROOM_THEMES } from '@classmoji/utils/themes';
 import {
   SETTINGS_AUDIT_FIELDS,
   describeSettingsChange,
@@ -38,6 +40,99 @@ describe('settings audit allow-list', () => {
         expect(rule.shape, `${model}.${field.name}`).toBeInstanceOf(RegExp);
       }
     }
+  });
+
+  /** A column name that reads like a credential: a key, token, secret, password or code. */
+  const SECRET_NAME = /(^|_)(key|token|secret|password)(_|$)|_code$|^access_|^refresh_/i;
+  /**
+   * Columns whose name matches SECRET_NAME but that hold no credential, each
+   * with the reason. Kept to exact names, so a new key column is caught.
+   */
+  const NOT_SECRET: Readonly<Record<string, string>> = {
+    // A counter bumped to retire signed content URLs; it appears in every URL.
+    'Classroom.content_key_version': 'a version number, not a key',
+  };
+
+  it.each(MODELS)('classifies every credential-like column of %s as secret', model => {
+    for (const field of columnsOf(model)) {
+      if (!SECRET_NAME.test(field.name)) continue;
+      if (Object.hasOwn(NOT_SECRET, `${model}.${field.name}`)) continue;
+      expect(SETTINGS_AUDIT_FIELDS[model][field.name], `${model}.${field.name}`).toEqual({
+        kind: 'secret',
+      });
+    }
+  });
+
+  it('exempts only columns that exist and match the credential pattern', () => {
+    for (const name of Object.keys(NOT_SECRET)) {
+      const [model, field] = name.split('.');
+      expect(
+        columnsOf(model).some(f => f.name === field),
+        name
+      ).toBe(true);
+      expect(SECRET_NAME.test(field), name).toBe(true);
+    }
+  });
+
+  /** Strings that look like a credential or free text: no value shape may accept one. */
+  const PROBES = [
+    'sk-ant-api03-AbC_dEf-123',
+    'ghp_abcdef123456',
+    'a sentence with spaces and punctuation.',
+    'a'.repeat(200),
+  ];
+
+  it.each(MODELS)('gives no value column of %s a shape that accepts a probe', model => {
+    for (const [field, rule] of Object.entries(SETTINGS_AUDIT_FIELDS[model])) {
+      if (rule.kind !== 'value' || !rule.shape) continue;
+      for (const probe of PROBES) {
+        expect(rule.shape.test(probe), `${model}.${field} accepts ${probe.slice(0, 40)}`).toBe(
+          false
+        );
+        expect(settingsValues(model, { [field]: probe }, [field])).toEqual({});
+      }
+    }
+  });
+
+  it('records the values the product stores', () => {
+    const shown = (model: SettingsAuditModel, field: string, value: string) =>
+      settingsValues(model, { [field]: value }, [field])[field];
+    // Every zone Intl knows, as normalizeTimeZoneSetting stores it, and UTC.
+    for (const zone of [...Intl.supportedValuesOf('timeZone'), 'UTC']) {
+      expect(shown('ClassroomSettings', 'timezone', zone), zone).toBe(zone);
+      expect(shown('ClassroomSite', 'timezone', zone), zone).toBe(zone);
+    }
+    for (const { key } of CLASSROOM_THEMES) {
+      expect(shown('ClassroomSettings', 'theme', key), key).toBe(key);
+    }
+    for (const model of [
+      ...ALLOWED_MODELS,
+      FALLBACK_MODEL,
+      'claude-sonnet-5-20260101',
+      'claude-haiku-4-5-20251001',
+      'gpt-4o-mini',
+      'o1-mini',
+    ]) {
+      for (const field of [
+        'syllabus_bot_model',
+        'llm_model',
+        'code_aware_model',
+        'exploration_model',
+      ]) {
+        expect(shown('ClassroomSettings', field, model), `${field} ${model}`).toBe(model);
+      }
+    }
+    expect(shown('ClassroomSettings', 'llm_provider', 'anthropic')).toBe('anthropic');
+    expect(shown('ClassroomSettings', 'llm_provider', 'openai')).toBe('openai');
+    for (const domain of ['cs52.me', 'www.example-course.org', 'xn--bcher-kva.example']) {
+      expect(shown('ClassroomSite', 'custom_domain', domain), domain).toBe(domain);
+    }
+    for (const subdomain of ['cs52', 'intro-to-cs', 'a']) {
+      expect(shown('ClassroomSite', 'subdomain', subdomain), subdomain).toBe(subdomain);
+    }
+    // Recorded by name only: a host with no top-level domain, a legacy zone.
+    expect(shown('ClassroomSite', 'custom_domain', 'localhost')).toBeUndefined();
+    expect(shown('ClassroomSettings', 'timezone', 'EST5EDT')).toBeUndefined();
   });
 
   it('keeps keys and codes secret, and owner text name-only', () => {
