@@ -889,7 +889,8 @@ describe('tag_create', () => {
     expect(auditRow()).toMatchObject({
       action: 'CREATE',
       classroom_id: 'class-1',
-      resource_type: 'TEAMS',
+      // A tag row is about the tag, not a team: TAGS, as the web's tag rows.
+      resource_type: 'TAGS',
       resource_id: 'tag-9',
       data: { tool: 'tag_create', name: 'workshop-pairs', value: 'workshop-pairs' },
     });

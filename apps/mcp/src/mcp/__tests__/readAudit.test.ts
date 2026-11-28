@@ -298,7 +298,7 @@ describe('auditRead registration', () => {
         description: 'x',
         scope: 'write',
         roles: TEACHING_TEAM,
-        auditRead: { resourceType: 'X' },
+        auditRead: { resourceType: 'GRADES' },
         inputSchema: { classroom: z.string() },
         handler: async () => text({}),
       })
@@ -310,7 +310,7 @@ describe('auditRead registration', () => {
         description: 'x',
         scope: 'read',
         roles: null,
-        auditRead: { resourceType: 'X' },
+        auditRead: { resourceType: 'GRADES' },
         inputSchema: {},
         handler: async () => text({}),
       })
@@ -326,7 +326,7 @@ describe('auditRead registration', () => {
         description: 'x',
         scope: 'read',
         roles: null,
-        auditRead: { resourceType: 'X' },
+        auditRead: { resourceType: 'GRADES' },
         handler: async () => ({}),
       })
     ).toThrow(/auditRead/);
