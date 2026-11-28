@@ -126,7 +126,7 @@ it('sends the late react_router.render report under ctx.waitUntil', async () => 
   expect(events).toHaveLength(1);
   expect(events[0].tags).toMatchObject({
     app: 'admin',
-    runtime: 'worker',
+    runtime_kind: 'worker',
     surface: 'react_router.render',
   });
   expect(events[0].request).toEqual({

@@ -127,7 +127,7 @@ describe('withSentry with sentryServerOptions (real @sentry/cloudflare)', () => 
     }
     for (const event of sent) {
       expect(event.environment).toBe('staging');
-      expect(event.tags).toMatchObject({ app: 'content', runtime: 'worker' });
+      expect(event.tags).toMatchObject({ app: 'content', runtime_kind: 'worker' });
       expect(event.request).toEqual({ method: 'POST', url: 'https://content.test/join/[code]' });
       expect(event.contexts).not.toHaveProperty('culture');
     }

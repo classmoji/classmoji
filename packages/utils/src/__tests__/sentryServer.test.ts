@@ -46,7 +46,7 @@ describe('sentryServerOptions', () => {
     );
     expect(options.dsn).toBe(DSN);
     expect(options.environment).toBe('staging');
-    expect(options.initialScope).toEqual({ tags: { app: 'mcp', runtime: 'server' } });
+    expect(options.initialScope).toEqual({ tags: { app: 'mcp', runtime_kind: 'server' } });
     expect(options.tracePropagationTargets).toEqual([]);
     expect(options).not.toHaveProperty('tracesSampleRate');
     expect(options).not.toHaveProperty('tracesSampler');

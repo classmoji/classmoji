@@ -45,7 +45,9 @@ const firstReport = (error: unknown): boolean => {
 
 /**
  * Start Sentry if the server sent a config; null when it is off. Events are
- * tagged `app: admin`, `runtime: browser` (one Sentry project for every app).
+ * tagged `app: admin`, `runtime_kind: browser` (one Sentry project for every
+ * app; not `runtime`, which Sentry derives itself from `contexts.runtime` on
+ * server events).
  *
  * Returns React Router's instrumentation for `HydratedRouter`'s
  * `instrumentations`, so navigations are named by their full route pattern.
@@ -87,8 +89,8 @@ export const initSentry = (): { instrumentations: ClientInstrumentation[] } | nu
     beforeSendSpan: span => scrubSpan(span),
     integrations: [reactRouterTracingIntegration()],
     initialScope: {
-      tags: { app: 'admin', runtime: 'browser' },
-      attributes: { app: 'admin', runtime: 'browser' },
+      tags: { app: 'admin', runtime_kind: 'browser' },
+      attributes: { app: 'admin', runtime_kind: 'browser' },
     },
   });
   enabled = true;

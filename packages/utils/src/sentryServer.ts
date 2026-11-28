@@ -110,7 +110,11 @@ export type ServerApp =
   | 'hook-station'
   | 'content';
 
-/** `server` = a Node process on Fly; `worker` = a Cloudflare Worker. */
+/**
+ * `server` = a Node process on Fly; `worker` = a Cloudflare Worker. Sent as
+ * the tag `runtime_kind`, not `runtime`: on Node, Sentry derives a `runtime`
+ * tag from `contexts.runtime` ("node v24…") that overwrites one of ours.
+ */
 export type ServerRuntime = 'server' | 'worker';
 
 /** Options common to `@sentry/node`'s `init` and `@sentry/cloudflare`'s `withSentry`. */
@@ -121,7 +125,7 @@ export interface SentryServerOptions {
   tracePropagationTargets: string[];
   beforeSend: (event: ErrorEvent, hint: EventHint) => ErrorEvent | null;
   beforeBreadcrumb: (breadcrumb: Breadcrumb) => Breadcrumb | null;
-  initialScope: { tags: { app: ServerApp; runtime: ServerRuntime } };
+  initialScope: { tags: { app: ServerApp; runtime_kind: ServerRuntime } };
 }
 
 /**
@@ -195,7 +199,7 @@ export const sentryServerOptions = (
     tracePropagationTargets: [],
     beforeSend: event => scrubEvent(event),
     beforeBreadcrumb: breadcrumb => scrubBreadcrumb(breadcrumb),
-    initialScope: { tags: { app: opts.app, runtime: opts.runtime } },
+    initialScope: { tags: { app: opts.app, runtime_kind: opts.runtime } },
   };
 };
 
