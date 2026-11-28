@@ -435,6 +435,41 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
       expect(await rowsFor(taId)).toHaveLength(1);
     });
 
+    it('an MCP actor under View as, and a row that cannot be written', async () => {
+      const taId = await makeMember(X, 'flag-ta-mcp', 'TEACHER');
+      const update = (isGrader: boolean, actor: AuditActor) =>
+        staff.updateStaff({
+          classroomId: X.classroomId,
+          login: login('flag-ta-mcp'),
+          role: 'TEACHER',
+          isGrader,
+          actor,
+        });
+      await update(false, mcpActor(X, 'staff_update'));
+      expect(await rowsFor(taId)).toEqual([
+        expect.objectContaining({
+          user_id: X.ownerId,
+          action: 'UPDATE',
+          data: {
+            via: 'mcp',
+            tool: 'staff_update',
+            user_id: taId,
+            login: login('flag-ta-mcp'),
+            role: 'TEACHER',
+            is_grader: false,
+            client_id: 'client-1',
+            impersonated_by: ADMIN,
+          },
+        }),
+      ]);
+
+      const { value, misses } = await quietly(() => update(true, ghost('staff_update')));
+      expect(value).toMatchObject({ changed: true, audit: { written: 0, missed: 1 } });
+      expect(misses).toHaveLength(1);
+      expect((await membershipOf(X, taId, 'TEACHER'))?.is_grader).toBe(true);
+      expect(await rowsFor(taId)).toHaveLength(1);
+    });
+
     it('a person of classroom Y named in X is not found, and nothing is written', async () => {
       const taY = await makeMember(Y, 'flag-ta-y', 'ASSISTANT');
       await expect(
@@ -623,6 +658,25 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
           role: 'ASSISTANT',
         })
       ).rejects.toMatchObject({ code: 'staff_not_found' });
+    });
+
+    it('a removal row: none for actor null, and a miss reported when it cannot be written', async () => {
+      const taId = await makeMember(X, 'row-gone', 'ASSISTANT');
+      await membershipService.remove(X.classroomId, taId, 'ASSISTANT', {});
+      const record = (actor: AuditActor | null) =>
+        staff.recordStaffRemoval(actor, {
+          classroomId: X.classroomId,
+          userId: taId,
+          role: 'ASSISTANT',
+          choice: null,
+          removal: 'completed',
+          ungraded: null,
+        });
+      expect(await record(null)).toEqual({ written: 0, missed: 0 });
+      const { value, misses } = await quietly(() => record(ghost('web:staff.remove')));
+      expect(value).toEqual({ written: 0, missed: 1 });
+      expect(misses).toHaveLength(1);
+      expect(await rowsFor(taId)).toHaveLength(0);
     });
 
     it('the follow-up’s row, and none for actor null or a row that cannot be written', async () => {
@@ -979,6 +1033,36 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
     });
   });
 
+  describe('roster.addStudents without a row', () => {
+    it('actor null and a row that cannot be written: the students are added either way', async () => {
+      const add = (email: string, actor: AuditActor | null) =>
+        roster.addStudents({
+          classroomId: Y.classroomId,
+          students: [{ email }],
+          signInvite: address => `token-for-${address}`,
+          actor,
+        });
+      const countY = () =>
+        prisma.auditLog.count({
+          where: { classroom_id: Y.classroomId, resource_type: 'STUDENT_ROSTER', action: 'CREATE' },
+        });
+      const before = await countY();
+
+      const quiet = `quiet-add-${suite}@example.test`;
+      const quietId = await makeUser('quiet-add', { email: quiet });
+      expect((await add(quiet, null)).audit).toEqual({ written: 0, missed: 0 });
+      expect(await membershipOf(Y, quietId, 'STUDENT')).not.toBeNull();
+
+      const missed = `missed-add-${suite}@example.test`;
+      const missedId = await makeUser('missed-add', { email: missed });
+      const { value, misses } = await quietly(() => add(missed, ghost('web:students.add')));
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(misses).toHaveLength(1);
+      expect(await membershipOf(Y, missedId, 'STUDENT')).not.toBeNull();
+      expect(await countY()).toBe(before);
+    });
+  });
+
   // ─── invites ───────────────────────────────────────────────────────────────
 
   describe('classroomInvite.deleteInviteInClassroom', () => {
@@ -1020,6 +1104,34 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
           data: { tool: 'web:roster.revoke_invite' },
         },
       ]);
+    });
+  });
+
+  describe('classroomInvite.deleteInviteInClassroom without a row', () => {
+    it('actor null and a row that cannot be written: the invite is gone either way', async () => {
+      const make = (label: string) =>
+        prisma.classroomInvite.create({
+          data: {
+            classroom_id: X.classroomId,
+            school_email: `${label}-${suite}@example.test`,
+            student_name: '',
+          },
+        });
+      const quiet = await make('revoke-quiet');
+      expect(await invites.deleteInviteInClassroom(X.classroomId, quiet.id, null)).toEqual({
+        deleted: true,
+        audit: { written: 0, missed: 0 },
+      });
+      const missed = await make('revoke-missed');
+      const { value, misses } = await quietly(() =>
+        invites.deleteInviteInClassroom(X.classroomId, missed.id, ghost('web:roster.revoke_invite'))
+      );
+      expect(value).toEqual({ deleted: true, audit: { written: 0, missed: 1 } });
+      expect(misses).toHaveLength(1);
+      for (const id of [quiet.id, missed.id]) {
+        expect(await prisma.classroomInvite.findUnique({ where: { id } })).toBeNull();
+        expect(await rowsFor(id)).toHaveLength(0);
+      }
     });
   });
 
@@ -1075,6 +1187,29 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
       const again = await invites.claimPendingInvites(claimer, { tool: 'web:roster.invite_email' });
       expect(again).toMatchObject({ claimed: 2, audit: { written: 0, missed: 0 } });
       expect(await rowsFor(claimer)).toHaveLength(2);
+    });
+
+    it('a row that cannot be written: the membership stands and the miss is reported', async () => {
+      const email = `claim-missed-${suite}@example.test`;
+      const claimer = await makeUser('claim-missed', { email });
+      await prisma.classroomInvite.create({
+        data: { classroom_id: X.classroomId, school_email: email, student_name: '' },
+      });
+      // The audit table refuses every write for this call.
+      const refuse = vi
+        .spyOn(prisma.auditLog, 'create')
+        .mockRejectedValue(new Error('audit_logs unavailable'));
+      try {
+        const { value, misses } = await quietly(() =>
+          invites.claimPendingInvites(claimer, { tool: 'web:roster.invite_email' })
+        );
+        expect(value).toMatchObject({ claimed: 1, audit: { written: 0, missed: 1 } });
+        expect(misses).toHaveLength(1);
+      } finally {
+        refuse.mockRestore();
+      }
+      expect(await membershipOf(X, claimer, 'STUDENT')).not.toBeNull();
+      expect(await rowsFor(claimer)).toHaveLength(0);
     });
 
     it('leaves out the classroom its caller records, and records nothing for null', async () => {
