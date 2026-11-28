@@ -193,7 +193,9 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
     });
     const targetLogin = gitUsername(identity, provider);
 
-    // Audit the intent BEFORE firing the async removal.
+    // Audit the request BEFORE firing the async removal: the row records that
+    // the removal was asked for (`removal: 'requested'`), not that it happened;
+    // the task removes the membership later, and this call does not wait.
     await writeAudit(ctx, {
       resource_type: 'STUDENT_ROSTER',
       resource_id: target.id,
@@ -203,6 +205,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
         user_id: target.id,
         login: targetLogin,
         had_accepted_invite: hasAcceptedInvite,
+        removal: 'requested',
       },
     });
 
