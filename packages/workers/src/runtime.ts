@@ -10,6 +10,7 @@
 import { RouterContextProvider } from 'react-router';
 import { runWithPrisma } from '@classmoji/database';
 import { PrismaPg } from '@classmoji/database/pg-adapter';
+import { reportError } from '@classmoji/utils/error-report';
 
 import { cloudflareContext } from './context.ts';
 
@@ -52,6 +53,9 @@ export function createWorkerHandler<Env extends ClassmojiWorkerEnv>(
         // A build without an environment (no `--env`/CLOUDFLARE_ENV) has no
         // bindings at all; say so instead of failing on the first query.
         console.error('[workers] the HYPERDRIVE binding is missing: no database for this request');
+        reportError(new Error('[workers] the HYPERDRIVE binding is missing'), {
+          surface: 'workers.hyperdrive_missing',
+        });
         return new Response('Service misconfigured', { status: 503 });
       }
       const adapter = new PrismaPg({ connectionString });

@@ -88,6 +88,9 @@ COPY --from=build /app/node_modules ./node_modules
 
 COPY --from=build /app/apps/slides/build ./apps/slides/build
 COPY --from=build /app/apps/slides/server.ts ./apps/slides/server.ts
+# server.ts imports from server/ (error tracking, started first) — skipping
+# this directory crash-loops the app at boot with ERR_MODULE_NOT_FOUND.
+COPY --from=build /app/apps/slides/server ./apps/slides/server
 COPY --from=build /app/apps/slides/package.json ./apps/slides/package.json
 COPY --from=build /app/package.json ./
 COPY --from=build /app/package-lock.json ./

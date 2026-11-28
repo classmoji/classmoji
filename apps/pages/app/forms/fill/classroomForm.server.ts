@@ -3,6 +3,7 @@ import { requiresResolvedContext, type FormField } from '@classmoji/services/for
 import { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername, gitAccount } from '@classmoji/utils';
 import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { ReviewTarget } from '~/components/forms/FormRenderer.tsx';
 import {
@@ -211,7 +212,7 @@ export type ClassroomFormRow = NonNullable<
  * else is wrong with their account.
  */
 async function sessionAccount(request: Request): Promise<SessionMember | null> {
-  const session = await getAuthSession(request).catch(() => null);
+  const session = await getAuthSession(request).catch(sessionReadFailed);
   const userId = session?.userId;
   if (!userId) return null;
 

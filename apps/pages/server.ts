@@ -1,5 +1,9 @@
+// First: starts server-side error tracking before anything else loads.
+import { sentryEnabled } from './server/sentry.ts';
+
 import express from 'express';
 import { createRequestHandler } from '@react-router/express';
+import { setupExpressErrorHandler } from '@classmoji/utils/sentry-node';
 import compression from 'compression';
 import morgan from 'morgan';
 
@@ -135,6 +139,11 @@ if (isDev) {
     })
   );
 }
+
+// After every route: reports an error that reaches Express (one the React
+// Router handler did not answer itself) and passes it on with next(error), so
+// Express's own handler still sends the response it always did.
+if (sentryEnabled) setupExpressErrorHandler(app);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Start Server

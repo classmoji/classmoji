@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { getPrisma } from '@classmoji/database';
 import { proPriceIds } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import dayjs from 'dayjs';
 
 /**
@@ -131,6 +132,18 @@ const grantPro = async (
     console.warn(
       `Stripe subscription ${subscription.id} does not carry a STRIPE_PRO_PRICE_ID price — no tier granted`
     );
+    // Still answered 2xx, but someone paid (or a price changed without
+    // STRIPE_PRO_PRICE_ID following it): a person should look.
+    reportError(new Error('Stripe subscription does not carry a Pro price; no tier granted'), {
+      surface: 'stripe.price_mismatch',
+      level: 'error',
+      tags: {
+        provider: 'stripe',
+        stripe_event_id: eventId,
+        stripe_subscription_id: subscription.id,
+        subscription_status: subscription.status,
+      },
+    });
     return;
   }
 
@@ -413,6 +426,10 @@ export default async function stripeRoutes(fastify: FastifyInstance): Promise<vo
         await handler(user, subscription, event.id);
       } catch (err: unknown) {
         request.log.error({ err, eventId: event.id, type: event.type }, 'Stripe handler failed');
+        reportError(err, {
+          surface: 'stripe.handler',
+          tags: { provider: 'stripe', event: event.type, stripe_event_id: event.id },
+        });
         // No processed row: Stripe redelivers for ~3 days, and the handlers are
         // idempotent, so the retry either finishes the job or fails the same way
         // loudly. A refusal is NOT routed here — see the handlers.

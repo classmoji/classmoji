@@ -15,6 +15,7 @@
     "@classmoji/page-schema": "*",
     "@classmoji/services": "*",
     "@classmoji/tasks": "*",
+    "@classmoji/utils": "*",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
     "@trigger.dev/sdk": "4.8.3",

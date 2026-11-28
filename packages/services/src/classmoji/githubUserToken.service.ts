@@ -15,6 +15,7 @@
 
 import getPrisma from '@classmoji/database';
 import type { Account as PrismaAccount } from '@classmoji/database/client';
+import { reportError } from '@classmoji/utils/error-report';
 
 export interface GitHubTokenResult {
   token: string;
@@ -51,6 +52,35 @@ async function withRefreshLock(
   return promise;
 }
 
+/** GitHub's `error` field when it is a plain code (`bad_refresh_token`), else undefined. */
+const errorCode = (value: unknown): string | undefined =>
+  typeof value === 'string' && /^[a-z_]{1,40}$/.test(value) ? value : undefined;
+
+/**
+ * Refusals that are expected and not reported: the person must sign in again
+ * (or another machine used the token first). They recur on every request for
+ * that person until they do, so a report would say nothing new.
+ */
+const EXPECTED_REFUSALS = new Set(['bad_refresh_token', 'invalid_grant']);
+
+/**
+ * Report a failed refresh: the network, a 5xx, an answer we could not read, a
+ * refusal we did not expect. Never the tokens or GitHub's text.
+ */
+function reportRefreshFailure(
+  error: unknown,
+  tags: { reason: string; status?: number; code?: string }
+): void {
+  if (tags.code && EXPECTED_REFUSALS.has(tags.code)) return;
+  reportError(error, { surface: 'github.token_refresh', tags });
+}
+
+/**
+ * The one error a missing client id/secret is reported as: the same object
+ * every time, so `reportError` sends it once per process, not per request.
+ */
+const NOT_CONFIGURED = new Error('GitHub token refresh: client not configured');
+
 /**
  * Refresh a GitHub App user access token using its refresh token.
  *
@@ -66,6 +96,7 @@ async function refreshGitHubToken(
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     console.error('[githubUserToken] Missing GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET');
+    reportRefreshFailure(NOT_CONFIGURED, { reason: 'not_configured' });
     return null;
   }
 
@@ -76,27 +107,49 @@ async function refreshGitHubToken(
     refresh_token: account.refresh_token,
   });
 
-  const response = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      accept: 'application/json',
-    },
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body,
+    });
+  } catch (error: unknown) {
+    reportRefreshFailure(error, { reason: 'network' });
+    throw error;
+  }
 
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error: unknown) {
+    reportRefreshFailure(error, { reason: 'unreadable_response', status: response.status });
+    throw error;
+  }
 
   // GitHub returns HTTP 200 for errors! Must check the body.
   if (data.error) {
     console.error(
       `[githubUserToken] GitHub token refresh failed: ${data.error} - ${data.error_description}`
     );
+    const code = errorCode(data.error);
+    reportRefreshFailure(new Error(`GitHub token refresh failed: ${code ?? 'unknown_error'}`), {
+      reason: 'refused',
+      status: response.status,
+      code,
+    });
     return null;
   }
 
   if (!data.access_token) {
     console.error('[githubUserToken] GitHub token refresh returned no access_token');
+    reportRefreshFailure(new Error('GitHub token refresh returned no access_token'), {
+      reason: 'no_access_token',
+      status: response.status,
+    });
     return null;
   }
 

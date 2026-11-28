@@ -16,6 +16,7 @@ import {
   type CollabLoaderData,
 } from '@classmoji/collab';
 import { resolveCollabEnv, type CollabEnv } from '@classmoji/collab/env';
+import { reportError } from '@classmoji/utils/error-report';
 
 export type { CollabEnv };
 
@@ -30,6 +31,10 @@ export function collabEnv(env: Env = process.env): CollabEnv | null {
     console.error(
       '[slides] Live editing is off: COLLAB_URL (or COLLAB_WS_URL) and COLLAB_INTERNAL_SECRET must be set.'
     );
+    // Once per process, like the log line: a deploy missing its collab env.
+    reportError(new Error('Live editing is off: the collab environment is not set'), {
+      surface: 'slides.collab_env',
+    });
   }
   return resolved;
 }

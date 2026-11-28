@@ -23,6 +23,7 @@
  * dropped: the edits are safe in collab_docs and the next store re-triggers.
  */
 import { CONTENT_CHECKPOINT_TASK, type ContentCheckpointPayload } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 
 import type { CollabConfig } from './config.ts';
 
@@ -148,6 +149,11 @@ export function createTaskCheckpointTrigger(
     if (!env.TRIGGER_SECRET_KEY) {
       if (!warned) {
         console.warn('[collab] TRIGGER_SECRET_KEY is not set; checkpoints are not triggered');
+        // Edits then never reach git: reported once per process, like the log.
+        reportError(new Error('TRIGGER_SECRET_KEY is not set; checkpoints are not triggered'), {
+          surface: 'collab.checkpoint_trigger',
+          tags: { stage: 'unconfigured' },
+        });
         warned = true;
       }
       return false;
@@ -170,6 +176,18 @@ export function createTaskCheckpointTrigger(
         `[collab] could not trigger ${CONTENT_CHECKPOINT_TASK}${payload.warm ? ' (warm-up)' : ''} for classroom ${payload.classroomId}:`,
         err
       );
+      // Until a later store triggers again, these edits do not reach git. A
+      // failed warm-up only costs a cold start.
+      reportError(err, {
+        surface: 'collab.checkpoint_trigger',
+        level: payload.warm ? 'warning' : 'error',
+        tags: {
+          stage: 'send',
+          classroom_id: payload.classroomId,
+          reason: payload.reason,
+          warm: Boolean(payload.warm),
+        },
+      });
     } finally {
       if (timer) clearTimeout(timer);
     }

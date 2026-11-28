@@ -56,7 +56,9 @@
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "vars": {
         "ADMIN_URL": "http://localhost:7500",
-        "WEBAPP_URL": "http://localhost:3000"
+        "WEBAPP_URL": "http://localhost:3000",
+        // Sentry stays off locally unless .dev.vars sets SENTRY_DSN.
+        "SENTRY_ENVIRONMENT": "development"
       }
     },
 
@@ -87,7 +89,9 @@
         "SITE_BASE_DOMAIN": "staging.classmoji.io",
         // Staging's cookies must not shadow production's on .classmoji.io; a
         // wrong prefix silently signs everyone out (Fly-only secret until now).
-        "COOKIE_PREFIX": "classmoji-staging"
+        "COOKIE_PREFIX": "classmoji-staging",
+        // Workers have no FLY_APP_NAME to derive it from (SENTRY_DSN is a secret).
+        "SENTRY_ENVIRONMENT": "staging"
       },
       "observability": {
         "enabled": true
@@ -117,7 +121,8 @@
         "NODE_ENV": "production",
         "ADMIN_URL": "https://admin.classmoji.io",
         "WEBAPP_URL": "https://app.classmoji.io",
-        "SITE_BASE_DOMAIN": "classmoji.io"
+        "SITE_BASE_DOMAIN": "classmoji.io",
+        "SENTRY_ENVIRONMENT": "production"
       },
       "observability": {
         "enabled": true

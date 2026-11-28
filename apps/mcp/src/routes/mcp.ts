@@ -68,6 +68,9 @@ import { normalizeAgentSession } from '@classmoji/collab';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import type { Role } from '@classmoji/database/client';
 import { randomUUID } from 'node:crypto';
+import { reportError } from '@classmoji/utils/error-report';
+import { setSentryUserId } from '@classmoji/utils/sentry-node';
+import { reportServerError } from '../httpErrorHandler.ts';
 import { parseRoleCeiling, ROLE_CEILING_VALUES } from '../authz/pure.ts';
 
 /**
@@ -297,9 +300,10 @@ const authenticated = new WeakMap<FastifyRequest, Authenticated>();
  * the body ever being parsed.
  */
 async function authenticate(request: FastifyRequest, reply: FastifyReply) {
+  let viewer: Viewer;
   try {
     const headers = toFetchHeaders(request);
-    const viewer: Viewer = {
+    viewer = {
       ...(await resolveViewer(headers)),
       timezoneHint: timezoneHintFrom(headers),
       agentSession: agentSessionFrom(headers),
@@ -308,12 +312,23 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   } catch (error) {
     if (error instanceof TokenStoreUnavailableError) {
       request.log.warn({ err: error.cause }, '[mcp] token store unavailable; answering 503');
+      reportError(error.cause ?? error, { surface: 'mcp.auth.token_store' });
       return sendTryAgain(reply);
     }
     const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
-    if (!(error instanceof UnauthorizedError)) request.log.error(error);
+    if (!(error instanceof UnauthorizedError)) {
+      // Not a refused token: the check itself failed, answered as a 401.
+      request.log.error(error);
+      reportError(error, { surface: 'mcp.auth' });
+    }
     return sendUnauthorized(reply, message);
   }
+  // This request's error reports name the user (internal id only). The
+  // request has its own Sentry scope, which the route and every tool handler
+  // it starts run inside. An Ask Moji token minted under View as names no one
+  // (`impersonating` instead): the viewed person is not the one acting.
+  // Outside the try above, so it can never turn into a 401 (it does not throw).
+  setSentryUserId(viewer.userId, { impersonating: Boolean(viewer.impersonatedBy) });
 }
 
 /** The elements of large tool calls in flight, shared by every request. */
@@ -366,10 +381,14 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
   /**
    * The route's error handler: a body the budget refused partway gets its
    * JSON-RPC refusal with Retry-After (Fastify has already set
-   * `Connection: close`). Every other error goes on to the server's handler.
+   * `Connection: close`). Every other error goes on to the next error
+   * handler, reported first when it is answered 5xx.
    */
   const answerBodyRefusal = (error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-    if (!(error instanceof BodyBudgetRefusal)) throw error;
+    if (!(error instanceof BodyBudgetRefusal)) {
+      reportServerError(error);
+      throw error;
+    }
     const viewer = authenticated.get(request)?.viewer;
     request.log.warn(
       {
@@ -511,6 +530,7 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
     } catch (error) {
       // S5: a transport/server failure must never hang the request.
       request.log.error(error, '[mcp] transport error');
+      reportError(error, { surface: 'mcp.transport' });
       if (!reply.raw.headersSent) {
         reply.raw.writeHead(500, { 'Content-Type': 'application/json' });
         reply.raw.end(

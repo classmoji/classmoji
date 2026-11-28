@@ -65,9 +65,10 @@ const CspNonceMeta = ({ nonce }: { nonce: string | undefined }) => (
 
 const App = () => {
   const nonce = useNonce();
-  const { user, sentry } = useLoaderData<typeof loader>() as {
+  const { user, sentry, impersonating } = useLoaderData<typeof loader>() as {
     user: SlideUser | null;
     sentry?: SentryBrowserConfig | null;
+    impersonating?: boolean;
   };
   const setUser = useStore(state => state.setUser);
 
@@ -78,9 +79,11 @@ const App = () => {
   }, [user, setUser]);
 
   const userId = user?.id;
+  // Under "View as" the loader says so; the browser then sets no user id.
+  const viewingAs = Boolean(impersonating);
   useEffect(() => {
-    setSentryUser(userId);
-  }, [userId]);
+    setSentryUser(userId, viewingAs);
+  }, [userId, viewingAs]);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -144,15 +147,20 @@ export function ErrorBoundary() {
   const error = routeError as { message?: string; stack?: string } | undefined;
   // Present unless the root loader itself threw; carries the Sentry settings.
   const rootData = useRouteLoaderData<typeof loader>('root') as
-    | { user?: { id?: string } | null; sentry?: SentryBrowserConfig | null }
+    | {
+        user?: { id?: string } | null;
+        sentry?: SentryBrowserConfig | null;
+        impersonating?: boolean;
+      }
     | undefined;
   const isDevelopment = import.meta.env.MODE === 'development';
 
   const userId = rootData?.user?.id;
+  const impersonating = Boolean(rootData?.impersonating);
   useEffect(() => {
-    setSentryUser(userId);
+    setSentryUser(userId, impersonating);
     captureRouteError(routeError);
-  }, [routeError, userId]);
+  }, [routeError, userId, impersonating]);
 
   return (
     <html lang="en">

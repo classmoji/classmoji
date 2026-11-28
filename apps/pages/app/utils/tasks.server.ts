@@ -9,6 +9,7 @@
  * `db.server.ts` does for Prisma.
  */
 import Tasks from '@classmoji/tasks';
+import { reportError } from '@classmoji/utils/error-report';
 
 export { Tasks };
 
@@ -68,6 +69,11 @@ export async function dispatchVerifyEmail(
       console.error('[forms:magic-link] dispatch failed', {
         to: email.payload.to,
         error: (error as Error).message,
+      });
+      // Never the address: the surface and the template only.
+      reportError(error, {
+        surface: 'forms.verify_email',
+        tags: { template: email.payload.template.id },
       });
     }
   }

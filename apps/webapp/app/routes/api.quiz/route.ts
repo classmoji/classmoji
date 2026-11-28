@@ -34,6 +34,7 @@ import { sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import type { Role } from '@classmoji/database/client';
 import type { Route } from './+types/route';
 
@@ -691,6 +692,7 @@ export async function action({ request }: Route.ActionArgs) {
         } catch (error: unknown) {
           if (error instanceof Response) return error;
           console.error('[restartQuiz] Error:', error);
+          reportError(error, { surface: 'quiz.restart' });
           return new Response(JSON.stringify({ success: false, message: RESTART_FAILED_MESSAGE }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' },
@@ -708,6 +710,7 @@ export async function action({ request }: Route.ActionArgs) {
     // A gate's refusal (access, classroom status) goes back exactly as thrown.
     if (error instanceof Response) return error;
     console.error('API Quiz action error:', error);
+    reportError(error, { surface: 'quiz.action' });
     return new Response(JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

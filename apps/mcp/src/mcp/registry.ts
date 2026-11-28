@@ -50,6 +50,7 @@ import {
 } from '@modelcontextprotocol/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
+import { reportError } from '@classmoji/utils/error-report';
 import type { Role } from '@classmoji/database/client';
 import type { z } from 'zod';
 import type { Viewer } from '../auth/resolveViewer.ts';
@@ -306,6 +307,33 @@ function callerErrorOf(error: unknown): { kind: ToolErrorKind; code: string } | 
   return null;
 }
 
+/**
+ * Hand a tool's or resource's failure to the error reporter (Sentry when the
+ * server started it; nothing otherwise). Reported: an unknown error, and a
+ * ToolError of kind `internal` (its `cause` when it has one, so the report
+ * points at the real failure; without one it is a refusal the code chose, sent
+ * as a warning). Every other ToolError kind is an answer to the caller, not a
+ * fault, and is never reported. Tags carry the surface's name, the kind and
+ * the code only: never arguments, results, or the message of a caller error.
+ */
+export function reportSurfaceFailure(
+  failure: unknown,
+  surface: { kind: 'tool' | 'resource'; name: string }
+): void {
+  const tags = { [surface.kind]: surface.name };
+  const reportSurface = `mcp.${surface.kind}`;
+  if (failure instanceof ToolError) {
+    if (failure.kind !== 'internal') return;
+    reportError(failure.cause ?? failure, {
+      surface: reportSurface,
+      level: failure.cause === undefined ? 'warning' : 'error',
+      tags: { ...tags, error_kind: 'internal', ...(failure.code ? { code: failure.code } : {}) },
+    });
+    return;
+  }
+  reportError(failure, { surface: reportSurface, tags: { ...tags, error_kind: 'unknown' } });
+}
+
 /** Serialize a caught error into a structured isError tool result (S5). */
 function toErrorResult(error: unknown, toolName: string): ToolResult {
   // A service refusal carrying a known code is reported as the ToolError it
@@ -314,6 +342,8 @@ function toErrorResult(error: unknown, toolName: string): ToolResult {
   const failure = caller
     ? new ToolError(caller.kind, (error as Error).message, caller.code)
     : error;
+
+  reportSurfaceFailure(failure, { kind: 'tool', name: toolName });
 
   if (failure instanceof ToolError) {
     return {
@@ -477,6 +507,7 @@ const RESOURCE_ERROR_CODES: Record<ToolErrorKind, number> = {
 /** Serialize a caught error into a ProtocolError (resources have no isError result). */
 function toResourceError(error: unknown, resourceName: string): ProtocolError {
   if (error instanceof ProtocolError) return error;
+  reportSurfaceFailure(error, { kind: 'resource', name: resourceName });
   if (error instanceof ToolError) {
     return new ProtocolError(RESOURCE_ERROR_CODES[error.kind], error.message, {
       kind: error.kind,

@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -49,6 +50,7 @@ vi.mock('@classmoji/services', () => ({
 
 const { closeLiveDocBeforeDelete } = await import('../lifecycle.ts');
 const { pageDeleteTool } = await import('../../tools/pages.ts');
+const { reportSurfaceFailure } = await import('../../mcp/registry.ts');
 
 const PAGE_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -112,6 +114,33 @@ describe('closeLiveDocBeforeDelete', () => {
     await expect(closeLiveDocBeforeDelete('page', PAGE_ID, 'class-1')).rejects.toMatchObject({
       code: 'LIVE_UNAVAILABLE',
     });
+  });
+
+  it("reports collab not answering once, as the refusal's cause", async () => {
+    const captured: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (error, context) => captured.push({ error, context }),
+      flush: async () => true,
+    });
+    try {
+      closeResponse = { status: 503, body: { error: 'starting' } };
+      const refusal = await closeLiveDocBeforeDelete('page', PAGE_ID, 'class-1').catch(e => e);
+      expect(refusal).toMatchObject({ kind: 'internal', code: 'LIVE_UNAVAILABLE' });
+      expect(captured).toEqual([
+        {
+          error: refusal.cause,
+          context: {
+            surface: 'mcp.collab.close',
+            tags: { status: 503, code: 'starting', kind: 'page' },
+          },
+        },
+      ]);
+      // The registry reports the same cause: not sent a second time.
+      reportSurfaceFailure(refusal, { kind: 'tool', name: 'page_delete' });
+      expect(captured).toHaveLength(1);
+    } finally {
+      setErrorReporter(null);
+    }
   });
 });
 

@@ -29,6 +29,7 @@
  * never Up next, so a closed row never reads as overdue.
  */
 
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import {
   countingQuizScore,
@@ -432,6 +433,11 @@ const degraded =
   <T>(what: string, context: { classroomId: string; userId: string }, empty: T) =>
   (error: unknown): T => {
     console.error(`[studentCoursework] ${what} lookup failed`, context, error);
+    reportError(error, {
+      surface: 'coursework.lookup',
+      tags: { lookup: what },
+      extra: { classroomId: context.classroomId },
+    });
     return empty;
   };
 

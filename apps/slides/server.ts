@@ -1,3 +1,6 @@
+// First: starts server-side error tracking before anything else loads.
+import { sentryEnabled } from './server/sentry.ts';
+
 import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
@@ -11,6 +14,9 @@ import { auth } from '@classmoji/auth/server';
 // is the same module apps/pages reads the prefix from).
 import { sessionTokenFromCookieHeader } from '@classmoji/auth/secret';
 import { RoomStateStore, withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
+import { setupExpressErrorHandler } from '@classmoji/utils/sentry-node';
+import { createJoinHandler } from './server/multiplexJoin.ts';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -118,6 +124,9 @@ io.use(async (socket, next) => {
     return next();
   } catch (err) {
     console.error('[socket] Auth error:', err);
+    // A session or database failure, answered as "signed out": reported, or
+    // an outage would look like everyone losing their session.
+    reportError(err, { surface: 'auth.session_read', tags: { via: 'socket' } });
     return next(new Error('UNAUTHENTICATED'));
   }
 });
@@ -152,6 +161,7 @@ multiplex.use(async (socket, next) => {
     return next();
   } catch (err) {
     console.error('[multiplex] Auth error:', err);
+    reportError(err, { surface: 'auth.session_read', tags: { via: 'multiplex' } });
     return next(new Error('UNAUTHENTICATED'));
   }
 });
@@ -160,79 +170,20 @@ multiplex.on('connection', socket => {
   const data = socket.data as SocketData;
   console.log(`[multiplex] ${data.user?.login || 'anonymous'} connected`);
 
-  socket.on('join', async ({ slideId }: { slideId: string }) => {
-    try {
-      const slide = await getPrisma().slide.findUnique({
-        where: { id: slideId },
-        include: { classroom: true },
-      });
-
-      if (!slide) {
-        console.log(`[multiplex] Slide ${slideId} not found`);
-        socket.emit('join_error', { reason: 'slide_not_found' });
-        return;
-      }
-
-      // Check authorization
-      if (data.shareCode) {
-        // Validate shareCode against slide's multiplex_id
-        if (slide.multiplex_id !== data.shareCode) {
-          console.log(`[multiplex] Invalid shareCode for slide ${slideId}`);
-          socket.emit('error', { message: 'Invalid share code' });
-          socket.emit('join_error', { reason: 'invalid_share_code' });
-          return;
-        }
-        // Public follower - can join but not broadcast
-        data.canBroadcast = false;
-      } else if (data.user) {
-        // Authenticated user - verify classroom membership
-        const membership = data.user.classroom_memberships.find(
-          m => String(m.classroom?.id) === String(slide.classroom_id)
-        );
-
-        if (!membership) {
-          console.log(
-            `[multiplex] User ${data.user.login} not a member of classroom ${slide.classroom_id}`
-          );
-          socket.emit('join_error', { reason: 'not_a_member' });
-          return;
-        }
-
-        data.canBroadcast = membership.role === 'OWNER' || membership.role === 'TEACHER';
-      } else {
-        // No auth at all
-        socket.emit('join_error', { reason: 'unauthenticated' });
-        return;
-      }
-
-      socket.join(slideId);
-      data.slideId = slideId;
-
-      // Per-socket ack so clients can resolve their own join deterministically
-      // (the room-wide `viewercount` below can be triggered by other clients).
-      socket.emit('joined', { slideId, canBroadcast: data.canBroadcast });
-
-      console.log(
-        `[multiplex] ${data.user?.login || 'anonymous'} joined ${slideId} (canBroadcast: ${data.canBroadcast})`
-      );
-
-      // Send current slide position to late joiner (catch-up)
-      const currentState = roomStates.get(slideId);
-      if (currentState) {
-        console.log(
-          `[multiplex] Sending current state to late joiner: h=${currentState.indexh}, v=${currentState.indexv}`
-        );
-        socket.emit('currentstate', currentState);
-      }
-
-      // Broadcast updated viewer count
-      const room = multiplex.adapter.rooms.get(slideId);
-      const viewerCount = room ? room.size : 0;
-      multiplex.to(slideId).emit('viewercount', { count: viewerCount });
-    } catch (err) {
-      console.error('[multiplex] Join error:', err);
-    }
-  });
+  // The payload is client input, taken as it comes; the handler validates it.
+  socket.on(
+    'join',
+    createJoinHandler({
+      socket,
+      data,
+      findSlide: id =>
+        getPrisma().slide.findUnique({ where: { id }, include: { classroom: true } }),
+      currentState: slideId => roomStates.get(slideId),
+      roomSize: slideId => multiplex.adapter.rooms.get(slideId)?.size ?? 0,
+      broadcastViewerCount: (slideId, count) =>
+        multiplex.to(slideId).emit('viewercount', { count }),
+    })
+  );
 
   socket.on('slidechanged', (eventData: { indexh: number; indexv: number }) => {
     if (!data.canBroadcast || !data.slideId) return;
@@ -347,6 +298,11 @@ if (isDev) {
   const build = await import('./build/server/index.js');
   app.use(createRequestHandler({ build }));
 }
+
+// After every route: reports an error that reaches Express (one the React
+// Router handler did not answer itself) and passes it on with next(error), so
+// Express's own handler still sends the response it always did.
+if (sentryEnabled) setupExpressErrorHandler(app);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Start Server

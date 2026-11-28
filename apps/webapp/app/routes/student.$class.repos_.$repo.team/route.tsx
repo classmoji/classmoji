@@ -10,6 +10,7 @@ import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/h
 import { auditActor } from '~/utils/auditActor.server';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername, scopeGitlabId, teamsNamespace, titleToIdentifier } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { auth } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
@@ -205,6 +206,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         githubTeam = await gitProvider.createTeam(orgLogin, teamSlug);
       } catch (error: unknown) {
         console.error('Failed to create GitHub team:', error);
+        reportError(error, {
+          surface: 'team.create.github',
+          tags: { classroom_id: classroom.id, provider },
+        });
         return {
           error: `Failed to create team on ${terms.platform}. Please try again or contact your instructor.`,
         };
@@ -248,6 +253,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // Team was created, but user wasn't added - still return success
+        reportError(error, {
+          surface: 'team.create.add_member',
+          tags: { classroom_id: classroom.id, provider },
+        });
       }
 
       // Trigger repository creation workflow. Keyed by classroom like every
@@ -328,6 +337,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // DB was updated, GitHub failed - still return success
+        reportError(error, {
+          surface: 'team.join.github',
+          tags: { classroom_id: classroom.id, team_id: team.id, provider },
+        });
       }
 
       return { success: `You have joined "${team.name}"` };
@@ -354,6 +367,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Failed to remove user from GitHub team:', error);
         // DB was updated, GitHub failed - still return success
+        reportError(error, {
+          surface: 'team.leave.github',
+          tags: { classroom_id: classroom.id, team_id: userTeam.id, provider },
+        });
       }
 
       return { success: `You have left "${userTeam.name}"` };

@@ -20,6 +20,7 @@ import type {
 import { resolveCollabEnv } from '@classmoji/collab/env';
 import { liveEditingBlocked } from '~/utils/liveGates.ts';
 import { prisma } from '~/utils/db.server.ts';
+import { reportError } from '@classmoji/utils/error-report';
 import {
   buildCollabLoaderData,
   collabEnv,
@@ -270,6 +271,10 @@ export async function closeLivePageForDelete(
   const env = resolveCollabEnv();
   if (!env) {
     console.error('[pages] Cannot close the live room before deleting page', page.id);
+    reportError(new Error('Live editing is not configured; a live page cannot be deleted'), {
+      surface: 'pages.collab.close_for_delete',
+      tags: { page_id: page.id },
+    });
     return { ok: false };
   }
   try {
@@ -279,6 +284,7 @@ export async function closeLivePageForDelete(
   } catch (error) {
     if ((error as { status?: number }).status === 404) return { ok: true };
     console.error('[pages] Closing the live room before delete failed:', error);
+    reportError(error, { surface: 'pages.collab.close_for_delete', tags: { page_id: page.id } });
     return { ok: false };
   }
 }

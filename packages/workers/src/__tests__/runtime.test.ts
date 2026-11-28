@@ -5,6 +5,7 @@
  */
 import { RouterContextProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 
 import { cloudflareContext } from '../context.ts';
 
@@ -105,5 +106,29 @@ describe('createWorkerHandler', () => {
     expect(db.adapters).toHaveLength(0);
     expect(error).toHaveBeenCalledWith(expect.stringMatching(/HYPERDRIVE binding is missing/));
     error.mockRestore();
+  });
+
+  it('reports the missing binding to the registered reporter, and answers the same 503', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const reported: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (e, context) => reported.push({ error: e, context }),
+      flush: async () => true,
+    });
+    try {
+      const response = await createWorkerHandler(async () => new Response('ok')).fetch(
+        new Request('https://a/'),
+        {},
+        ctx
+      );
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe('Service misconfigured');
+      expect(reported).toHaveLength(1);
+      expect(reported[0].context).toEqual({ surface: 'workers.hyperdrive_missing' });
+      expect((reported[0].error as Error).message).toMatch(/HYPERDRIVE binding is missing/);
+    } finally {
+      setErrorReporter(null);
+      error.mockRestore();
+    }
   });
 });

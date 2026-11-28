@@ -33,8 +33,19 @@ export class ToolError extends Error {
    */
   data?: Record<string, unknown>;
 
-  constructor(kind: ToolErrorKind, message: string, code?: string, data?: Record<string, unknown>) {
-    super(message);
+  /**
+   * `options.cause`: the failure an `internal` ToolError stands for. The
+   * registry reports the cause instead of the ToolError (mcp/registry.ts);
+   * it is never part of what the caller is sent.
+   */
+  constructor(
+    kind: ToolErrorKind,
+    message: string,
+    code?: string,
+    data?: Record<string, unknown>,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
     this.name = 'ToolError';
     this.kind = kind;
     this.code = code;

@@ -17,6 +17,7 @@ import { MantineProvider } from '@mantine/core';
 import { MANTINE_8_THEME, mantine8CssVariables } from '~/utils/mantineTheme.ts';
 
 import { withLogin } from '@classmoji/utils';
+import { reportError } from '@classmoji/utils/error-report';
 import {
   SENTRY_CONFIG_ELEMENT_ID,
   sentryBrowserConfig,
@@ -24,6 +25,8 @@ import {
   type SentryBrowserConfig,
 } from '@classmoji/utils/sentry';
 import { prisma, getAuthSession, GIT_IDENTITY } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
+import { isImpersonatedSession } from '~/utils/pageSections.server.ts';
 import { classifyFormsPath } from '~/utils/formsPaths.ts';
 import { VIEW_PENDING_ATTRIBUTE } from '@classmoji/services/render-contract';
 import { isRenderDataRequest, renderDataRequestRefusal } from '~/render/headers.server.ts';
@@ -125,13 +128,14 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   if (url.pathname === '/health' || url.pathname.startsWith('/api/') || url.pathname === '/') {
     // Still try to get user if available (non-blocking)
     try {
-      const authData = await getAuthSession(request);
+      const authData = await getAuthSession(request).catch(sessionReadFailed);
       if (authData) {
         const user = await findRootUser(authData.userId);
-        return { user, isSite: false };
+        return { user, impersonating: isImpersonatedSession(authData), isSite: false };
       }
-    } catch {
-      // Not authenticated — that's fine for these routes
+    } catch (error) {
+      // The user lookup failed: the page is served without the chrome's user.
+      reportError(error, { surface: 'pages.root.user_lookup' });
     }
     return { user: null, isSite: false };
   }
@@ -158,12 +162,17 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   if (formsRoute === 'public') {
     // Best-effort session, exactly like the public-page branch: a signed-in
     // member filling a public form should still see themselves in the chrome.
-    const authData = await getAuthSession(request).catch(() => null);
+    const authData = await getAuthSession(request).catch(sessionReadFailed);
     let user = null;
     if (authData) {
       user = await findRootUser(authData.userId).catch(() => null);
     }
-    return { user, isPublicAccess: true, isSite: false };
+    return {
+      user,
+      impersonating: isImpersonatedSession(authData),
+      isPublicAccess: true,
+      isSite: false,
+    };
   }
 
   // Check if this is a page view route (/:classroomSlug/:pageId pattern)
@@ -183,14 +192,19 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
       // If page is public and not a draft, allow unauthenticated access
       if (page && page.is_public && !page.is_draft) {
         // Try to get auth anyway (user might be logged in)
-        const authData = await getAuthSession(request).catch(() => null);
+        const authData = await getAuthSession(request).catch(sessionReadFailed);
         let user = null;
 
         if (authData) {
           user = await findRootUser(authData.userId);
         }
 
-        return { user, isPublicAccess: true, isSite: false };
+        return {
+          user,
+          impersonating: isImpersonatedSession(authData),
+          isPublicAccess: true,
+          isSite: false,
+        };
       }
     } catch {
       // If lookup fails, continue with normal auth flow
@@ -216,7 +230,7 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
     return redirect(webappUrl);
   }
 
-  return { user, isSite: false };
+  return { user, impersonating: isImpersonatedSession(authData), isSite: false };
 };
 
 export const loader = async (args: { request: Request; url: URL }) => {
@@ -338,9 +352,11 @@ const App = () => {
   }, [user, setUser]);
 
   const userId = user?.id;
+  // Under "View as" the loader says so; the browser then sets no user id.
+  const impersonating = Boolean((data as { impersonating?: boolean }).impersonating);
   useEffect(() => {
-    setSentryUser(userId);
-  }, [userId]);
+    setSentryUser(userId, impersonating);
+  }, [userId, impersonating]);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -522,11 +538,13 @@ export function ErrorBoundary() {
   const isDevelopment = import.meta.env.MODE === 'development';
 
   // Class-site documents never hydrate, so this only runs on app documents.
-  const userId = (rootData as { user?: { id?: string } | null } | undefined)?.user?.id;
+  const root = rootData as { user?: { id?: string } | null; impersonating?: boolean } | undefined;
+  const userId = root?.user?.id;
+  const impersonating = Boolean(root?.impersonating);
   useEffect(() => {
-    setSentryUser(userId);
+    setSentryUser(userId, impersonating);
     captureRouteError(routeError);
-  }, [routeError, userId]);
+  }, [routeError, userId, impersonating]);
 
   /**
    * A 404 is a bad address, not a broken server, and telling someone to "try

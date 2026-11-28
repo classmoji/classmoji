@@ -19,6 +19,7 @@
 import { ContentService } from '@classmoji/services';
 import { blocksToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 import type { CollabActor } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { loadPageContent } from '~/utils/content.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
@@ -197,6 +198,13 @@ export async function acceptPreviewLive({
         unitPreviews: orderUnitPreviews(failure.units, [live, theirs.blocks, base.blocks]),
       };
     }
+    // The collab server unreachable or failing (5xx): a fault, not the author's.
+    if (failure.status >= 500) {
+      reportError(error, {
+        surface: 'pages.collab.preview_merge',
+        tags: { page_id: page.id, status: failure.status },
+      });
+    }
     return { merged: false, conflict: false, status: failure.status, error: failure.message };
   }
 
@@ -210,6 +218,11 @@ export async function acceptPreviewLive({
     return { merged: true, previewKept: false };
   } catch (error) {
     console.error('[pages] Preview merged live but its branch could not be deleted:', error);
+    reportError(error, {
+      surface: 'pages.collab.preview_discard',
+      level: 'warning',
+      tags: { page_id: page.id },
+    });
     return { merged: true, previewKept: true };
   }
 }

@@ -180,7 +180,13 @@ export const repoContributionsCalculateTool: ToolDefinition<RepoContributionsArg
         );
       }
       console.error('[mcp] repo_contributions_calculate failed:', error);
-      throw new ToolError('internal', 'The calculation could not be queued. Try again.');
+      throw new ToolError(
+        'internal',
+        'The calculation could not be queued. Try again.',
+        undefined,
+        undefined,
+        { cause: error }
+      );
     }
 
     await writeAudit(ctx, {

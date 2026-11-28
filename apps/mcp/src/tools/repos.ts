@@ -78,6 +78,7 @@ import {
 } from '@classmoji/tasks/repo-sync';
 import { z } from 'zod';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
+import { reportError } from '@classmoji/utils/error-report';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
@@ -161,6 +162,10 @@ function triggerRepoProvisioning(
     )
     .catch((error: unknown) => {
       console.error('[mcp] create_git_repos trigger failed:', error);
+      reportError(error, {
+        surface: 'mcp.trigger.create_git_repos',
+        tags: { repos: logins.length },
+      });
     });
 }
 
@@ -438,12 +443,18 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
         throw new ToolError(
           'internal',
           `Sync was only partly queued. Run repo_sync again once the student ${terms.repos} ` +
-            `exist; it adds only what is still missing.`
+            `exist; it adds only what is still missing.`,
+          undefined,
+          undefined,
+          { cause: error }
         );
       }
       throw new ToolError(
         'internal',
-        'Sync could not be queued; nothing was changed. Run repo_sync again.'
+        'Sync could not be queued; nothing was changed. Run repo_sync again.',
+        undefined,
+        undefined,
+        { cause: error }
       );
     }
 

@@ -24,6 +24,7 @@ import {
   type AskMojiAvailabilityCode,
 } from '@classmoji/utils/ask-moji';
 import type { AskMojiSessionRefusal } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import { checkOrigin } from './originCheck.server';
 
 /** The largest body an Ask Moji route reads, in bytes. */
@@ -116,6 +117,7 @@ export async function askMojiPost(
   } catch (error: unknown) {
     if (error instanceof Response) return accessRefusal(error);
     console.error('[api.ask-moji] access check failed', { action, error });
+    reportError(error, { surface: 'ask_moji.access', tags: { action } });
     return askMojiRefuse(500, 'ERROR');
   }
 
@@ -126,6 +128,7 @@ export async function askMojiPost(
   } catch (error: unknown) {
     if (error instanceof Response) return accessRefusal(error);
     console.error('[api.ask-moji] failed', { action, error });
+    reportError(error, { surface: 'ask_moji.route', tags: { action } });
     return askMojiRefuse(500, 'ERROR');
   }
 }

@@ -1,5 +1,6 @@
 import type { Role } from '@classmoji/database/client';
 
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { recordAudit } from '~/utils/audit.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
@@ -121,6 +122,11 @@ export async function readSitePageContent(
   } catch (error) {
     if (error instanceof SiteContentUnavailableError) {
       console.error('[site] content unavailable:', error.message, error.status);
+      // The 503 says nothing about why; the report carries the cause.
+      reportError(error, {
+        surface: 'pages.site.content_read',
+        tags: { page_id: page.id, status: error.status ?? undefined },
+      });
       throw serviceUnavailable(request);
     }
     throw error;

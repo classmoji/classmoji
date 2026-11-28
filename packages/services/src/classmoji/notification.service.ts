@@ -6,6 +6,7 @@ import type {
   NotificationType,
 } from '@classmoji/database/client';
 import { tasks } from '@trigger.dev/sdk';
+import { reportError } from '@classmoji/utils/error-report';
 import * as entitlementService from './entitlement.service.ts';
 import { renderEmail } from './notificationEmails.ts';
 
@@ -98,6 +99,11 @@ export const createNotifications = async (input: CreateNotificationsInput) => {
     });
   } catch (error) {
     console.error('[notifications] createMany failed', { type, error });
+    reportError(error, {
+      surface: 'notify.create',
+      tags: { type },
+      extra: { recipients: uniqueRecipientUserIds.length },
+    });
     return { count: 0 };
   }
 
@@ -119,6 +125,7 @@ export const runSafely = async <T>(label: string, fn: () => Promise<T>): Promise
     return await fn();
   } catch (error) {
     console.error(`[notifications] ${label} failed`, { error });
+    reportError(error, { surface: 'notify.run', tags: { label } });
     return null;
   }
 };
@@ -195,9 +202,15 @@ const enqueueEmails = async ({
     } catch (error) {
       // Notifications must never break the primary action.
       console.error('[notifications] email enqueue failed', { type, count: emails.length, error });
+      reportError(error, {
+        surface: 'notify.email_enqueue',
+        tags: { type },
+        extra: { emails: emails.length },
+      });
     }
   } catch (error) {
     console.error('[notifications] enqueueEmails failed', { type, error });
+    reportError(error, { surface: 'notify.email_prepare', tags: { type } });
   }
 };
 

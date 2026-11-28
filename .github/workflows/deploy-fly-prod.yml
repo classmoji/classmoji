@@ -676,6 +676,8 @@ jobs:
               "CLASSMOJI_EGRESS_IPS",
               // Gitlab approval emails are queued as a Trigger.dev task.
               "TRIGGER_SECRET_KEY",
+              // Server and browser error tracking (Sentry); off without it.
+              "SENTRY_DSN",
             ];
             const allowed = [...required, ...optional];
 

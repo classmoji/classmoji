@@ -8,10 +8,18 @@ import {
   isRouteErrorResponse,
   useRouteError,
   useRouteLoaderData,
+  type LoaderFunctionArgs,
 } from 'react-router';
 import { signOut } from '@classmoji/auth/client';
 import { installClickBurst } from '@classmoji/ui-components/click-burst';
+import {
+  SENTRY_CONFIG_ELEMENT_ID,
+  serializeSentryConfig,
+  type SentryBrowserConfig,
+} from '@classmoji/utils/sentry';
 import { THEME_SCRIPT, useSystemTheme } from '~/hooks/useSystemTheme';
+import { browserSentryConfig } from '~/utils/sentryConfig.server';
+import { captureRouteError } from '~/utils/sentry.client';
 
 import '@fontsource-variable/mona-sans';
 import '~/styles/tailwind.css';
@@ -25,19 +33,34 @@ export const meta = () => [{ title: 'Admin · Classmoji' }];
  *
  * `now` is the instant the server rendered at: ~/hooks/useNow hands it to
  * "how long ago" text while hydrating, so both renders say the same thing.
+ *
+ * `sentry` is the browser's error-tracking config (null when off), read by
+ * entry.client.tsx from the block both documents render.
  */
-export const loader = () => ({
+export const loader = ({ context }: LoaderFunctionArgs) => ({
   webappUrl: process.env.WEBAPP_URL ?? 'http://localhost:3000',
   now: Date.now(),
+  sentry: browserSentryConfig(context),
 });
+
+/** The browser's Sentry settings as a JSON data block (not a script that runs). */
+const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | undefined }) =>
+  config ? (
+    <script
+      type="application/json"
+      id={SENTRY_CONFIG_ELEMENT_ID}
+      dangerouslySetInnerHTML={{ __html: serializeSentryConfig(config) }}
+    />
+  ) : null;
 
 const Document = ({ children }: { children: React.ReactNode }) => {
   // Follows the OS color scheme; see ~/hooks/useSystemTheme for why the
   // pre-paint script needs this companion.
   useSystemTheme();
-  // The burst every click of a control gives (one document listener; this
-  // app has no client entry of its own, so the document installs it).
+  // The burst every click of a control gives (one document listener).
   useEffect(() => installClickBurst(), []);
+  // Present unless the root loader itself threw.
+  const sentry = useRouteLoaderData<typeof loader>('root')?.sentry;
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -47,6 +70,7 @@ const Document = ({ children }: { children: React.ReactNode }) => {
         <meta name="robots" content="noindex, nofollow" />
         <Meta />
         <Links />
+        <SentryConfigScript config={sentry} />
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body suppressHydrationWarning>
@@ -70,6 +94,9 @@ export const ErrorBoundary = () => {
   const rootData = useRouteLoaderData<typeof loader>('root');
   const webappUrl = rootData?.webappUrl ?? 'http://localhost:3000';
   const [signingOut, setSigningOut] = useState(false);
+
+  // 4xx (the 401/403 below) are skipped; real errors and 5xx are reported once.
+  useEffect(() => captureRouteError(error), [error]);
 
   // Without this a rejected visitor is stuck: signed in as the wrong account,
   // no nav rendered, and no way to switch. Signing out drops the shared cookie

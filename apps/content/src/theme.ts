@@ -1,4 +1,4 @@
-import { treeKey, errorResponse } from './cache.ts';
+import { treeKey, errorResponse, reportCachePutFailure } from './cache.ts';
 import { contentTypeForPath } from './content-type.ts';
 import type { Env } from './env.ts';
 import { originFor } from './origins/select.ts';
@@ -46,6 +46,7 @@ export async function loadTree(
       httpMetadata: { contentType: 'application/json; charset=utf-8' },
     }).catch(error => {
       console.warn(`[content] failed to cache ${key}:`, error);
+      return reportCachePutFailure(error);
     })
   );
 

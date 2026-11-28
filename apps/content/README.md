@@ -296,6 +296,8 @@ the same one: the tier's lifetime. Nothing revokes an issued URL early.
 | `CONTENT_SIGNING_SECRET`          | secret           | HMAC master key for signed URLs                                                                  |
 | `CONTENT_SIGNING_SECRET_PREVIOUS` | secret, optional | the key the current one replaced; accepted for verification during a rotation, never signed with |
 | `CONTENT_WORKER_SHARED_SECRET`    | secret           | bearer token presented to the token endpoint                                                     |
+| `SENTRY_ENVIRONMENT`              | var              | `staging` / `production` / `development`, the environment Sentry events carry                    |
+| `SENTRY_DSN`                      | secret, optional | turns error reporting to Sentry on; unset, nothing is sent                                       |
 
 Secrets come from Infisical (`/content-worker`, env `sta` for staging and `prod`
 for production) and are pushed by CI with `wrangler secret bulk` after the
@@ -303,6 +305,14 @@ deploy. A Worker without the two required ones serves 503 for everything, so the
 deploy workflow fails loudly if either is missing; the previous-key slot is
 allowed but never required, and `/healthz` deliberately says nothing about
 whether it is set.
+
+Errors go to Sentry when `SENTRY_DSN` is set (errors only, no tracing; URLs
+lose their query, signature and grant, and no header, body or IP is sent; see
+`sentryServer.ts` in `@classmoji/utils`). Reported: an unhandled error (the
+500), an origin failure other than a 404 (the 502), a failed cache write, and
+a Worker missing its secrets or its MEDIA binding (once per isolate). Like the
+previous key, deleting `SENTRY_DSN` from Infisical does not remove it from the
+Worker: `npx wrangler secret delete SENTRY_DSN --env <env>` does.
 
 ## Signing
 
