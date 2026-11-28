@@ -123,8 +123,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       role: 'STUDENT',
       action: 'CREATE',
       resource_type: 'CLASSROOM_MEMBERSHIP',
-      resource_id: membershipId,
-      data: { tool: 'web:roster.join_link', matched_roster_invite: result.matchedRosterInvite },
+      // The person, by user id; their new membership beside it.
+      resource_id: userId,
+      data: {
+        tool: 'web:roster.join_link',
+        membership_id: membershipId,
+        matched_roster_invite: result.matchedRosterInvite,
+      },
     });
   } else {
     // Already here. Only a pending student goes on to the git step again.

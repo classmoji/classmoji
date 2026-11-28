@@ -432,6 +432,24 @@ describe('updateInClassroom', () => {
   });
 });
 
+describe('findUserIdInClassroom', () => {
+  it('reads the user of a membership bound to both its id and the classroom', async () => {
+    findFirstMock.mockResolvedValue({ user_id: 'u1' });
+
+    expect(await membershipService.findUserIdInClassroom('m1', 'c1')).toBe('u1');
+    expect(findFirstMock).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'm1', classroom_id: 'c1' },
+      select: { user_id: true },
+    });
+  });
+
+  it('is null for a membership of another classroom', async () => {
+    findFirstMock.mockResolvedValue(null);
+
+    expect(await membershipService.findUserIdInClassroom('m1', 'c1')).toBeNull();
+  });
+});
+
 /**
  * The drawer-facing lookup. It replaces a global `user.findByLogin` plus an
  * unfiltered membership read, and the two properties that made that pairing

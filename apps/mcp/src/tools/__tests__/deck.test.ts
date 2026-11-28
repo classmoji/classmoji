@@ -1060,7 +1060,7 @@ describe('deck_preview_accept', () => {
     expect(audit.data).toMatchObject({ preview_kept: true, reason: expect.any(String) });
   });
 
-  it('conflict: structured per-unit report as a NON-error payload, with guidance + audit', async () => {
+  it('conflict: structured per-unit report as a NON-error payload, with guidance, no row', async () => {
     const units = [
       { id: 'aaa', index: '1', ours: { id: 'aaa' }, theirs: { id: 'aaa' }, base: { id: 'aaa' } },
     ];
@@ -1098,16 +1098,9 @@ describe('deck_preview_accept', () => {
     expect(payload.message).toContain('3 change(s) auto-merge cleanly');
     expect(payload.message).toContain('2 conflict(s)');
 
-    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
-    expect(audit.data).toMatchObject({
-      tool: 'deck_preview_accept',
-      outcome: 'conflict',
-      conflict_unit_ids: ['aaa'],
-      order_conflict: true,
-      auto_merged: 3,
-      ours_sha: 'ours-sha',
-      theirs_sha: 'theirs-sha',
-    });
+    // Nothing was merged, so nothing is recorded as changed.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('audit_incomplete');
   });
 
   it('a semantic auto-merge surfaces semantic + auto_merged in payload and audit', async () => {
@@ -1310,7 +1303,7 @@ describe('deck_preview_discard', () => {
     expect(audit.data).toMatchObject({ tool: 'deck_preview_discard', existed: true });
   });
 
-  it('is tolerant of an already-gone preview (still success, with a note)', async () => {
+  it('is tolerant of an already-gone preview (still success, with a note, no DELETE row)', async () => {
     mocks.discardDeckPreview.mockResolvedValue({ discarded: true, existed: false });
 
     const payload = parse(
@@ -1322,5 +1315,7 @@ describe('deck_preview_discard', () => {
       discarded: true,
       note: expect.stringMatching(/already gone/),
     });
+    // Nothing was deleted, so nothing is recorded as deleted.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });

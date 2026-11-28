@@ -1155,19 +1155,7 @@ async function acceptDeckPreviewLive(
     const { units, orderConflict } = splitDeckConflicts(
       outcome.conflicts as unknown as Parameters<typeof splitDeckConflicts>[0]
     );
-    await writeAudit(ctx, {
-      resource_type: 'SLIDES',
-      resource_id: slide.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'deck_preview_accept',
-        outcome: 'conflict',
-        committed_to: 'live',
-        conflict_unit_ids: units.map(unit => unit.id),
-        ...(orderConflict ? { order_conflict: true } : {}),
-        theirs_sha: theirs.sha,
-      },
-    });
+    // A conflict applied nothing, so it writes no UPDATE row.
     const conflictCount = units.length + (orderConflict ? 1 : 0);
     return ok({
       conflict: true,
@@ -1398,21 +1386,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
       });
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'SLIDES',
-      resource_id: slide.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'deck_preview_accept',
-        outcome: 'conflict',
-        conflict_unit_ids: result.units.map(unit => unit.id),
-        ...(result.order_conflict ? { order_conflict: true } : {}),
-        auto_merged: result.auto_merged,
-        ours_sha: result.ours_sha,
-        theirs_sha: result.theirs_sha,
-      },
-    });
-
+    // A conflict merged nothing, so it writes no UPDATE row.
     const conflictCount = result.units.length + (result.order_conflict ? 1 : 0);
     return ok({
       conflict: true,
@@ -1455,15 +1429,18 @@ export const deckPreviewDiscardTool: ToolDefinition<DeckPreviewArgs> = {
     const result = await discardDeckPreview(slide);
     await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
 
-    await writeAudit(ctx, {
-      resource_type: 'SLIDES',
-      resource_id: slide.id,
-      action: 'DELETE',
-      data: {
-        tool: 'deck_preview_discard',
-        existed: result.existed,
-      },
-    });
+    // A preview that was already gone deleted nothing: no DELETE row.
+    if (result.existed) {
+      await writeAudit(ctx, {
+        resource_type: 'SLIDES',
+        resource_id: slide.id,
+        action: 'DELETE',
+        data: {
+          tool: 'deck_preview_discard',
+          existed: result.existed,
+        },
+      });
+    }
 
     return ok({
       success: true,

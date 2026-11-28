@@ -177,7 +177,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     request,
     classSlug,
     {
-      resourceType: 'TEACHING_STAFF',
+      resourceType: 'STAFF',
       action: 'manage_staff',
     }
   );

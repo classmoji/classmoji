@@ -66,7 +66,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         userId,
         role: membership!.role,
         action: 'DELETE',
-        resourceType: 'TEAMS',
+        resourceType: 'TAGS',
         resourceId: deleted.id,
         metadata: { tool: 'web:settings.team.delete_tag', name: deleted.name },
       });

@@ -38,7 +38,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     request,
     classroomId: repoAssignment.git_repo.classroom_id,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-    resourceType: 'REPOSITORY_ASSIGNMENT',
+    resourceType: 'GIT_REPO_ASSIGNMENT',
     attemptedAction: 'refresh_repo_analytics',
     metadata: { git_repo_assignment_id: repositoryAssignmentId },
   });

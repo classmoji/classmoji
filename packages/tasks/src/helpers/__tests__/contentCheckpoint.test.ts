@@ -1111,7 +1111,8 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     expect(audit).toHaveBeenCalledTimes(1);
     expect(audit).toHaveBeenCalledWith({
       classroomId: 'class-1',
-      userId: 'u-ada',
+      // Every editor of the checkpoint, in credit order; the payload's is not.
+      editors: ['u-ada', 'u-nogh'],
       kind: 'page',
       docId: 'page-a',
       commit: head,

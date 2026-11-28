@@ -81,7 +81,7 @@ describe('regrade request rows', () => {
         userId: 'ta-1',
         role: 'ASSISTANT',
         action: 'VIEW',
-        resourceType: 'REGRADE_REQUESTS',
+        resourceType: 'REGRADE_REQUEST',
         metadata: expect.objectContaining({ tool: 'web:regrade_requests.view' }),
       })
     );

@@ -319,8 +319,9 @@ describe('select-organization with an invite link for another address', () => {
       role: 'STUDENT',
       action: 'CREATE',
       resource_type: 'CLASSROOM_MEMBERSHIP',
-      resource_id: 'mem-x',
-      data: { tool: 'web:roster.invite_token' },
+      // The person by user id; their new membership beside it.
+      resource_id: 'user-1',
+      data: { tool: 'web:roster.invite_token', membership_id: 'mem-x' },
     });
     // No address in the audit row.
     expect(JSON.stringify(vi.mocked(ClassmojiService.audit.record).mock.calls)).not.toContain(

@@ -9,6 +9,7 @@
  */
 import type { Connection, onAuthenticatePayload } from '@hocuspocus/server';
 import {
+  COLLAB_AUDIT_RESOURCE,
   COLLAB_CLOSE_FORBIDDEN,
   parseRoom,
   type CollabConnectionContext,
@@ -149,7 +150,7 @@ async function authenticateOrRefuse(
         classroomId: access.classroomId,
         role: access.role,
         action: 'ACCESS_DENIED',
-        resourceType: `collab_${room.kind}`,
+        resourceType: COLLAB_AUDIT_RESOURCE[room.kind],
         resourceId: room.id,
         data: { tool: 'collab', reason: access.reason },
         ...(impersonatedBy ? { impersonatedBy } : {}),

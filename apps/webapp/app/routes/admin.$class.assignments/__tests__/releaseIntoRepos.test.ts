@@ -143,7 +143,7 @@ describe('assignments update: when it opens the assignment in existing repos', (
       expect.objectContaining({
         classroomId: 'class-1',
         action: 'UPDATE',
-        resourceType: 'ASSIGNMENTS',
+        resourceType: 'ASSIGNMENT',
         resourceId: 'a-1',
         metadata: expect.objectContaining({ tool: 'web:assignments.update', opened_in_repos: 3 }),
       })

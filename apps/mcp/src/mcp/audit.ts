@@ -30,7 +30,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import { withImpersonator } from '@classmoji/services/audit';
+import { withImpersonator, type AuditResourceType } from '@classmoji/services/audit';
 import type { AuditLogAction, Prisma, Role } from '@classmoji/database/client';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { ToolError } from './errors.ts';
@@ -44,8 +44,8 @@ import type { ToolContext, ToolResult } from './registry.ts';
 export type AuditData = { tool: string } & { [key: string]: unknown };
 
 export interface AuditEntry {
-  /** Web-route vocabulary, e.g. 'GIT_REPO_ASSIGNMENT', 'REGRADE_REQUEST'. */
-  resource_type: string;
+  /** The audit vocabulary (`AUDIT_RESOURCE_TYPES`), e.g. 'GIT_REPO_ASSIGNMENT', 'REGRADE_REQUEST'. */
+  resource_type: AuditResourceType;
   resource_id?: string | null;
   action: AuditLogAction;
   data: AuditData;
@@ -156,8 +156,8 @@ export function withAuditIncomplete(result: ToolResult): ToolResult {
  * registry records each successful call as a VIEW row.
  */
 export interface ReadAudit {
-  /** The row's resource_type, in the web routes' vocabulary (e.g. 'STUDENT_ROSTER'). */
-  resourceType: string;
+  /** The row's resource_type, in the audit vocabulary (e.g. 'STUDENT_ROSTER'). */
+  resourceType: AuditResourceType;
   /**
    * Which calls read other people's data, for a read whose payload depends on
    * the role (e.g. the staff branch of a list a student also reads for their

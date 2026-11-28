@@ -12,6 +12,7 @@
  * fails the read).
  */
 import type { AuditLogAction, Role } from '@classmoji/database/client';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
 
@@ -22,7 +23,7 @@ export interface PagesAuditRow {
   user_id: string;
   classroom_id: string;
   role: Role | string | null;
-  resource_type: string;
+  resource_type: AuditResourceType;
   resource_id?: string | null;
   action: AuditLogAction;
   data: PagesAuditData;

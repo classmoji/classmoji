@@ -290,21 +290,32 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async clearMyAttempts() {
       // Delete only this authenticated user's attempts for this specific quiz
       // The userId from assertClassroomAccess ensures we only clear the authenticated user's attempts
-      await ClassmojiService.quizAttempt.clearForUserAndQuiz(userId, quizId, classroom.id);
+      const result = await ClassmojiService.quizAttempt.clearForUserAndQuiz(
+        userId,
+        quizId,
+        classroom.id
+      );
 
       // This route's loader already logs a VIEW; the mutation logged nothing.
       // Scoped to one quiz, so the quiz is the affected resource — which is
       // what distinguishes it from the classroom-wide clear on the quiz list.
-      await addClassroomAuditLog({
-        request,
-        classroomId: classroom.id,
-        userId,
-        role: membership!.role,
-        action: 'DELETE',
-        resourceType: 'QUIZ',
-        resourceId: quizId,
-        metadata: { tool: 'web:quiz.clear_my_attempts', scope: 'quiz' },
-      });
+      // Nothing deleted, nothing to record.
+      if (result.deletedCount > 0) {
+        await addClassroomAuditLog({
+          request,
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'DELETE',
+          resourceType: 'QUIZ',
+          resourceId: quizId,
+          metadata: {
+            tool: 'web:quiz.clear_my_attempts',
+            scope: 'quiz',
+            deleted_count: result.deletedCount,
+          },
+        });
+      }
 
       return new Response(
         JSON.stringify({ success: 'Your preview attempts for this quiz have been cleared' }),

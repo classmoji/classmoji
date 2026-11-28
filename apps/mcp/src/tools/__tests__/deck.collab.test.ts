@@ -637,6 +637,8 @@ describe('live preview accept', () => {
     });
     expect(result.message).toMatch(/2 conflict/);
     expect(mocks.discardDeckPreview).not.toHaveBeenCalled();
+    // Nothing was applied, so no UPDATE row.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('a slide someone is editing stops the accept and keeps the preview', async () => {

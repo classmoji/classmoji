@@ -123,7 +123,7 @@ export const loader = async ({
 
   // Authorization: require OWNER, TEACHER, or ASSISTANT role to create slides
   const { membership } = await requireClassroomTeachingTeam(request, classroomSlug, {
-    resourceType: 'SLIDE_CONTENT',
+    resourceType: 'SLIDES',
   });
 
   // Get classroom with git_organization
@@ -269,7 +269,7 @@ export const action = async ({
   const { userId, membership, classroom } = await requireClassroomTeachingTeam(
     request,
     classroomSlug,
-    { resourceType: 'SLIDE_CONTENT' }
+    { resourceType: 'SLIDES' }
   );
   // Creating a slide writes: in a LOCKED or UNPUBLISHED classroom only the
   // owner may. Refused before the body (an upload, maybe) is read.

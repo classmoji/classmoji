@@ -1,4 +1,5 @@
 import { assertProTier, requireClassroomStaff } from '@classmoji/auth/server';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 /**
  * The classroom-status mutation gate, re-exported from the platform package it
@@ -29,7 +30,7 @@ export { formMutationBlocked } from '@classmoji/auth/server';
  */
 
 /** The forms vocabulary in audit rows, shared with the webapp redirect route. */
-const FORMS_RESOURCE = 'FORMS';
+const FORMS_RESOURCE = 'FORMS' as const satisfies AuditResourceType;
 
 /**
  * Redirect a session-less caller to the webapp login, the way `root.tsx` does,

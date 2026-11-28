@@ -504,6 +504,15 @@ describe('admin quizzes action — audit rows', () => {
     });
   });
 
+  it('writes no DELETE row for clearMyAttempts when there was nothing to clear', async () => {
+    mocks.clearForUser.mockResolvedValue({ success: true, deletedCount: 0 });
+
+    const response = (await submit({ _action: 'clearMyAttempts' })) as Response;
+
+    expect(await response.json()).toMatchObject({ deletedCount: 0 });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
   it('writes nothing when the authorization gate throws', async () => {
     mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
 

@@ -74,7 +74,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // ./action.ts. A layout loader never gates a leaf action, so widening this
   // read must not be read as widening anything else.
   const { classroom, membership, userId } = await requireClassroomTeachingTeam(request, classSlug, {
-    resourceType: 'TEACHING_STAFF',
+    resourceType: 'STAFF',
     action: 'view_staff',
   });
 

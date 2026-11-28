@@ -245,6 +245,33 @@ describe('roster_remove_student', () => {
     expect(audit.data.login).toBe('alice');
   });
 
+  it('records the removal as requested, not done: the task removes the membership later', async () => {
+    mocks.findByGitUsername.mockResolvedValue({ id: 'stu-1', login: 'alice' });
+    mocks.findByClassroomAndUser.mockResolvedValue({
+      has_accepted_invite: true,
+      user: { id: 'stu-1', login: 'alice', name: 'Alice' },
+    });
+    mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
+    mocks.auditCreate.mockResolvedValue({ id: 'audit-1' });
+
+    const payload = parse(await rosterRemoveStudentTool.handler(ARGS, CTX));
+
+    expect(payload).toMatchObject({ success: true, queued: true });
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.taskTrigger).toHaveBeenCalledTimes(1);
+    // The row is written before the task is triggered (it is never awaited),
+    // so it records the request, not the removal.
+    expect(mocks.auditCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.taskTrigger.mock.invocationCallOrder[0]
+    );
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'STUDENT_ROSTER',
+      resource_id: 'stu-1',
+      action: 'DELETE',
+      data: { tool: 'roster_remove_student', user_id: 'stu-1', removal: 'requested' },
+    });
+  });
+
   it('sends the task only the fields it reads', async () => {
     // classroom.findById returns the classroom WITH its settings row and its
     // git organization. The task reads the classroom id/slug and the git-org

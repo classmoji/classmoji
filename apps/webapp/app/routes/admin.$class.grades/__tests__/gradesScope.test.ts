@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   addAuditLog: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   updateInClassroom: vi.fn(),
+  findUserIdInClassroom: vi.fn(),
   findByClassroomId: vi.fn(),
   findEmojiMappings: vi.fn(),
   findByClassroomSlug: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroomMembership: {
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
+      findUserIdInClassroom: (...a: unknown[]) => mocks.findUserIdInClassroom(...a),
       findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a),
     },
     emojiMapping: {
@@ -211,6 +213,7 @@ beforeEach(() => {
     membership: { id: 'm-1', role: 'TEACHER' },
   });
   mocks.updateInClassroom.mockResolvedValue(true);
+  mocks.findUserIdInClassroom.mockResolvedValue('student-7');
   mocks.findRepositoriesPerStudent.mockResolvedValue([STUDENT_ROW]);
   mocks.findByClassroomId.mockResolvedValue([MEMBERSHIP_ROW]);
   mocks.findEmojiMappings.mockResolvedValue({});
@@ -642,9 +645,11 @@ describe('grades loader — quiz grade items join the totals', () => {
 // ─── Action: the audit row ───────────────────────────────────────────────────
 
 describe('grades action — the letter-grade write is audited', () => {
-  it('records the write against the membership it landed on', async () => {
+  it('records the write against the student it landed on, by user id', async () => {
     await route.action(actionArgs({ membership_id: OWN_MEMBERSHIP, letter_grade: 'A-' }));
 
+    // The student is read bound to the authorized classroom, like the write.
+    expect(mocks.findUserIdInClassroom).toHaveBeenCalledExactlyOnceWith(OWN_MEMBERSHIP, 'class-1');
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
       request: sameObject(routeRequest),
       classroomId: 'class-1',
@@ -652,8 +657,12 @@ describe('grades action — the letter-grade write is audited', () => {
       role: 'TEACHER',
       action: 'UPDATE',
       resourceType: 'GRADES',
-      resourceId: OWN_MEMBERSHIP,
-      metadata: { tool: 'web:grades.update_letter_grade', letter_grade: 'A-' },
+      resourceId: 'student-7',
+      metadata: {
+        tool: 'web:grades.update_letter_grade',
+        membership_id: OWN_MEMBERSHIP,
+        letter_grade: 'A-',
+      },
     });
   });
 
