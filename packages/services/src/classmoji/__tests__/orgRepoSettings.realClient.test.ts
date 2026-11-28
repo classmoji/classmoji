@@ -75,6 +75,8 @@ describe('updateOrgRepoSettings with the real client', () => {
     const startedAt = Date.now();
     await expect(
       updateOrgRepoSettings({
+        classroomId: 'class-1',
+        actor: null,
         gitOrganization: ORG,
         userToken: 'ghu_token',
         input: { default_repository_permission: 'read' },

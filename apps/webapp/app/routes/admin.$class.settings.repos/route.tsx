@@ -2,11 +2,8 @@ import { Select, Switch, Alert, Button } from 'antd';
 import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
-import {
-  addClassroomAuditLog,
-  assertClassroomAccess,
-  assertClassroomMutationAllowed,
-} from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { clearRevokedToken, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService, getGitProvider, OrgRepoSettingsError } from '@classmoji/services';
 import {
@@ -314,13 +311,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Get classroom with git_organization to find the GitHub org login
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'REPO_SETTINGS',
     attemptedAction: 'modify',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   let input: unknown;
@@ -352,14 +350,15 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     return { error: ORG_SETTINGS_IMPERSONATION_MESSAGE, action: UPDATE_ACTION };
   }
 
-  let result;
   try {
     // Applies only the settings this page edits, to the classroom's own
-    // organization (never one named in the request).
-    result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
+    // organization (never one named in the request), and records the change.
+    await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
       gitOrganization: classroom.git_organization,
       userToken: authData?.token ?? null,
       input,
+      classroomId: classroom.id,
+      actor: await auditActor(request, gate, 'web:settings.repos'),
     });
   } catch (error: unknown) {
     if (error instanceof OrgRepoSettingsError) {
@@ -384,22 +383,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       action: UPDATE_ACTION,
     };
   }
-
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership?.role,
-    action: 'UPDATE',
-    resourceType: 'REPO_SETTINGS',
-    resourceId: classroom.id,
-    metadata: {
-      tool: 'web:settings.repos',
-      org: result.org,
-      changes: result.changes,
-      value: result.value,
-    },
-  });
 
   return {
     success: 'Permissions updated',

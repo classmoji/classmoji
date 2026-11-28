@@ -106,6 +106,12 @@ const WRITES: Record<string, Entry> = {
     fn: 'classroom.updateClassroomSettings',
     actor: 'serviceActor',
   },
+  // After GitHub applied the change (REPO_SETTINGS, old → new).
+  org_repo_settings_update: {
+    kind: 'service',
+    fn: 'orgRepoSettings.updateOrgRepoSettings',
+    actor: 'serviceActor',
+  },
   emoji_mapping_upsert: {
     kind: 'service',
     fn: 'emojiMapping.saveEmojiMapping',
@@ -177,7 +183,6 @@ const WRITES: Record<string, Entry> = {
   repo_delete: TOOL,
   resource_link_add: TOOL,
   resource_link_remove: TOOL,
-  org_repo_settings_update: TOOL,
   slide_create: TOOL,
   slide_update: TOOL,
   slide_delete: TOOL,

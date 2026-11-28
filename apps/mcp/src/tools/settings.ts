@@ -42,7 +42,6 @@ import {
   requireClassroomCtx,
   serviceActor,
   viewingAs,
-  writeAudit,
 } from './shared.ts';
 
 /**
@@ -470,10 +469,13 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
 
     let result;
     try {
+      // The service records the change (REPO_SETTINGS) once GitHub applied it.
       result = await ClassmojiService.orgRepoSettings.updateOrgRepoSettings({
         gitOrganization: record?.git_organization,
         userToken: tokenResult?.token ?? null,
         input: updates,
+        classroomId: classroom.classroomId,
+        actor: serviceActor(ctx, 'org_repo_settings_update'),
       });
     } catch (error: unknown) {
       if (error instanceof OrgRepoSettingsError) {
@@ -515,17 +517,7 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       throw error;
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'REPO_SETTINGS',
-      resource_id: classroom.classroomId,
-      action: 'UPDATE',
-      data: {
-        tool: 'org_repo_settings_update',
-        org: result.org,
-        changes: result.changes,
-        value: result.value,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,

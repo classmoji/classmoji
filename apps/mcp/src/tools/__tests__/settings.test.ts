@@ -857,33 +857,49 @@ describe('org_repo_settings_update', () => {
     expect(Buffer.byteLength(orgRepoSettingsUpdateTool.description, 'utf8')).toBeLessThan(1500);
   });
 
-  it('audits against REPO_SETTINGS with old and new values after the GitHub write', async () => {
+  it('hands the service the ctx classroom and its actor, and writes no row itself', async () => {
     mocks.updateOrgRepoSettings.mockResolvedValue({
       org: 'myorg',
       changes: { default_repository_permission: { from: 'read', to: 'none' } },
       settings: { default_repository_permission: 'none' },
       value: 'default_repository_permission=none',
+      audit: WRITTEN,
     });
-    await orgRepoSettingsUpdateTool.handler(
-      { ...BASE, default_repository_permission: 'none' },
-      CTX
+    const ctx = { ...CTX } as ToolContext;
+    const payload = parse(
+      await orgRepoSettingsUpdateTool.handler(
+        { ...BASE, default_repository_permission: 'none' },
+        ctx
+      )
     );
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      resource_type: string;
-      classroom_id: string;
-      action: string;
-      data: Record<string, unknown>;
-    };
-    expect(audit.resource_type).toBe('REPO_SETTINGS');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.data).toEqual({
-      tool: 'org_repo_settings_update',
-      via: 'mcp',
-      client_id: 'c',
-      org: 'myorg',
-      changes: { default_repository_permission: { from: 'read', to: 'none' } },
-      value: 'default_repository_permission=none',
+    const [call] = mocks.updateOrgRepoSettings.mock.calls[0] as [Record<string, unknown>];
+    expect(call.classroomId).toBe('class-1');
+    expect(call.actor).toEqual(actorFor('org_repo_settings_update'));
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(ctx.auditIncomplete).toBeUndefined();
+    expect(payload).toEqual({
+      success: true,
+      organization: 'myorg',
+      updated_fields: ['default_repository_permission'],
+      settings: { default_repository_permission: 'none' },
+      message:
+        "Updated organization-wide Github settings for 'myorg' — this affects every classroom and repository in that organization.",
     });
+  });
+
+  it('marks the call when the service could not write its row', async () => {
+    mocks.updateOrgRepoSettings.mockResolvedValue({
+      org: 'myorg',
+      changes: {},
+      settings: { members_can_create_repositories: true },
+      value: 'members_can_create_repositories=true',
+      audit: { written: 0, missed: 1 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+    await orgRepoSettingsUpdateTool.handler(
+      { ...BASE, members_can_create_repositories: true },
+      ctx
+    );
+    expect(ctx.auditIncomplete).toBe(true);
   });
 });
