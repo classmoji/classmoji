@@ -1,6 +1,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 /**
@@ -41,7 +42,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // Authorize on the id, not on the repo's classroom slug: a slug sends the auth
   // layer through a second lookup, leaving nothing that ties the authorized
   // classroom to the repo whose contributor mapping is written below.
-  const { classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomId: repo.classroom_id,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -49,6 +50,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     attemptedAction: 'link_contributor',
     metadata: { git_repo_id: repositoryId },
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   let body: { github_login?: string; user_id?: string | null };
@@ -69,7 +71,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   }
 
   try {
-    await ClassmojiService.repoAnalytics.linkContributor(repositoryId, githubLogin, userId);
+    // The analytics service records a mapping that changed.
+    await ClassmojiService.repoAnalytics.linkContributor(
+      repositoryId,
+      githubLogin,
+      userId,
+      await auditActor(request, gate, 'web:repos.link_contributor')
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return Response.json({ error: message }, { status: 400 });

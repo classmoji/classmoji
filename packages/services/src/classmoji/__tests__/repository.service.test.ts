@@ -5,13 +5,17 @@ const updateMany = vi.fn();
 const findFirst = vi.fn();
 const findUniqueOrThrow = vi.fn();
 const tagFindFirst = vi.fn();
+const queryRaw = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
-    repository: { deleteMany, updateMany, findFirst, findUniqueOrThrow },
-    tag: { findFirst: tagFindFirst },
-  }),
-}));
+// Writes that read what they replace run in one interactive transaction: the
+// client it hands over is this same one, with the row lock.
+const client: Record<string, unknown> = {
+  repository: { deleteMany, updateMany, findFirst, findUniqueOrThrow },
+  tag: { findFirst: tagFindFirst },
+  $queryRaw: queryRaw,
+};
+client.$transaction = (run: (tx: unknown) => unknown) => run(client);
+vi.mock('@classmoji/database', () => ({ default: () => client }));
 
 vi.mock('@classmoji/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@classmoji/utils')>()),
@@ -128,14 +132,14 @@ describe('setPublished', () => {
 
 describe('update', () => {
   it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
-    await expect(update(id as string, { description: 'updated' }, 'classroom-1')).rejects.toThrow(
-      'Invalid repository id'
-    );
+    await expect(
+      update(id as string, { description: 'updated' }, 'classroom-1', null)
+    ).rejects.toThrow('Invalid repository id');
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
   });
 
   it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
-    await expect(update('repo-1', { description: 'updated' }, cid as string)).rejects.toThrow(
+    await expect(update('repo-1', { description: 'updated' }, cid as string, null)).rejects.toThrow(
       'Invalid classroom id'
     );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
@@ -151,10 +155,10 @@ describe('update', () => {
     });
 
     await expect(
-      update('repo-1', { description: 'updated' }, 'classroom-1')
+      update('repo-1', { description: 'updated' }, 'classroom-1', null)
     ).resolves.toMatchObject({
-      id: 'repo-1',
-      description: 'updated',
+      repository: { id: 'repo-1', description: 'updated' },
+      audit: { written: 0, missed: 0 },
     });
     expect(updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'repo-1', classroom_id: 'classroom-1' },
@@ -168,10 +172,11 @@ describe('update', () => {
   it('throws when the repository lives in another classroom', async () => {
     updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(update('repo-1', { description: 'updated' }, 'other-classroom')).rejects.toThrow(
-      'Repository not found in classroom'
-    );
-    expect(findFirst).not.toHaveBeenCalled();
+    await expect(
+      update('repo-1', { description: 'updated' }, 'other-classroom', null)
+    ).rejects.toThrow('Repository not found in classroom');
+    // Only the read of what the write would replace, under the row lock.
+    expect(findFirst).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -226,7 +231,7 @@ describe('update — immutable columns', () => {
       slug: 'renamed',
       title: 'Renamed',
     } as unknown as Parameters<typeof update>[1];
-    await update('repo-1', smuggled, 'classroom-1');
+    await update('repo-1', smuggled, 'classroom-1', null);
 
     expect(updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'repo-1', classroom_id: 'classroom-1' },
@@ -237,14 +242,14 @@ describe('update — immutable columns', () => {
 
 describe('deleteIfUnprovisioned', () => {
   it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
-    await expect(deleteIfUnprovisioned(id as string, 'classroom-1')).rejects.toThrow(
+    await expect(deleteIfUnprovisioned(id as string, 'classroom-1', null)).rejects.toThrow(
       'Invalid repository id'
     );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
   });
 
   it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
-    await expect(deleteIfUnprovisioned('repo-1', cid as string)).rejects.toThrow(
+    await expect(deleteIfUnprovisioned('repo-1', cid as string, null)).rejects.toThrow(
       'Invalid classroom id'
     );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
@@ -252,8 +257,9 @@ describe('deleteIfUnprovisioned', () => {
 
   it('puts "unpublished and nothing provisioned" into the DELETE itself', async () => {
     deleteMany.mockResolvedValue({ count: 1 });
-    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1')).resolves.toEqual({
+    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1', null)).resolves.toEqual({
       status: 'deleted',
+      audit: { written: 0, missed: 0 },
     });
     expect(deleteMany).toHaveBeenCalledExactlyOnceWith({
       where: {
@@ -263,21 +269,27 @@ describe('deleteIfUnprovisioned', () => {
         git_repos: { none: {} },
       },
     });
-    expect(findFirst).not.toHaveBeenCalled();
+    // The one read is the cascade's count for the audit row, under the lock.
+    expect(findFirst).toHaveBeenCalledTimes(1);
   });
 
+  const NONE = { written: 0, missed: 0 };
   it.each([
-    ['not_found', null, { status: 'not_found' }],
-    ['published', { is_published: true, _count: { git_repos: 0 } }, { status: 'published' }],
+    ['not_found', null, { status: 'not_found', audit: NONE }],
+    [
+      'published',
+      { is_published: true, _count: { git_repos: 0 } },
+      { status: 'published', audit: NONE },
+    ],
     [
       'provisioned',
       { is_published: false, _count: { git_repos: 3 } },
-      { status: 'provisioned', gitRepos: 3 },
+      { status: 'provisioned', gitRepos: 3, audit: NONE },
     ],
   ])('reports %s when nothing was deleted', async (_label, row, expected) => {
     deleteMany.mockResolvedValue({ count: 0 });
     findFirst.mockResolvedValue(row);
-    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1')).resolves.toEqual(expected);
+    await expect(deleteIfUnprovisioned('repo-1', 'classroom-1', null)).resolves.toEqual(expected);
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'repo-1', classroom_id: 'classroom-1' } })
     );
@@ -326,14 +338,16 @@ function expectPlainData(data: object) {
 
 describe('updateFromForm', () => {
   it.each(unusableIds)('rejects %s as an id before issuing any query', async (_label, id) => {
-    await expect(updateFromForm({ ...FORM_BODY, id: id as string }, 'classroom-1')).rejects.toThrow(
-      'Invalid repository id'
-    );
+    await expect(
+      updateFromForm({ ...FORM_BODY, id: id as string }, 'classroom-1', null)
+    ).rejects.toThrow('Invalid repository id');
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
   });
 
   it.each(unusableIds)('rejects %s as a classroom id before any query', async (_label, cid) => {
-    await expect(updateFromForm(FORM_BODY, cid as string)).rejects.toThrow('Invalid classroom id');
+    await expect(updateFromForm(FORM_BODY, cid as string, null)).rejects.toThrow(
+      'Invalid classroom id'
+    );
     for (const fn of allPrismaCalls()) expect(fn).not.toHaveBeenCalled();
   });
 
@@ -345,7 +359,9 @@ describe('updateFromForm', () => {
     // The form's own id and tag win; every other key in the body is ignored.
     const body = { ...NON_FORM_COLUMNS, ...FORM_BODY };
     expect(Object.prototype.hasOwnProperty.call(body, '__proto__')).toBe(true);
-    await expect(updateFromForm(body, 'classroom-1')).resolves.toMatchObject({ id: 'repo-1' });
+    await expect(updateFromForm(body, 'classroom-1', null)).resolves.toMatchObject({
+      repository: { id: 'repo-1' },
+    });
 
     expect(updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'repo-1', classroom_id: 'classroom-1' },
@@ -373,7 +389,7 @@ describe('updateFromForm', () => {
     updateMany.mockResolvedValue({ count: 1 });
     findFirst.mockResolvedValue({ id: 'repo-1' });
 
-    await updateFromForm(FORM_BODY, 'classroom-1');
+    await updateFromForm(FORM_BODY, 'classroom-1', null);
     expect(tagFindFirst).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'tag-1', classroom_id: 'classroom-1' },
       select: { id: true },
@@ -383,7 +399,7 @@ describe('updateFromForm', () => {
   it('refuses a tag of another classroom and writes nothing', async () => {
     tagFindFirst.mockResolvedValue(null);
 
-    await expect(updateFromForm(FORM_BODY, 'classroom-1')).rejects.toThrow(
+    await expect(updateFromForm(FORM_BODY, 'classroom-1', null)).rejects.toThrow(
       'Tag not found in classroom'
     );
     expect(updateMany).not.toHaveBeenCalled();
@@ -393,19 +409,20 @@ describe('updateFromForm', () => {
     updateMany.mockResolvedValue({ count: 1 });
     findFirst.mockResolvedValue({ id: 'repo-1' });
 
-    await updateFromForm({ ...FORM_BODY, type: 'INDIVIDUAL' }, 'classroom-1');
+    await updateFromForm({ ...FORM_BODY, type: 'INDIVIDUAL' }, 'classroom-1', null);
     expect(tagFindFirst).not.toHaveBeenCalled();
     expect((updateMany.mock.calls[0][0] as { data: object }).data).not.toHaveProperty('tag_id');
   });
 
-  it('throws and reads nothing back when the repository is in another classroom', async () => {
+  it('throws and reads nothing back after the write when the repository is in another classroom', async () => {
     tagFindFirst.mockResolvedValue({ id: 'tag-1' });
     updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(updateFromForm(FORM_BODY, 'other-classroom')).rejects.toThrow(
+    await expect(updateFromForm(FORM_BODY, 'other-classroom', null)).rejects.toThrow(
       'Repository not found in classroom'
     );
-    expect(findFirst).not.toHaveBeenCalled();
+    // Only the read of what the write would replace, under the row lock.
+    expect(findFirst).toHaveBeenCalledTimes(1);
   });
 });
 

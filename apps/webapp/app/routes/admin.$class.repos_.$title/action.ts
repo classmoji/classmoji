@@ -61,13 +61,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         : null;
       if (!gitRepo) return { action: ActionTypes.DELETE_REPO, error: REPO_NOT_FOUND };
 
-      // The stored name, in this classroom's organization.
+      // The stored name, in this classroom's organization. The service
+      // records the delete (REPOSITORY / DELETE on the student repo).
       await HelperService.deleteRepository({
         id: gitRepo.id,
         name: gitRepo.name,
         gitOrganization: classroom.git_organization,
         classroomId: classroom.id,
         deleteFromGithub: true,
+        repositoryId: pageRepository?.id ?? null,
+        actor: await auditActor(request, gate, 'web:repos.delete_student_repo'),
       });
       return {
         action: ActionTypes.DELETE_REPO,

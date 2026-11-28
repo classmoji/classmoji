@@ -164,6 +164,14 @@ interface DeleteRepositoryPayload {
    * only removed if it belongs to this classroom.
    */
   classroomId?: string;
+  /** The Repository the student repo was made from, for the audit row. */
+  repositoryId?: string | null;
+  /**
+   * Who the delete is recorded for, once the row is gone in `classroomId`:
+   * REPOSITORY / DELETE on the student repo, with `repository_id` and
+   * `deleted_from_provider`. `null` (or no classroom): no row.
+   */
+  actor: AuditActor | null;
 }
 
 interface DeleteSubmissionPayload {
@@ -427,7 +435,10 @@ async function clearStaleGradesInScope(
 }
 
 class HelperService {
-  static async deleteRepository(payload: DeleteRepositoryPayload): Promise<unknown> {
+  static async deleteRepository(
+    payload: DeleteRepositoryPayload
+  ): Promise<{ audit: ServiceAudit }> {
+    let deleted = false;
     try {
       const { name: repoName, gitOrganization, deleteFromGithub } = payload;
       if (deleteFromGithub) {
@@ -447,13 +458,27 @@ class HelperService {
         await gitProvider.deleteRepository(owner, repoName);
       }
       if (payload?.id && payload.classroomId) {
-        return ClassmojiService.gitRepo.deleteInClassroom(payload.id, payload.classroomId);
+        await ClassmojiService.gitRepo.deleteInClassroom(payload.id, payload.classroomId);
+        deleted = true;
+      } else if (payload?.id) {
+        await ClassmojiService.gitRepo.deleteById(payload.id);
       }
-      if (payload?.id) return ClassmojiService.gitRepo.deleteById(payload.id);
     } catch (error: unknown) {
       console.error('Error deleting git_repo:', error);
       throw error;
     }
+    if (!deleted || !payload.id || !payload.classroomId) return { audit: NO_SERVICE_AUDIT };
+    const audit = await recordForActor(payload.actor, {
+      classroomId: payload.classroomId,
+      resourceType: 'REPOSITORY',
+      resourceId: payload.id,
+      action: 'DELETE',
+      data: {
+        repository_id: payload.repositoryId ?? null,
+        deleted_from_provider: Boolean(payload.deleteFromGithub),
+      },
+    });
+    return { audit };
   }
 
   /**
@@ -475,6 +500,8 @@ class HelperService {
         deleteFromGithub: true,
         // The row goes only if it belongs to this classroom.
         classroomId,
+        // The submission's own row below records the repository's delete.
+        actor: null,
       });
     } else {
       await ClassmojiService.gitRepoAssignment.deleteById(submission.id);

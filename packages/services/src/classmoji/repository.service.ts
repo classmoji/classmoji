@@ -3,6 +3,12 @@ import { gitTerms, resolveTemplateRef, titleToIdentifier } from '@classmoji/util
 import type { RepositoryType, Prisma } from '@classmoji/database/client';
 import { getGitProvider } from '../git/index.ts';
 import * as notificationService from './notification.service.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 interface RepositoryQueryOptions {
   includeAssignments?: boolean;
@@ -233,16 +239,135 @@ export const findPublished = async (classroomId: string) => {
  * @param {string} data.template - Template repo name
  * @param {string} data.type - INDIVIDUAL or GROUP
  * @param {string} [data.tag_id] - Tag UUID
- * @returns {Promise<Object>}
+ * @param actor - who the create is recorded for: REPOSITORIES / CREATE on the
+ *   new repository, with its `title` and `type` (`null`: no row)
  */
-export const create = async (data: RepositoryCreateInput) => {
+export const create = async (data: RepositoryCreateInput, actor: AuditActor | null) => {
   // Generate slug from title (set once, never updated)
   const slug = titleToIdentifier(data.title);
 
-  return getPrisma().repository.create({
+  const repository = await getPrisma().repository.create({
     data: { ...data, slug },
     include: { assignments: true, tag: true },
   });
+  const audit = await recordForActor(actor, {
+    classroomId: repository.classroom_id,
+    resourceType: 'REPOSITORIES',
+    resourceId: repository.id,
+    action: 'CREATE',
+    data: { title: repository.title, type: repository.type },
+  });
+  return { repository, audit };
+};
+
+/**
+ * The columns of a repository an edit's audit row compares: the form's
+ * columns, the MCP's patch fields and the tag. `description` is owner text:
+ * the row names it and gives its length, never its value.
+ */
+const RECORDED_REPOSITORY_FIELDS = [
+  'title',
+  'type',
+  'template',
+  'description',
+  'tag_id',
+  'team_formation_mode',
+  'team_formation_deadline',
+  'max_team_size',
+  'project_template_id',
+  'project_template_title',
+] as const;
+
+const recordedValue = (value: unknown): string | number | boolean | null =>
+  value instanceof Date
+    ? value.toISOString()
+    : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+      ? value
+      : null;
+
+/**
+ * An edit's audit `data`, or null when no recorded column changed: `fields`
+ * (the changed columns), `values` / `previous` (their new and old values,
+ * dates as ISO strings, the description left out) and `value` (a digest of
+ * `values`, as repo_update wrote it); `description_length` when the
+ * description changed.
+ */
+const repositoryChange = (
+  before: Record<string, unknown>,
+  after: Record<string, unknown>
+): Record<string, unknown> | null => {
+  const fields = RECORDED_REPOSITORY_FIELDS.filter(
+    field => recordedValue(before[field]) !== recordedValue(after[field])
+  );
+  if (fields.length === 0) return null;
+  const values: Record<string, unknown> = {};
+  const previous: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (field === 'description') continue;
+    values[field] = recordedValue(after[field]);
+    previous[field] = recordedValue(before[field]);
+  }
+  const description = after.description;
+  return {
+    fields,
+    values,
+    previous,
+    value: JSON.stringify(values),
+    ...(fields.includes('description')
+      ? { description_length: typeof description === 'string' ? description.length : null }
+      : {}),
+  };
+};
+
+/** The recorded columns of a repository, for `repositoryChange`. */
+const RECORDED_SELECT = Object.fromEntries(
+  RECORDED_REPOSITORY_FIELDS.map(field => [field, true])
+) as Record<(typeof RECORDED_REPOSITORY_FIELDS)[number], true>;
+
+/**
+ * Write a repository edit in one transaction that locks the row and reads the
+ * values it replaces first, so the audit row compares against exactly what
+ * this write replaced. Answers the row as it is after the write.
+ */
+const updateRecorded = async (
+  id: string,
+  classroomId: string,
+  data: Prisma.RepositoryUncheckedUpdateManyInput,
+  actor: AuditActor | null
+) => {
+  const { before, after } = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${id} AND classroom_id = ${classroomId} FOR UPDATE`;
+    const before = await tx.repository.findFirst({
+      where: { id, classroom_id: classroomId },
+      select: RECORDED_SELECT,
+    });
+    const { count } = await tx.repository.updateMany({
+      where: { id, classroom_id: classroomId },
+      data,
+    });
+    if (count !== 1) throw new Error('Repository not found in classroom');
+    const after = await tx.repository.findFirst({
+      where: { id, classroom_id: classroomId },
+      select: RECORDED_SELECT,
+    });
+    return { before, after };
+  });
+  const change = before && after ? repositoryChange(before, after) : null;
+  const audit = change
+    ? await recordForActor(actor, {
+        classroomId,
+        resourceType: 'REPOSITORIES',
+        resourceId: id,
+        action: 'UPDATE',
+        data: change,
+      })
+    : NO_SERVICE_AUDIT;
+  // Read after the commit, as before: a delete landing in between answers null.
+  const repository = await getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    include: { assignments: true, tag: true },
+  });
+  return { repository, audit };
 };
 
 /**
@@ -269,10 +394,14 @@ const IMMUTABLE_REPOSITORY_FIELDS = ['id', 'classroom_id', 'slug', 'title'] as c
  *
  * `classroomId` is REQUIRED and scopes the write — see `deleteById` below.
  *
+ * Recorded for `actor` when a column changed: REPOSITORIES / UPDATE with the
+ * changed `fields`, their `values` and `previous` values (the description by
+ * name and `description_length`), and `value`, a digest of `values`. A write
+ * that changes nothing, or `actor: null`: no row.
+ *
  * @param {string} id - UUID of the Repository
  * @param {Object} updates - Fields to update
  * @param {string} classroomId - UUID of the authorized Classroom
- * @returns {Promise<Object>}
  */
 export const update = async (
   id: string,
@@ -281,7 +410,8 @@ export const update = async (
     Prisma.RepositoryUncheckedUpdateManyInput,
     (typeof IMMUTABLE_REPOSITORY_FIELDS)[number]
   >,
-  classroomId: string
+  classroomId: string,
+  actor: AuditActor | null
 ) => {
   assertScopedIds(id, classroomId);
 
@@ -291,19 +421,7 @@ export const update = async (
   const data: Record<string, unknown> = { ...updates };
   for (const field of IMMUTABLE_REPOSITORY_FIELDS) delete data[field];
 
-  const { count } = await getPrisma().repository.updateMany({
-    where: { id, classroom_id: classroomId },
-    data: data as Prisma.RepositoryUncheckedUpdateManyInput,
-  });
-  if (count !== 1) throw new Error('Repository not found in classroom');
-
-  return getPrisma().repository.findFirst({
-    where: { id, classroom_id: classroomId },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-  });
+  return updateRecorded(id, classroomId, data as Prisma.RepositoryUncheckedUpdateManyInput, actor);
 };
 
 /**
@@ -375,11 +493,17 @@ export const createFromFormData = (
  * is applied only to a GROUP repository, and only when one is given; it must
  * be a tag of this classroom ('Tag not found in classroom' otherwise).
  *
+ * Recorded for `actor` as `update` records an edit (only when a column
+ * changed).
+ *
  * @param {Object} values - The form body: id, the form fields, and tag
  * @param {string} classroomId - UUID of the authorized Classroom
- * @returns {Promise<Object>} The updated repository with assignments and tag
  */
-export const updateFromForm = async (values: RepositoryUpdateValues, classroomId: string) => {
+export const updateFromForm = async (
+  values: RepositoryUpdateValues,
+  classroomId: string,
+  actor: AuditActor | null
+) => {
   const { id, tag } = values;
   assertScopedIds(id, classroomId);
 
@@ -397,16 +521,7 @@ export const updateFromForm = async (values: RepositoryUpdateValues, classroomId
     ...(applyTag ? { tag_id: String(tag) } : {}),
   } as Prisma.RepositoryUncheckedUpdateManyInput;
 
-  const { count } = await getPrisma().repository.updateMany({
-    where: { id, classroom_id: classroomId },
-    data,
-  });
-  if (count !== 1) throw new Error('Repository not found in classroom');
-
-  return getPrisma().repository.findFirst({
-    where: { id, classroom_id: classroomId },
-    include: { assignments: true, tag: true },
-  });
+  return updateRecorded(id, classroomId, data, actor);
 };
 
 /**
@@ -449,27 +564,91 @@ export const deleteById = async (id: string, classroomId: string) => {
  *   - `not_found`   — no such repository in this classroom (any more);
  *   - `published`   — it is published;
  *   - `provisioned` — student/team git repos exist (`gitRepos` of them).
+ *
+ * A delete is recorded for `actor` after the commit, as repo_delete recorded
+ * it: REPOSITORIES / DELETE with the `title`, `slug`, the
+ * `assignments_deleted` (id and title) and the counts of what the cascade
+ * took, read under a lock on the row in the delete's own transaction. A
+ * refused delete, or `actor: null`: no row.
  */
 export const deleteIfUnprovisioned = async (
   id: string,
-  classroomId: string
+  classroomId: string,
+  actor: AuditActor | null
 ): Promise<
-  { status: 'deleted' | 'not_found' | 'published' } | { status: 'provisioned'; gitRepos: number }
+  (
+    | { status: 'deleted' | 'not_found' | 'published' }
+    | { status: 'provisioned'; gitRepos: number }
+  ) & { audit: ServiceAudit }
 > => {
   assertScopedIds(id, classroomId);
 
-  const { count } = await getPrisma().repository.deleteMany({
-    where: { id, classroom_id: classroomId, is_published: false, git_repos: { none: {} } },
+  const { count, doomed } = await getPrisma().$transaction(async tx => {
+    // The row lock waits for a publish or a provisioned GitRepo (which takes a
+    // key-share lock on the row) in flight, so what is read here is what the
+    // delete takes.
+    await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${id} AND classroom_id = ${classroomId} FOR UPDATE`;
+    const doomed = await tx.repository.findFirst({
+      where: { id, classroom_id: classroomId },
+      select: {
+        title: true,
+        slug: true,
+        assignments: {
+          select: {
+            id: true,
+            title: true,
+            _count: { select: { pages: true, slides: true, calendarEventLinks: true } },
+          },
+          orderBy: { title: 'asc' },
+        },
+        _count: {
+          select: {
+            module_items: true,
+            pages: true,
+            slides: true,
+            quizzes: true,
+            autograding_tests: true,
+          },
+        },
+      },
+    });
+    const { count } = await tx.repository.deleteMany({
+      where: { id, classroom_id: classroomId, is_published: false, git_repos: { none: {} } },
+    });
+    return { count, doomed };
   });
-  if (count === 1) return { status: 'deleted' };
+  if (count === 1) {
+    const sumOver = (key: 'pages' | 'slides' | 'calendarEventLinks') =>
+      (doomed?.assignments ?? []).reduce((total, a) => total + a._count[key], 0);
+    const audit = await recordForActor(actor, {
+      classroomId,
+      resourceType: 'REPOSITORIES',
+      resourceId: id,
+      action: 'DELETE',
+      data: {
+        title: doomed?.title ?? null,
+        slug: doomed?.slug ?? null,
+        assignments_deleted: (doomed?.assignments ?? []).map(a => ({ id: a.id, title: a.title })),
+        module_items_removed: doomed?._count.module_items ?? 0,
+        page_links_removed: doomed?._count.pages ?? 0,
+        slide_links_removed: doomed?._count.slides ?? 0,
+        assignment_page_links_removed: sumOver('pages'),
+        assignment_slide_links_removed: sumOver('slides'),
+        calendar_event_links_removed: sumOver('calendarEventLinks'),
+        autograding_tests_deleted: doomed?._count.autograding_tests ?? 0,
+        quizzes_unlinked: doomed?._count.quizzes ?? 0,
+      },
+    });
+    return { status: 'deleted', audit };
+  }
 
   const row = await getPrisma().repository.findFirst({
     where: { id, classroom_id: classroomId },
     select: { is_published: true, _count: { select: { git_repos: true } } },
   });
-  if (!row) return { status: 'not_found' };
-  if (row.is_published) return { status: 'published' };
-  return { status: 'provisioned', gitRepos: row._count.git_repos };
+  if (!row) return { status: 'not_found', audit: NO_SERVICE_AUDIT };
+  if (row.is_published) return { status: 'published', audit: NO_SERVICE_AUDIT };
+  return { status: 'provisioned', gitRepos: row._count.git_repos, audit: NO_SERVICE_AUDIT };
 };
 
 /**

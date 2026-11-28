@@ -367,15 +367,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       try {
         // Form-owned columns only; the classroom always comes from the route.
-        const createdModule = await ClassmojiService.repository.create(
-          ClassmojiService.repository.createFromFormData(moduleData, classroom.id, tag || null)
+        // The repository service records the create, the autograding service
+        // a set of tests.
+        const actor = await auditActor(request, gate, 'web:repos.create');
+        const { repository: createdModule } = await ClassmojiService.repository.create(
+          ClassmojiService.repository.createFromFormData(moduleData, classroom.id, tag || null),
+          actor
         );
 
         // Sync repository-level content links
         await syncModuleContentLinks(createdModule.id);
         await ClassmojiService.autogradingTest.replaceForRepository(
           createdModule.id,
-          autogradingTests || []
+          autogradingTests || [],
+          classroom.id,
+          actor
         );
 
         // Save content manifest to GitHub repo
@@ -421,16 +427,22 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       try {
+        // Each service records what changed (the repository's columns; the
+        // set of autograding tests).
+        const actor = await auditActor(request, gate, 'web:repos.update');
         await ClassmojiService.repository.updateFromForm(
           { ...moduleData, id: repository.id, tag },
-          classroom.id
+          classroom.id,
+          actor
         );
 
         // Sync repository-level content links
         await syncModuleContentLinks(repository.id);
         await ClassmojiService.autogradingTest.replaceForRepository(
           repository.id,
-          autogradingTests || []
+          autogradingTests || [],
+          classroom.id,
+          actor
         );
 
         // Save content manifest to GitHub repo

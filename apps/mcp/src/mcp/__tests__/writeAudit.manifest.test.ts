@@ -153,6 +153,11 @@ const WRITES: Record<string, Entry> = {
   // Only when a link was written.
   team_tag_add: { kind: 'service', fn: 'teamAdmin.addTeamTags', actor: 'serviceActor' },
   team_tag_remove: { kind: 'service', fn: 'teamAdmin.removeTeamTag', actor: 'serviceActor' },
+  // ── repositories: the repository service writes the row for the actor ──
+  repo_create: { kind: 'service', fn: 'repository.create', actor: 'serviceActor' },
+  // Only when a column changed (old and new values).
+  repo_update: { kind: 'service', fn: 'repository.update', actor: 'serviceActor' },
+  repo_delete: { kind: 'service', fn: 'repository.deleteIfUnprovisioned', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -201,9 +206,6 @@ const WRITES: Record<string, Entry> = {
   repo_publish: TOOL,
   repo_sync: TOOL,
   repo_unpublish: TOOL,
-  repo_create: TOOL,
-  repo_update: TOOL,
-  repo_delete: TOOL,
   resource_link_add: TOOL,
   resource_link_remove: TOOL,
   slide_create: TOOL,

@@ -18,6 +18,12 @@ import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { repoNamespace } from '@classmoji/utils';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 import type {
   CommitRecord,
   CommitStats,
@@ -488,11 +494,20 @@ export async function refreshRepo(
  * modal. The stored link is consumed by `buildLoginToUserIdMap` on the next
  * refresh, so newly-linked contributors are attributed correctly.
  */
+/**
+ * Map a commit author's GitHub login on one student repo to a member of its
+ * classroom (`userId: null` unlinks). A link that changed is recorded for
+ * `actor` after the write: REPOSITORY / UPDATE on the student repo, with
+ * `event: 'contributor_linked'`, the `github_login` (a GitHub username, as
+ * the submission rows name git identities), the `user_id` it maps to and the
+ * `previous_user_id`. The same mapping again, or `actor: null`: no row.
+ */
 export async function linkContributor(
   repositoryId: string,
   githubLogin: string,
-  userId: string | null
-): Promise<void> {
+  userId: string | null,
+  actor: AuditActor | null
+): Promise<{ audit: ServiceAudit }> {
   const prisma = getPrisma();
 
   const repo = await prisma.gitRepo.findUnique({
@@ -511,20 +526,35 @@ export async function linkContributor(
     }
   }
 
-  await prisma.gitRepoContributorLink.upsert({
-    where: {
-      git_repo_id_github_login: {
-        git_repo_id: repositoryId,
-        github_login: githubLogin,
-      },
-    },
-    create: {
-      git_repo_id: repositoryId,
+  const key = { git_repo_id: repositoryId, github_login: githubLogin };
+  // What the upsert replaces is read with it, under the row's lock, so the
+  // row compares against exactly what this write changed.
+  const previous = await prisma.$transaction(async tx => {
+    const rows = await tx.$queryRaw<Array<{ user_id: string | null }>>`
+      SELECT user_id FROM git_repo_contributor_links
+      WHERE git_repo_id = ${repositoryId} AND github_login = ${githubLogin}
+      FOR UPDATE`;
+    await tx.gitRepoContributorLink.upsert({
+      where: { git_repo_id_github_login: key },
+      create: { ...key, user_id: userId },
+      update: { user_id: userId },
+    });
+    return rows.length > 0 ? { user_id: rows[0].user_id } : null;
+  });
+  if (previous && previous.user_id === userId) return { audit: NO_SERVICE_AUDIT };
+  const audit = await recordForActor(actor, {
+    classroomId: repo.classroom_id,
+    resourceType: 'REPOSITORY',
+    resourceId: repositoryId,
+    action: 'UPDATE',
+    data: {
+      event: 'contributor_linked',
       github_login: githubLogin,
       user_id: userId,
+      previous_user_id: previous?.user_id ?? null,
     },
-    update: { user_id: userId },
   });
+  return { audit };
 }
 
 // Cron helper

@@ -169,17 +169,22 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           if (isTeam && team_formation_mode === 'INSTRUCTOR' && !tag_id) {
             return { error: `Pick the team tag whose teams each get a ${terms.repo}.` };
           }
-          const repository = await ClassmojiService.repository.create({
-            title: repoTitle,
-            template: templateRef,
-            type: isTeam ? 'GROUP' : 'INDIVIDUAL',
-            classroom_id: classroom.id,
-            ...(isTeam && {
-              team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
-              max_team_size: max_team_size ?? null,
-              tag_id: tag_id ?? null,
-            }),
-          });
+          // The repository service records the repository it made; the
+          // assignment's own row below names it (repository_id).
+          const { repository } = await ClassmojiService.repository.create(
+            {
+              title: repoTitle,
+              template: templateRef,
+              type: isTeam ? 'GROUP' : 'INDIVIDUAL',
+              classroom_id: classroom.id,
+              ...(isTeam && {
+                team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
+                max_team_size: max_team_size ?? null,
+                tag_id: tag_id ?? null,
+              }),
+            },
+            await auditActor(request, gate, 'web:assignments.create')
+          );
           assignmentData.repository_id = repository.id;
         }
         const created = await ClassmojiService.assignment.createInClassroom(
