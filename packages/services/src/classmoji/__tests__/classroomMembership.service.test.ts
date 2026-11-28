@@ -239,7 +239,31 @@ describe('plan-owner hand-off', () => {
 
     await membershipService.updateById('m1', { has_accepted_invite: true });
 
-    expect(onOwnerAcceptedMock).toHaveBeenCalledWith('u1');
+    expect(onOwnerAcceptedMock).toHaveBeenCalledWith('u1', {});
+  });
+
+  it('hands the claim the admin viewing as the owner who accepts', async () => {
+    updateMock.mockResolvedValue({ id: 'm1', role: 'OWNER', user_id: 'u1' });
+
+    await membershipService.updateById(
+      'm1',
+      { has_accepted_invite: true },
+      { actorUserId: 'u1', impersonatedBy: 'admin-1' }
+    );
+
+    expect(onOwnerAcceptedMock).toHaveBeenCalledWith('u1', { impersonatedBy: 'admin-1' });
+  });
+
+  it('names no admin on the claim when someone else accepted for the owner', async () => {
+    updateMock.mockResolvedValue({ id: 'm1', role: 'OWNER', user_id: 'u1' });
+
+    await membershipService.updateById(
+      'm1',
+      { has_accepted_invite: true },
+      { actorUserId: 'u2', impersonatedBy: 'admin-1' }
+    );
+
+    expect(onOwnerAcceptedMock).toHaveBeenCalledWith('u1', {});
   });
 
   it('does not claim anything when a student accepts', async () => {

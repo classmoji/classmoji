@@ -40,6 +40,17 @@ export interface MembershipActor {
 }
 
 /**
+ * The View as admin for the rows of an accepted owner's claims, which are
+ * audited as the accepted user: only when that user is the actor, since the
+ * admin was viewing as the actor.
+ */
+const acceptedBy = (
+  { actorUserId, impersonatedBy }: MembershipActor,
+  acceptedUserId: string
+): { impersonatedBy?: string | null } =>
+  actorUserId === acceptedUserId && impersonatedBy ? { impersonatedBy } : {};
+
+/**
  * Run `write`, the step that ends `userId`'s OWNER membership (a removal or a
  * demotion), with everything that has to hold around it in ONE transaction:
  *
@@ -338,7 +349,7 @@ export const update = async (
       : await write(getPrisma());
 
   if (updated.role === 'OWNER' && acceptsInvite(updates))
-    await planOwnerService.onOwnerAccepted(userId);
+    await planOwnerService.onOwnerAccepted(userId, acceptedBy(actor, userId));
   return withLogins(updated);
 };
 
@@ -375,7 +386,7 @@ export const updateById = async (
       : await write(getPrisma());
 
   if (updated.role === 'OWNER' && acceptsInvite(updates))
-    await planOwnerService.onOwnerAccepted(updated.user_id);
+    await planOwnerService.onOwnerAccepted(updated.user_id, acceptedBy(actor, updated.user_id));
   return withLogins(updated);
 };
 

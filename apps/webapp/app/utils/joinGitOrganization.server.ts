@@ -51,7 +51,8 @@ export const joinGitOrganization = async ({
   /** `data.tool` on the audit row: which surface the join came from. */
   tool: string;
   /**
-   * The platform admin viewing as the user ("View as"), for the audit row.
+   * The platform admin viewing as the user ("View as"), for the audit rows
+   * (the join's, and a plan-owner claim's when an owner is accepted).
    * The join link and the class picker's automatic invites never run under
    * View as; the picker's Accept can.
    */
@@ -188,9 +189,13 @@ export const joinGitOrganization = async ({
       // shows their role, not "Pending invite" until the task gets to it (the
       // task sets the same flag; its job is the repos). After the trigger, so a
       // failed trigger leaves them pending and able to try again.
-      await ClassmojiService.classroomMembership.updateById(membership.id, {
-        has_accepted_invite: true,
-      });
+      await ClassmojiService.classroomMembership.updateById(
+        membership.id,
+        { has_accepted_invite: true },
+        // The user accepts their own invite: a classroom an owner claims on
+        // the way is audited as them, naming any admin viewing as them.
+        { actorUserId: userId, impersonatedBy }
+      );
       await auditJoin('added_to_team');
       return {
         ok: true,

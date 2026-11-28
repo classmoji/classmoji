@@ -251,9 +251,18 @@ export const auditPlanOwnerChange = async (
 /**
  * Call after a user's OWNER membership is accepted, by any path: they take over
  * each of their classrooms that has no plan owner, audited as them.
+ * `impersonatedBy`: the platform admin viewing as that user ("View as") when
+ * the acceptance was theirs, for the rows.
  */
-export const onOwnerAccepted = async (userId: string): Promise<void> => {
+export const onOwnerAccepted = async (
+  userId: string,
+  { impersonatedBy = null }: { impersonatedBy?: string | null } = {}
+): Promise<void> => {
   for (const change of await claimVacantPlanOwnership(userId)) {
-    await auditPlanOwnerChange(change, { actorUserId: userId, reason: 'owner_accepted' });
+    await auditPlanOwnerChange(change, {
+      actorUserId: userId,
+      impersonatedBy,
+      reason: 'owner_accepted',
+    });
   }
 };
