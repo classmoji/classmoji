@@ -51,7 +51,14 @@ vi.mock('../../git/index.ts', async importOriginal => ({
     }),
   },
 }));
-vi.mock('../../fly/index.ts', () => ({ removeCert: vi.fn(), isFlyCertsConfigured: () => false }));
+const fly = vi.hoisted(() => ({
+  configured: false,
+  removeCert: vi.fn(async (_domain: string) => undefined),
+}));
+vi.mock('../../fly/index.ts', () => ({
+  removeCert: (domain: string) => fly.removeCert(domain),
+  isFlyCertsConfigured: () => fly.configured,
+}));
 vi.mock('../subscription.service.ts', async importOriginal => ({
   ...(await importOriginal<typeof import('../subscription.service.ts')>()),
   getProStateForClassroomId: async () => ({ isPro: true }),
@@ -913,6 +920,214 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
         }),
       ]);
       expect(await prisma.tag.findUnique({ where: { id: yTag.tag.id } })).not.toBeNull();
+    });
+  });
+  // ─── every function: no row for actor: null, `missed` for a row it cannot write ───
+
+  describe('each settings function with actor: null and with a row it cannot write', () => {
+    /**
+     * One change per call, fresh each time, in classroom Y. `check` reads what
+     * the change leaves: a different value after each call, or (`same`) the
+     * same end state each time (a delete, a clear, a replace).
+     */
+    interface Case {
+      name: string;
+      run: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
+      check: () => Promise<unknown>;
+      same?: true;
+    }
+    let n = 0;
+    const next = () => ++n;
+    const cases: Case[] = [
+      {
+        name: 'emojiMapping.saveEmojiMapping',
+        run: actor =>
+          emojiMapping.saveEmojiMapping(Y.classroomId, { emoji: '🎯', grade: 70 + next() }, actor),
+        check: async () =>
+          (
+            await prisma.emojiMapping.findFirst({
+              where: { classroom_id: Y.classroomId, emoji: '🎯' },
+            })
+          )?.grade,
+      },
+      {
+        name: 'emojiMapping.deleteEmojiMapping',
+        same: true,
+        run: async actor => {
+          const emoji = `del-${next()}`;
+          await emojiMapping.saveEmojiMapping(Y.classroomId, { emoji, grade: 1 }, null);
+          return emojiMapping.deleteEmojiMapping(Y.classroomId, emoji, actor);
+        },
+        check: () =>
+          prisma.emojiMapping.count({
+            where: { classroom_id: Y.classroomId, emoji: { startsWith: 'del-' } },
+          }),
+      },
+      {
+        name: 'emojiMapping.replaceScale',
+        same: true,
+        run: actor =>
+          emojiMapping.replaceScale(Y.classroomId, [{ emoji: `s-${next()}`, grade: 1 }], actor),
+        check: () => prisma.emojiMapping.count({ where: { classroom_id: Y.classroomId } }),
+      },
+      {
+        name: 'letterGradeMapping.save',
+        run: actor =>
+          letterGradeMapping.save(Y.classroomId, { letter_grade: 'C', min_grade: next() }, actor),
+        check: async () =>
+          (
+            await prisma.letterGradeMapping.findFirst({
+              where: { classroom_id: Y.classroomId, letter_grade: 'C' },
+            })
+          )?.min_grade,
+      },
+      {
+        name: 'letterGradeMapping.delete',
+        same: true,
+        run: async actor => {
+          const letter = `D${next()}`;
+          await letterGradeMapping.save(
+            Y.classroomId,
+            { letter_grade: letter, min_grade: 1 },
+            null
+          );
+          return letterGradeMapping.delete(Y.classroomId, letter, actor);
+        },
+        check: () =>
+          prisma.letterGradeMapping.count({
+            where: { classroom_id: Y.classroomId, letter_grade: { startsWith: 'D' } },
+          }),
+      },
+      {
+        name: 'letterGradeMapping.replaceAll',
+        same: true,
+        run: actor =>
+          letterGradeMapping.replaceAll(
+            Y.classroomId,
+            [{ letter_grade: 'A', min_grade: next() }],
+            actor
+          ),
+        check: () => prisma.letterGradeMapping.count({ where: { classroom_id: Y.classroomId } }),
+      },
+      {
+        name: 'contentDelivery.bumpContentKeyVersion',
+        run: actor => contentDelivery.bumpContentKeyVersion(Y.classroomId, actor),
+        check: async () =>
+          (await prisma.classroom.findUniqueOrThrow({ where: { id: Y.classroomId } }))
+            .content_key_version,
+      },
+      {
+        name: 'orgRepoSettings.updateOrgRepoSettings',
+        run: actor =>
+          orgRepoSettings.updateOrgRepoSettings({
+            gitOrganization: {
+              login: `sa-${suite}`,
+              provider: 'GITHUB',
+              github_installation_id: `inst-${suite}`,
+            },
+            userToken: 'ghu_token',
+            input: { members_can_create_repositories: next() % 2 === 0 },
+            classroomId: Y.classroomId,
+            actor,
+          }),
+        check: async () => github.org.members_can_create_repositories,
+      },
+      {
+        name: 'site.upsertSiteSettings',
+        run: actor =>
+          site.upsertSiteSettings(Y.classroomId, { show_schedule: next() % 2 === 0 }, actor),
+        check: async () =>
+          (await prisma.classroomSite.findUniqueOrThrow({ where: { classroom_id: Y.classroomId } }))
+            .show_schedule,
+      },
+      {
+        name: 'site.setCustomDomain',
+        run: actor =>
+          site.setCustomDomain(Y.classroomId, `d${next()}-${suite}.example-course.org`, actor),
+        check: async () =>
+          (await prisma.classroomSite.findUniqueOrThrow({ where: { classroom_id: Y.classroomId } }))
+            .custom_domain,
+      },
+      {
+        name: 'site.clearCustomDomain',
+        same: true,
+        run: async actor => {
+          await site.setCustomDomain(Y.classroomId, `c${next()}-${suite}.example-course.org`, null);
+          return site.clearCustomDomain(Y.classroomId, actor);
+        },
+        check: async () =>
+          (await prisma.classroomSite.findUniqueOrThrow({ where: { classroom_id: Y.classroomId } }))
+            .custom_domain,
+      },
+      {
+        name: 'organizationTag.findOrCreate',
+        run: actor => organizationTag.findOrCreate(Y.classroomId, `tag-${next()}`, actor),
+        check: () => prisma.tag.count({ where: { classroom_id: Y.classroomId } }),
+      },
+      {
+        name: 'organizationTag.deleteInClassroom',
+        same: true,
+        run: async actor => {
+          const { tag } = await organizationTag.findOrCreate(Y.classroomId, `gone-${next()}`, null);
+          return organizationTag.deleteInClassroom(Y.classroomId, tag.id, actor);
+        },
+        check: () =>
+          prisma.tag.count({
+            where: { classroom_id: Y.classroomId, name: { startsWith: 'gone-' } },
+          }),
+      },
+    ];
+
+    beforeAll(async () => {
+      // Y has a site from the earlier claim test; make sure it does.
+      if (!(await prisma.classroomSite.findUnique({ where: { classroom_id: Y.classroomId } }))) {
+        await site.validateAndClaimSubdomain(Y.classroomId, `sa-yy-${suite}`, null);
+      }
+    });
+
+    it.each(cases.map(c => [c.name, c] as const))(
+      '%s: actor null writes no row; a row it cannot write is `missed`, the change stands',
+      async (_name, c) => {
+        const none = await newRows(Y, () => c.run(null));
+        expect(none.value.audit).toEqual({ written: 0, missed: 0 });
+        expect(none.rows).toEqual([]);
+        const after = await c.check();
+
+        const { value, misses } = await quietly(() => c.run(ghost(`ghost:${c.name}`)));
+        expect(value.audit).toEqual({ written: 0, missed: 1 });
+        expect(misses).toHaveLength(1);
+        // The second change landed too.
+        const now = await c.check();
+        if (c.same) expect(now).toEqual(after);
+        else expect(now).not.toEqual(after);
+        expect(await rowsIn(Y.classroomId)).not.toContainEqual(
+          expect.objectContaining({ data: expect.objectContaining({ tool: `ghost:${c.name}` }) })
+        );
+      }
+    );
+
+    it('site.deleteSiteForClassroom: the certificate is still released after a missed row', async () => {
+      fly.configured = true;
+      fly.removeCert.mockClear();
+      try {
+        await site.setCustomDomain(Y.classroomId, `rm-${suite}.example-course.org`, null);
+        const { value, misses } = await quietly(() =>
+          site.deleteSiteForClassroom(Y.classroomId, ghost('ghost:delete_site'))
+        );
+        expect(value.audit).toEqual({ written: 0, missed: 1 });
+        expect(misses).toHaveLength(1);
+        expect(fly.removeCert).toHaveBeenCalledWith(`rm-${suite}.example-course.org`);
+        expect(await prisma.classroomSite.count({ where: { classroom_id: Y.classroomId } })).toBe(
+          0
+        );
+
+        await site.validateAndClaimSubdomain(Y.classroomId, `sa-yz-${suite}`, null);
+        const none = await newRows(Y, () => site.deleteSiteForClassroom(Y.classroomId, null));
+        expect(none.value.audit).toEqual({ written: 0, missed: 0 });
+        expect(none.rows).toEqual([]);
+      } finally {
+        fly.configured = false;
+      }
     });
   });
 });
