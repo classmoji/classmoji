@@ -73,6 +73,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'noname@x.edu' }],
@@ -89,6 +90,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([{ id: 'u-existing', email: 'known@x.edu', name: 'Known' }]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [
@@ -139,6 +141,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'New.Student@x.edu', name: 'New' }],
@@ -157,6 +160,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'new@x.edu', name: '<b>Mallory</b>' }],
@@ -172,6 +176,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'noname@x.edu' }],
@@ -184,6 +189,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([{ id: 'u1', email: 'a@x.edu', name: 'A' }]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'A@X.edu' }],
@@ -202,6 +208,7 @@ describe('roster.addStudents', () => {
 
     await expect(
       roster.addStudents({
+        actor: null,
         classroomId: 'class-1',
         signInvite: email => `tok(${email})`,
         students: [{ email: 'known@x.edu' }, { email: 'new@x.edu' }],
@@ -223,6 +230,7 @@ describe('roster.addStudents', () => {
     alreadyIn.add('u-in');
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'In@x.edu' }, { email: 'fresh@x.edu' }],
@@ -249,6 +257,7 @@ describe('roster.addStudents', () => {
     alreadyIn.add('u-in');
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'in@x.edu' }],
@@ -283,6 +292,7 @@ describe('roster.addStudents', () => {
     ]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'in@x.edu' }, { email: 'fresh@x.edu' }],
@@ -303,6 +313,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: 'dup@x.edu', name: 'D' }, { email: 'DUP@x.edu' }],
@@ -320,6 +331,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       // The address that sank a whole batch of invitations in production.
@@ -343,6 +355,7 @@ describe('roster.addStudents', () => {
     userFindMany.mockResolvedValue([]);
 
     const result = await roster.addStudents({
+      actor: null,
       classroomId: 'class-1',
       signInvite: email => `tok(${email})`,
       students: [{ email: '  Jane@X.edu ' }],
@@ -356,6 +369,7 @@ describe('roster.addStudents', () => {
     classroomFindById.mockResolvedValue(null);
     await expect(
       roster.addStudents({
+        actor: null,
         classroomId: 'nope',
         students: [{ email: 'a@x.edu' }],
         signInvite: () => 'tok',

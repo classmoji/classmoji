@@ -85,6 +85,11 @@ const WRITES: Record<string, Entry> = {
   // markers only this tool's rows carry), staff.recordLeftoverSettled the
   // follow-up's; the grader moves are recorded by settleUngradedSlots.
   staff_remove: { kind: 'service', fn: 'staff.recordStaffRemoval', actor: 'serviceActor' },
+  roster_add_student: { kind: 'service', fn: 'roster.addStudents', actor: 'serviceActor' },
+  // The tool records the request; the remove_user_from_organization run
+  // records the completed removal (classroomMembership.remove) for the actor
+  // the payload carries.
+  roster_remove_student: { kind: 'both', fn: 'buildRemoveUserPayload', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -149,8 +154,6 @@ const WRITES: Record<string, Entry> = {
   repo_delete: TOOL,
   resource_link_add: TOOL,
   resource_link_remove: TOOL,
-  roster_add_student: TOOL,
-  roster_remove_student: TOOL,
   classroom_settings_update: TOOL,
   org_repo_settings_update: TOOL,
   slide_create: TOOL,

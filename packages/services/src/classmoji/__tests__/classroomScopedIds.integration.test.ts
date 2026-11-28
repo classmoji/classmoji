@@ -59,14 +59,18 @@ describe.skipIf(!RUN_DB_SUITES)('ids are scoped to their classroom (integration)
 
   describe('classroomInvite.deleteInviteInClassroom', () => {
     it('deletes nothing when the invite belongs to another classroom', async () => {
-      expect(await classroomInvite.deleteInviteInClassroom(fx.X.id, fx.Y.inviteId)).toBe(false);
+      expect(
+        (await classroomInvite.deleteInviteInClassroom(fx.X.id, fx.Y.inviteId, null)).deleted
+      ).toBe(false);
       expect(
         await prisma.classroomInvite.findUnique({ where: { id: fx.Y.inviteId } })
       ).not.toBeNull();
     });
 
     it('deletes an invite of its own classroom', async () => {
-      expect(await classroomInvite.deleteInviteInClassroom(fx.X.id, fx.X.inviteId)).toBe(true);
+      expect(
+        (await classroomInvite.deleteInviteInClassroom(fx.X.id, fx.X.inviteId, null)).deleted
+      ).toBe(true);
       expect(await prisma.classroomInvite.findUnique({ where: { id: fx.X.inviteId } })).toBeNull();
     });
   });

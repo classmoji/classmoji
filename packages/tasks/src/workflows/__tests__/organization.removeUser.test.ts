@@ -87,6 +87,7 @@ type RemovePayload = {
   role: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
   actorUserId?: string | null;
   impersonatedBy?: string | null;
+  auditActor?: unknown;
 };
 
 const run = (overrides: Partial<RemovePayload> = {}) =>
@@ -137,6 +138,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
       // The membership row itself is still deleted.
       expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role, {
         actorUserId: undefined,
+        audit: null,
+        hadAcceptedInvite: true,
       });
     }
   );
@@ -147,6 +150,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
     // The delete is where a plan-owner hand-off happens, and it is audited as them.
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'OWNER', {
       actorUserId: 'owner-9',
+      audit: null,
+      hadAcceptedInvite: true,
     });
   });
 
@@ -156,6 +161,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'OWNER', {
       actorUserId: 'owner-9',
       impersonatedBy: 'admin-1',
+      audit: null,
+      hadAcceptedInvite: true,
     });
   });
 
@@ -169,6 +176,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
       expect(mocks.removeTeamMember).toHaveBeenCalledWith('dev-org', STAFF_TEAM, 'ada');
       expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role, {
         actorUserId: undefined,
+        audit: null,
+        hadAcceptedInvite: true,
       });
     }
   );
@@ -214,6 +223,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
     expect(mocks.removeFromOrganization).not.toHaveBeenCalled();
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT', {
       actorUserId: undefined,
+      audit: null,
+      hadAcceptedInvite: false,
     });
   });
 
@@ -227,6 +238,8 @@ describe('remove_user_from_organization — the shared staff team', () => {
     expect(mocks.removeFromOrganization).toHaveBeenCalledWith('dev-org', 'ada');
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT', {
       actorUserId: undefined,
+      audit: null,
+      hadAcceptedInvite: true,
     });
   });
 });
@@ -251,6 +264,8 @@ describe('remove_user_from_organization — a stale Github login', () => {
     expect(mocks.removeFromOrganization).toHaveBeenLastCalledWith('dev-org', 'ada-renamed');
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT', {
       actorUserId: undefined,
+      audit: null,
+      hadAcceptedInvite: true,
     });
   });
 
@@ -263,6 +278,8 @@ describe('remove_user_from_organization — a stale Github login', () => {
     expect(mocks.removeFromOrganization).toHaveBeenCalledTimes(1);
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT', {
       actorUserId: undefined,
+      audit: null,
+      hadAcceptedInvite: true,
     });
   });
 
@@ -273,6 +290,46 @@ describe('remove_user_from_organization — a stale Github login', () => {
 
     await expect(run({ role: 'STUDENT' })).rejects.toThrow('Server Error');
     expect(mocks.currentGithubLogin).not.toHaveBeenCalled();
+    expect(mocks.removeMembership).not.toHaveBeenCalled();
+  });
+});
+
+describe('remove_user_from_organization — the removal row', () => {
+  const OWNER = {
+    userId: 'owner-9',
+    role: 'OWNER',
+    tool: 'roster_remove_student',
+    impersonatedBy: 'admin-1',
+    clientId: 'client-1',
+    via: 'mcp',
+  };
+
+  it('hands the membership delete the actor the payload names, field by field', async () => {
+    await run({ role: 'STUDENT', auditActor: { ...OWNER, extra: 'not an actor field' } });
+
+    // The delete records the completed removal for them (classroomMembership.remove).
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT', {
+      actorUserId: undefined,
+      audit: OWNER,
+      hadAcceptedInvite: true,
+    });
+  });
+
+  it('a payload with no actor, or one that is not valid, records nothing', async () => {
+    await run({ role: 'STUDENT' });
+    await run({ role: 'STUDENT', auditActor: { ...OWNER, role: 'NOBODY' } });
+
+    for (const call of mocks.removeMembership.mock.calls) {
+      expect(call[3]).toMatchObject({ audit: null });
+    }
+  });
+
+  it('a failed run never reaches the delete, so nothing is recorded', async () => {
+    mocks.removeFromOrganization.mockRejectedValue(
+      Object.assign(new Error('Server Error'), { status: 500 })
+    );
+
+    await expect(run({ role: 'STUDENT', auditActor: OWNER })).rejects.toThrow('Server Error');
     expect(mocks.removeMembership).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,11 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@classmoji/database/client';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
@@ -63,19 +69,32 @@ export const findInvitesByClassroomId = async (
 
 /**
  * Delete one pending invite of a classroom. The invite is deleted only where
- * it belongs to `classroomId`; returns false (nothing deleted) for an invite
- * of another classroom, an unknown id, or a value that is not a non-empty
- * string.
+ * it belongs to `classroomId`; `deleted: false` (nothing deleted) for an
+ * invite of another classroom, an unknown id, or a value that is not a
+ * non-empty string.
+ *
+ * A deleted invite is recorded for `actor` (STUDENT_ROSTER, DELETE, on the
+ * invite's id: an invite names no user yet); nothing deleted records nothing.
  */
 export const deleteInviteInClassroom = async (
   classroomId: string,
-  id: unknown
-): Promise<boolean> => {
-  if (typeof id !== 'string' || id === '' || !classroomId) return false;
+  id: unknown,
+  actor: AuditActor | null
+): Promise<{ deleted: boolean; audit: ServiceAudit }> => {
+  if (typeof id !== 'string' || id === '' || !classroomId) {
+    return { deleted: false, audit: NO_SERVICE_AUDIT };
+  }
   const { count } = await getPrisma().classroomInvite.deleteMany({
     where: { id, classroom_id: classroomId },
   });
-  return count > 0;
+  if (count === 0) return { deleted: false, audit: NO_SERVICE_AUDIT };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'STUDENT_ROSTER',
+    resourceId: id,
+    action: 'DELETE',
+  });
+  return { deleted: true, audit };
 };
 
 /**
