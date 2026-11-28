@@ -198,25 +198,42 @@ export function realCheckpointDeps(): CheckpointDeps {
       });
     },
     notifyCheckpointResult: postCheckpointResult,
-    audit: async ({ classroomId, userId, editors, kind, docId, commit, version, runId }) => {
-      // The editor's highest ACCEPTED role here, by the shared reader rule
-      // (a person can hold several memberships in one classroom). Collab
-      // lets an owner or teacher edit before accepting the invite; such an
-      // editor's row takes their highest role in any invite state.
-      const viewer = await ClassmojiService.pageSections.sectionViewer({ userId, classroomId });
-      const role = viewer.acceptedRole ?? viewer.role;
-      if (!role) return;
-      // After the push: a failed write is reported (`audit_miss`); the
-      // checkpoint neither fails nor retries for it.
-      await ClassmojiService.audit.record({
+    audit: async ({ classroomId, editors, kind, docId, commit, version, runId }) => {
+      const resourceType = COLLAB_AUDIT_RESOURCE[kind === 'deck' ? 'deck' : 'page'];
+      const tool = 'task:content_checkpoint';
+      // The row's actor is the first editor, in credit order, who still holds
+      // a role here (one membership read per editor, stopping at the first),
+      // recorded by their highest role in any invite state: the role collab
+      // admitted them by and its join rows record.
+      for (const userId of editors) {
+        const { role } = await ClassmojiService.pageSections.sectionViewer({ userId, classroomId });
+        if (!role) continue;
+        // After the push: a failed write is reported (`audit_miss`); the
+        // checkpoint neither fails nor retries for it.
+        await ClassmojiService.audit.record({
+          classroom_id: classroomId,
+          user_id: userId,
+          role,
+          action: 'COLLAB_CHECKPOINT',
+          // What joins and the MCP tools write for the doc.
+          resource_type: resourceType,
+          resource_id: docId,
+          data: {
+            tool,
+            commit,
+            version,
+            runId,
+            editors: editors.filter(id => id !== userId),
+          },
+        });
+        return;
+      }
+      ClassmojiService.audit.logAuditMiss('no editor holds a role in the classroom', {
         classroom_id: classroomId,
-        user_id: userId,
-        role,
         action: 'COLLAB_CHECKPOINT',
-        // What joins and the MCP tools write for the doc.
-        resource_type: COLLAB_AUDIT_RESOURCE[kind === 'deck' ? 'deck' : 'page'],
+        resource_type: resourceType,
         resource_id: docId,
-        data: { tool: 'task:content_checkpoint', commit, version, runId, editors },
+        data: { tool, commit, version, runId, editors },
       });
     },
     repoSizeKb: async classroom => {
