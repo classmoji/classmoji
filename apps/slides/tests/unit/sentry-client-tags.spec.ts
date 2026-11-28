@@ -25,7 +25,7 @@ const CONFIG_STUB = stubModule(`
   export const parseSentryConfig = () => ({ dsn: 'https://public@o0.ingest.sentry.io/0', environment: 'test' });
 `);
 
-test('tags events and spans with the app and runtime: browser', async () => {
+test('tags events and spans with the app and runtime_kind: browser', async () => {
   const { initSentry } = await importWithStubs<{ initSentry: (app: 'slides') => unknown }>(
     new URL('../../app/utils/sentry.client.ts', import.meta.url),
     { '@sentry/react-router': SDK_STUB, '@classmoji/utils/sentry': CONFIG_STUB }
@@ -40,7 +40,7 @@ test('tags events and spans with the app and runtime: browser', async () => {
   }
   const options = globals.__sentryInitOptions as { initialScope?: unknown };
   expect(options.initialScope).toEqual({
-    tags: { app: 'slides', runtime: 'browser' },
-    attributes: { app: 'slides', runtime: 'browser' },
+    tags: { app: 'slides', runtime_kind: 'browser' },
+    attributes: { app: 'slides', runtime_kind: 'browser' },
   });
 });

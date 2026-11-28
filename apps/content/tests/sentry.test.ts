@@ -162,7 +162,7 @@ function expectNothingSecret(urls: string[]) {
 
 function expectTagged(event: SentEvent) {
   expect(event.environment).toBe('staging');
-  expect(event.tags).toMatchObject({ app: 'content', runtime: 'worker' });
+  expect(event.tags).toMatchObject({ app: 'content', runtime_kind: 'worker' });
 }
 
 const GAME: FilesFolder = { path: 'games/snake', treeSha: TREE_SHA };

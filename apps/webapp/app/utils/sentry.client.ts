@@ -48,7 +48,8 @@ const firstReport = (error: unknown): boolean => {
 /**
  * Start Sentry if the server sent a config; null when it is off. The three
  * apps share one Sentry project, so every event is tagged with its app
- * (and `runtime: browser`).
+ * (and `runtime_kind: browser`; not `runtime`, which Sentry derives itself
+ * from `contexts.runtime` on server events).
  *
  * Returns React Router's instrumentation for `HydratedRouter`'s
  * `instrumentations`: navigations are then named by their full route
@@ -97,8 +98,8 @@ export const initSentry = (
     // Errors carry tags, streamed spans carry attributes: both name the app
     // and the runtime.
     initialScope: {
-      tags: { app, runtime: 'browser' },
-      attributes: { app, runtime: 'browser' },
+      tags: { app, runtime_kind: 'browser' },
+      attributes: { app, runtime_kind: 'browser' },
     },
   });
   enabled = true;

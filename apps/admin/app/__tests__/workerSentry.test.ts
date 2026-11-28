@@ -71,7 +71,7 @@ it('reports during a request and flushes through ctx.waitUntil', async () => {
   expect(event.environment).toBe('staging');
   expect(event.tags).toMatchObject({
     app: 'admin',
-    runtime: 'worker',
+    runtime_kind: 'worker',
     surface: 'workers.hyperdrive_missing',
   });
   expect(event.request).toEqual({ method: 'GET', url: 'https://admin.example.com/people' });

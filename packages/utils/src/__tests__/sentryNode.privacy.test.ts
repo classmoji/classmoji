@@ -67,6 +67,7 @@ type SentEvent = {
   request?: { method?: string; url?: string };
   user?: unknown;
   tags: Record<string, unknown>;
+  contexts?: Record<string, Record<string, unknown> | undefined>;
   extra?: Record<string, unknown>;
   exception: {
     values: Array<{
@@ -93,7 +94,7 @@ const expectNothingSecret = () => {
 
 const expectTheUsefulParts = (event: SentEvent) => {
   expect(event.environment).toBe('staging');
-  expect(event.tags).toMatchObject({ app: 'webapp', runtime: 'server' });
+  expect(event.tags).toMatchObject({ app: 'webapp', runtime_kind: 'server' });
   const frames = event.exception?.values?.[0]?.stacktrace?.frames ?? [];
   expect(frames.length).toBeGreaterThan(0);
   // The request's method and scrubbed URL are kept; nothing else about it.
@@ -189,6 +190,26 @@ describe('initServerSentry privacy (real SDK, fake transport)', () => {
     expect(sent[0].exception.values[0].value).toBe(
       'boot refused COLLAB_INTERNAL_SECRET=[redacted], sent Authorization: Bearer [redacted]'
     );
+  });
+
+  // Sentry derives a `runtime` tag from `contexts.runtime` ("node v24…") when
+  // it stores an event, overwriting a tag of ours with that name, so ours is
+  // `runtime_kind`. The SDK still sends `contexts.runtime`; nothing of ours
+  // may be called `runtime`.
+  it('names the runtime kind in its own tag, beside the runtime context of the SDK', async () => {
+    withIsolationScope(() => {
+      reportError(new Error('which runtime'), { surface: 'test.choke_point' });
+    });
+    await flushErrorReports(2000);
+    const sent = events();
+    expect(sent).toHaveLength(1);
+    const [event] = sent;
+    expect(event.contexts?.runtime).toMatchObject({
+      name: 'node',
+      version: process.version,
+    });
+    expect(event.tags.runtime_kind).toBe('server');
+    expect(event.tags).not.toHaveProperty('runtime');
   });
 
   it('reports one error object once across handleError and a choke point', async () => {

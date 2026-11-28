@@ -83,7 +83,7 @@ describe('a route error with Sentry on', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].tags).toMatchObject({
       app: 'hook-station',
-      runtime: 'server',
+      runtime_kind: 'server',
       surface: 'hook_station.route',
       route: '/webhooks/callback/gitlab',
       method: 'POST',

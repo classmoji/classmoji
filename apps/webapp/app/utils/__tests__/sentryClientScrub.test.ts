@@ -98,7 +98,7 @@ it('scrubs the error, its breadcrumbs and the sampled span before they leave', a
     breadcrumbs?: Array<{ category?: string; message?: string }>;
   };
   // Every event names its app and runtime, as the servers' do.
-  expect(event.tags).toMatchObject({ app: 'webapp', runtime: 'browser' });
+  expect(event.tags).toMatchObject({ app: 'webapp', runtime_kind: 'browser' });
   expect(event.request?.url).toBe('http://localhost:3000/teacher/cs52/students/[login]');
   expect(event.exception?.values?.[0].value).toBe('boom at /join/[code]');
   const click = event.breadcrumbs?.find(crumb => crumb.category === 'ui.click');
@@ -109,6 +109,6 @@ it('scrubs the error, its breadcrumbs and the sampled span before they leave', a
   expect(spanText).toContain('/api/search');
   expect(spanText).not.toContain('?q=');
   // Spans carry the same two as attributes.
-  expect(spanText).toMatch(/"runtime":\{[^}]*"value":"browser"/);
+  expect(spanText).toMatch(/"runtime_kind":\{[^}]*"value":"browser"/);
   expect(spanText).toMatch(/"app":\{[^}]*"value":"webapp"/);
 });
