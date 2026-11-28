@@ -17,7 +17,6 @@ import {
   scopeGitlabId,
   teamsNamespace,
 } from '@classmoji/utils';
-import { parseAuditActor } from '@classmoji/services/audit';
 import { addAssignmentToRepo } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
@@ -172,8 +171,6 @@ interface DeleteRepositoryTaskPayload {
   name: string;
   gitOrganization: StrictGitOrganizationLike;
   deleteFromGithub?: boolean;
-  /** Who to record the delete for (`AuditActor`); read back with parseAuditActor. */
-  actor?: unknown;
 }
 
 interface CreateProjectForRepoTaskPayload {
@@ -792,9 +789,8 @@ export const deleteRepoTask = task({
     concurrencyLimit: 6,
   },
   run: async (payload: DeleteRepositoryTaskPayload) => {
-    // No caller triggers this run with an actor today: a payload without one
-    // records nothing (parseAuditActor answers null).
-    return HelperService.deleteRepository({ ...payload, actor: parseAuditActor(payload.actor) });
+    // No caller triggers this run today; a delete it makes records nothing.
+    return HelperService.deleteRepository({ ...payload, actor: null });
   },
 });
 
