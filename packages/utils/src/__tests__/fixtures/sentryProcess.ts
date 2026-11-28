@@ -159,10 +159,22 @@ switch (mode) {
     break;
   }
 
-  // Sentry's listener alone on a rejection: mode 'none' never exits. Node's
-  // default would have crashed: the documented caveat.
+  // Sentry's listener alone on a rejection: crashes as Node's default would
+  // (exit 1, the error printed), after flushing the event.
   case 'rejection-alone': {
     on();
+    // What was sent by the time the process exits.
+    process.on('exit', () => print({ exiting: true, events: events.length }));
+    void Promise.reject(new Error('detached boom'));
+    setTimeout(() => print({ alive: true, events: events.length }), 2500);
+    break;
+  }
+
+  // The dev-server order: Sentry first, the app's own listener added later
+  // (when the build loads). From then on the app's listener decides.
+  case 'rejection-listener-added-later': {
+    on();
+    process.on('unhandledRejection', () => {});
     void Promise.reject(new Error('detached boom'));
     setTimeout(() => {
       void flushErrorReports(2000).then(() => print({ alive: true, events: events.length }));

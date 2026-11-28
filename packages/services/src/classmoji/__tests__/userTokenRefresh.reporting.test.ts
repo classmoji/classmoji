@@ -2,9 +2,12 @@
  * A failed GitHub or GitLab token refresh is reported (`github.token_refresh`,
  * `gitlab.token_refresh`) once, with what each call returned or threw before
  * unchanged. The expected refusal (`bad_refresh_token` / `invalid_grant`: the
- * person signs in again) is a warning; network, 5xx and unreadable answers are
- * errors. Reports carry the reason, status and OAuth error code only, never a
- * token or the provider's text. Nothing is reported without a reporter.
+ * person signs in again) and a Gitlab instance that is gone are not reported
+ * at all (they recur on every request for that person); a missing client
+ * id/secret is reported once per process; network, 5xx and unreadable answers
+ * are reported each time. Reports carry the reason, status and OAuth error
+ * code only, never a token or the provider's text. Nothing is reported
+ * without a reporter.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -103,7 +106,7 @@ afterEach(() => {
 });
 
 describe('github.token_refresh', () => {
-  it('bad_refresh_token: a warning with the code, and null as before', async () => {
+  it('bad_refresh_token: not reported, and null as before', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -112,14 +115,8 @@ describe('github.token_refresh', () => {
     );
 
     expect(await getGitHubTokenForUser('user-1')).toBeNull();
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0].context).toEqual({
-      surface: 'github.token_refresh',
-      level: 'warning',
-      tags: { reason: 'refused', status: 200, code: 'bad_refresh_token' },
-    });
-    expectNoSecrets();
+    expect(await getGitHubTokenForUser('user-1')).toBeNull();
+    expect(captured).toHaveLength(0);
   });
 
   it('another refusal code is an error', async () => {
@@ -130,8 +127,10 @@ describe('github.token_refresh', () => {
 
     expect(await getGitHubTokenForUser('user-1')).toBeNull();
     expect(captured).toHaveLength(1);
-    expect(captured[0].context.level).toBe('error');
-    expect(captured[0].context.tags?.code).toBe('incorrect_client_credentials');
+    expect(captured[0].context).toEqual({
+      surface: 'github.token_refresh',
+      tags: { reason: 'refused', status: 200, code: 'incorrect_client_credentials' },
+    });
   });
 
   it('a code that is not a plain code is left out of the tags', async () => {
@@ -159,7 +158,6 @@ describe('github.token_refresh', () => {
     expect(captured[0].error).toBe(failure);
     expect(captured[0].context).toEqual({
       surface: 'github.token_refresh',
-      level: 'error',
       tags: { reason: 'network' },
     });
   });
@@ -172,18 +170,19 @@ describe('github.token_refresh', () => {
 
     await expect(getGitHubTokenForUser('user-1')).rejects.toThrow(SyntaxError);
     expect(captured).toHaveLength(1);
-    expect(captured[0].context).toMatchObject({
-      level: 'error',
+    expect(captured[0].context).toEqual({
+      surface: 'github.token_refresh',
       tags: { reason: 'unreadable_response', status: 502 },
     });
   });
 
-  it('missing client credentials are reported, and null as before', async () => {
+  it('missing client credentials are reported once per process, and null as before', async () => {
     vi.stubEnv('GITHUB_CLIENT_SECRET', '');
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
     expect(await getGitHubTokenForUser('user-1')).toBeNull();
+    expect(await getGitHubTokenForUser('user-2')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(captured.map(c => c.context.tags?.reason)).toEqual(['not_configured']);
   });
@@ -213,19 +212,13 @@ describe('github.token_refresh', () => {
 });
 
 describe('gitlab.token_refresh', () => {
-  it('invalid_grant: a warning with status and code, and null as before', async () => {
+  it('invalid_grant: not reported, and null as before', async () => {
     gitlabFetchMock.mockResolvedValue(
       jsonResponse({ error: 'invalid_grant', error_description: `bad ${REFRESH}` }, 400)
     );
 
     expect(await getGitLabTokenForUser('user-2')).toBeNull();
-    expect(captured).toHaveLength(1);
-    expect(captured[0].context).toEqual({
-      surface: 'gitlab.token_refresh',
-      level: 'warning',
-      tags: { reason: 'refused', status: 400, code: 'invalid_grant' },
-    });
-    expectNoSecrets();
+    expect(captured).toHaveLength(0);
   });
 
   it('a 5xx is an error, without GitLab’s text', async () => {
@@ -235,7 +228,6 @@ describe('gitlab.token_refresh', () => {
     expect(captured).toHaveLength(1);
     expect(captured[0].context).toEqual({
       surface: 'gitlab.token_refresh',
-      level: 'error',
       tags: { reason: 'refused', status: 503, code: undefined },
     });
     expectNoSecrets();
@@ -247,7 +239,10 @@ describe('gitlab.token_refresh', () => {
 
     await expect(getGitLabTokenForUser('user-2')).rejects.toBe(failure);
     expect(captured).toHaveLength(1);
-    expect(captured[0].context).toMatchObject({ level: 'error', tags: { reason: 'network' } });
+    expect(captured[0].context).toEqual({
+      surface: 'gitlab.token_refresh',
+      tags: { reason: 'network' },
+    });
   });
 
   it('an unreadable 200 answer is reported and still thrown', async () => {
@@ -259,17 +254,26 @@ describe('gitlab.token_refresh', () => {
     });
   });
 
-  it('an instance that is gone is a warning; another client failure an error', async () => {
+  it('an instance that is gone is not reported; another client failure is', async () => {
     oauthClientMock.mockRejectedValueOnce(new GitLabInstanceError('not_found', 'gone'));
+    expect(await getGitLabTokenForUser('user-2')).toBeNull();
+    oauthClientMock.mockRejectedValueOnce(new GitLabInstanceError('disabled', 'off'));
     expect(await getGitLabTokenForUser('user-2')).toBeNull();
     oauthClientMock.mockRejectedValueOnce(new Error('decrypt failed'));
     expect(await getGitLabTokenForUser('user-3')).toBeNull();
 
-    expect(captured.map(c => [c.context.level, c.context.tags])).toEqual([
-      ['warning', { reason: 'no_client', code: 'not_found' }],
-      ['error', { reason: 'no_client', code: undefined }],
-    ]);
+    expect(captured.map(c => c.context.tags)).toEqual([{ reason: 'no_client', code: undefined }]);
     expect(gitlabFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('gitlab.com not configured is reported once per process', async () => {
+    oauthClientMock.mockRejectedValue(new GitLabInstanceError('not_configured', 'unset'));
+    expect(await getGitLabTokenForUser('user-2')).toBeNull();
+    expect(await getGitLabTokenForUser('user-3')).toBeNull();
+
+    expect(captured.map(c => c.context.tags)).toEqual([
+      { reason: 'not_configured', code: 'not_configured' },
+    ]);
   });
 
   it('a successful refresh reports nothing', async () => {

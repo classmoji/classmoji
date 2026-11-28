@@ -19,6 +19,11 @@ import { TokenStoreUnavailableError, UnauthorizedError } from '../../mcp/errors.
 const mocks = vi.hoisted(() => ({
   resolveViewer: vi.fn(),
   buildMcpServer: vi.fn(),
+  setSentryUserId: vi.fn(),
+}));
+
+vi.mock('@classmoji/utils/sentry-node', () => ({
+  setSentryUserId: (...args: unknown[]) => mocks.setSentryUserId(...args),
 }));
 
 vi.mock('../../auth/resolveViewer.ts', () => ({
@@ -42,6 +47,7 @@ beforeEach(() => {
   captured.length = 0;
   mocks.resolveViewer.mockReset();
   mocks.buildMcpServer.mockReset();
+  mocks.setSentryUserId.mockReset();
   mocks.buildMcpServer.mockImplementation(() => new McpServer({ name: 'test', version: '0' }));
   setErrorReporter(fakeReporter);
 });
@@ -91,6 +97,31 @@ describe('token check', () => {
     const res = await postMcp(await mcpApp());
     expect(res.statusCode).toBe(401);
     expect(captured).toEqual([]);
+  });
+});
+
+describe('the Sentry user id', () => {
+  it("is the viewer's own id on an ordinary token", async () => {
+    mocks.resolveViewer.mockResolvedValue({ userId: 'u1', clientId: 'c', scopes: new Set() });
+    await postMcp(await mcpApp());
+    expect(mocks.setSentryUserId).toHaveBeenCalledWith('u1', { impersonating: false });
+  });
+
+  it('names no one for an Ask Moji token minted under View as', async () => {
+    mocks.resolveViewer.mockResolvedValue({
+      userId: 'viewed-user',
+      clientId: 'classmoji-ask-moji',
+      scopes: new Set(),
+      impersonatedBy: 'admin-1',
+    });
+    await postMcp(await mcpApp());
+    expect(mocks.setSentryUserId).toHaveBeenCalledWith('viewed-user', { impersonating: true });
+  });
+
+  it('is never set for a refused token', async () => {
+    mocks.resolveViewer.mockRejectedValue(new UnauthorizedError('Token expired'));
+    await postMcp(await mcpApp());
+    expect(mocks.setSentryUserId).not.toHaveBeenCalled();
   });
 });
 

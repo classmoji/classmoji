@@ -142,7 +142,9 @@ test.describe('entry.server handleError', () => {
   test('the streaming render error is reported only after the shell, as react_router.render', () => {
     const source = readFileSync(app('entry.server.tsx'), 'utf8');
     const onError = source.slice(source.indexOf('onError(error: unknown)'));
-    expect(onError.indexOf("surface: 'react_router.render'")).toBeGreaterThan(
+    // reportRenderError (sentry-server): surface react_router.render, never
+    // for a client that went away or the stream timeout's abort.
+    expect(onError.indexOf('reportRenderError(error, request)')).toBeGreaterThan(
       onError.indexOf('if (shellRendered)')
     );
   });
@@ -251,7 +253,30 @@ test.describe('server.ts', () => {
     const text = source();
     expect(text).toContain("surface: 'auth.session_read', tags: { via: 'socket' }");
     expect(text).toContain("surface: 'auth.session_read', tags: { via: 'multiplex' }");
-    expect(text).toContain("surface: 'slides.multiplex.join'");
+    expect(text).toContain('reportJoinFailure(err, slideId);');
+  });
+
+  test('a join with a slide id that is not a string is logged, never reported', async () => {
+    const { reportJoinFailure } = await import('../../server/multiplexJoin.ts');
+    const validation = Object.assign(new Error('Invalid `findUnique()` invocation'), {
+      name: 'PrismaClientValidationError',
+    });
+    const reports: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (error, context) => void reports.push({ error, context }),
+      flush: async () => true,
+    });
+    try {
+      reportJoinFailure(validation, { not: 'a string' });
+      reportJoinFailure(validation, 'slide-1');
+      reportJoinFailure(new Error('x'), 42);
+      expect(reports).toEqual([]);
+      const down = new Error('database down');
+      reportJoinFailure(down, 'slide-1');
+      expect(reports).toEqual([{ error: down, context: { surface: 'slides.multiplex.join' } }]);
+    } finally {
+      setErrorReporter(null);
+    }
   });
 
   test('the production image copies server/, which server.ts imports first', () => {

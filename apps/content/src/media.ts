@@ -18,6 +18,7 @@
  * two paths share their POLICY (range.ts, cache.ts) and share nothing else.
  */
 import { reportError } from '@classmoji/utils/error-report';
+import { workerRequestSendsReports } from '@classmoji/utils/sentry-server';
 import { asDownload, blobHeaders, errorResponse } from './cache.ts';
 import { hasMediaBinding, type Env } from './env.ts';
 import { MediaOrigin, type MediaObjectRef } from './origins/media.ts';
@@ -124,7 +125,11 @@ export async function serveMedia(
   // fix is the deploy rather than a hunt through the signing code.
   if (!hasMediaBinding(env)) {
     console.warn('[content] media binding missing');
-    reportError(mediaBindingMissing, { surface: 'content.media_binding' });
+    // Not from a HEAD or OPTIONS, which Sentry does not send: the one report
+    // would be spent there.
+    if (workerRequestSendsReports(request)) {
+      reportError(mediaBindingMissing, { surface: 'content.media_binding' });
+    }
     return errorResponse(503, 'media not configured');
   }
 

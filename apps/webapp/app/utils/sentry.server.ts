@@ -23,12 +23,29 @@ export { captureServerException } from '@classmoji/utils/sentry-node';
 
 /**
  * Tie this request's errors to the signed-in user by internal id (null for
- * none). Call it inside a request only (a loader or action). No-op while
- * Sentry is off, and for a request that has no Sentry scope of its own: under
- * the Vite dev server Sentry starts in the middle of the first request, and
+ * none). Call it inside a request only (a loader or action). Under View as
+ * (`impersonating`) no id is set, neither the viewed person's nor the admin's:
+ * the events carry `impersonating: 'true'` instead. No-op while Sentry is
+ * off, and for a request that has no Sentry scope of its own: under the Vite
+ * dev server Sentry starts in the middle of the first request, and
  * `setSentryUserId` leaves that one alone rather than set the user on the
  * scope every later request copies.
  */
-export const setRequestUserId = (userId: string | null | undefined): void => {
-  setSentryUserId(userId ?? null);
+export const setRequestUserId = (
+  userId: string | null | undefined,
+  options: { impersonating?: boolean } = {}
+): void => {
+  setSentryUserId(userId ?? null, options);
+};
+
+/**
+ * `setRequestUserId` from what `getAuthSession` returned: its user id, and
+ * View as when the better-auth session carries `impersonatedBy` (then no id
+ * at all is set, see above).
+ */
+export const setRequestUser = (
+  authData: { userId?: string | null; session?: unknown } | null | undefined
+): void => {
+  const session = authData?.session as { session?: { impersonatedBy?: unknown } } | null;
+  setRequestUserId(authData?.userId, { impersonating: Boolean(session?.session?.impersonatedBy) });
 };

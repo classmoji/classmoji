@@ -300,18 +300,15 @@ const authenticated = new WeakMap<FastifyRequest, Authenticated>();
  * the body ever being parsed.
  */
 async function authenticate(request: FastifyRequest, reply: FastifyReply) {
+  let viewer: Viewer;
   try {
     const headers = toFetchHeaders(request);
-    const viewer: Viewer = {
+    viewer = {
       ...(await resolveViewer(headers)),
       timezoneHint: timezoneHintFrom(headers),
       agentSession: agentSessionFrom(headers),
     };
     authenticated.set(request, { headers, viewer });
-    // This request's error reports name the user (internal id only). The
-    // request has its own Sentry scope, which the route and every tool
-    // handler it starts run inside.
-    setSentryUserId(viewer.userId);
   } catch (error) {
     if (error instanceof TokenStoreUnavailableError) {
       request.log.warn({ err: error.cause }, '[mcp] token store unavailable; answering 503');
@@ -326,6 +323,12 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
     }
     return sendUnauthorized(reply, message);
   }
+  // This request's error reports name the user (internal id only). The
+  // request has its own Sentry scope, which the route and every tool handler
+  // it starts run inside. An Ask Moji token minted under View as names no one
+  // (`impersonating` instead): the viewed person is not the one acting.
+  // Outside the try above, so it can never turn into a 401 (it does not throw).
+  setSentryUserId(viewer.userId, { impersonating: Boolean(viewer.impersonatedBy) });
 }
 
 /** The elements of large tool calls in flight, shared by every request. */

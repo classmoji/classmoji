@@ -11,7 +11,6 @@ import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-rep
 
 const mocks = vi.hoisted(() => ({
   enabled: { value: true },
-  capture: vi.fn(),
   render: vi.fn(),
 }));
 
@@ -19,7 +18,6 @@ vi.mock('../utils/sentry.server', () => ({
   get serverSentryEnabled() {
     return mocks.enabled.value;
   },
-  captureServerException: (...a: unknown[]) => mocks.capture(...a),
 }));
 
 vi.mock('react-dom/server', () => ({
@@ -44,7 +42,6 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.enabled.value = true;
-  mocks.capture.mockReset();
   mocks.render.mockReset();
   // React Router's default skips logging in test mode; the entry mirrors that
   // through NODE_ENV, so the log branch needs a non-test mode here.
@@ -128,6 +125,18 @@ describe('handleError', () => {
 });
 
 describe('streaming render errors', () => {
+  let reports: Array<{ error: unknown; context: ReportContext }>;
+  beforeEach(() => {
+    reports = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        reports.push({ error, context });
+      },
+      flush: async () => true,
+    });
+  });
+  afterEach(() => setErrorReporter(null));
+
   type Options = { onShellReady(): void; onError(error: unknown): void };
   const start = () => {
     let options: Options | undefined;
@@ -153,13 +162,37 @@ describe('streaming render errors', () => {
     options.onError(error);
 
     expect(errorSpy).toHaveBeenCalledWith(error);
-    expect(mocks.capture).toHaveBeenCalledWith(error, { surface: 'react_router.render' });
+    expect(reports).toEqual([
+      { error, context: { surface: 'react_router.render', handled: false } },
+    ]);
+  });
+
+  it('logs but does not report a client that went away or the stream timeout', async () => {
+    const { options, pending } = start();
+    options.onShellReady();
+    await pending;
+    const gone = new Error('The destination stream closed early.');
+    const timedOut = new Error('The render was aborted by the server without a reason.');
+    options.onError(gone);
+    options.onError(timedOut);
+    expect(errorSpy).toHaveBeenCalledWith(gone);
+    expect(errorSpy).toHaveBeenCalledWith(timedOut);
+    expect(reports).toEqual([]);
+  });
+
+  it('reports nothing while Sentry is off', async () => {
+    mocks.enabled.value = false;
+    const { options, pending } = start();
+    options.onShellReady();
+    await pending;
+    options.onError(new Error('suspense boundary failed'));
+    expect(reports).toEqual([]);
   });
 
   it('leaves an error before the shell to handleError', () => {
     const { options } = start();
     options.onError(new Error('shell failed'));
     expect(errorSpy).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
   });
 });

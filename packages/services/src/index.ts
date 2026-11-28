@@ -96,6 +96,7 @@ export {
   getTeamNameForClassroom,
   ensureClassroomTeam,
   describeTokenMintError,
+  tokenMintErrorStatus,
   redactAccessTokens,
   Octokit,
 } from './git/index.ts';

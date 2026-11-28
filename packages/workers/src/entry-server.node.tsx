@@ -8,14 +8,15 @@
  *
  * One addition, every line of it ending in `// classmoji`: a rendering error
  * after the shell (logged, never seen by `handleError`) also goes to
- * `reportError`, which does nothing unless the process registered a reporter
- * (Sentry). The test drops those lines before comparing.
+ * `reportRenderError`, which skips a client that went away and the stream
+ * timeout's own abort, and does nothing unless the process registered a
+ * reporter (Sentry). The test drops those lines before comparing.
  *
  * Workers builds resolve the `workerd` export condition to
  * ./entry-server.workerd.tsx instead.
  */
 /* eslint-disable -- kept verbatim; see above. */
-import { reportError } from "@classmoji/utils/error-report"; // classmoji
+import { reportRenderError } from "@classmoji/utils/sentry-server"; // classmoji
 import { PassThrough } from "node:stream";
 
 import type { EntryContext, RouterContextProvider } from "react-router";
@@ -96,7 +97,7 @@ export default function handleRequest(
           // reject and get logged in handleDocumentRequest.
           if (shellRendered) {
             console.error(error);
-            reportError(error, { surface: "react_router.render" }); // classmoji
+            reportRenderError(error, request); // classmoji
           }
         },
       },

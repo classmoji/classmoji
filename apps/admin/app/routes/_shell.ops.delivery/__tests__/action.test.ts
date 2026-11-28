@@ -13,7 +13,16 @@ const db = vi.hoisted(() => ({
 }));
 
 vi.mock('~/utils/db.server', () => ({
-  prisma: { classroom: { update: db.update, updateMany: db.updateMany } },
+  prisma: {
+    classroom: {
+      update: db.update,
+      updateMany: db.updateMany,
+      findUnique: vi.fn(async () => ({ id: 'c1', name: 'Class' })),
+      count: vi.fn(async () => 1),
+    },
+    // The switch and its platform row are written together.
+    $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
+  },
   requirePlatformAdmin: vi.fn(async () => ({ user: { id: 'admin-1' } })),
 }));
 vi.mock('~/utils/audit.server', () => ({ platformAudit: vi.fn(async () => {}) }));

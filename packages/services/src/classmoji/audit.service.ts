@@ -189,7 +189,11 @@ export async function recordNonMemberRefusal(
   };
   if (!userId || !classroomId) {
     logAuditMiss(!userId ? 'missing user_id' : 'missing classroom_id', row);
-    reportSkipped(!userId ? 'missing_user' : 'missing_classroom', row);
+    // Reported in production only, as `refuse` reports (outside it, a
+    // developer reads the line above).
+    if (process.env.NODE_ENV === 'production') {
+      reportSkipped(!userId ? 'missing_user' : 'missing_classroom', row);
+    }
     return;
   }
   try {

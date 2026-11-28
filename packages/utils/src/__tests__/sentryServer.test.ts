@@ -2,8 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Breadcrumb, ErrorEvent } from '@sentry/core';
 import { markReported, reportError, setErrorReporter, type ReportContext } from '../errorReport.ts';
 import {
-  CREDENTIAL_PATHS,
+  SENSITIVE_PATHS,
   captureWithContext,
+  isOriginRefusal,
+  isRenderAbort,
+  isSecretKey,
+  reportRenderError,
   reportRouteError,
   createSentryReporter,
   scrubBreadcrumb,
@@ -158,7 +162,7 @@ describe('scrubUrl', () => {
 
   it('drops credentials in the authority', () => {
     expect(scrubUrl('https://x-access-token:ghs_abc123@github.com/org/repo.git')).toBe(
-      'https://github.com/org/repo.git'
+      'https://github.com/org/[repo]'
     );
     expect(scrubUrl('postgresql://app:hunter2@db.internal:5432/classmoji?sslmode=require')).toBe(
       'postgresql://db.internal:5432/classmoji'
@@ -219,18 +223,112 @@ describe('scrubUrl', () => {
     expect(scrubUrl('')).toBe('');
   });
 
-  it('documents one rule per credential path', () => {
-    expect(CREDENTIAL_PATHS.map(rule => rule.name)).toEqual([
+  it('documents one rule per sensitive path', () => {
+    expect(SENSITIVE_PATHS.map(rule => rule.name)).toEqual([
       'join link code',
       'calendar feed signature',
       'password reset token',
       'content theme signature',
       'content files grant and signature',
+      'student login',
+      'staff login',
+      'team slug',
+      'repository name',
+      'Gitlab project path',
+      'Github API repository',
+      'Github repository',
+      'person id (admin app)',
     ]);
+  });
+
+  it('rewrites path segments that name a person', () => {
+    expect(scrubUrl('https://classmoji.io/admin/cs52/students/jane-doe')).toBe(
+      'https://classmoji.io/admin/cs52/students/[login]'
+    );
+    expect(scrubUrl('/teacher/cs52/students/jane-doe.data?_routes=x')).toBe(
+      '/teacher/cs52/students/[login]'
+    );
+    expect(scrubUrl('/admin/cs52/staff/prof-x/edit')).toBe('/admin/cs52/staff/[login]/edit');
+    expect(scrubUrl('/student/cs52/repos/hw1-jane-doe/team')).toBe(
+      '/student/cs52/repos/[repo]/team'
+    );
+    expect(scrubUrl('/admin/cs52/teams/jane-and-joe/edit')).toBe('/admin/cs52/teams/[team]/edit');
+    expect(scrubUrl('https://api.github.com/repos/cs52-org/hw1-jane-doe/contents/x')).toBe(
+      'https://api.github.com/repos/cs52-org/[repo]/contents/x'
+    );
+    expect(scrubUrl('https://github.com/cs52-org/hw1-jane-doe.git')).toBe(
+      'https://github.com/cs52-org/[repo]'
+    );
+    expect(
+      scrubUrl('https://gitlab.example.edu/api/v4/projects/cs52%2Fprojects%2Fhw1-jane/repository')
+    ).toBe('https://gitlab.example.edu/api/v4/projects/[project]/repository');
+    expect(scrubUrl('https://admin.classmoji.io/people/user_123')).toBe(
+      'https://admin.classmoji.io/people/[id]'
+    );
+    // Classroom slugs and record ids stay.
+    expect(scrubUrl('/admin/cs52/students')).toBe('/admin/cs52/students');
+    expect(scrubUrl('/admin/cs52/assignments/42')).toBe('/admin/cs52/assignments/42');
+    expect(scrubUrl('/cs52/forms/survey/teams/set-1')).toBe('/cs52/forms/survey/teams/set-1');
+  });
+
+  it('matches paths case-insensitively and through percent-encoding', () => {
+    expect(scrubUrl('/JOIN/ABC')).toBe('/JOIN/[code]');
+    expect(scrubUrl('/%6Aoin/ABC')).toBe('/%6Aoin/[code]');
+    expect(scrubUrl('/api/auth/Reset-Password/T0KEN')).toBe('/api/auth/Reset-Password/[token]');
+    expect(scrubUrl('/Admin/cs52/%53tudents/jane')).toBe('/Admin/cs52/%53tudents/[login]');
+    // An encoded slash stays inside its segment.
+    expect(scrubUrl('/join%2Fabc')).toBe('/join%2Fabc');
+    // A segment that does not decode is not sent.
+    expect(scrubUrl('/join/%E0%A4%A')).toBe('/join/[segment]');
+    expect(() => scrubUrl('/%/%%/x')).not.toThrow();
   });
 });
 
 describe('scrubText', () => {
+  it('scrubs people-naming paths inside messages, case-insensitively', () => {
+    expect(scrubText('No route matches URL "/ADMIN/cs52/students/jane"')).toBe(
+      'No route matches URL "/ADMIN/cs52/students/[login]"'
+    );
+  });
+
+  it('redacts secrets written as key: value, JSON, headers and env pairs', () => {
+    expect(scrubText('login failed, password: hunter2')).toBe('login failed, password: [redacted]');
+    expect(scrubText('body {"password":"hunter2","id":"u1"}')).toBe(
+      'body {"password":[redacted],"id":"u1"}'
+    );
+    expect(scrubText('{"password": "hunter 2"}')).toBe('{"password": [redacted]}');
+    expect(scrubText("config { client_secret: 'abc123' }")).toBe(
+      'config { client_secret: [redacted] }'
+    );
+    expect(scrubText('sent x-collab-secret: s3cr3t to collab')).toBe(
+      'sent x-collab-secret: [redacted]'
+    );
+    expect(scrubText('env SOME_SECRET=abc OTHER=1')).toBe('env SOME_SECRET=[redacted] OTHER=1');
+    expect(scrubText('RESEND_API_KEY="re_x" and GITHUB_TOKEN: abc')).toBe(
+      'RESEND_API_KEY=[redacted] and GITHUB_TOKEN: [redacted]'
+    );
+    expect(scrubText('joinCode=ABCD')).toBe('joinCode=[redacted]');
+  });
+
+  it('redacts Resend and AWS keys and Stripe signature values', () => {
+    expect(scrubText('key re_123abc45_ABCDEFGHIJKLMNOPQRSTUVWX rejected')).toBe(
+      'key [api-key] rejected'
+    );
+    expect(scrubText('aws AKIAIOSFODNN7EXAMPLE denied')).toBe('aws [aws-key] denied');
+    expect(scrubText('Signature: t=1700000000,v1=abcdef0123,v0=99ff bad')).toBe(
+      'Signature: [signature] bad'
+    );
+    expect(scrubText('stripe-signature: t=1,v1=ab')).toBe('stripe-signature: [redacted]');
+  });
+
+  it('leaves ordinary diagnostics alone', () => {
+    expect(scrubText('request failed with status code: 500')).toBe(
+      'request failed with status code: 500'
+    );
+    expect(scrubText('token expired at 12:30')).toBe('token expired at 12:30');
+    expect(scrubText('re_render failed')).toBe('re_render failed');
+  });
+
   it('scrubs URLs inside a message', () => {
     expect(scrubText('fetch https://x.test/join/SECRET?invite=abc failed.')).toBe(
       'fetch https://x.test/join/[code] failed.'
@@ -290,7 +388,7 @@ describe('scrubText', () => {
 
   it('redacts session cookies and secret key=value pairs', () => {
     expect(scrubText('Cookie: better-auth.session_token=abc.def; theme=dark')).toBe(
-      'Cookie: better-auth.session_token=[redacted]; theme=dark'
+      'Cookie: [redacted]'
     );
     expect(scrubText('__Secure-better-auth.session_data=xyz')).toBe(
       '__Secure-better-auth.session_data=[redacted]'
@@ -345,7 +443,7 @@ describe('scrubBreadcrumb', () => {
     expect(scrubBreadcrumb(breadcrumb)).toEqual({
       category: 'http',
       type: 'http',
-      data: { url: 'https://api.github.com/repos/x/y', method: 'GET', status_code: 500 },
+      data: { url: 'https://api.github.com/repos/x/[repo]', method: 'GET', status_code: 500 },
     });
     expect(
       scrubBreadcrumb({ category: 'fetch', data: { url: '/join/CODE?x=1', method: 'POST' } })
@@ -693,5 +791,171 @@ describe('createSentryReporter / captureWithContext', () => {
     const { sdk } = makeSdk();
     await createSentryReporter(sdk).flush(500);
     expect(sdk.flush).toHaveBeenCalledWith(500);
+  });
+});
+
+describe('isSecretKey', () => {
+  it.each([
+    'authToken',
+    'sessionToken',
+    'session_token',
+    'apiSecret',
+    'credentials',
+    'jwt',
+    'joinCode',
+    'code',
+    'x-collab-secret',
+    'Authorization',
+    'cookie',
+    'private_key',
+    'stripe_signature',
+  ])('drops %s', key => expect(isSecretKey(key)).toBe(true));
+
+  it.each([
+    'status_code',
+    'filter_key',
+    'tokens_per_hour',
+    'error_code',
+    'classroom_id',
+    'surface',
+    'count',
+  ])('keeps %s', key => expect(isSecretKey(key)).toBe(false));
+
+  it('drops them from extra and contexts', () => {
+    const event = scrubEvent({
+      extra: { authToken: 't', status_code: 500, nested: { apiSecret: 's', tokens_per_hour: 2 } },
+      contexts: { app: { credentials: 'x', filter_key: 'k' } },
+    });
+    expect(event.extra).toEqual({ status_code: 500, nested: { tokens_per_hour: 2 } });
+    expect(event.contexts).toEqual({ app: { filter_key: 'k' } });
+  });
+});
+
+describe('scrubEvent: fingerprint, exception type and mechanism data', () => {
+  it('scrubs each through scrubText', () => {
+    const event = scrubEvent({
+      fingerprint: ['{{ default }}', '/join/CODE', 'jane@school.edu'],
+      exception: {
+        values: [
+          {
+            type: 'Error at /admin/cs52/students/jane',
+            value: 'x',
+            mechanism: { data: { url: '/join/CODE?x=1', handler: 'jane@school.edu' } },
+          },
+        ],
+      },
+    });
+    expect(event.fingerprint).toEqual(['{{ default }}', '/join/[code]', '[email]']);
+    expect(event.exception?.values?.[0].type).toBe('Error at /admin/cs52/students/[login]');
+    expect(event.exception?.values?.[0].mechanism?.data).toEqual({
+      url: '/join/[code]',
+      handler: '[email]',
+    });
+  });
+});
+
+describe('isOriginRefusal / shouldReportRouteError for React Router refusals', () => {
+  const MISMATCH =
+    'The `request.url` origin does not match `origin` header from a forwarded action request. Aborting the action.';
+  const post = (origin: string | null, url = 'https://classmoji.io/admin/cs52/settings') =>
+    new Request(url, { method: 'POST', headers: origin === null ? {} : { origin } });
+
+  it('skips the document POST refusal (origin mismatch, answered 400)', () => {
+    const request = post('https://evil.example');
+    expect(isOriginRefusal(new Error(MISMATCH), request)).toBe(true);
+    expect(shouldReportRouteError(new Error(MISMATCH), request)).toBe(false);
+  });
+
+  it('skips an origin header that is not a URL', () => {
+    const error = new Error('`origin` header is not a valid URL. Aborting the action.');
+    expect(shouldReportRouteError(error, post('not a url'))).toBe(false);
+  });
+
+  it('skips the .data POST refusal (new Error("Bad Request"))', () => {
+    const request = post('https://evil.example', 'https://classmoji.io/admin/cs52/settings.data');
+    expect(shouldReportRouteError(new Error('Bad Request'), request)).toBe(false);
+  });
+
+  it('still reports the same message on a same-origin request, a GET, or a subclass', () => {
+    expect(shouldReportRouteError(new Error('Bad Request'), post('https://classmoji.io'))).toBe(
+      true
+    );
+    expect(shouldReportRouteError(new Error('Bad Request'), post(null))).toBe(true);
+    const get = new Request('https://classmoji.io/x', {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(shouldReportRouteError(new Error('Bad Request'), get)).toBe(true);
+    class Custom extends Error {}
+    expect(shouldReportRouteError(new Custom('Bad Request'), post('https://evil.example'))).toBe(
+      true
+    );
+    expect(shouldReportRouteError(new Error('database down'), post('https://evil.example'))).toBe(
+      true
+    );
+  });
+
+  it('logs the refusal as before but does not report it', () => {
+    const captured: unknown[] = [];
+    setErrorReporter({ capture: error => void captured.push(error), flush: async () => true });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const error = new Error(MISMATCH);
+      reportRouteError(error, post('https://evil.example'), { mode: 'production' });
+      expect(log).toHaveBeenCalledWith(error);
+      expect(captured).toEqual([]);
+    } finally {
+      log.mockRestore();
+      setErrorReporter(null);
+    }
+  });
+});
+
+describe('reportRenderError', () => {
+  const capture = () => {
+    const captured: Array<{ error: unknown; context: ReportContext }> = [];
+    setErrorReporter({
+      capture: (error, context) => void captured.push({ error, context }),
+      flush: async () => true,
+    });
+    return captured;
+  };
+  afterEach(() => setErrorReporter(null));
+
+  it('reports a real render error once, as react_router.render (unhandled)', () => {
+    const captured = capture();
+    const error = new Error('render boom');
+    reportRenderError(error, new Request('https://x.test/'));
+    reportRenderError(error, new Request('https://x.test/'));
+    expect(captured).toEqual([
+      { error, context: { surface: 'react_router.render', handled: false } },
+    ]);
+  });
+
+  it('skips a client that went away, the stream timeout and an aborted request', () => {
+    const captured = capture();
+    reportRenderError(new Error('The destination stream closed early.'));
+    reportRenderError(new Error('The render was aborted by the server without a reason.'));
+    reportRenderError(new DOMException('aborted', 'AbortError'));
+    const controller = new AbortController();
+    controller.abort();
+    reportRenderError(new Error('anything'), { signal: controller.signal });
+    expect(captured).toEqual([]);
+  });
+
+  it("reports a TimeoutError that is not the entry's own (an upstream fetch timing out)", () => {
+    const captured = capture();
+    const upstream = new DOMException('The operation timed out.', 'TimeoutError');
+    reportRenderError(upstream);
+    expect(captured.map(c => c.error)).toEqual([upstream]);
+  });
+
+  it('isRenderAbort is exact: a subclass or another message is a real error', () => {
+    class Custom extends Error {}
+    expect(isRenderAbort(new Custom('The destination stream closed early.'))).toBe(false);
+    expect(isRenderAbort(new Error('The destination stream closed early'))).toBe(false);
+  });
+
+  it('does nothing without a reporter', () => {
+    expect(() => reportRenderError(new Error('x'))).not.toThrow();
   });
 });

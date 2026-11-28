@@ -12,7 +12,7 @@
  * Everything else is the default, unchanged: when React Router's default
  * changes, copy the change here.
  */
-import { serverSentryEnabled, captureServerException } from './utils/sentry.server';
+import { serverSentryEnabled } from './utils/sentry.server';
 import { PassThrough } from 'node:stream';
 
 import type { EntryContext, HandleErrorFunction, RouterContextProvider } from 'react-router';
@@ -21,7 +21,7 @@ import { ServerRouter } from 'react-router';
 import { isbot } from 'isbot';
 import type { RenderToPipeableStreamOptions } from 'react-dom/server';
 import { renderToPipeableStream } from 'react-dom/server';
-import { reportRouteError, shouldReportRouteError } from '@classmoji/utils/sentry-server';
+import { reportRenderError, reportRouteError } from '@classmoji/utils/sentry-server';
 
 export const streamTimeout = 5_000;
 
@@ -102,10 +102,9 @@ export default function handleRequest(
           if (shellRendered) {
             console.error(error);
             // Reported here for the same reason: an error before the shell
-            // reaches handleError above.
-            if (serverSentryEnabled && shouldReportRouteError(error, request)) {
-              captureServerException(error, { surface: 'react_router.render' });
-            }
+            // reaches handleError above. Not when the client went away or the
+            // stream timeout stopped it.
+            if (serverSentryEnabled) reportRenderError(error, request);
           }
         },
       }

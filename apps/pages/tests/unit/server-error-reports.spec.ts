@@ -171,7 +171,9 @@ test.describe('entry.server handleError', () => {
   test('the streaming render error is reported only after the shell, as react_router.render', () => {
     const source = readFileSync(app('entry.server.tsx'), 'utf8');
     const onError = source.slice(source.indexOf('onError(error: unknown)'));
-    expect(onError.indexOf("surface: 'react_router.render'")).toBeGreaterThan(
+    // reportRenderError (sentry-server): surface react_router.render, never
+    // for a client that went away or the stream timeout's abort.
+    expect(onError.indexOf('reportRenderError(error, request)')).toBeGreaterThan(
       onError.indexOf('if (shellRendered)')
     );
   });
@@ -256,4 +258,31 @@ test('server.ts starts Sentry before anything else it imports', () => {
   expect(source.indexOf('setupExpressErrorHandler(app)')).toBeGreaterThan(
     source.lastIndexOf('createRequestHandler(')
   );
+});
+
+// ─── Client-posted JSON ─────────────────────────────────────────────────────
+
+test.describe('client-posted JSON that does not parse', () => {
+  test('throws as JSON.parse does, and is never reported (its message quotes the input)', async () => {
+    const { parseClientJson } = await import('~/utils/clientJson.server.ts');
+    const { reportError } = await import('@classmoji/utils/error-report');
+    useFakeReporter();
+    let thrown: unknown;
+    try {
+      parseClientJson('{"text": "my secret essay"');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SyntaxError);
+    reportError(thrown, { surface: 'pages.page_action' });
+    expect(reports).toEqual([]);
+    expect(parseClientJson('[1]')).toEqual([1]);
+  });
+
+  test('the page save and the JSON body reader use it', () => {
+    const source = readFileSync(app('routes/$classroomSlug.$pageId/route.server.ts'), 'utf8');
+    expect(source).toContain('parseClientJson(data.content as string)');
+    expect(source).not.toContain('JSON.parse(data.content');
+    expect(source).toContain('if (error instanceof SyntaxError) markReported(error);');
+  });
 });

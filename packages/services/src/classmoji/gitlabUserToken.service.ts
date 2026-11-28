@@ -13,7 +13,7 @@
 import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
 import type { Account as PrismaAccount } from '@classmoji/database/client';
-import { reportError, type ErrorReportLevel } from '@classmoji/utils/error-report';
+import { reportError } from '@classmoji/utils/error-report';
 import { GitLabInstanceError, gitlabFetch, oauthClient } from './gitlabInstance.service.ts';
 
 export interface GitLabTokenResult {
@@ -65,19 +65,26 @@ const isGoneInstance = (error: unknown): boolean =>
   (error.code === 'not_found' || error.code === 'pending' || error.code === 'disabled');
 
 /**
- * Report a failed refresh. `invalid_grant` (the person must sign in again, or
- * another machine used the token first) and an instance that is gone are
- * expected, so warnings; anything else is an error. Never the tokens or
- * GitLab's text.
+ * Report a failed refresh: the network, a 5xx, an answer we could not read, a
+ * refusal we did not expect. Not `invalid_grant` (the person must sign in
+ * again, or another machine used the token first) and not an instance that is
+ * gone: both recur on every request for that person and are expected. Never
+ * the tokens or GitLab's text.
  */
 function reportRefreshFailure(
   error: unknown,
-  tags: { reason: string; status?: number; code?: string },
-  expected = tags.code === 'invalid_grant'
+  tags: { reason: string; status?: number; code?: string }
 ): void {
-  const level: ErrorReportLevel = expected ? 'warning' : 'error';
-  reportError(error, { surface: 'gitlab.token_refresh', level, tags });
+  if (tags.code === 'invalid_grant') return;
+  reportError(error, { surface: 'gitlab.token_refresh', tags });
 }
+
+/**
+ * The one error the gitlab.com client being unset is reported as: the same
+ * object every time, so `reportError` sends it once per process, not per
+ * request (`oauthClient` throws a new error on each call).
+ */
+const NOT_CONFIGURED = new Error('GitLab token refresh: client not configured');
 
 async function refreshGitLabToken(
   account: Pick<PrismaAccount, 'refresh_token' | 'account_id'>
@@ -95,14 +102,13 @@ async function refreshGitLabToken(
       '[gitlabUserToken] No usable Gitlab OAuth client:',
       error instanceof Error ? error.message : error
     );
-    reportRefreshFailure(
-      error,
-      {
-        reason: 'no_client',
+    if (!isGoneInstance(error)) {
+      const notConfigured = error instanceof GitLabInstanceError && error.code === 'not_configured';
+      reportRefreshFailure(notConfigured ? NOT_CONFIGURED : error, {
+        reason: notConfigured ? 'not_configured' : 'no_client',
         code: error instanceof GitLabInstanceError ? error.code : undefined,
-      },
-      isGoneInstance(error)
-    );
+      });
+    }
     return null;
   }
 

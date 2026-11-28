@@ -44,6 +44,30 @@ const sentUsers = () =>
   );
 
 describe('setSentryUserId', () => {
+  it('under View as sets no user id at all, only the impersonating tag', async () => {
+    withIsolationScope(() => {
+      setSentryUserId('viewed_user', { impersonating: true });
+      captureServerException(new Error('viewed'));
+    });
+    withIsolationScope(() => {
+      setSentryUserId('own_user');
+      captureServerException(new Error('own'));
+    });
+    await flushErrorReports(2000);
+    const events = captured.flatMap(([, items]) =>
+      items
+        .filter(([header]) => (header as { type: string }).type === 'event')
+        .map(([, payload]) => payload as { user?: unknown; tags?: Record<string, unknown> })
+    );
+    expect(events).toHaveLength(2);
+    expect(events[0].user).toBeUndefined();
+    expect(events[0].tags?.impersonating).toBe('true');
+    expect(JSON.stringify(events[0].user ?? null)).not.toContain('viewed_user');
+    // The next request is not marked.
+    expect(events[1].user).toEqual({ id: 'own_user' });
+    expect(events[1].tags?.impersonating).toBeUndefined();
+  });
+
   it('ties errors to the user inside a per-request scope', async () => {
     withIsolationScope(() => {
       setSentryUserId('user_in_request');

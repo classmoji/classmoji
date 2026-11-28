@@ -1,6 +1,11 @@
 import crypto from 'crypto';
 
-import { ClassmojiService, getGitProvider, describeTokenMintError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  getGitProvider,
+  describeTokenMintError,
+  tokenMintErrorStatus,
+} from '@classmoji/services';
 import { reportError } from '@classmoji/utils/error-report';
 
 import type { Route } from './+types/route';
@@ -205,10 +210,17 @@ export const action = async ({ request }: Route.ActionArgs) => {
     // Laundered before it is logged: raw mint failures echo credentials back.
     const laundered = describeTokenMintError(org, error);
     console.error(`[api.content.token] Mint failed for classroom ${classroomId}: ` + laundered);
-    // The same laundered text, never the raw error.
-    reportError(new Error(laundered), {
+    // Only the status (or that there was none) and the provider, never the
+    // raw error nor the laundered text: without a status that text still
+    // carries up to 200 characters of the provider's own message.
+    const status = tokenMintErrorStatus(error);
+    reportError(new Error(`Token mint failed (${status ?? 'no status'})`), {
       surface: 'content_token.mint',
-      tags: { classroom_id: classroomId },
+      tags: {
+        classroom_id: classroomId,
+        status: status ?? undefined,
+        provider: classroom.git_organization.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB',
+      },
     });
     // The Worker gets no detail. It cannot act on the reason — its only move is
     // to fall back — and the reason is about this deployment's GitHub App, not

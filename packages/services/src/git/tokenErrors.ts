@@ -34,7 +34,7 @@ const MAX_DETAIL_LENGTH = 200;
  * `GitHubProvider.getAccessToken`'s own plain `Error` whose only record of the
  * status is the trailing `(404)` in its message.
  */
-function extractStatus(error: unknown): number | null {
+export function extractStatus(error: unknown): number | null {
   if (error && typeof error === 'object') {
     const candidate = error as { status?: unknown; response?: { status?: unknown } };
     if (typeof candidate.status === 'number') return candidate.status;

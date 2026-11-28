@@ -107,10 +107,10 @@ function sentEnv(overrides: Partial<Env> = {}): Env {
   });
 }
 
-async function call(url: string, env: Env, headers: Record<string, string> = {}) {
+async function call(url: string, env: Env, headers: Record<string, string> = {}, method = 'GET') {
   const ctx = fakeContext();
   const response = await worker.fetch(
-    new Request(url, { headers: { ...secrets.REQUEST_HEADERS, ...headers } }),
+    new Request(url, { method, headers: { ...secrets.REQUEST_HEADERS, ...headers } }),
     env,
     ctx
   );
@@ -208,7 +208,7 @@ describe('content Worker with Sentry on (real @sentry/cloudflare, fake ingest)',
       status: 502,
     });
     expect(event.exception?.values?.[0]?.value).toMatch(
-      /^github tree a{40} unreachable: connect refused https:\/\/api\.github\.com\/repos\/classmoji\/content-cs1\/git\/trees\/a{40} Bearer \[redacted\]$/
+      /^github tree a{40} unreachable: connect refused https:\/\/api\.github\.com\/repos\/classmoji\/\[repo\]\/git\/trees\/a{40} Bearer \[redacted\]$/
     );
     expect(event.request?.url).toMatch(/\/c\/[^/]+\/theme\/night\/a{40}\/\[sig\]\/theme\.css$/);
     expectNothingSecret([url]);
@@ -344,6 +344,34 @@ describe('content Worker with Sentry on (real @sentry/cloudflare, fake ingest)',
     expectTagged(reported[0]);
     expect(reported[0].tags).toMatchObject({ surface: 'content.not_configured' });
     expectNothingSecret([url]);
+  });
+
+  it('a HEAD or OPTIONS (which Sentry does not send) does not spend the one report', async () => {
+    resetNotConfiguredReport();
+    const url = await signedBlobUrl({ sha: BLOB_SHA, ext: 'png', master: secrets.MASTER_SECRET });
+    const env = sentEnv({ CONTENT_SIGNING_SECRET: undefined });
+
+    expect((await call(url, env, {}, 'HEAD')).response.status).toBe(503);
+    // An OPTIONS is answered before the check (CORS preflight), with nothing to report.
+    await call(url, env, {}, 'OPTIONS');
+    expect(events()).toHaveLength(0);
+    // The next GET still reports it, once.
+    expect((await call(url, env)).response.status).toBe(503);
+    expect((await call(url, env)).response.status).toBe(503);
+    const reported = events();
+    expect(reported).toHaveLength(1);
+    expect(reported[0].tags).toMatchObject({ surface: 'content.not_configured' });
+  });
+
+  it('the same for a missing MEDIA binding', async () => {
+    resetMediaBindingReport();
+    const url = await signedMediaUrl({ variant: 'orig.mp4', master: secrets.MASTER_SECRET });
+    const env = sentEnv({ MEDIA: undefined as unknown as R2Bucket });
+
+    expect((await call(url, env, {}, 'HEAD')).response.status).toBe(503);
+    expect(events()).toHaveLength(0);
+    expect((await call(url, env)).response.status).toBe(503);
+    expect(events()).toHaveLength(1);
   });
 
   it('reports a missing MEDIA binding once per isolate', async () => {

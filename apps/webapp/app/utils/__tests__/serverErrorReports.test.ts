@@ -27,7 +27,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (...a: unknown[]) => mocks.auditCreate(...a),
+    },
     classroomMembership: { updateById: vi.fn() },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     gitlabInstance: { defaultHost: () => 'https://gitlab.com' },
@@ -41,6 +44,8 @@ vi.mock('@classmoji/services', () => ({
   }),
   ensureClassroomTeam: (...a: unknown[]) => mocks.ensureTeam(...a),
   describeTokenMintError: (org: string) => `laundered mint failure for ${org}`,
+  tokenMintErrorStatus: (error: { status?: number }) =>
+    typeof error?.status === 'number' ? error.status : null,
 }));
 
 vi.mock('@classmoji/database', async () => ({
@@ -213,26 +218,41 @@ describe('api.content.token', () => {
     });
   });
 
-  it('reports a failed mint by its laundered text, never the raw error', async () => {
+  const mintFailure = async (raw: unknown, provider: 'GITHUB' | 'GITLAB') => {
     vi.stubEnv('CONTENT_WORKER_SHARED_SECRET', 'worker-secret');
     const classroomId = '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b';
     mocks.classroomFindById.mockResolvedValue({
       content_repo: 'content',
-      git_organization: { provider: 'GITHUB', login: 'cs10-org' },
+      git_organization: { provider, login: 'cs10-org' },
     });
-    const raw = new Error('fatal: https://x-access-token:ghs_abcdefghijklmnop1234@github.com');
     mocks.getInstallationToken.mockRejectedValue(raw);
-
     expect((await post({ classroomId })).status).toBe(502);
-
     expect(capture).toHaveBeenCalledTimes(1);
-    const [reported, context] = capture.mock.calls[0];
+    return { classroomId, reported: capture.mock.calls[0][0], context: capture.mock.calls[0][1] };
+  };
+
+  it('reports a failed mint by its status only, never the raw error or its text', async () => {
+    const raw = Object.assign(
+      new Error('fatal: https://x-access-token:ghs_abcdefghijklmnop1234@github.com'),
+      { status: 404 }
+    );
+    const { classroomId, reported, context } = await mintFailure(raw, 'GITHUB');
     expect(reported).not.toBe(raw);
-    expect(reported).toBeInstanceOf(Error);
-    expect((reported as Error).message).toBe('laundered mint failure for cs10-org');
+    expect((reported as Error).message).toBe('Token mint failed (404)');
     expect(context).toEqual({
       surface: 'content_token.mint',
-      tags: { classroom_id: classroomId },
+      tags: { classroom_id: classroomId, status: 404, provider: 'GITHUB' },
+    });
+  });
+
+  it('a Gitlab failure with no status sends none of its message', async () => {
+    const raw = new Error('Gitlab said: group jane-doe-projects/hw1 for jane@school.edu refused');
+    const { classroomId, reported, context } = await mintFailure(raw, 'GITLAB');
+    expect((reported as Error).message).toBe('Token mint failed (no status)');
+    expect(JSON.stringify(context)).not.toContain('jane');
+    expect(context).toEqual({
+      surface: 'content_token.mint',
+      tags: { classroom_id: classroomId, status: undefined, provider: 'GITLAB' },
     });
   });
 });

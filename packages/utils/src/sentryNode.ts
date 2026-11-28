@@ -39,13 +39,19 @@
  * - the tracing-only integrations are never added (`defaultIntegrations` is
  *   the SDK's list "without performance").
  *
- * Exit behaviour: unchanged wherever the app has its own `unhandledRejection`
- * listener, which every server has today through `@classmoji/database` (it
- * reports, flushes and exits 1) or `apps/mcp/src/processSafety.ts` (logs and
- * keeps serving). In a process with NO other `unhandledRejection` listener,
- * Sentry's (mode 'none') would be the only one, and Node's default "crash on
- * unhandled rejection" would no longer apply: such a process must register
- * its own handler.
+ * Exit behaviour: unchanged. Every server has its own `unhandledRejection`
+ * listener today through `@classmoji/database` (it reports, flushes and exits
+ * 1) or `apps/mcp/src/processSafety.ts` (logs and keeps serving), and with one
+ * of those Sentry's listener (mode 'none') only captures. A process with NO
+ * other listener (the pages, slides and admin dev servers until the first
+ * request loads the build, or any script that starts Sentry) would otherwise
+ * lose Node's default "crash on an unhandled rejection", since any listener
+ * at all turns it off: `crashWhenAlone` below restores it. When a rejection
+ * arrives and no listener but Sentry's and its own is registered, it rethrows
+ * the reason, which is exactly what Node's default does (the rejection
+ * becomes an uncaught exception), so the OnUncaughtException integration
+ * then flushes the event and exits 1, printing it, as Node would. With any
+ * other listener present it does nothing.
  *
  * Duplicates: `reportError`'s once-only set and the SDK's own per-object
  * marker (`__sentry_captured__`) both stop one error object from being sent
@@ -61,7 +67,6 @@ import {
   init,
   nativeNodeFetchIntegration,
   onUnhandledRejectionIntegration,
-  setUser,
   setupExpressErrorHandler,
   withIsolationScope,
   withScope,
@@ -145,6 +150,7 @@ export function initServerSentry(
     return false;
   }
 
+  const listenersBefore = new Set(process.listeners('unhandledRejection'));
   init({
     ...options,
     ...(overrides.transport ? { transport: overrides.transport } : {}),
@@ -155,8 +161,39 @@ export function initServerSentry(
     integrations: serverIntegrations,
   });
   setErrorReporter(createSentryReporter(sdk));
+  restoreCrashOnUnhandledRejection(listenersBefore);
   state[STATE_KEY] = { enabled: true };
   return true;
+}
+
+/**
+ * Node's default for an unhandled rejection, for a process whose only
+ * `unhandledRejection` listener is Sentry's (see the file header): rethrow
+ * the reason so it becomes an uncaught exception, as Node does without
+ * listeners. Inert whenever any other listener is registered at the time.
+ * `before` is the set registered before `init` (an app's own count as
+ * others); the ones `init` added are Sentry's.
+ */
+function restoreCrashOnUnhandledRejection(before: Set<NodeJS.UnhandledRejectionListener>): void {
+  const sentryListeners = new Set(
+    process.listeners('unhandledRejection').filter(listener => !before.has(listener))
+  );
+  const crashWhenAlone: NodeJS.UnhandledRejectionListener = (reason: unknown): void => {
+    const others = process
+      .listeners('unhandledRejection')
+      .filter(listener => listener !== crashWhenAlone && !sentryListeners.has(listener));
+    if (others.length > 0) return;
+    if (reason instanceof Error) throw reason;
+    // What Node throws for a reason that is not an Error.
+    const error = new Error(
+      'This error originated either by throwing inside of an async function without a catch ' +
+        'block, or by rejecting a promise which was not handled with .catch(). The promise ' +
+        `rejected with the reason "${String(reason)}".`
+    );
+    (error as Error & { code?: string }).code = 'ERR_UNHANDLED_REJECTION';
+    throw error;
+  };
+  process.on('unhandledRejection', crashWhenAlone);
 }
 
 /** Whether `initServerSentry` turned Sentry on in this process. */
@@ -193,7 +230,12 @@ export function captureServerException(
 /**
  * Tie this request's errors to a signed-in user, by internal id only (null
  * clears it). Call inside the request (httpIntegration gives each request its
- * own isolation scope). No-op while Sentry is off.
+ * own isolation scope). No-op while Sentry is off; never throws.
+ *
+ * `impersonating: true` (a platform admin viewing as someone, or an Ask Moji
+ * token minted under View as): the request is NOT the person acting, so no
+ * user id is set at all (neither the viewed person's nor the admin's) and the
+ * events carry the tag `impersonating: 'true'` instead.
  *
  * Also a no-op outside a per-request (or `withIsolationScope`) scope: the
  * process-wide default isolation scope is the parent every later scope
@@ -201,10 +243,23 @@ export function captureServerException(
  * scope, or a request that arrived before `initServerSentry` ran, as the
  * first request under a Vite dev server does) would be on every later event.
  */
-export function setSentryUserId(id: string | null | undefined): void {
+export function setSentryUserId(
+  id: string | null | undefined,
+  options: { impersonating?: boolean } = {}
+): void {
   if (!isServerSentryEnabled()) return;
-  if (getIsolationScope() === getDefaultIsolationScope()) return;
-  setUser(id ? { id } : null);
+  try {
+    const scope = getIsolationScope();
+    if (scope === getDefaultIsolationScope()) return;
+    if (options.impersonating) {
+      scope.setUser(null);
+      scope.setTag('impersonating', 'true');
+      return;
+    }
+    scope.setUser(id ? { id } : null);
+  } catch {
+    // Naming the user must never break the request.
+  }
 }
 
 /**

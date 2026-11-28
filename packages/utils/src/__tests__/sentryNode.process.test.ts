@@ -61,7 +61,8 @@ describe('initServerSentry in a real process', () => {
     expect(report.hookCalls).toEqual([]);
     expect(report.orchestrion).toBeNull();
     expect(report.otelInstrumentationInstalled).toBe(false);
-    expect(report.after).toEqual({ uncaughtException: 1, unhandledRejection: 1 });
+    // Sentry's two: its capture, and the crash-when-alone that keeps Node's default.
+    expect(report.after).toEqual({ uncaughtException: 1, unhandledRejection: 2 });
     expect(report.events).toBe(1);
     for (const gone of ['Console', 'ProcessSession', 'LocalVariablesAsync']) {
       expect(report.integrations).not.toContain(gone);
@@ -123,12 +124,21 @@ describe('initServerSentry in a real process', () => {
     expect(stderr).toContain('uncaught boom');
   });
 
-  it('CAVEAT: an unhandled rejection with no other listener no longer crashes the process', () => {
-    // Node's default would exit 1 here. Every server registers its own
-    // listener today (@classmoji/database, apps/mcp); this pins the caveat
-    // documented in sentryNode.ts.
-    const { code, report } = run('rejection-alone');
+  it('an unhandled rejection with no other listener crashes as Node would, after sending it', () => {
+    // Node's default without listeners: exit 1, the error printed. Sentry's
+    // listener (mode 'none') alone would have kept the process alive.
+    const { code, stderr, report, lines } = run('rejection-alone');
+    expect(code).toBe(1);
+    expect(stderr).toContain('detached boom');
+    // Never alive again, and the event was sent (once) before it exited.
+    expect(lines).toBe(1);
+    expect(report).toEqual({ exiting: true, events: 1 });
+  });
+
+  it('once the app adds its own listener (as the dev servers do later), it decides', () => {
+    const { code, stderr, report } = run('rejection-listener-added-later');
     expect(code).toBe(0);
+    expect(stderr).toBe('');
     expect(report).toEqual({ alive: true, events: 1 });
   });
 });

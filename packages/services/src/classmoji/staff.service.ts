@@ -196,6 +196,19 @@ const loadClassroom = async (classroomId: string) => {
  * instructor-supplied overrides from the web form; when omitted the git
  * profile's name and email are used.
  */
+/**
+ * Report a failed staff org invite, unless it is the provider saying no (a
+ * 4xx: an invite already pending, say), which is an answer, not a fault.
+ */
+export const reportOrgInviteFailure = (error: unknown): void => {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500) return;
+  reportError(error, {
+    surface: 'staff.org_invite',
+    tags: { status: typeof status === 'number' ? status : undefined },
+  });
+};
+
 export const addStaff = async ({
   classroomId,
   login,
@@ -335,13 +348,7 @@ export const addStaff = async ({
       await gitProvider.inviteToOrganization(gitOrganization.login, String(gitUser.id), [team.id]);
     } catch (error: unknown) {
       console.error('Error inviting staff member to organization:', error);
-      const status = (error as { status?: unknown } | null)?.status;
-      reportError(error, {
-        surface: 'staff.org_invite',
-        // A 4xx is the provider saying no (an invite already pending, say).
-        level: typeof status === 'number' && status < 500 ? 'warning' : 'error',
-        tags: { status: typeof status === 'number' ? status : undefined },
-      });
+      reportOrgInviteFailure(error);
     }
   }
 

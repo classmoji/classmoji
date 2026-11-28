@@ -48,6 +48,7 @@ import type { Browser, BrowserContext, Page, Route } from 'playwright-core';
 import { isBrowserRunConfigured, redactRenderToken } from '@classmoji/tasks/browser-run';
 import { isBlockedAddress } from '@classmoji/tasks/safe-url';
 import type { ViewTokenCookie } from '@classmoji/services/render-contract';
+import { markReported } from '@classmoji/utils/error-report';
 
 export type RenderBackend = 'browser-run' | 'local';
 
@@ -199,7 +200,11 @@ async function slot(): Promise<void> {
     const timer = setTimeout(() => {
       const at = waiters.indexOf(go);
       if (at !== -1) waiters.splice(at, 1);
-      reject(new RenderError('RENDER_BUSY', 'The renderer is busy; retry in a few seconds.'));
+      const busy = new RenderError('RENDER_BUSY', 'The renderer is busy; retry in a few seconds.');
+      // Load shedding the caller is told to retry, not a fault: never reported
+      // (the tool's refusal carries it as its cause, which the registry reports).
+      markReported(busy);
+      reject(busy);
     }, 20_000);
     const go = () => {
       clearTimeout(timer);

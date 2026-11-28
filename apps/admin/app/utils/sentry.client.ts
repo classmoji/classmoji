@@ -22,10 +22,15 @@ import {
   withScope,
 } from '@sentry/react-router';
 import { SENTRY_CONFIG_ELEMENT_ID, parseSentryConfig } from '@classmoji/utils/sentry';
+import {
+  scrubBrowserBreadcrumb,
+  scrubBrowserEvent,
+  scrubSpan,
+} from '@classmoji/utils/sentry-scrub';
 
 let enabled = false;
 
-/** Header and query keys Sentry 10 scrubbed by default (addresses and user names). */
+/** Header keys Sentry 10 scrubbed by default (addresses and user names). */
 const SCRUBBED_KEYS = ['forwarded', '-ip', 'remote-', 'via', '-user'];
 
 /** Every error is reported once, whichever of the router's onError or the ErrorBoundary sees it first. */
@@ -62,7 +67,8 @@ export const initSentry = (): { instrumentations: ClientInstrumentation[] } | nu
         response: { deny: SCRUBBED_KEYS },
       },
       httpBodies: [],
-      urlQueryParams: { deny: SCRUBBED_KEYS },
+      // No query string at all: search terms, tokens and codes live there.
+      urlQueryParams: false,
       genAI: { inputs: false, outputs: false },
       mcp: { inputs: false, outputs: false },
       databaseQueryData: false,
@@ -72,6 +78,13 @@ export const initSentry = (): { instrumentations: ClientInstrumentation[] } | nu
     tracesSampleRate: 0.05,
     // No server continues a browser trace, so no sentry-trace/baggage headers.
     tracePropagationTargets: [],
+    // One scrubber for browser and server events (`@classmoji/utils/sentry-scrub`):
+    // URLs lose their query and the path segments that name a person or hold
+    // a code, the user stays `{ id }`, click targets lose their attribute
+    // values, and the sampled spans go through the same rules.
+    beforeSend: event => scrubBrowserEvent(event),
+    beforeBreadcrumb: breadcrumb => scrubBrowserBreadcrumb(breadcrumb),
+    beforeSendSpan: span => scrubSpan(span),
     integrations: [reactRouterTracingIntegration()],
     initialScope: {
       tags: { app: 'admin', runtime: 'browser' },

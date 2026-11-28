@@ -150,6 +150,10 @@ export async function ensureClassroomTeam(
 export { Octokit } from 'octokit';
 
 // Installation-token failure formatters (pure; safe to import anywhere).
-export { describeTokenMintError, redactAccessTokens } from './tokenErrors.ts';
+export {
+  describeTokenMintError,
+  extractStatus as tokenMintErrorStatus,
+  redactAccessTokens,
+} from './tokenErrors.ts';
 
 export { GitProvider, GitHubProvider, GitLabProvider };

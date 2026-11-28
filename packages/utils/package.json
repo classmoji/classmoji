@@ -30,6 +30,7 @@
     "./webapp-links": "./src/webappLinks.ts",
     "./runtime": "./src/runtime.ts",
     "./sentry-server": "./src/sentryServer.ts",
+    "./sentry-scrub": "./src/sentryScrub.ts",
     "./sentry-node": "./src/sentryNode.ts",
     "./error-report": "./src/errorReport.ts"
   },

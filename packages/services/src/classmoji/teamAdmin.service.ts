@@ -169,23 +169,24 @@ const isUniqueViolation = (error: unknown): boolean =>
 /**
  * Classify a thrown error into the closed failure vocabulary and log the raw
  * one with context, so the detail stays in the server logs rather than in a
- * response body. Every reason but `not_found` is also reported. Octokit errors carry a numeric `.status`; Prisma errors carry
- * a string `.code`; anything else falls back to the caller's default.
+ * response body. A provider 4xx (the provider saying no: not there, not
+ * allowed, invalid) is an answer; everything else is also reported. Octokit
+ * errors carry a numeric `.status`; Prisma errors carry a string `.code`;
+ * anything else falls back to the caller's default.
  */
-const failureReason = (
+export const failureReason = (
   context: string,
   error: unknown,
   fallback: TeamFailureReason
 ): TeamFailureReason => {
   console.error(`[team] ${context}`, error);
   const reason = classifyFailure(error, fallback);
-  // The context names logins and slugs, so it stays in the log; a provider
-  // 404 is "not there", not a fault.
-  if (reason !== 'not_found') {
-    const status = (error as { status?: unknown } | null)?.status;
+  // The context names logins and slugs, so it stays in the log.
+  const status = (error as { status?: unknown } | null)?.status;
+  const providerSaidNo = typeof status === 'number' && status >= 400 && status < 500;
+  if (!providerSaidNo) {
     reportError(error, {
       surface: 'team.admin',
-      level: typeof status === 'number' && status < 500 ? 'warning' : 'error',
       tags: { reason, status: typeof status === 'number' ? status : undefined },
     });
   }

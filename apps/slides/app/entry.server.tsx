@@ -20,8 +20,7 @@ import { ServerRouter } from 'react-router';
 import { isbot } from 'isbot';
 import type { RenderToPipeableStreamOptions } from 'react-dom/server';
 import { renderToPipeableStream } from 'react-dom/server';
-import { reportRouteError, shouldReportRouteError } from '@classmoji/utils/sentry-server';
-import { captureServerException } from '@classmoji/utils/sentry-node';
+import { reportRenderError, reportRouteError } from '@classmoji/utils/sentry-server';
 
 import { NonceContext } from '~/utils/cspNonce';
 import { appContentSecurityPolicy, cspHeaderName } from '~/utils/csp.server';
@@ -118,9 +117,8 @@ export default function handleRequest(
           if (shellRendered) {
             console.error(error);
             // Reported here only: a shell error reaches handleError instead.
-            if (shouldReportRouteError(error, request)) {
-              captureServerException(error, { surface: 'react_router.render' });
-            }
+            // Not when the client went away or the stream timeout stopped it.
+            reportRenderError(error, request);
           }
         },
       }

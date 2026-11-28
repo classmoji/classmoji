@@ -16,6 +16,7 @@ import { sessionTokenFromCookieHeader } from '@classmoji/auth/secret';
 import { RoomStateStore, withLogin } from '@classmoji/utils';
 import { reportError } from '@classmoji/utils/error-report';
 import { setupExpressErrorHandler } from '@classmoji/utils/sentry-node';
+import { reportJoinFailure } from './server/multiplexJoin.ts';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -240,8 +241,9 @@ multiplex.on('connection', socket => {
       multiplex.to(slideId).emit('viewercount', { count: viewerCount });
     } catch (err) {
       console.error('[multiplex] Join error:', err);
-      // Socket.IO events run outside any HTTP request: nothing else reports them.
-      reportError(err, { surface: 'slides.multiplex.join' });
+      // Socket.IO events run outside any HTTP request: nothing else reports
+      // them. Not a slide id that is not a string (the client's input).
+      reportJoinFailure(err, slideId);
     }
   });
 

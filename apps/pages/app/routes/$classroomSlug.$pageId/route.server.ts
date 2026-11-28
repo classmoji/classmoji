@@ -23,7 +23,8 @@ import { OPS_MALFORMED_ANSWER, readCanonicalSaveOps } from '~/utils/saveOps.serv
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
-import { reportError } from '@classmoji/utils/error-report';
+import { parseClientJson } from '~/utils/clientJson.server.ts';
+import { markReported, reportError } from '@classmoji/utils/error-report';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import {
@@ -885,6 +886,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (error instanceof UploadTooLargeError) {
         return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
       }
+      // A body that is not JSON is the client's, not a fault (and its message
+      // quotes what was sent): thrown as before, never reported.
+      if (error instanceof SyntaxError) markReported(error);
       throw error;
     }
   }
@@ -1106,7 +1110,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         }
         const blocks = await canonicalizeDocumentAssets(
           actionAssetCtx,
-          JSON.parse(data.content as string)
+          parseClientJson(data.content as string)
         );
 
         if (!expectedSha) {

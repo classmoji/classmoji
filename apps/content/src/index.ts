@@ -24,6 +24,7 @@ import {
   sentryOffOptions,
   sentryServerOptions,
   workerIntegrations,
+  workerRequestSendsReports,
 } from '@classmoji/utils/sentry-server';
 import {
   captureException,
@@ -198,7 +199,11 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   // One definition of "configured", shared with /healthz — the verifier below
   // needs no narrowed local now that it takes the whole list of secrets.
   if (!isConfigured(env)) {
-    reportError(notConfigured, { surface: 'content.not_configured' });
+    // Not from a HEAD or OPTIONS, which Sentry does not send: the one report
+    // would be spent there.
+    if (workerRequestSendsReports(request)) {
+      reportError(notConfigured, { surface: 'content.not_configured' });
+    }
     return errorResponse(503, 'not configured');
   }
 

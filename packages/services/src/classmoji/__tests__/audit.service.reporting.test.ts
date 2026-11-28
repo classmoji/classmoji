@@ -251,7 +251,12 @@ describe('recordNonMemberRefusal', () => {
     });
   });
 
-  it('reports a row dropped for a missing id as audit.skipped', async () => {
+  it('reports a row dropped for a missing id as audit.skipped, in production only', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    await audit.recordNonMemberRefusal({ userId: '', classroomId: 'class-1' });
+    expect(captured).toHaveLength(0);
+
+    vi.stubEnv('NODE_ENV', 'production');
     await audit.recordNonMemberRefusal({ userId: '', classroomId: 'class-1' });
     expect(executeRawMock).not.toHaveBeenCalled();
     expect(captured).toHaveLength(1);
