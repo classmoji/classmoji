@@ -151,6 +151,7 @@ describe('the office-hours limit holds on create', () => {
     expect(response.init?.status).toBe(403);
     expect(response.data?.error).toBe(ASSISTANT_EVENT_TYPE_MESSAGE);
     expect(mocks.createEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('allows office hours', async () => {
@@ -175,6 +176,7 @@ describe('the office-hours limit holds on update', () => {
     expect(response.data?.error).toBe(ASSISTANT_EVENT_TYPE_MESSAGE);
     expect(mocks.updateEvent).not.toHaveBeenCalled();
     expect(mocks.updateEventWithScope).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('allows an edit that leaves the type alone', async () => {
@@ -331,6 +333,7 @@ describe('an event still has to be this assistant’s own, in this classroom', (
 
     expect(response.init?.status).toBe(404);
     expect(mocks.updateEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('refuses somebody else’s event', async () => {
@@ -344,6 +347,7 @@ describe('an event still has to be this assistant’s own, in this classroom', (
 
     expect(response.init?.status).toBe(403);
     expect(mocks.updateEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 
@@ -425,12 +429,17 @@ describe('the rows it records: the owner/teacher calendar’s, with the assistan
 
   it('records nothing for a write it refused', async () => {
     mocks.getEventById.mockResolvedValue(ownOfficeHours({ created_by: 'someone-else' }));
-    await submit({ intent: 'delete', eventId: 'event-1' });
-    await submit({
+    expect((await submit({ intent: 'delete', eventId: 'event-1' })).init?.status).toBe(403);
+    const created = await submit({
       intent: 'create',
       eventData: JSON.stringify({ title: 'Lecture', event_type: 'LECTURE' }),
     });
+    expect(created.init?.status).toBe(403);
+    mocks.getEventById.mockResolvedValue(ownOfficeHours({ classroom_id: 'other-class' }));
+    expect((await submit({ intent: 'delete', eventId: 'event-1' })).init?.status).toBe(404);
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    expect(mocks.deleteEvent).not.toHaveBeenCalled();
+    expect(mocks.createEvent).not.toHaveBeenCalled();
   });
 });
 
