@@ -130,9 +130,16 @@ export type JoinByCodeResult =
 export const joinByCode = async ({
   userId,
   code,
+  inviteClaim,
 }: {
   userId: string;
   code: string;
+  /**
+   * Who the memberships of OTHER classrooms that a matched roster invite
+   * creates are recorded for (see `claimPendingInvites`). This classroom's
+   * membership is the caller's to record (the join).
+   */
+  inviteClaim: classroomInviteService.InviteClaimAudit | null;
 }): Promise<JoinByCodeResult> => {
   const lookup = await findJoinableClassroom(code);
   if (!lookup.ok) return { status: 'inactive' };
@@ -158,7 +165,9 @@ export const joinByCode = async ({
   // so the roster shows one row for them, not an invite beside a student.
   let matchedRosterInvite = false;
   try {
-    const { classroomIds } = await classroomInviteService.claimPendingInvites(userId);
+    const { classroomIds } = await classroomInviteService.claimPendingInvites(userId, inviteClaim, {
+      exceptClassroomId: classroom.id,
+    });
     matchedRosterInvite = classroomIds.includes(classroom.id);
   } catch (error: unknown) {
     console.error('[joinLink] claiming roster invites failed:', error);

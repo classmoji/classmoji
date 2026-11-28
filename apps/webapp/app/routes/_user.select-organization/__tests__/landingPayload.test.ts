@@ -252,11 +252,16 @@ describe('select-organization before a Github or Gitlab account is connected', (
     vi.mocked(ClassmojiService.classroomInvite.claimPendingInvites).mockResolvedValueOnce({
       claimed: 1,
       classroomIds: ['class-1'],
+      audit: { written: 1, missed: 0 },
     });
 
     const data = await runLoader();
 
-    expect(ClassmojiService.classroomInvite.claimPendingInvites).toHaveBeenCalledWith('user-1');
+    // Each membership the claim creates is recorded for the person themselves.
+    expect(ClassmojiService.classroomInvite.claimPendingInvites).toHaveBeenCalledWith('user-1', {
+      tool: 'web:roster.invite_email',
+      impersonatedBy: null,
+    });
     expect(data.memberships).toHaveLength(1);
   });
 

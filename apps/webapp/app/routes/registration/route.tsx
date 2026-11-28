@@ -19,6 +19,7 @@ import {
   consumeEmailVerificationCode,
 } from '~/utils/emailVerification.server';
 import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
 import { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } from '~/utils/impersonationSession';
 
@@ -620,7 +621,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // for this user. The same call runs on login and on an email change, so a
   // student invited at an address they did not register with is no longer
   // stranded (#307).
-  await ClassmojiService.classroomInvite.claimPendingInvites(user.id);
+  // Each membership the claim creates is recorded for this person.
+  await ClassmojiService.classroomInvite.claimPendingInvites(user.id, {
+    tool: 'web:roster.invite_email',
+    impersonatedBy: await requestImpersonator(request),
+  });
 
   // The "Example Course" sandbox is no longer provisioned here: it is created
   // on demand when someone starts the tour (POST /api/example-classroom).
