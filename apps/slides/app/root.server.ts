@@ -27,6 +27,16 @@ type SlidesAppUser = ReturnType<
   typeof withLogin<Prisma.UserGetPayload<{ include: typeof ROOT_USER_INCLUDE }>>
 >;
 
+/**
+ * Whether this session is a platform admin viewing as someone (better-auth's
+ * admin plugin sets `session.impersonatedBy`): the browser then names no user.
+ */
+const isImpersonated = (authData: { session?: unknown }): boolean =>
+  Boolean(
+    (authData.session as { session?: { impersonatedBy?: unknown } } | undefined)?.session
+      ?.impersonatedBy
+  );
+
 const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
   // Allow public access to /follow routes with valid shareCode
   // These routes handle their own authorization via shareCode validation
@@ -90,7 +100,7 @@ const loadRoot = async ({ request, url }: { request: Request; url: URL }) => {
     return redirect(webappUrl);
   }
 
-  return { user };
+  return { user, impersonating: isImpersonated(authData) };
 };
 
 export const loader = async (args: { request: Request; url: URL }) => {

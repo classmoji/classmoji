@@ -135,6 +135,19 @@ describe('initServerSentry in a real process', () => {
     expect(report).toEqual({ exiting: true, events: 1 });
   });
 
+  it.each(['string', 'object'])(
+    'a rejected %s with no other listener crashes as Node would, sent once',
+    kind => {
+      // Sentry's listener sends the reason; the Error the crash wraps it in
+      // carries the SDK's "already captured" mark, so it is not sent again.
+      const { code, stderr, report, lines } = run('rejection-alone', kind);
+      expect(code).toBe(1);
+      expect(stderr).toContain('ERR_UNHANDLED_REJECTION');
+      expect(lines).toBe(1);
+      expect(report).toEqual({ exiting: true, events: 1 });
+    }
+  );
+
   it('once the app adds its own listener (as the dev servers do later), it decides', () => {
     const { code, stderr, report } = run('rejection-listener-added-later');
     expect(code).toBe(0);

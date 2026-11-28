@@ -253,30 +253,105 @@ test.describe('server.ts', () => {
     const text = source();
     expect(text).toContain("surface: 'auth.session_read', tags: { via: 'socket' }");
     expect(text).toContain("surface: 'auth.session_read', tags: { via: 'multiplex' }");
-    expect(text).toContain('reportJoinFailure(err, slideId);');
+    // The join payload is taken as a plain parameter (no destructuring in
+    // the parameter list, which would reject outside the handler's guard).
+    expect(text).toMatch(/socket\.on\(\s*'join',\s*createJoinHandler\(/);
   });
 
-  test('a join with a slide id that is not a string is logged, never reported', async () => {
-    const { reportJoinFailure } = await import('../../server/multiplexJoin.ts');
-    const validation = Object.assign(new Error('Invalid `findUnique()` invocation'), {
-      name: 'PrismaClientValidationError',
-    });
-    const reports: Array<{ error: unknown; context: ReportContext }> = [];
-    setErrorReporter({
-      capture: (error, context) => void reports.push({ error, context }),
-      flush: async () => true,
-    });
-    try {
-      reportJoinFailure(validation, { not: 'a string' });
-      reportJoinFailure(validation, 'slide-1');
-      reportJoinFailure(new Error('x'), 42);
-      expect(reports).toEqual([]);
-      const down = new Error('database down');
-      reportJoinFailure(down, 'slide-1');
-      expect(reports).toEqual([{ error: down, context: { surface: 'slides.multiplex.join' } }]);
-    } finally {
-      setErrorReporter(null);
+  test.describe('the multiplex join handler', () => {
+    type Emit = [string, unknown?];
+    const setup = (findSlide: (id: string) => Promise<unknown>) => {
+      const emits: Emit[] = [];
+      const queried: string[] = [];
+      const reports: Array<{ error: unknown; context: ReportContext }> = [];
+      setErrorReporter({
+        capture: (error, context) => void reports.push({ error, context }),
+        flush: async () => true,
+      });
+      return {
+        emits,
+        queried,
+        reports,
+        findSlide,
+        socket: {
+          emit: (event: string, payload?: unknown) => void emits.push([event, payload]),
+          join: () => {},
+        },
+      };
+    };
+    const run = async (payload: unknown, findSlide: (id: string) => Promise<unknown>) => {
+      const { createJoinHandler } = await import('../../server/multiplexJoin.ts');
+      const t = setup(findSlide);
+      const handler = createJoinHandler({
+        socket: t.socket,
+        data: { shareCode: 'share-1' },
+        findSlide: async id => {
+          t.queried.push(id);
+          return (await t.findSlide(id)) as never;
+        },
+        currentState: () => undefined,
+        roomSize: () => 1,
+        broadcastViewerCount: () => {},
+      });
+      const logged: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => void logged.push(args);
+      try {
+        await handler(payload);
+      } finally {
+        console.error = original;
+        setErrorReporter(null);
+      }
+      return { ...t, logged };
+    };
+    const neverCalled = async () => {
+      throw new Error('queried');
+    };
+
+    for (const payload of [
+      null,
+      undefined,
+      42,
+      'slide-1',
+      [],
+      {},
+      { slideId: 42 },
+      { slideId: {} },
+    ]) {
+      test(`a payload naming no slide id (${JSON.stringify(payload)}) is not queried, answered or reported`, async () => {
+        const { emits, queried, reports, logged } = await run(payload, neverCalled);
+        expect(queried).toEqual([]);
+        // What it answered before: nothing.
+        expect(emits).toEqual([]);
+        expect(reports).toEqual([]);
+        expect(logged).toHaveLength(1);
+      });
     }
+
+    test('for a slide id, every failure is reported (a validation error included)', async () => {
+      const validation = Object.assign(new Error('Invalid `findUnique()` invocation'), {
+        name: 'PrismaClientValidationError',
+      });
+      const down = new Error('database down');
+      for (const error of [validation, down]) {
+        const { emits, reports } = await run({ slideId: 'slide-1' }, async () => {
+          throw error;
+        });
+        expect(emits).toEqual([]);
+        expect(reports).toEqual([{ error, context: { surface: 'slides.multiplex.join' } }]);
+      }
+    });
+
+    test('a valid join answers as before', async () => {
+      const missing = await run({ slideId: 'slide-1' }, async () => null);
+      expect(missing.emits).toEqual([['join_error', { reason: 'slide_not_found' }]]);
+      const found = await run({ slideId: 'slide-1' }, async () => ({
+        classroom_id: 'c1',
+        multiplex_id: 'share-1',
+      }));
+      expect(found.emits).toEqual([['joined', { slideId: 'slide-1', canBroadcast: false }]]);
+      expect(found.reports).toEqual([]);
+    });
   });
 
   test('the production image copies server/, which server.ts imports first', () => {

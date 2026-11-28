@@ -202,11 +202,14 @@ export const captureRecoverableError = (
 };
 
 /**
- * Tie events to the signed-in user by internal id only. A staff "view as"
- * session is marked with a tag, never with who is viewing.
+ * Tie events to the signed-in user by internal id only. A "View as"
+ * session carries no user id at all (neither the viewed person's nor the
+ * admin's), only the tag `impersonating`.
  */
 export const setSentryUser = (id: string | null | undefined, impersonating = false): void => {
   if (!enabled) return;
-  setUser(id ? { id } : null);
+  // Under "View as" the person acting is not the one signed in: no id at
+  // all (neither theirs nor the admin's), only the tag, as on the server.
+  setUser(id && !impersonating ? { id } : null);
   setTag('impersonating', impersonating ? 'true' : undefined);
 };

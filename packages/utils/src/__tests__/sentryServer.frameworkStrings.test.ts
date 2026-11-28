@@ -24,8 +24,17 @@ describe('React Router origin refusals', () => {
     expect(actions).toContain(`throw new Error("${mismatch}")`);
     // A template literal in the source, its backticks escaped.
     expect(actions).toContain(`throw new Error(\`${invalid.replaceAll('`', '\\`')}\`)`);
-    // The `.data` POST reports this one in place of the refusal itself.
+    // The `.data` POST reports this one in place of the refusal itself,
+    // made inside `singleFetchAction` (isOriginRefusal reads that frame).
     expect(singleFetch).toContain(`new Error("${badRequest}"), 400)`);
+    const start = singleFetch.indexOf('async function singleFetchAction(');
+    const next = singleFetch.indexOf('\nasync function ', start + 1);
+    const made = singleFetch.indexOf(`new Error("${badRequest}")`);
+    expect(start).toBeGreaterThan(-1);
+    expect(made).toBeGreaterThan(start);
+    expect(made).toBeLessThan(next === -1 ? Infinity : next);
+    // And nowhere else in the runtime.
+    expect(singleFetch.split(`new Error("${badRequest}")`)).toHaveLength(2);
   });
 
   it('pins the react-router version they were read from', () => {

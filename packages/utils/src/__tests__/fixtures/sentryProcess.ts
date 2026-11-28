@@ -160,12 +160,20 @@ switch (mode) {
   }
 
   // Sentry's listener alone on a rejection: crashes as Node's default would
-  // (exit 1, the error printed), after flushing the event.
+  // (exit 1, the error printed), after flushing the event. argv[3] picks the
+  // reason: an Error (default), a string or a plain object.
   case 'rejection-alone': {
     on();
+    const kind = process.argv[3] ?? 'error';
+    const reason =
+      kind === 'string'
+        ? 'a rejected string'
+        : kind === 'object'
+          ? { marker: 'OBJECTMARKER' }
+          : new Error('detached boom');
     // What was sent by the time the process exits.
     process.on('exit', () => print({ exiting: true, events: events.length }));
-    void Promise.reject(new Error('detached boom'));
+    void Promise.reject(reason);
     setTimeout(() => print({ alive: true, events: events.length }), 2500);
     break;
   }

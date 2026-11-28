@@ -10,7 +10,9 @@
 export const JOIN_CODE = 'SECRETCODE';
 export const INVITE_JWT = 'eyJhbGciOi.SECRET.JWT';
 export const COOKIE_VALUE = 'COOKIESECRET';
-export const BEARER_VALUE = 'BEARERSECRET';
+// A credential's length (the Bearer rule needs 16+ characters, so prose such
+// as "Bearer realm missing" stays).
+export const BEARER_VALUE = 'BEARERSECRET0123456789';
 export const COLLAB_SECRET = 'COLLABSECRET';
 export const BODY_SECRET = 'BODYSECRET';
 export const CLIENT_IP = '203.0.113.9';

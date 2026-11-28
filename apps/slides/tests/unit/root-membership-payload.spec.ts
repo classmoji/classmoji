@@ -49,3 +49,31 @@ export default () => prisma;
     created_by: true,
   });
 });
+
+test('says whether the session is "View as", so the browser names no user then', async () => {
+  const load = async (instance: string, session: object) => {
+    (globalThis as unknown as { __rootSession: object }).__rootSession = session;
+    const { loader } = await importWithStubs<{
+      loader: (args: { request: Request; url: URL }) => Promise<unknown>;
+    }>(new URL(`../../app/root.server.ts?${instance}`, import.meta.url), {
+      '@classmoji/auth/server': stubModule(
+        "export const getAuthSession = async () => ({ userId: 'user-1', session: globalThis.__rootSession });"
+      ),
+      '@classmoji/database': stubModule(`
+export const GIT_IDENTITY = {};
+const prisma = {
+  slide: { findUnique: async () => null },
+  user: { findUnique: async () => ({ id: 'user-1', accounts: [], classroom_memberships: [] }) },
+};
+export default () => prisma;
+`),
+    });
+    return (await loader(routerArgs('http://localhost/class-x/new'))) as {
+      impersonating?: boolean;
+    };
+  };
+  const viewedAs = await load('viewAs', { session: { impersonatedBy: 'admin-1' } });
+  expect(viewedAs.impersonating).toBe(true);
+  const own = await load('own', { session: { impersonatedBy: null } });
+  expect(own.impersonating).toBe(false);
+});

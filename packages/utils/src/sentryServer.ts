@@ -178,7 +178,8 @@ export const sentryServerEnvironment = (env: object): string =>
  * Worker's `Env` interface (with its R2/KV bindings) passes as it is.
  *
  * Spread the result into the SDK's options and add only the SDK-specific bits
- * (integrations; on Node `enableRuntimeChannelInjection: false`).
+ * (integrations; on Node, `initServerSentry` also turns the SDK's module hooks
+ * off). No Node SDK names here: this comment ships in the Worker bundle.
  */
 export const sentryServerOptions = (
   env: object,
@@ -334,7 +335,8 @@ const isSentryCaptured = (value: unknown): boolean => {
   }
 };
 
-const markSentryCaptured = (value: unknown): void => {
+/** Mark `value` as sent, so neither the SDK nor `captureWithContext` sends it again. */
+export const markSentryCaptured = (value: unknown): void => {
   if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return;
   try {
     Object.defineProperty(value, SENTRY_CAPTURED, {
@@ -388,24 +390,65 @@ export const REACT_ROUTER_ORIGIN_REFUSALS: readonly string[] = [
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+const BAD_REQUEST = 'Bad Request';
+
 /**
- * Whether this is React Router refusing a cross-origin action: one of its
- * three plain Errors, on a mutation, whose `Origin` header does not parse or
- * names another origin than the request's URL. The error has no structural
- * mark of its own, so the request has to agree with the message: a real
- * failure that happens to say "Bad Request" on a same-origin request is
- * still reported.
+ * Whether React Router's own single-fetch action handler made this Error:
+ * its `new Error("Bad Request")` is created inside `singleFetchAction`, so
+ * that is the first frame of its stack (react-router runs from node_modules
+ * on the Node servers, unminified). An action's own "Bad Request" starts in
+ * app code. A test pins where react-router creates it.
+ */
+const madeBySingleFetchAction = (error: Error): boolean => {
+  const stack = typeof error.stack === 'string' ? error.stack : '';
+  const frame = stack
+    .slice(0, 2048)
+    .split('\n')
+    .find(line => line.trimStart().startsWith('at '));
+  return frame !== undefined && /\bsingleFetchAction\b/.test(frame);
+};
+
+/**
+ * Whether this is React Router refusing a cross-origin action, which anyone
+ * can provoke at will, signed out. React Router 8.5.1
+ * (`throwIfPotentialCSRFAttack`, lib/actions.ts) checks mutations only, and
+ * only when an `Origin` header is present; it refuses a `null` or unparsable
+ * Origin, and one whose origin differs from `request.url`'s unless its host
+ * is in the app's `allowedActionOrigins`.
+ * - Its two long messages are thrown by nothing else: on a mutation with an
+ *   `Origin` header they are the refusal, whatever the hosts (a host that
+ *   reaches the app but is not in ACTION_ORIGIN_HOSTS, such as the
+ *   `*.fly.dev` name, is refused for the scheme alone behind Fly's proxy).
+ * - "Bad Request" is common, so it is a refusal only when React Router made
+ *   it (`madeBySingleFetchAction`), or the request is one React Router
+ *   refuses whatever its allowed list says: an Origin that is `null`, does
+ *   not parse, or names another HOST than `request.url` (each app lists
+ *   only its own hosts). The same host with another scheme (a POST behind
+ *   Fly's TLS proxy: Origin `https://host`, `request.url` `http://host`)
+ *   passes React Router's check in production, so an action's own "Bad
+ *   Request" there is reported.
+ * `request.url` is what the server adapter built (`@react-router/express`
+ * takes its host from `X-Forwarded-Host` when `trust proxy` is on), the same
+ * value React Router compares.
  */
 export const isOriginRefusal = (error: unknown, request?: RouteRequestLike): boolean => {
   if (!(error instanceof Error) || Object.getPrototypeOf(error) !== Error.prototype) return false;
   if (!REACT_ROUTER_ORIGIN_REFUSALS.includes(error.message)) return false;
   if (!request?.method || !MUTATION_METHODS.has(request.method.toUpperCase())) return false;
   const origin = request.headers?.get('origin');
-  if (!origin || origin === 'null') return false;
+  if (origin === null || origin === undefined) return false;
+  if (error.message !== BAD_REQUEST || madeBySingleFetchAction(error)) return true;
+  if (origin === 'null') return true;
+  let originHost: string;
   try {
-    return new URL(origin).origin !== new URL(String(request.url)).origin;
+    originHost = new URL(origin).host;
   } catch {
     return true;
+  }
+  try {
+    return originHost !== new URL(String(request.url)).host;
+  } catch {
+    return false;
   }
 };
 

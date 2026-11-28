@@ -236,7 +236,13 @@ describe('scrubUrl', () => {
       'repository name',
       'Gitlab project path',
       'Github API repository',
+      'Github API collaborator',
+      'Github API user',
+      'Github API org member',
+      'Github API team',
+      'Github API team member',
       'Github repository',
+      'Github avatar',
       'person id (admin app)',
     ]);
   });
@@ -292,7 +298,11 @@ describe('scrubText', () => {
   });
 
   it('redacts secrets written as key: value, JSON, headers and env pairs', () => {
-    expect(scrubText('login failed, password: hunter2')).toBe('login failed, password: [redacted]');
+    // A bare value is redacted when it looks like a secret (12+ characters);
+    // a quoted one always.
+    expect(scrubText('login failed, password: hunter2-Secret-2024')).toBe(
+      'login failed, password: [redacted]'
+    );
     expect(scrubText('body {"password":"hunter2","id":"u1"}')).toBe(
       'body {"password":[redacted],"id":"u1"}'
     );
@@ -303,11 +313,14 @@ describe('scrubText', () => {
     expect(scrubText('sent x-collab-secret: s3cr3t to collab')).toBe(
       'sent x-collab-secret: [redacted]'
     );
-    expect(scrubText('env SOME_SECRET=abc OTHER=1')).toBe('env SOME_SECRET=[redacted] OTHER=1');
-    expect(scrubText('RESEND_API_KEY="re_x" and GITHUB_TOKEN: abc')).toBe(
+    expect(scrubText('env SOME_SECRET=abc123def456ghi OTHER=1')).toBe(
+      'env SOME_SECRET=[redacted] OTHER=1'
+    );
+    expect(scrubText('RESEND_API_KEY="re_x" and GITHUB_TOKEN: 0123456789abcdef')).toBe(
       'RESEND_API_KEY=[redacted] and GITHUB_TOKEN: [redacted]'
     );
-    expect(scrubText('joinCode=ABCD')).toBe('joinCode=[redacted]');
+    // A join code is 16 base64url characters.
+    expect(scrubText('joinCode=Ab3xYz09_-Ab3xYz0')).toBe('joinCode=[redacted]');
   });
 
   it('redacts Resend and AWS keys and Stripe signature values', () => {
@@ -345,10 +358,13 @@ describe('scrubText', () => {
   });
 
   it('redacts authorization values', () => {
+    // An Authorization header line loses its whole value.
     expect(scrubText('sent Authorization: Bearer abc.def-123')).toBe(
-      'sent Authorization: Bearer [redacted]'
+      'sent Authorization: [redacted]'
     );
-    expect(scrubText('Basic dXNlcjpwYXNz rejected')).toBe('Basic [redacted] rejected');
+    // A bare credential needs 16+ characters.
+    expect(scrubText('sent Bearer abc.def-1234567890XYZ')).toBe('sent Bearer [redacted]');
+    expect(scrubText('Basic dXNlcjpwYXNzd29yZDEyMw== rejected')).toBe('Basic [redacted] rejected');
   });
 
   it('redacts JWTs and askmoji tokens', () => {
@@ -393,9 +409,9 @@ describe('scrubText', () => {
     expect(scrubText('__Secure-better-auth.session_data=xyz')).toBe(
       '__Secure-better-auth.session_data=[redacted]'
     );
-    expect(scrubText('retry with token=abc&code=def, password=hunter2')).toBe(
-      'retry with token=[redacted]&code=[redacted], password=[redacted]'
-    );
+    expect(
+      scrubText('retry with token=abc123def456ghi&code=def, password=hunter2-Secret-2024')
+    ).toBe('retry with token=[redacted]&code=def, password=[redacted]');
   });
 
   it('redacts email addresses', () => {
@@ -500,7 +516,7 @@ describe('scrubEvent', () => {
         values: [
           {
             type: 'Error',
-            value: 'Bearer abc at /join/CODE',
+            value: 'Bearer abcdefghijklmnop123 at /join/CODE',
             stacktrace: { frames: [{ filename: 'a.js', vars: { password: 'x' } }] },
           },
         ],
@@ -758,7 +774,7 @@ describe('createSentryReporter / captureWithContext', () => {
       surface: 'audit.write',
       level: 'warning',
       tags: { classroom_id: 'c1', count: 2, skipped: undefined, path: '/join/CODE' },
-      extra: { attempts: 3, headers: { cookie: 'x' }, note: 'Bearer abc' },
+      extra: { attempts: 3, headers: { cookie: 'x' }, note: 'Bearer abcdefghijklmnop123' },
     });
     expect(scope.setTag.mock.calls).toEqual([
       ['surface', 'audit.write'],
@@ -803,7 +819,9 @@ describe('isSecretKey', () => {
     'credentials',
     'jwt',
     'joinCode',
-    'code',
+    'join_code',
+    'shareCode',
+    'invite',
     'x-collab-secret',
     'Authorization',
     'cookie',
@@ -816,6 +834,11 @@ describe('isSecretKey', () => {
     'filter_key',
     'tokens_per_hour',
     'error_code',
+    'code',
+    'tokenCount',
+    'tokenizer',
+    'cookieConsent',
+    'signatureVersion',
     'classroom_id',
     'surface',
     'count',
@@ -876,11 +899,61 @@ describe('isOriginRefusal / shouldReportRouteError for React Router refusals', (
     expect(shouldReportRouteError(new Error('Bad Request'), request)).toBe(false);
   });
 
+  it('skips Origin: null and an empty Origin, which React Router refuses too', () => {
+    // React Router compares the string "null" with the request's host, and
+    // an empty value fails to parse: both are refused, by anyone, signed out.
+    expect(shouldReportRouteError(new Error(MISMATCH), post('null'))).toBe(false);
+    expect(shouldReportRouteError(new Error('Bad Request'), post('null'))).toBe(false);
+    const invalid = '`origin` header is not a valid URL. Aborting the action.';
+    expect(shouldReportRouteError(new Error(invalid), post(''))).toBe(false);
+  });
+
+  it("reports a same-host POST behind Fly's TLS proxy (https Origin, http request.url)", () => {
+    // React Router lets this through (the host is in allowedActionOrigins),
+    // so a "Bad Request" here is the action's own failure.
+    const proxied = post('https://classmoji.io', 'http://classmoji.io/admin/cs52/settings');
+    expect(isOriginRefusal(new Error('Bad Request'), proxied)).toBe(false);
+    expect(shouldReportRouteError(new Error('Bad Request'), proxied)).toBe(true);
+    // Another host is refused, whatever the scheme or port.
+    expect(
+      isOriginRefusal(
+        new Error('Bad Request'),
+        post('http://classmoji.io:8443', 'http://classmoji.io/x')
+      )
+    ).toBe(true);
+    expect(
+      isOriginRefusal(new Error(MISMATCH), post('https://evil.example', 'http://classmoji.io/x'))
+    ).toBe(true);
+  });
+
+  it("skips React Router's long messages on any mutation with an Origin, whatever the host", () => {
+    // A host that reaches the app but is not in ACTION_ORIGIN_HOSTS (the
+    // *.fly.dev name) is refused for the scheme alone behind Fly's proxy.
+    const flyDev = post('https://app.fly.dev', 'http://app.fly.dev/admin/cs52/settings');
+    expect(shouldReportRouteError(new Error(MISMATCH), flyDev)).toBe(false);
+    // No Origin: React Router never throws it then, so it is not its refusal.
+    expect(shouldReportRouteError(new Error(MISMATCH), post(null))).toBe(true);
+  });
+
+  it('skips React Router\'s own .data "Bad Request" by where it was made, on any host', () => {
+    // What react-router's singleFetchAction does after a refused origin check.
+    const singleFetchAction = () => new Error('Bad Request');
+    const flyDev = post('https://app.fly.dev', 'http://app.fly.dev/admin/cs52/settings.data');
+    expect(shouldReportRouteError(singleFetchAction(), flyDev)).toBe(false);
+    // The same message made by an action on that request is reported.
+    expect(shouldReportRouteError(new Error('Bad Request'), flyDev)).toBe(true);
+  });
+
   it('still reports the same message on a same-origin request, a GET, or a subclass', () => {
     expect(shouldReportRouteError(new Error('Bad Request'), post('https://classmoji.io'))).toBe(
       true
     );
+    // No Origin at all: React Router does not refuse it.
     expect(shouldReportRouteError(new Error('Bad Request'), post(null))).toBe(true);
+    for (const origin of ['null', 'https://evil.example']) {
+      const get = new Request('https://classmoji.io/x', { headers: { origin } });
+      expect(shouldReportRouteError(new Error(MISMATCH), get)).toBe(true);
+    }
     const get = new Request('https://classmoji.io/x', {
       headers: { origin: 'https://evil.example' },
     });

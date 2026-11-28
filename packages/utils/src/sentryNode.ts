@@ -83,6 +83,7 @@ import {
 import {
   captureWithContext,
   createSentryReporter,
+  markSentryCaptured,
   sentryServerOptions,
   type SentryReporterSdk,
   type ServerApp,
@@ -184,13 +185,17 @@ function restoreCrashOnUnhandledRejection(before: Set<NodeJS.UnhandledRejectionL
       .filter(listener => listener !== crashWhenAlone && !sentryListeners.has(listener));
     if (others.length > 0) return;
     if (reason instanceof Error) throw reason;
-    // What Node throws for a reason that is not an Error.
+    // What Node throws for a reason that is not an Error. Sentry's own
+    // listener has already sent the reason itself, so this wrapper carries
+    // the SDK's "already captured" mark: the OnUncaughtException integration
+    // then only flushes, prints and exits, and the rejection is sent once.
     const error = new Error(
       'This error originated either by throwing inside of an async function without a catch ' +
         'block, or by rejecting a promise which was not handled with .catch(). The promise ' +
         `rejected with the reason "${String(reason)}".`
     );
     (error as Error & { code?: string }).code = 'ERR_UNHANDLED_REJECTION';
+    markSentryCaptured(error);
     throw error;
   };
   process.on('unhandledRejection', crashWhenAlone);

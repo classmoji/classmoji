@@ -146,6 +146,10 @@ describe('the four browser clients', () => {
       expect(source).toContain('beforeSendSpan: span => scrubSpan(span),');
       // The browser module, never the server one.
       expect(source).not.toMatch(/@classmoji\/utils\/sentry-(server|node)/);
+      // Under "View as" no user id at all, as on the server (the admin app
+      // is the admin's own session).
+      if (app !== 'admin')
+        expect(source).toContain('setUser(id && !impersonating ? { id } : null);');
     }
   );
 });
