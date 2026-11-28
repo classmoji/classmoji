@@ -15,7 +15,7 @@ import {
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { userId } = await requireStudentAccess(request, params.class!, {
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     action: 'view_new_regrade_form',
   });
 
@@ -112,7 +112,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     action: 'submit_regrade_request',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });

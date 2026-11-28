@@ -215,6 +215,25 @@ interface GradeWithTokenTransaction {
   token_transaction?: TokenTransactionRef | null;
 }
 
+/** A grade row a grade transaction removed. */
+export interface RemovedGrade {
+  id: string;
+  emoji: string;
+  grader_id: string | null;
+}
+
+/**
+ * What one `addGradeToGitRepoAssignment` call changed, read inside its
+ * transaction: the grades it removed (pre-regrade grades, the grader's
+ * previous score) and the grade it created, if any. Both empty when the grade
+ * was already there, including when a concurrent identical call added it
+ * first.
+ */
+export interface AddGradeOutcome {
+  removed: RemovedGrade[];
+  created: { id: string; emoji: string } | null;
+}
+
 interface RemoveGradePayload {
   classroom: HelperClassroomRef;
   gitRepoAssignment: GitRepoAssignmentRef;
@@ -292,16 +311,26 @@ async function removeGradeInScope(
   scope: GradeScope,
   gradeId: string
 ): Promise<boolean> {
+  return (await removeGradeRowInScope(tx, scope, gradeId)) !== null;
+}
+
+/** `removeGradeInScope`, answering the row it removed (null when it was already gone). */
+async function removeGradeRowInScope(
+  tx: Prisma.TransactionClient,
+  scope: GradeScope,
+  gradeId: string
+): Promise<RemovedGrade | null> {
   const where = { id: gradeId, git_repo_assignment_id: scope.gitRepoAssignmentId };
   const grade = await tx.assignmentGrade.findFirst({
     where,
-    select: { emoji: true, token_transaction: { select: { amount: true } } },
+    select: { emoji: true, grader_id: true, token_transaction: { select: { amount: true } } },
   });
-  if (!grade) return false;
+  if (!grade) return null;
 
   const { count } = await tx.assignmentGrade.deleteMany({ where });
-  if (count === 0) return false;
-  if (!grade.token_transaction) return true;
+  if (count === 0) return null;
+  const removed = { id: gradeId, emoji: grade.emoji, grader_id: grade.grader_id };
+  if (!grade.token_transaction) return removed;
 
   for (const studentId of scope.recipients) {
     await ClassmojiService.token.assignToStudent(
@@ -316,32 +345,36 @@ async function removeGradeInScope(
       tx
     );
   }
-  return true;
+  return removed;
 }
 
 /**
  * If the submission has an open (IN_REVIEW) regrade request, remove the grades
  * that predate it, with their token rewards, inside the caller's transaction.
+ * Answers the rows it removed.
  */
 async function clearStaleGradesInScope(
   tx: Prisma.TransactionClient,
   scope: GradeScope
-): Promise<void> {
+): Promise<RemovedGrade[]> {
   const openRequest = await ClassmojiService.regradeRequest.findOpenByAssignmentId(
     scope.gitRepoAssignmentId,
     tx
   );
-  if (!openRequest) return;
+  if (!openRequest) return [];
 
   const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(
     scope.gitRepoAssignmentId,
     tx
   );
+  const removed: RemovedGrade[] = [];
   for (const grade of grades) {
     if (grade.created_at <= openRequest.created_at) {
-      await removeGradeInScope(tx, scope, grade.id);
+      const row = await removeGradeRowInScope(tx, scope, grade.id);
+      if (row) removed.push(row);
     }
   }
+  return removed;
 }
 
 class HelperService {
@@ -926,8 +959,12 @@ class HelperService {
    * numeric score, creating the grade, its GAIN row(s) and the link to them
    * either all commit or none do. The recipients come from the submission's
    * repo; `studentId`/`teamId` in the payload are accepted but not used.
+   * Answers what this call changed (see `AddGradeOutcome`), read inside the
+   * transaction, so a caller records only what it did.
    */
-  static async addGradeToGitRepoAssignment(payload: GradeAssignmentPayload): Promise<void> {
+  static async addGradeToGitRepoAssignment(
+    payload: GradeAssignmentPayload
+  ): Promise<AddGradeOutcome> {
     const { classroom, gitRepoAssignment, graderId, grade } = payload;
 
     // Only emojis in the classroom's grading scale are grades. A classroom
@@ -941,7 +978,7 @@ class HelperService {
     }
     const reward = scale.find(mapping => mapping.emoji === grade)?.extra_tokens ?? 0;
 
-    await getPrisma().$transaction(async tx => {
+    return getPrisma().$transaction(async (tx): Promise<AddGradeOutcome> => {
       const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
 
       // When a submission has an open resubmit (regrade) request, a new grade
@@ -949,7 +986,7 @@ class HelperService {
       // Clear the grades captured at request time before adding the new one.
       // The request's `previous_grade` snapshot keeps those emojis visible in
       // the "Previous Grade" column for reference.
-      await clearStaleGradesInScope(tx, scope);
+      const removed = await clearStaleGradesInScope(tx, scope);
 
       // A numeric score is one number per grader, never a stack: a grader's new
       // score replaces the score they gave before (tokens reversed with it).
@@ -962,15 +999,16 @@ class HelperService {
         for (const previous of existing) {
           if (previous.grader_id !== graderId) continue;
           if (parseScoreEmoji(previous.emoji) === null) continue;
-          if (previous.emoji === grade) return;
+          if (previous.emoji === grade) return { removed, created: null };
           // A score already removed by a concurrent request (a double submit
           // from the same field) deletes nothing and reverses nothing.
-          await removeGradeInScope(tx, scope, previous.id);
+          const row = await removeGradeRowInScope(tx, scope, previous.id);
+          if (row) removed.push(row);
         }
       }
 
       if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade, tx)) {
-        return;
+        return { removed, created: null };
       }
 
       const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(
@@ -979,8 +1017,9 @@ class HelperService {
         grade,
         tx
       );
+      const created = { id: assignmentGrade.id, emoji: assignmentGrade.emoji };
 
-      if (reward <= 0) return;
+      if (reward <= 0) return { removed, created };
 
       // One GAIN row per recipient; the grade links to the first, whose amount
       // is what a removal reverses for each of them.
@@ -1006,6 +1045,7 @@ class HelperService {
           tx
         );
       }
+      return { removed, created };
     }, GRADE_TX);
   }
 

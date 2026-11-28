@@ -216,7 +216,7 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
         user_id: X.studentA,
         classroom_id: X.classroomId,
         role: 'STUDENT',
-        resource_type: 'PAGES',
+        resource_type: 'PAGES' as const,
         resource_id: X.pageId,
         action: 'VIEW' as const,
         data: { tool: 'page_section_unlocks', page_id: X.pageId, block_id: blockId },

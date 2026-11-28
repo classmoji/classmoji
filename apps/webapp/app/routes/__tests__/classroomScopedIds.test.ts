@@ -120,6 +120,8 @@ describe('settings.team — deleteTag', () => {
       classroom_id: CLASS_X.id,
       role: 'OWNER',
       action: 'DELETE',
+      // A tag row is about the tag: TAGS, as the MCP's tag_create writes.
+      resource_type: 'TAGS',
       resource_id: 'tag-x',
       data: { tool: 'web:settings.team.delete_tag', name: 'Section A' },
     });

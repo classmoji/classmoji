@@ -5,6 +5,7 @@ import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server
 import { requestImpersonator, sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { ClassmojiService } from '@classmoji/services';
 import { reportError } from '@classmoji/utils/error-report';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 export const sleep = async (ms: number) => {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -65,7 +66,8 @@ interface AuditLogParams {
   request: Request;
   params: Record<string, string | undefined>;
   action: string;
-  resourceType: string;
+  /** What the row is about, in the audit vocabulary (`AUDIT_RESOURCE_TYPES`). */
+  resourceType: AuditResourceType;
   resourceId?: string | number | null;
   metadata: AuditMetadata;
 }
@@ -91,7 +93,8 @@ interface ClassroomAuditParams {
    */
   role: string | undefined;
   action: string;
-  resourceType: string;
+  /** What the row is about, in the audit vocabulary (`AUDIT_RESOURCE_TYPES`). */
+  resourceType: AuditResourceType;
   resourceId?: string | number | null;
   metadata: AuditMetadata;
 }
@@ -132,7 +135,7 @@ const writeAuditRow = async ({
     user_id: string;
     role: string | undefined;
     resource_id: string | null;
-    resource_type: string;
+    resource_type: AuditResourceType;
     action: string;
     data?: Record<string, unknown>;
   } = {

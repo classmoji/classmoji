@@ -6,6 +6,7 @@ import { displayUsername } from '@classmoji/utils';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { createAudit, recordAudit } from '~/utils/audit.server.ts';
 import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.ts';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 /**
  * The staff responses surface's shared server half — used by the responses
@@ -34,7 +35,7 @@ import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.
  * team sets use too.
  */
 
-export const FORMS_RESOURCE = 'FORMS';
+export const FORMS_RESOURCE = 'FORMS' as const satisfies AuditResourceType;
 
 /** The columns the staff table and the exports read. Staff columns included. */
 export interface ResponseRow {

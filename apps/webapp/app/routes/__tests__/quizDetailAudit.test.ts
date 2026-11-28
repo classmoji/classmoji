@@ -135,7 +135,7 @@ beforeEach(() => {
     membership: { id: 'm-1', role: 'ASSISTANT' },
   });
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
-  mocks.clearForUserAndQuiz.mockResolvedValue(undefined);
+  mocks.clearForUserAndQuiz.mockResolvedValue({ success: true, deletedCount: 2 });
 });
 
 describe('quiz detail action — clearMyAttempts audit row', () => {
@@ -150,8 +150,17 @@ describe('quiz detail action — clearMyAttempts audit row', () => {
       action: 'DELETE',
       resourceType: 'QUIZ',
       resourceId: QUIZ_ID,
-      metadata: { tool: 'web:quiz.clear_my_attempts', scope: 'quiz' },
+      metadata: { tool: 'web:quiz.clear_my_attempts', scope: 'quiz', deleted_count: 2 },
     });
+  });
+
+  it('writes no DELETE row when there was nothing to clear', async () => {
+    mocks.clearForUserAndQuiz.mockResolvedValue({ success: true, deletedCount: 0 });
+
+    const response = (await submit({ _action: 'clearMyAttempts' })) as Response;
+
+    expect(response.status).toBe(200);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('clears only the calling user own attempts for this quiz', async () => {

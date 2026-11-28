@@ -597,7 +597,8 @@ interface AuthSessionResult {
 }
 
 interface AccessOptions {
-  resourceType?: string;
+  /** What a refusal's audit row is about (the audit vocabulary). */
+  resourceType?: auditService.AuditResourceType;
   action?: string;
   metadata?: Record<string, unknown>;
 }
@@ -615,7 +616,8 @@ interface AssertClassroomAccessOptions {
    */
   classroomId?: string;
   allowedRoles?: Role[];
-  resourceType?: string;
+  /** What a refusal's audit row is about (the audit vocabulary). */
+  resourceType?: auditService.AuditResourceType;
   attemptedAction?: string;
   metadata?: Record<string, unknown>;
   resourceOwnerId?: string | null;
@@ -2825,7 +2827,7 @@ export async function assertSlideAccess({
         user_id: userId!,
         role: role ?? membership.role,
         resource_id: slideId,
-        resource_type: 'SLIDE',
+        resource_type: 'SLIDES',
         action: 'ACCESS_DENIED',
         data: auditService.withImpersonator(
           {

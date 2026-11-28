@@ -732,7 +732,7 @@ export const tagCreateTool: ToolDefinition<TagCreateArgs> = {
     // `value` is the name created.
     if (created) {
       await writeAudit(ctx, {
-        resource_type: 'TEAMS',
+        resource_type: 'TAGS',
         resource_id: tag.id,
         action: 'CREATE',
         data: { tool: 'tag_create', name: tag.name, value: tag.name },

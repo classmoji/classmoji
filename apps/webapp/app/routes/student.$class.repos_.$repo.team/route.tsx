@@ -35,7 +35,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
-    resourceType: 'TEAM',
+    resourceType: 'TEAMS',
     attemptedAction: 'view_teams',
   });
   const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
@@ -93,7 +93,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
-    resourceType: 'TEAM',
+    resourceType: 'TEAMS',
     attemptedAction: 'modify_team',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });

@@ -14,6 +14,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * 2. That every status the service can return survives the trip to the client
  *    intact, including `rate-limited`'s retry hint — the banner renders these
  *    verbatim, so a dropped field silently becomes a wrong sentence.
+ *
+ * An UPDATE row is written exactly when the service says this call saved the
+ * installation id (`claimed`), whatever the final status.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -79,7 +82,11 @@ const unwrap = (result: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.requireClassroomStaff.mockResolvedValue(gateResult());
-  mocks.repairInstallation.mockResolvedValue({ status: 'connected', org: GITHUB_ORG });
+  mocks.repairInstallation.mockResolvedValue({
+    status: 'connected',
+    org: GITHUB_ORG,
+    claimed: true,
+  });
   mocks.addClassroomAuditLog.mockResolvedValue(undefined);
 });
 
@@ -109,7 +116,7 @@ describe('POST /api/classrooms/:class/github-installation', () => {
     expect(mocks.repairInstallation).not.toHaveBeenCalled();
   });
 
-  it('reports the outcome and audits the attempt', async () => {
+  it('reports the outcome and audits the reconnection', async () => {
     const result = unwrap(await action(args()));
 
     expect(mocks.repairInstallation).toHaveBeenCalledWith('org-1');
@@ -134,32 +141,73 @@ describe('POST /api/classrooms/:class/github-installation', () => {
     ['suspended'],
     ['wrong-app'],
     ['not-found'],
-  ])('passes the %s status straight through', async status => {
-    mocks.repairInstallation.mockResolvedValue({ status });
+  ])('passes the %s status straight through, and writes no row: nothing changed', async status => {
+    mocks.repairInstallation.mockResolvedValue({ status, claimed: false });
     const result = unwrap(await action(args()));
     expect(result.data).toEqual({ status, login: 'cs52-org' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('writes one row when the id was saved but the follow-up read failed', async () => {
+    mocks.repairInstallation.mockResolvedValue({
+      status: 'error',
+      message: 'connection reset',
+      claimed: true,
+    });
+    const result = unwrap(await action(args()));
+    expect(result.data).toEqual({ status: 'error', login: 'cs52-org' });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ outcome: status }) })
+      expect.objectContaining({
+        action: 'UPDATE',
+        resourceType: 'GIT_ORGANIZATION',
+        resourceId: 'org-1',
+        metadata: expect.objectContaining({ outcome: 'error' }),
+      })
+    );
+    // The internal message stays out of the row too.
+    expect(JSON.stringify(mocks.addClassroomAuditLog.mock.calls[0][0])).not.toContain(
+      'connection reset'
     );
   });
 
+  it('writes one row for two simultaneous checks: only the one that saved the id', async () => {
+    // The second check joined the first one's lookup: same status, not its write.
+    mocks.repairInstallation
+      .mockResolvedValueOnce({ status: 'connected', org: GITHUB_ORG, claimed: true })
+      .mockResolvedValueOnce({ status: 'connected', org: GITHUB_ORG, claimed: false });
+
+    const [a, b] = await Promise.all([action(args()), action(args())]);
+
+    expect(unwrap(a).data).toEqual({ status: 'connected', login: 'cs52-org' });
+    expect(unwrap(b).data).toEqual({ status: 'connected', login: 'cs52-org' });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the retry hint on a rate-limited answer', async () => {
-    mocks.repairInstallation.mockResolvedValue({ status: 'rate-limited', retryAfterSeconds: 12 });
+    mocks.repairInstallation.mockResolvedValue({
+      status: 'rate-limited',
+      retryAfterSeconds: 12,
+      claimed: false,
+    });
     const result = unwrap(await action(args()));
     expect(result.data).toEqual({
       status: 'rate-limited',
       login: 'cs52-org',
       retryAfterSeconds: 12,
     });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('never leaks the internal error message to the client', async () => {
     mocks.repairInstallation.mockResolvedValue({
       status: 'error',
       message: 'app-jwt signing failed for app 12345',
+      claimed: false,
     });
     const result = unwrap(await action(args()));
     expect(result.data).toEqual({ status: 'error', login: 'cs52-org' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('refuses a non-GitHub org without calling GitHub', async () => {

@@ -18,7 +18,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const repoAssignmentId = params.id!;
 
   const { classroom } = await requireClassroomTeachingTeam(request, classSlug, {
-    resourceType: 'REPOSITORY_ASSIGNMENT',
+    resourceType: 'GIT_REPO_ASSIGNMENT',
     action: 'view_submission_analytics',
   });
 

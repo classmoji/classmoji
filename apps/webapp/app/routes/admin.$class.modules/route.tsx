@@ -138,7 +138,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             userId,
             role: membership!.role,
             action: 'DELETE',
-            resourceType: 'MODULE',
+            resourceType: 'MODULES',
             resourceId: data.id!,
             metadata: {
               tool: 'web:modules.delete',

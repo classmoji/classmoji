@@ -543,11 +543,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       const result = await ClassmojiService.quizAttempt.clearForUser(userId, classroom.id);
       // Classroom-wide clear of the caller's OWN preview attempts, so it is not
       // keyed on any one quiz — the classroom is the affected resource.
-      await audit('DELETE', classroom.id, {
-        tool: 'web:quizzes.clear_my_attempts',
-        scope: 'classroom',
-        deleted_count: result.deletedCount,
-      });
+      // Nothing deleted, nothing to record.
+      if (result.deletedCount > 0) {
+        await audit('DELETE', classroom.id, {
+          tool: 'web:quizzes.clear_my_attempts',
+          scope: 'classroom',
+          deleted_count: result.deletedCount,
+        });
+      }
       return new Response(
         JSON.stringify({
           success: `Cleared ${result.deletedCount} quiz attempt(s)`,

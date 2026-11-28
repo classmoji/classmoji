@@ -25,6 +25,7 @@ import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
 import { Prisma } from '@classmoji/database/client';
 import type { FormResponsesPerPerson, Role, SubmissionState } from '@classmoji/database/client';
+import type { AuditResourceType } from './auditResourceTypes.ts';
 
 /**
  * Form Response Service
@@ -2192,7 +2193,7 @@ export async function createResponses({
             classroom_id: audit.classroom_id,
             role: audit.role,
             action: 'CREATE',
-            resource_type: 'FORMS',
+            resource_type: 'FORMS' satisfies AuditResourceType,
             resource_id: formId,
             data: {
               ...(audit.data ?? {}),

@@ -71,14 +71,15 @@ export const action = checkAuth(async ({ request, user }) => {
       console.error('Default grading scale seeding failed:', error);
     }
     // After the import: a failed write is reported (`audit_miss`), not thrown.
+    // A re-import updated a classroom that was already there: UPDATE, not CREATE.
     await addClassroomAuditLog({
       request,
       classroomId: r.classroomId,
       userId: user.id,
       role: 'OWNER',
-      action: 'CREATE',
+      action: r.reimported ? 'UPDATE' : 'CREATE',
       resourceType: 'GITHUB_CLASSROOM_IMPORT',
-      resourceId: r.classroomSlug,
+      resourceId: r.classroomId,
       metadata: {
         tool: 'web:github_classroom.import',
         classroomName: r.classroomName,

@@ -3,6 +3,7 @@
  * git worker. Types only (plus a few constants), so every side can import
  * this without pulling in a runtime.
  */
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 import type { DeckJson } from '@classmoji/services/slides';
 
 import type { CollabKind } from './rooms.ts';
@@ -266,11 +267,14 @@ export interface ResetRequest {
   discard?: boolean;
 }
 
-/** Audit `resource_type` of a doc kind (the same as the MCP tools write). */
-export const COLLAB_AUDIT_RESOURCE: Record<CollabKind, 'PAGES' | 'SLIDES'> = {
+/**
+ * Audit `resource_type` of a doc kind (the same as the MCP tools write), for
+ * every collab row: joins, leaves, refused joins and checkpoints.
+ */
+export const COLLAB_AUDIT_RESOURCE = {
   page: 'PAGES',
   deck: 'SLIDES',
-};
+} as const satisfies Record<CollabKind, AuditResourceType>;
 
 /** `POST /internal/:kind/:id/close` — checkpoint now, then close every connection. */
 export interface CloseRequest {

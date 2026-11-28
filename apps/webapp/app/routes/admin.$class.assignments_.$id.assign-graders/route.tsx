@@ -21,7 +21,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
 
   const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'ASSIGNMENTS',
+    resourceType: 'ASSIGNMENT',
     action: 'view_grader_assignment',
   });
 
@@ -106,7 +106,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'ASSIGNMENTS',
+    resourceType: 'ASSIGNMENT',
     action: 'assign_graders',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });

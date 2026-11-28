@@ -37,7 +37,7 @@ export type InsightAccess = {
   /** The course time zone (UTC when unset or unknown). */
   timeZone: string;
   audit: (row: {
-    resourceType: string;
+    resourceType: 'ASK_MOJI_INSIGHTS' | 'ASK_MOJI_FEEDBACK';
     resourceId: string;
     tool: (typeof INSIGHT_AUDIT_TOOLS)[keyof typeof INSIGHT_AUDIT_TOOLS];
     data?: Record<string, unknown>;

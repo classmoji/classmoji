@@ -76,6 +76,7 @@ import {
 
 import { formsListUrl } from '../adminLinks.server.ts';
 import { NO_STORE } from '../responsesData.server.ts';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 /**
  * The Teams pages' server half: the gates, the loaders, the set layout's one
@@ -139,7 +140,7 @@ import { NO_STORE } from '../responsesData.server.ts';
  */
 
 /** Audit resource type, shared with the MCP team-set tools. */
-export const TEAM_SETS_RESOURCE = 'TEAM_SETS';
+export const TEAM_SETS_RESOURCE = 'TEAM_SETS' as const satisfies AuditResourceType;
 
 export { NO_STORE };
 

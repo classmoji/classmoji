@@ -235,6 +235,23 @@ describe('resolveImportedClassroom', () => {
     expect(onCreatedLocked).toHaveBeenCalledTimes(1);
   });
 
+  it('says when it matched a classroom that already exists, and only then', async () => {
+    const onReimported = vi.fn();
+    await resolveImportedClassroom(makeTx({ byCourse: { id: 'existing' } }).tx, {
+      ...args,
+      onReimported,
+    });
+    await resolveImportedClassroom(makeTx({ legacy: { id: 'legacy' } }).tx, {
+      ...args,
+      onReimported,
+    });
+    expect(onReimported).toHaveBeenCalledTimes(2);
+
+    onReimported.mockClear();
+    await resolveImportedClassroom(makeTx({}).tx, { ...args, onReimported });
+    expect(onReimported).not.toHaveBeenCalled();
+  });
+
   it('never asks about the slot on a re-import', async () => {
     const { tx } = makeTx({ byCourse: { id: 'existing' } });
     const mayCreateActive = vi.fn(async () => false);

@@ -208,7 +208,7 @@ describe('repositories page audit rows', () => {
     await run('publishAssignment', { assignment_id: 'asg-1' });
 
     expect(row()).toMatchObject({
-      resourceType: 'ASSIGNMENTS',
+      resourceType: 'ASSIGNMENT',
       resourceId: 'asg-1',
       metadata: { tool: 'web:repos.publish_assignment', repos_to_create: 25 },
     });
@@ -223,7 +223,7 @@ describe('repositories page audit rows', () => {
     await run('publishAssignment', { assignment_id: 'asg-1' });
 
     expect(row()).toMatchObject({
-      resourceType: 'ASSIGNMENTS',
+      resourceType: 'ASSIGNMENT',
       resourceId: 'asg-1',
       metadata: { tool: 'web:repos.publish_assignment', opened_in_repos: 38 },
     });

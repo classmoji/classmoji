@@ -1,6 +1,9 @@
 import getPrisma from '@classmoji/database';
 import { Prisma, type AuditLogAction, type Role } from '@classmoji/database/client';
 import { reportError } from '@classmoji/utils/error-report';
+import type { AuditResourceType } from './auditResourceTypes.ts';
+
+export * from './auditResourceTypes.ts';
 
 // Valid AuditLogAction values from Prisma schema
 const VALID_ACTIONS = [
@@ -33,7 +36,8 @@ const COUNTED_ACTIONS: ReadonlySet<AuditLogAction> = new Set<AuditLogAction>([
 /** How long after a read's FIRST occurrence a repeat still counts on its row. */
 export const REPEAT_WINDOW_MS = 5 * 1000;
 
-interface AuditLogData {
+/** One `audit_logs` row, as `create` and `record` take it. */
+export interface AuditLogData {
   user_id: string;
   classroom_id: string;
   /**
@@ -42,7 +46,8 @@ interface AuditLogData {
    * classroom is recorded with `recordNonMemberRefusal`, not here.
    */
   role: string | null;
-  resource_type: string;
+  /** What the row is about, in the audit vocabulary (`AUDIT_RESOURCE_TYPES`). */
+  resource_type: AuditResourceType;
   resource_id?: string | number | null;
   action: AuditLogAction;
   data?: Prisma.InputJsonValue | null;
@@ -236,7 +241,7 @@ export async function recordNonMemberRefusal(
     classroom_id: classroomId,
     role: null,
     action: 'ACCESS_DENIED',
-    resource_type: 'CLASSROOM',
+    resource_type: 'CLASSROOM' satisfies AuditResourceType,
     resource_id: classroomId,
     data: JSON.parse(data) as unknown,
   };

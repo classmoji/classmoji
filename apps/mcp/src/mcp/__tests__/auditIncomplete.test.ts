@@ -80,7 +80,7 @@ const strictReadTool: ToolDefinition<{ classroom: string }> = {
   inputSchema: { classroom: z.string() },
   handler: async (_args, ctx) => {
     await writeAuditOrFail(ctx, {
-      resource_type: 'TEST',
+      resource_type: 'PAGES',
       resource_id: 'x',
       action: 'VIEW',
       data: { tool: 't_strict_read' },
@@ -99,7 +99,7 @@ const readWithRowTool: ToolDefinition<{ classroom: string }> = {
   inputSchema: { classroom: z.string() },
   handler: async (_args, ctx) => {
     await writeAudit(ctx, {
-      resource_type: 'TEST',
+      resource_type: 'PAGES',
       resource_id: 'x',
       action: 'VIEW',
       data: { tool: 't_read_with_row' },

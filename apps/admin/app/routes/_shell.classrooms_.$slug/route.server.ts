@@ -3,6 +3,7 @@ import { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername } from '@classmoji/utils';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { auditView, platformAudit } from '~/utils/audit.server';
+import { auditTool, classroomActivityText } from '~/utils/auditRows';
 import { healthOf, loadPlans, loadSignals } from '~/utils/classroomHealth.server';
 import { describeAdminAction } from '~/utils/metrics.server';
 import { safeReturn } from '~/utils/url';
@@ -292,11 +293,8 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
       at: r.timestamp.toISOString(),
       admin: false,
       actor: r.user,
-      text: `${r.action.toLowerCase().replace('_', ' ')} ${r.resource_type.replace(/_/g, ' ').toLowerCase()}`,
-      tool:
-        r.data && typeof r.data === 'object' && 'tool' in r.data
-          ? String((r.data as { tool?: unknown }).tool)
-          : null,
+      text: classroomActivityText(r),
+      tool: auditTool(r.data),
       // A repeated read (or a member's refusal) counted on one row, within
       // seconds; a non-member's refusals counted on one row per UTC day.
       count: r.count,

@@ -93,9 +93,11 @@ export const joinGitOrganization = async ({
       role: membership.role,
       action: 'UPDATE',
       resource_type: 'CLASSROOM_MEMBERSHIP',
-      resource_id: membership.id,
+      // The person, by user id; the membership the step is for beside it.
+      resource_id: userId,
       data: {
         tool,
+        membership_id: membership.id,
         outcome,
         provider: courseProvider,
         organization: org.login,

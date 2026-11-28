@@ -417,6 +417,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Student not found.' };
   }
 
+  // A row about a student names them by user id (the cell sends the
+  // membership), read bound to this classroom like the write.
+  const studentId = await ClassmojiService.classroomMembership.findUserIdInClassroom(
+    membershipId,
+    classroom.id
+  );
+
   // Audited only once the write has landed, so a row naming this classroom
   // always describes a change that happened in it — same rule the quiz and page
   // mutations follow. The loader logs a VIEW; this is the surface's only write,
@@ -428,9 +435,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     role: membership!.role,
     action: 'UPDATE',
     resourceType: 'GRADES',
-    resourceId: membershipId,
+    resourceId: studentId,
     metadata: {
       tool: 'web:grades.update_letter_grade',
+      membership_id: membershipId,
       letter_grade: rawLetterGrade ? rawLetterGrade : null,
     },
   });

@@ -9,7 +9,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
   const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     action: 'view_requests',
   });
 

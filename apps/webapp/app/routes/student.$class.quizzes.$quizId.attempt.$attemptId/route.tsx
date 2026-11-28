@@ -362,7 +362,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   const quizId = params.quizId!;
   const attemptId = params.attemptId!;
   const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     action: 'request_quiz_regrade',
     metadata: { quiz_id: quizId, attempt_id: attemptId },
   });

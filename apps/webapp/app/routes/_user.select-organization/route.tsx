@@ -187,8 +187,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             role: 'STUDENT',
             action: 'CREATE',
             resource_type: 'CLASSROOM_MEMBERSHIP',
-            resource_id: result.membershipId,
-            data: { tool: 'web:roster.invite_token' },
+            // The person, by user id; their new membership beside it.
+            resource_id: typedUser.id,
+            data: { tool: 'web:roster.invite_token', membership_id: result.membershipId },
           });
           const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
             includeMemberships: true,

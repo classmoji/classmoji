@@ -1155,6 +1155,8 @@ describe('live preview accept', () => {
     });
     expect(result.message).toMatch(/resolutions/);
     expect(mocks.discardPreview).not.toHaveBeenCalled();
+    // Nothing was applied, so no UPDATE row.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('passes resolutions through and refuses a preview that moved since the report', async () => {

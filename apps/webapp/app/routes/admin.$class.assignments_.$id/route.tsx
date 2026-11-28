@@ -45,7 +45,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { classroom, userId, membership } = await requireClassroomTeachingTeam(
     request,
     classSlug!,
-    { resourceType: 'ASSIGNMENTS', action: 'view_assignment' }
+    { resourceType: 'ASSIGNMENT', action: 'view_assignment' }
   );
 
   const assignment = await ClassmojiService.assignment.findByIdInClassroom(id!, classroom.id);
@@ -149,7 +149,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   const { classroom, membership } = await requireClassroomTeachingTeam(request, classSlug, {
-    resourceType: 'ASSIGNMENTS',
+    resourceType: 'ASSIGNMENT',
     action: 'manage_graders',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
