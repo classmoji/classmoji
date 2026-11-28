@@ -54,7 +54,13 @@ const runtime = createCollabServer({
     adapters: createAdapterRegistry(),
     checkpoints: createTaskCheckpointTrigger(config),
     audit: createServiceAuditSink(
-      data => ClassmojiService.audit.record(data as never),
+      // Only `data` is cast (to the JSON the column takes): the row's other
+      // fields, its resource type among them, are checked as they are.
+      row =>
+        ClassmojiService.audit.record({
+          ...row,
+          data: row.data as Parameters<typeof ClassmojiService.audit.record>[0]['data'],
+        }),
       refusal => ClassmojiService.audit.recordNonMemberRefusal(refusal)
     ),
   },
