@@ -10,6 +10,7 @@ import {
 } from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { courseworkMaterials } from '~/utils/courseworkMaterials.server';
 import ProgressSummaryCard, { type BucketCounts } from './ProgressSummaryCard';
@@ -211,7 +212,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         if (claimed !== undefined && claimed !== null && !idFrom(claimed)) {
           throw new Error('Invalid student ID.');
         }
-        const { userId, classroom, membership } = await assertClassroomAccess({
+        const gate = await assertClassroomAccess({
           request,
           classroomSlug: classSlug,
           allowedRoles: ['STUDENT'],
@@ -220,17 +221,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           metadata,
           ...(idFrom(claimed) ? { resourceOwnerId: claimed, requireOwnership: true } : {}),
         });
+        const { userId, classroom, membership } = gate;
         if (idFrom(claimed) && claimed !== userId) {
           throw new Response('Forbidden', { status: 403 });
         }
         assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
         const hours = checkBody(classroom.id);
 
+        // The service records the purchase for the person the gate admitted.
         await ClassmojiService.token.purchaseQuizExtensionHours({
           classroomId: classroom.id,
           studentId: userId,
           assignmentId,
           hours,
+          actor: await auditActor(request, gate, 'web:assignments.purchase_extension'),
         });
       } else {
         // A repo submission: the student themselves, or staff on their behalf.
@@ -238,7 +242,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         if (!studentId) {
           throw new Error('Invalid student ID.');
         }
-        const { classroom, membership } = await assertClassroomAccess({
+        const gate = await assertClassroomAccess({
           request,
           classroomSlug: classSlug,
           allowedRoles: ['OWNER', 'TEACHER'],
@@ -248,14 +252,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           resourceOwnerId: studentId,
           selfAccessRoles: ['STUDENT'],
         });
+        const { classroom, membership } = gate;
         assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
         const hours = checkBody(classroom.id);
 
+        // The service records the purchase for the person the gate admitted.
         await ClassmojiService.token.purchaseExtensionHours({
           classroomId: classroom.id,
           studentId,
           gitRepoAssignmentId: gitRepoAssignmentId!,
           hours,
+          actor: await auditActor(request, gate, 'web:assignments.purchase_extension'),
         });
       }
       return {

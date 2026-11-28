@@ -5,7 +5,8 @@
  *   - settings.team ?/deleteTag deletes a tag only where it belongs to this
  *     classroom, and audits the delete;
  *   - tokens.new ?/assignTokens grants tokens only to this classroom's
- *     students, naming each from the classroom's own records.
+ *     students, naming each from the classroom's own records, and hands
+ *     each run the owner as the actor its grant is recorded for.
  *
  * The service-side rules (the classroom-scoped delete, the student lookup) run
  * against a real database in packages/services
@@ -184,9 +185,18 @@ describe('tokens.new — assignTokens', () => {
         classroomId: CLASS_X.id,
         amount: 3,
         description: 'bonus',
+        // Each run records its grant for the owner who sent the form.
+        auditActor: {
+          userId: 'owner-x',
+          role: 'OWNER',
+          tool: 'web:tokens.grant',
+          impersonatedBy: null,
+        },
       },
     ]);
     expect(result).toMatchObject({ triggerSession: { numStudentsToAssignTokens: 1 } });
+    // The grant's row is written by the run, not the route.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('triggers nothing when no selected id is a student of this classroom', async () => {

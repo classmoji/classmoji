@@ -8,6 +8,7 @@ import {
 } from '@classmoji/utils';
 import { Prisma } from '@classmoji/database/client';
 import type { TokenTransactionType } from '@classmoji/database/client';
+import { recordForActor, type AuditActor, type ServiceAudit } from './audit.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import { recordPushAfterExtension } from './gitRepoAssignment.service.ts';
 
@@ -194,18 +195,27 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
  *
  * NOTE: callers are responsible for authorizing `studentId` (self-access or
  * teaching-team).
+ *
+ * Once the purchase has committed, one audit row is written for `actor`
+ * (TOKEN_PURCHASE, CREATE, on the new transaction: the submission, hours and
+ * amount, plus `student_id` when the actor is not the paying student). A
+ * refused purchase writes none; a failed write is logged and reported in
+ * `audit`, and the purchase stands.
  */
 export const purchaseExtensionHours = async ({
   classroomId,
   studentId,
   gitRepoAssignmentId,
   hours,
+  actor,
 }: {
   classroomId: string;
   studentId: string;
   gitRepoAssignmentId: string;
   hours: number;
-}) => {
+  /** Who the purchase is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
   if (!Number.isInteger(hours) || hours <= 0) {
     throw new Error('Invalid hours: Must be a positive whole number.');
   }
@@ -259,6 +269,11 @@ export const purchaseExtensionHours = async ({
     description: `Purchase of ${hours} hour(s).`,
   });
 
+  // After the commit: a failed write is reported, never thrown.
+  const audit = await recordPurchase(actor, transaction, {
+    git_repo_assignment_id: repoAssignment.id,
+  });
+
   // Push mode: a push the old cutoff left out may count now. The purchase has
   // committed, so a failure here is logged, never thrown; the next push
   // stamps the submission as usual.
@@ -273,7 +288,7 @@ export const purchaseExtensionHours = async ({
     }
   }
 
-  return transaction;
+  return { transaction, audit };
 };
 
 /**
@@ -299,20 +314,28 @@ export const purchaseExtensionHours = async ({
  *
  * NOTE: callers authorize `studentId`. Quiz hours are bought by the student
  * for themselves: the web action and MCP pass the signed-in student's id.
+ *
+ * Once the purchase has committed, one audit row is written for `actor`
+ * (TOKEN_PURCHASE, CREATE, on the new transaction: the assignment, hours and
+ * amount). A refused purchase writes none; a failed write is logged and
+ * reported in `audit`, and the purchase stands.
  */
 export const purchaseQuizExtensionHours = async ({
   classroomId,
   studentId,
   assignmentId,
   hours,
+  actor,
   now = new Date(),
 }: {
   classroomId: string;
   studentId: string;
   assignmentId: string;
   hours: number;
+  /** Who the purchase is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
   now?: Date;
-}) => {
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
   if (!Number.isInteger(hours) || hours <= 0) {
     throw new Error('Invalid hours: Must be a positive whole number.');
   }
@@ -377,7 +400,7 @@ export const purchaseQuizExtensionHours = async ({
     throw new Error('Token cost not configured for this assignment.');
   }
 
-  return updateExtension({
+  const transaction = await updateExtension({
     classroom_id: classroomId,
     student_id: studentId,
     assignment_id: assignment.id,
@@ -386,7 +409,39 @@ export const purchaseQuizExtensionHours = async ({
     type: 'PURCHASE',
     description: quizExtensionDescription(assignment.title, hours),
   });
+
+  // After the commit: a failed write is reported, never thrown.
+  const audit = await recordPurchase(actor, transaction, { assignment_id: assignment.id });
+  return { transaction, audit };
 };
+
+/** A ledger row as the token service writes and returns it: a purchase, refund or grant. */
+type LedgerRow = Awaited<ReturnType<typeof updateExtension>>;
+
+/**
+ * The TOKEN_PURCHASE row of a purchase that has committed: what it was bought
+ * on, the hours and the amount (negative: tokens spent), and the paying
+ * student when the actor is someone else (staff buying for a student).
+ */
+const recordPurchase = (
+  actor: AuditActor | null,
+  transaction: LedgerRow,
+  target: { git_repo_assignment_id: string } | { assignment_id: string }
+): Promise<ServiceAudit> =>
+  recordForActor(actor, {
+    classroomId: transaction.classroom_id,
+    resourceType: 'TOKEN_PURCHASE',
+    resourceId: transaction.id,
+    action: 'CREATE',
+    data: {
+      ...target,
+      hours: transaction.hours_purchased,
+      amount: transaction.amount,
+      ...(actor && actor.userId !== transaction.student_id
+        ? { student_id: transaction.student_id }
+        : {}),
+    },
+  });
 
 /**
  * student id → the net extension hours each student has bought on one quiz
@@ -415,9 +470,23 @@ export const netQuizExtensionHoursByStudent = async ({
  * or concurrent request finds nothing to flip and refunds nothing. The REFUND
  * carries the hours as a negative, which takes the extension back wherever
  * hours are summed.
+ *
+ * Once the refund has committed, one audit row is written for `actor`
+ * (TOKEN_TRANSACTION, UPDATE, on the cancelled purchase: the paying student,
+ * the refund's id, the tokens returned and the hours taken back, and what the
+ * purchase was for). A refused cancel writes none; a failed write is logged
+ * and reported in `audit`, and the refund stands.
  */
-export const cancelPurchase = async (transactionId: string) => {
-  return getPrisma().$transaction(async tx => {
+export const cancelPurchase = async (
+  transactionId: string,
+  {
+    actor,
+  }: {
+    /** Who the cancel is recorded for; null writes no audit row. */
+    actor: AuditActor | null;
+  }
+): Promise<{ refund: LedgerRow; audit: ServiceAudit }> => {
+  const refund = await getPrisma().$transaction(async tx => {
     // The ledger to lock is the purchase's; a row's classroom and student
     // never change, so they can be read before the lock.
     const owner = await tx.tokenTransaction.findUnique({
@@ -472,6 +541,27 @@ export const cancelPurchase = async (transactionId: string) => {
       },
     });
   }, LEDGER_TX);
+
+  // After the commit: a failed write is reported, never thrown. The refund
+  // row carries the purchase's classroom, student and target.
+  const audit = await recordForActor(actor, {
+    classroomId: refund.classroom_id,
+    resourceType: 'TOKEN_TRANSACTION',
+    resourceId: transactionId,
+    action: 'UPDATE',
+    data: {
+      event: 'purchase_cancelled',
+      student_id: refund.student_id,
+      refund_transaction_id: refund.id,
+      amount: refund.amount,
+      hours: refund.hours_purchased,
+      ...(refund.git_repo_assignment_id
+        ? { git_repo_assignment_id: refund.git_repo_assignment_id }
+        : {}),
+      ...(refund.assignment_id ? { assignment_id: refund.assignment_id } : {}),
+    },
+  });
+  return { refund, audit };
 };
 
 export const findTransactions = async (query: Prisma.TokenTransactionWhereInput) => {
@@ -531,6 +621,50 @@ export const assignToStudent = async (data: AssignToStudentInput, tx?: LedgerTx)
     await lockLedger(ownTx, data.classroomId, data.studentId);
     return appendToLedger(ownTx, data);
   }, LEDGER_TX);
+};
+
+/**
+ * Staff grant tokens to one student (GAIN): `assignToStudent` in its own
+ * transaction under the student's ledger lock, then, once it has committed,
+ * one audit row for `actor` (TOKEN_GRANT, CREATE, on the new transaction: the
+ * student and the amount; never the description). The MCP `token_grant` tool
+ * and the `assign_tokens_to_student` run (the web's grant form, one run per
+ * student) call it; a grade's reward is paid by `assignToStudent` inside the
+ * grade's transaction and recorded with the grade. A failed write is logged
+ * and reported in `audit`; the grant stands.
+ *
+ * NOTE: callers authorize the grant and check that `studentId` is a student
+ * of `classroomId`.
+ */
+export const grantTokens = async ({
+  classroomId,
+  studentId,
+  amount,
+  description,
+  actor,
+}: {
+  classroomId: string;
+  studentId: string;
+  amount: number;
+  description?: string;
+  /** Who the grant is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
+}): Promise<{ transaction: LedgerRow; audit: ServiceAudit }> => {
+  const transaction = await assignToStudent({
+    classroomId,
+    studentId,
+    amount,
+    type: 'GAIN',
+    ...(description !== undefined ? { description } : {}),
+  });
+  const audit = await recordForActor(actor, {
+    classroomId: transaction.classroom_id,
+    resourceType: 'TOKEN_GRANT',
+    resourceId: transaction.id,
+    action: 'CREATE',
+    data: { student_id: transaction.student_id, amount: transaction.amount },
+  });
+  return { transaction, audit };
 };
 
 export const updateTransaction = async (id: string, data: Record<string, unknown>) => {

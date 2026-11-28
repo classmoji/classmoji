@@ -4,14 +4,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // or on a quiz assignment. The body names exactly one target; the matching
 // service prices and checks the purchase; the audit metadata names the target
 // that was sent. A quiz is bought by the signed-in student for themselves
-// only; a repo by the student or by staff on their behalf.
+// only; a repo by the student or by staff on their behalf. The service records
+// the purchase for the actor the gate resolved; the route writes no row.
 const purchaseRepoMock = vi.fn();
+const requestImpersonatorMock = vi.fn();
+const auditRecordMock = vi.fn();
 const purchaseQuizMock = vi.fn();
 const assertAccessMock = vi.fn();
 const mutationAllowedMock = vi.fn();
 
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => requestImpersonatorMock(...a),
+}));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    audit: { record: (...a: unknown[]) => auditRecordMock(...a) },
     token: {
       purchaseExtensionHours: (...a: unknown[]) => purchaseRepoMock(...a),
       purchaseQuizExtensionHours: (...a: unknown[]) => purchaseQuizMock(...a),
@@ -42,6 +49,12 @@ const post = (body: Record<string, unknown>) =>
   } as unknown as Parameters<typeof action>[0]);
 
 const BASE = { student_id: 'stu-1', classroom_id: 'class-1', hours_purchased: 2 };
+const TOOL = 'web:assignments.purchase_extension';
+const STUDENT_ACTOR = { userId: 'stu-1', role: 'STUDENT', tool: TOOL, impersonatedBy: null };
+const PURCHASED = {
+  transaction: { id: 'tx' },
+  audit: { written: 1, missed: 0 },
+};
 
 describe('purchaseExtensionHours action', () => {
   beforeEach(() => {
@@ -51,21 +64,28 @@ describe('purchaseExtensionHours action', () => {
       classroom: { id: 'class-1', status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
-    purchaseRepoMock.mockResolvedValue({ id: 'tx' });
-    purchaseQuizMock.mockResolvedValue({ id: 'tx' });
+    requestImpersonatorMock.mockResolvedValue(null);
+    purchaseRepoMock.mockResolvedValue(PURCHASED);
+    purchaseQuizMock.mockResolvedValue(PURCHASED);
   });
 
   it('buys hours on a quiz assignment through the quiz purchase', async () => {
     const result = await post({ ...BASE, assignment_id: 'asg-q' });
 
+    expect(purchaseQuizMock).toHaveBeenCalledTimes(1);
     expect(purchaseQuizMock).toHaveBeenCalledWith({
       classroomId: 'class-1',
       studentId: 'stu-1',
       assignmentId: 'asg-q',
       hours: 2,
+      actor: STUDENT_ACTOR,
     });
     expect(purchaseRepoMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ action: 'PURCHASE_EXTENSION_HOURS' });
+    expect(result).toEqual({
+      action: 'PURCHASE_EXTENSION_HOURS',
+      success: 'Successfully purchased hour(s).',
+    });
+    expect(auditRecordMock).not.toHaveBeenCalled();
     expect(assertAccessMock.mock.calls[0][0].metadata).toEqual({
       hours_requested: 2,
       assignment_id: 'asg-q',
@@ -75,13 +95,16 @@ describe('purchaseExtensionHours action', () => {
   it('buys hours on a repo submission through the repo purchase', async () => {
     await post({ ...BASE, git_repo_assignment_id: 'gra-1' });
 
+    expect(purchaseRepoMock).toHaveBeenCalledTimes(1);
     expect(purchaseRepoMock).toHaveBeenCalledWith({
       classroomId: 'class-1',
       studentId: 'stu-1',
       gitRepoAssignmentId: 'gra-1',
       hours: 2,
+      actor: STUDENT_ACTOR,
     });
     expect(purchaseQuizMock).not.toHaveBeenCalled();
+    expect(auditRecordMock).not.toHaveBeenCalled();
     expect(assertAccessMock.mock.calls[0][0].metadata).toEqual({
       hours_requested: 2,
       git_repo_assignment_id: 'gra-1',
@@ -132,9 +155,34 @@ describe('purchaseExtensionHours action', () => {
       membership: { role: 'OWNER' },
     });
 
-    await post({ ...BASE, git_repo_assignment_id: 'gra-1' });
+    requestImpersonatorMock.mockResolvedValue('admin-1');
 
-    expect(purchaseRepoMock).toHaveBeenCalledWith(expect.objectContaining({ studentId: 'stu-1' }));
+    const result = await post({ ...BASE, git_repo_assignment_id: 'gra-1' });
+
+    // Paid from the student's balance, recorded for the owner who bought it
+    // (and the admin viewing as them).
+    expect(purchaseRepoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        studentId: 'stu-1',
+        actor: { userId: 'owner-1', role: 'OWNER', tool: TOOL, impersonatedBy: 'admin-1' },
+      })
+    );
+    expect(result).toEqual({
+      action: 'PURCHASE_EXTENSION_HOURS',
+      success: 'Successfully purchased hour(s).',
+    });
+    expect(auditRecordMock).not.toHaveBeenCalled();
+  });
+
+  it('answers the same when the service could not write its row', async () => {
+    purchaseQuizMock.mockResolvedValue({
+      transaction: { id: 'tx' },
+      audit: { written: 0, missed: 1 },
+    });
+    await expect(post({ ...BASE, assignment_id: 'asg-q' })).resolves.toEqual({
+      action: 'PURCHASE_EXTENSION_HOURS',
+      success: 'Successfully purchased hour(s).',
+    });
   });
 
   describe('a quiz: the signed-in student buys for themselves only', () => {

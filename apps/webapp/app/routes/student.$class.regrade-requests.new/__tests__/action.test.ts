@@ -3,14 +3,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The request_regrade task destructures `gitRepoAssignment` from its payload
 // (packages/tasks/src/workflows/regrades.ts). The action used to send the
 // pre-rename `repositoryAssignment` key, which made every run crash before
-// creating the regrade request. These tests pin the fixed payload contract.
+// creating the regrade request. These tests pin the fixed payload contract,
+// and the actor the run records the request for (the route writes no row).
 const triggerMock = vi.fn();
+const requestImpersonatorMock = vi.fn();
+const auditRecordMock = vi.fn();
 const waitMock = vi.fn();
 const requireStudentAccessMock = vi.fn();
 const findByIdMock = vi.fn();
 
 vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => triggerMock(...a) },
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => requestImpersonatorMock(...a),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -21,6 +28,7 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
+    audit: { record: (...a: unknown[]) => auditRecordMock(...a) },
     gitRepoAssignment: {
       findForRegradeRequest: (...a: unknown[]) => findByIdMock(...a),
       // The real projection: the payload's shape is what these tests pin.
@@ -74,6 +82,7 @@ describe('regrade-requests.new action — request_regrade payload contract', () 
     findByIdMock.mockResolvedValue(submission());
     triggerMock.mockResolvedValue({ id: 'run-1' });
     waitMock.mockResolvedValue({ status: 'COMPLETED' });
+    requestImpersonatorMock.mockResolvedValue(null);
   });
 
   it("sends the task's `gitRepoAssignment` key (not the stale repositoryAssignment)", async () => {
@@ -107,6 +116,33 @@ describe('regrade-requests.new action — request_regrade payload contract', () 
         { grader: { name: 'Ta Two', email: 'ta2@example.com' } },
       ],
     });
+  });
+
+  it('names the student as the actor the run records the request for', async () => {
+    const result = await action(
+      actionArgs({ git_repo_assignment_id: 'gra-1', student_comment: 'x' })
+    );
+
+    const [, payload] = triggerMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.auditActor).toEqual({
+      userId: 'student-1',
+      role: 'STUDENT',
+      tool: 'web:regrade_requests.create',
+      impersonatedBy: null,
+    });
+    expect(auditRecordMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      action: 'REQUEST_REGRADE',
+      success: 'Regrade/resubmit request submitted',
+    });
+  });
+
+  it('names the admin viewing as the student', async () => {
+    requestImpersonatorMock.mockResolvedValue('admin-1');
+    await action(actionArgs({ git_repo_assignment_id: 'gra-1', student_comment: 'x' }));
+
+    const [, payload] = triggerMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.auditActor).toMatchObject({ userId: 'student-1', impersonatedBy: 'admin-1' });
   });
 
   it('rejects submissions that belong to another student (IDOR guard)', async () => {

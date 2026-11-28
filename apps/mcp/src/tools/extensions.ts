@@ -23,7 +23,9 @@
  * Assignment.tokens_per_hour, else the classroom's default; the late-override
  * refusal, deadline and price checks are re-enforced server-side; balance
  * check inside the DB transaction). Hours can be bought at any time, before
- * or after the deadline, submitted or not.
+ * or after the deadline, submitted or not. Both services write the
+ * TOKEN_PURCHASE row for the actor this tool passes (`serviceActor`); a missed
+ * row comes back as `audit_incomplete`, never as an error.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -35,11 +37,12 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
   loadCourseworkAssignmentInClassroom,
   loadGitRepoAssignmentInClassroom,
+  noteServiceAudit,
   ok,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   submissionIdSchema,
-  writeAudit,
 } from './shared.ts';
 
 /**
@@ -117,26 +120,20 @@ async function purchaseOnSubmission(
     throw scopedNotFound('Submission');
   }
 
+  // Built before the purchase, so nothing can fail between the tokens moving
+  // and the answer.
+  const actor = serviceActor(ctx, 'extension_purchase');
   try {
-    // Pricing + late-override gate + balance check all inside the service.
-    const transaction = await ClassmojiService.token.purchaseExtensionHours({
+    // Pricing + late-override gate + balance check all inside the service,
+    // which also writes the TOKEN_PURCHASE row once the purchase commits.
+    const { transaction, audit } = await ClassmojiService.token.purchaseExtensionHours({
       classroomId: gra.git_repo.classroom_id,
       studentId: ctx.viewer.userId,
       gitRepoAssignmentId: gra.id,
       hours: args.hours,
+      actor,
     });
-
-    await writeAudit(ctx, {
-      resource_type: 'TOKEN_PURCHASE',
-      resource_id: transaction.id,
-      action: 'CREATE',
-      data: {
-        tool: 'extension_purchase',
-        git_repo_assignment_id: gra.id,
-        hours: args.hours,
-        amount: transaction.amount,
-      },
-    });
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,
@@ -179,27 +176,21 @@ async function purchaseOnQuiz(
     );
   }
 
+  // Built before the purchase, so nothing can fail between the tokens moving
+  // and the answer.
+  const actor = serviceActor(ctx, 'extension_purchase');
   try {
     // Classroom, type, open-to-students, STUDENT payer, deadline, price and
-    // balance are all re-checked inside the service.
-    const transaction = await ClassmojiService.token.purchaseQuizExtensionHours({
+    // balance are all re-checked inside the service, which also writes the
+    // TOKEN_PURCHASE row once the purchase commits.
+    const { transaction, audit } = await ClassmojiService.token.purchaseQuizExtensionHours({
       classroomId: requireClassroomCtx(ctx).classroomId,
       studentId: ctx.viewer.userId,
       assignmentId: assignment.id,
       hours: args.hours,
+      actor,
     });
-
-    await writeAudit(ctx, {
-      resource_type: 'TOKEN_PURCHASE',
-      resource_id: transaction.id,
-      action: 'CREATE',
-      data: {
-        tool: 'extension_purchase',
-        assignment_id: assignment.id,
-        hours: args.hours,
-        amount: transaction.amount,
-      },
-    });
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,
