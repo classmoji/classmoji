@@ -129,11 +129,14 @@ const detailAction = (name: string, body: unknown) =>
     body
   );
 
+/** The authorized classroom, as the gate returns it. */
+const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG };
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   const session = {
     userId: 'owner-1',
-    classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG },
+    classroom: CLASSROOM,
     membership: { role: 'OWNER' },
   };
   mocks.requireClassroomAdmin.mockResolvedValue(session);
@@ -185,9 +188,13 @@ describe('repository page: deleteRepo', () => {
       repo: { id: 'gr-1', name: 'some-other-repo' },
     });
 
-    expect(mocks.deleteRepository).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'gr-1', name: 'lab-1-alice' })
-    );
+    expect(mocks.deleteRepository).toHaveBeenCalledExactlyOnceWith({
+      id: 'gr-1',
+      name: 'lab-1-alice',
+      gitOrganization: ORG,
+      classroomId: 'class-1',
+      deleteFromGithub: true,
+    });
   });
 
   it('refuses a git repo that is not in this classroom and page, with no delete', async () => {
@@ -243,6 +250,24 @@ describe('repository page: addGrader / removeGrader', () => {
       graderId: 'u-bob',
       repositoryId: 'repo-1',
       actor: { userId: 'owner-1', role: 'OWNER', tool: TOOL, impersonatedBy: null },
+    });
+  });
+
+  it('names the admin viewing as the owner, read from this request', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-4');
+    await detailAction('removeGrader', GRADER_BODY);
+    expect(mocks.removeGraderInClassroom).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      gitOrganization: ORG,
+      gitRepoAssignmentId: 'ra-1',
+      graderId: 'u-bob',
+      repositoryId: 'repo-1',
+      actor: {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:graders.remove',
+        impersonatedBy: 'admin-4',
+      },
     });
   });
 
@@ -327,12 +352,13 @@ describe('repository page: calculateContributions / createProjects', () => {
     const projects = await detailAction('createProjects', { repositoryId: 'repo-1' });
 
     expect(contributions).toEqual({ triggerSession: { id: 's-1' } });
-    expect(mocks.calculateContributions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        classroom: expect.objectContaining({ id: 'class-1' }),
-        repositoryId: 'repo-1',
-      })
-    );
+    expect(mocks.calculateContributions).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
+      classroom: CLASSROOM,
+      repositoryId: 'repo-1',
+      userId: 'owner-1',
+      role: 'OWNER',
+    });
     expect(projects).toMatchObject({ success: 'Project creation started', taskId: 'run-1' });
     expect(mocks.tasksTrigger).toHaveBeenCalledWith('gh-create_projects_for_repository', {
       repositoryId: 'repo-1',
@@ -371,12 +397,13 @@ describe('repositories list: calculateContributions', () => {
     await listAction({ assignment_id: 'repo-1' });
 
     expect(mocks.repositoryFindByIdInClassroom).toHaveBeenCalledWith('repo-1', 'class-1');
-    expect(mocks.calculateContributions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        classroom: expect.objectContaining({ id: 'class-1' }),
-        repositoryId: 'repo-1',
-      })
-    );
+    expect(mocks.calculateContributions).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
+      classroom: CLASSROOM,
+      repositoryId: 'repo-1',
+      userId: 'owner-1',
+      role: 'OWNER',
+    });
   });
 
   it('refuses a repository outside this classroom', async () => {

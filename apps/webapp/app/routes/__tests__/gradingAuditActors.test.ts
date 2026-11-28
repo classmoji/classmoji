@@ -3,7 +3,8 @@
  * grading intent of api.gitRepoAssignment.$class, and both bulk grader
  * modals, hand the service the actor built from the intent's own gate: the
  * gate's user and role, the admin viewing as them (read from this request) and
- * the intent's tool name. The routes write no audit row of their own. (The
+ * the intent's tool name, next to the classroom the gate authorized; each
+ * answer is pinned too. The routes write no audit row of their own. (The
  * per-submission grader actions are in assignmentGraderScope.test.ts and
  * repoDetailActionScope.test.ts.)
  */
@@ -141,9 +142,12 @@ const actor = (tool: string, impersonatedBy: string | null = null) => ({
 });
 
 describe('api.gitRepoAssignment.$class: each grading intent passes its actor', () => {
-  it('addGrade: the grade goes to the service as the gate’s user, with the actor', async () => {
+  it('addGrade: an assistant grades as themself, recorded as ASSISTANT', async () => {
     const result = await post('addGrade', { gitRepoAssignment: { id: 'gra-1' }, grade: '🟢' });
-    expect(result).toMatchObject({ success: 'Added grade successfully!' });
+    expect(result).toEqual({
+      action: 'add-grade-to-git-repo-assignment',
+      success: 'Added grade successfully!',
+    });
     expect(mocks.addGrade).toHaveBeenCalledExactlyOnceWith({
       classroom: CLASSROOM,
       gitRepoAssignment: { id: 'gra-1' },
@@ -151,16 +155,30 @@ describe('api.gitRepoAssignment.$class: each grading intent passes its actor', (
       grade: '🟢',
       studentId: 's-1',
       teamId: undefined,
-      actor: actor('web:grades.add'),
+      actor: { userId: 'ta-1', role: 'ASSISTANT', tool: 'web:grades.add', impersonatedBy: null },
     });
   });
 
-  it('removeGrade', async () => {
-    await post('removeGrade', { gitRepoAssignment: { id: 'gra-1' }, grade: { id: 'g-1' } });
-    expect(mocks.removeGrade.mock.calls[0][0]).toMatchObject({
+  it('removeGrade: the stored grade of this submission, recorded as ASSISTANT', async () => {
+    const result = await post('removeGrade', {
       gitRepoAssignment: { id: 'gra-1' },
-      grade: { id: 'g-1' },
-      actor: actor('web:grades.remove'),
+      grade: { id: 'g-1', emoji: '🔴' },
+    });
+    expect(result).toEqual({
+      action: 'remove-grade-from-git-repo-assignment',
+      success: 'Removed grade successfully!',
+    });
+    expect(mocks.gradeFindById).toHaveBeenCalledExactlyOnceWith('g-1');
+    expect(mocks.removeGrade).toHaveBeenCalledExactlyOnceWith({
+      classroom: CLASSROOM,
+      gitRepoAssignment: { id: 'gra-1', studentId: 's-1', teamId: undefined },
+      grade: { id: 'g-1', emoji: '🟢', git_repo_assignment_id: 'gra-1' },
+      actor: {
+        userId: 'ta-1',
+        role: 'ASSISTANT',
+        tool: 'web:grades.remove',
+        impersonatedBy: null,
+      },
     });
   });
 
@@ -170,12 +188,17 @@ describe('api.gitRepoAssignment.$class: each grading intent passes its actor', (
       git_repo_assignment_id: 'gra-1',
       is_late_override: true,
     });
-    expect(result).toMatchObject({ success: 'Added override' });
+    expect(result).toEqual({ action: 'update-late-override', success: 'Added override' });
     expect(mocks.setLateOverrideForSubmission).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
       gitRepoAssignmentId: 'gra-1',
       isLateOverride: true,
-      actor: actor('web:grades.late_override'),
+      actor: {
+        userId: 'teacher-1',
+        role: 'TEACHER',
+        tool: 'web:grades.late_override',
+        impersonatedBy: null,
+      },
     });
   });
 
@@ -185,31 +208,49 @@ describe('api.gitRepoAssignment.$class: each grading intent passes its actor', (
       assignment_id: 'asg-1',
       grades_released: true,
     });
-    expect(result).toMatchObject({ success: 'Grades released to students' });
+    expect(result).toEqual({
+      action: 'update-grade-release',
+      success: 'Grades released to students',
+    });
     expect(mocks.setGradesReleased).toHaveBeenCalledExactlyOnceWith({
       assignmentId: 'asg-1',
       classroomId: 'class-1',
       released: true,
-      actor: actor('web:grades.release'),
+      actor: { userId: 'owner-1', role: 'OWNER', tool: 'web:grades.release', impersonatedBy: null },
     });
   });
 
   it('deleteSubmission, with and without the repository', async () => {
     gateUser = { userId: 'teacher-1', role: 'TEACHER' };
-    await post('deleteSubmission', { git_repo_assignment_id: 'gra-1' });
-    expect(mocks.deleteSubmission).toHaveBeenLastCalledWith({
+    const teacher = {
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      tool: 'web:grades.delete_submission',
+      impersonatedBy: null,
+    };
+    expect(await post('deleteSubmission', { git_repo_assignment_id: 'gra-1' })).toEqual({
+      action: 'delete-git-repo-assignment',
+      success: 'Submission deleted',
+    });
+    expect(
+      await post('deleteSubmission', { git_repo_assignment_id: 'gra-1', delete_repository: true })
+    ).toEqual({
+      action: 'delete-git-repo-assignment',
+      success: 'Submission and repository deleted',
+    });
+    expect(mocks.deleteSubmission).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteSubmission).toHaveBeenNthCalledWith(1, {
       classroomId: 'class-1',
       submission: SUBMISSION,
-      actor: actor('web:grades.delete_submission'),
+      actor: teacher,
     });
-
-    await post('deleteSubmission', { git_repo_assignment_id: 'gra-1', delete_repository: true });
-    expect(mocks.deleteSubmission).toHaveBeenLastCalledWith({
+    expect(mocks.deleteSubmission).toHaveBeenNthCalledWith(2, {
       classroomId: 'class-1',
       submission: SUBMISSION,
       repository: { gitOrganization: ORG },
-      actor: actor('web:grades.delete_submission'),
+      actor: teacher,
     });
+    expect(mocks.classroomFindById).toHaveBeenCalledExactlyOnceWith('class-1');
   });
 
   it('names the admin viewing as the caller, read from this request', async () => {
@@ -260,19 +301,30 @@ describe('the bulk grader modals pass their actor', () => {
   ])('%s', async (_label, action, path) => {
     gateUser = { userId: 'owner-1', role: 'OWNER' };
     mocks.requestImpersonator.mockResolvedValue('admin-3');
-    await modalPost(action as never, path, {
+    const result = await modalPost(action as never, path, {
       selectedAssignmentId: 'asg-1',
       method: 'RANDOM',
       templateAssignmentId: null,
     });
-    expect(mocks.assignGraders).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        classroomId: 'class-1',
-        assignmentId: 'asg-1',
-        method: 'RANDOM',
-        actor: actor('web:graders.assign_bulk', 'admin-3'),
-      })
-    );
+    expect(mocks.assignGraders).toHaveBeenCalledTimes(1);
+    const [args] = mocks.assignGraders.mock.calls[0];
+    expect(args).toEqual({
+      classroomId: 'class-1',
+      assignmentId: 'asg-1',
+      method: 'RANDOM',
+      templateAssignmentId: null,
+      sessionId: expect.any(String),
+      actor: {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:graders.assign_bulk',
+        impersonatedBy: 'admin-3',
+      },
+    });
+    // The run's progress is read through the session the service was handed.
+    expect(result).toEqual({
+      triggerSession: { accessToken: 'token', id: args.sessionId, numAssignmentsToAddGradersTo: 2 },
+    });
     expect(mocks.auditRecord).not.toHaveBeenCalled();
   });
 });

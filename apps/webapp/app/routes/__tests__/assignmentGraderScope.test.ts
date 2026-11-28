@@ -49,6 +49,7 @@ vi.mock('../admin.$class.assignments_.$id/SubmissionsTable', () => ({
 
 const route = await import('../admin.$class.assignments_.$id/route.tsx');
 const teacherRoute = await import('../teacher.$class_.assignments_.$id/route.tsx');
+const assistantRoute = await import('../assistant.$class_.assignments_.$id/route.tsx');
 
 const CLASS_SLUG = 'cs52-26f';
 const ORG = { login: 'acme', provider: 'GITHUB' };
@@ -153,6 +154,24 @@ describe('assignment page: grader actions', () => {
       expect(mocks.removeGraderInClassroom.mock.calls[0][0].actor).toEqual(
         actor('web:graders.remove', role)
       );
+    }
+  );
+
+  it.each(['addGrader', 'removeGrader'] as const)(
+    'the /assistant re-export refuses an assistant’s %s before anything is looked up',
+    async name => {
+      mocks.requireClassroomTeachingTeam.mockResolvedValue({
+        userId: 'ta-1',
+        classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG },
+        membership: { role: 'ASSISTANT' },
+      });
+      await expect(submit(name, BODY, assistantRoute.action)).rejects.toMatchObject({
+        status: 403,
+      });
+      expect(mocks.addGraderInClassroom).not.toHaveBeenCalled();
+      expect(mocks.removeGraderInClassroom).not.toHaveBeenCalled();
+      expect(mocks.requestImpersonator).not.toHaveBeenCalled();
+      expect(mocks.auditRecord).not.toHaveBeenCalled();
     }
   );
 

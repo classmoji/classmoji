@@ -4,7 +4,9 @@
  * an MCP one under View as), none when the call changed nothing, none and no
  * throw for `actor: null`, and a saved change that reports `missed` when its
  * row could not be written (here an actor with no user row, which the
- * `audit_logs.user_id` foreign key refuses). Rows are scoped to the
+ * `audit_logs.user_id` foreign key refuses). The classrooms' scale pays tokens
+ * for the emoji grades, so a grade added or removed moves the student's ledger
+ * (a GAIN, then its REMOVAL) next to its audit row. Rows are scoped to the
  * submission's classroom and the actor: user A in classroom X and user B in
  * classroom Y never see each other's rows, and a submission of Y named with X's
  * classroom changes nothing and records nothing.
@@ -63,7 +65,21 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
   let orgId: string;
   let serial = 0;
 
-  /** One classroom with a teacher-grader, a student and a module. */
+  /**
+   * The grading scale of both classrooms: every grade this file gives, the
+   * emoji ones paying tokens (a non-empty scale refuses any other grade).
+   */
+  const SCALE = [
+    { emoji: '🟢', grade: 100, extra_tokens: 5 },
+    { emoji: '🟡', grade: 80, extra_tokens: 3 },
+    { emoji: '🟠', grade: 70, extra_tokens: 2 },
+    { emoji: '🔴', grade: 50, extra_tokens: 1 },
+    { emoji: 'score-70', grade: 70, extra_tokens: 0 },
+    { emoji: 'score-80', grade: 80, extra_tokens: 0 },
+  ];
+  const tokensOf = (emoji: string) => SCALE.find(m => m.emoji === emoji)?.extra_tokens ?? 0;
+
+  /** One classroom with a teacher-grader, a student, a module and the scale. */
   interface Fixture {
     classroomId: string;
     moduleId: string;
@@ -117,6 +133,9 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
         { classroom_id: classroom.id, user_id: teacherId, role: 'TEACHER', is_grader: true },
         { classroom_id: classroom.id, user_id: studentId, role: 'STUDENT' },
       ],
+    });
+    await prisma.emojiMapping.createMany({
+      data: SCALE.map(mapping => ({ classroom_id: classroom.id, ...mapping })),
     });
     return { classroomId: classroom.id, moduleId: module.id, teacherId, studentId };
   };
@@ -180,6 +199,29 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
         data: true,
       },
     });
+
+  /** The token rows of one submission, oldest first. */
+  const tokensFor = (submissionId: string) =>
+    prisma.tokenTransaction.findMany({
+      where: { git_repo_assignment_id: submissionId },
+      orderBy: { created_at: 'asc' },
+      select: {
+        id: true,
+        classroom_id: true,
+        student_id: true,
+        type: true,
+        amount: true,
+        balance_after: true,
+      },
+    });
+  /** A grade's link to the token row that paid for it. */
+  const tokenLinkOf = async (gradeId: string) =>
+    (
+      await prisma.assignmentGrade.findUniqueOrThrow({
+        where: { id: gradeId },
+        select: { token_transaction_id: true },
+      })
+    ).token_transaction_id;
 
   const webActor = (f: Fixture, tool: string): AuditActor => ({
     userId: f.teacherId,
@@ -254,10 +296,24 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
           data: { tool: 'web:grades.add', emoji: '🟢', grade_id: outcome.created!.id },
         },
       ]);
+      // Next to the row: one GAIN of the scale's reward, linked to the grade.
+      const tokens = await tokensFor(submissionId);
+      expect(tokens).toEqual([
+        {
+          id: expect.any(String),
+          classroom_id: X.classroomId,
+          student_id: X.studentId,
+          type: 'GAIN',
+          amount: tokensOf('🟢'),
+          balance_after: expect.any(Number),
+        },
+      ]);
+      expect(await tokenLinkOf(outcome.created!.id)).toBe(tokens[0].id);
 
       const again = await addGrade(X, submissionId, '🟢', webActor(X, 'web:grades.add'));
       expect(again).toMatchObject({ created: null, audit: { written: 0, missed: 0 } });
       expect(await rowsFor(submissionId)).toHaveLength(1);
+      expect(await tokensFor(submissionId)).toHaveLength(1);
     });
 
     it('an MCP actor under View as: via, client and the admin; a replaced score is named', async () => {
@@ -305,6 +361,9 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       expect(
         await prisma.assignmentGrade.count({ where: { git_repo_assignment_id: submissionId } })
       ).toBe(1);
+      expect(await tokensFor(submissionId)).toMatchObject([
+        { student_id: X.studentId, type: 'GAIN', amount: tokensOf('🟢') },
+      ]);
       expect(await rowsFor(submissionId)).toHaveLength(0);
     });
 
@@ -318,6 +377,12 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       const rowsY = await rowsFor(inY.submissionId);
       expect(rowsX.map(r => [r.user_id, r.classroom_id])).toEqual([[X.teacherId, X.classroomId]]);
       expect(rowsY.map(r => [r.user_id, r.classroom_id])).toEqual([[Y.teacherId, Y.classroomId]]);
+      expect(await tokensFor(inX.submissionId)).toMatchObject([
+        { classroom_id: X.classroomId, student_id: X.studentId, amount: tokensOf('🟢') },
+      ]);
+      expect(await tokensFor(inY.submissionId)).toMatchObject([
+        { classroom_id: Y.classroomId, student_id: Y.studentId, amount: tokensOf('🔴') },
+      ]);
     });
   });
 
@@ -359,11 +424,30 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
           },
         },
       ]);
+      // Next to the row: the GAIN the grade paid, then its reversal.
+      const [gain, reversal, ...rest] = await tokensFor(submissionId);
+      expect(rest).toEqual([]);
+      expect(grade.token_transaction?.id).toBe(gain.id);
+      expect(gain).toMatchObject({
+        classroom_id: X.classroomId,
+        student_id: X.studentId,
+        type: 'GAIN',
+        amount: tokensOf('🟡'),
+      });
+      expect(reversal).toMatchObject({
+        classroom_id: X.classroomId,
+        student_id: X.studentId,
+        type: 'REMOVAL',
+        amount: -tokensOf('🟡'),
+        balance_after: gain.balance_after - tokensOf('🟡'),
+      });
+
       expect(await remove(webActor(X, 'web:grades.remove'))).toEqual({
         removed: false,
         audit: { written: 0, missed: 0 },
       });
       expect(await rowsFor(submissionId)).toHaveLength(1);
+      expect(await tokensFor(submissionId)).toHaveLength(2);
     });
 
     it('actor null removes the grade and writes nothing', async () => {
@@ -381,6 +465,82 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       });
       expect(result).toEqual({ removed: true, audit: { written: 0, missed: 0 } });
       expect(await rowsFor(submissionId)).toHaveLength(0);
+      expect((await tokensFor(submissionId)).map(t => t.type)).toEqual(['GAIN', 'REMOVAL']);
+    });
+
+    /** A grade added to a fresh submission of `f`, with its token row, for removing. */
+    const gradedSubmission = async (f: Fixture, emoji: string) => {
+      const { submissionId } = await makeSubmission(f);
+      const { created } = await addGrade(f, submissionId, emoji, null);
+      const grade = await prisma.assignmentGrade.findUniqueOrThrow({
+        where: { id: created!.id },
+        include: { token_transaction: true },
+      });
+      return { submissionId, grade };
+    };
+
+    it('user A in X and user B in Y each remove a grade: each gets only their own row and reversal', async () => {
+      const inX = await gradedSubmission(X, '🟢');
+      const inY = await gradedSubmission(Y, '🔴');
+      for (const [f, graded, tool] of [
+        [X, inX, 'web:grades.remove'],
+        [Y, inY, 'grade_remove'],
+      ] as const) {
+        expect(
+          await HelperService.removeGradeFromGitRepoAssignment({
+            classroom: { id: f.classroomId },
+            gitRepoAssignment: { id: graded.submissionId },
+            grade: graded.grade,
+            actor: webActor(f, tool),
+          })
+        ).toEqual({ removed: true, audit: { written: 1, missed: 0 } });
+      }
+
+      const rowsX = await rowsFor(inX.submissionId);
+      const rowsY = await rowsFor(inY.submissionId);
+      expect(rowsX.map(r => [r.user_id, r.classroom_id, r.action])).toEqual([
+        [X.teacherId, X.classroomId, 'DELETE'],
+      ]);
+      expect(rowsY.map(r => [r.user_id, r.classroom_id, r.action])).toEqual([
+        [Y.teacherId, Y.classroomId, 'DELETE'],
+      ]);
+      expect(await tokensFor(inX.submissionId)).toMatchObject([
+        { classroom_id: X.classroomId, student_id: X.studentId, type: 'GAIN' },
+        {
+          classroom_id: X.classroomId,
+          student_id: X.studentId,
+          type: 'REMOVAL',
+          amount: -tokensOf('🟢'),
+        },
+      ]);
+      expect(await tokensFor(inY.submissionId)).toMatchObject([
+        { classroom_id: Y.classroomId, student_id: Y.studentId, type: 'GAIN' },
+        {
+          classroom_id: Y.classroomId,
+          student_id: Y.studentId,
+          type: 'REMOVAL',
+          amount: -tokensOf('🔴'),
+        },
+      ]);
+    });
+
+    it("a grade of Y's submission named on X's submission is not removed and nothing is recorded", async () => {
+      const inX = await makeSubmission(X);
+      const inY = await gradedSubmission(Y, '🔴');
+      expect(
+        await HelperService.removeGradeFromGitRepoAssignment({
+          classroom: { id: X.classroomId },
+          gitRepoAssignment: { id: inX.submissionId },
+          grade: inY.grade,
+          actor: webActor(X, 'web:grades.remove'),
+        })
+      ).toEqual({ removed: false, audit: { written: 0, missed: 0 } });
+
+      expect(await prisma.assignmentGrade.count({ where: { id: inY.grade.id } })).toBe(1);
+      expect((await tokensFor(inY.submissionId)).map(t => t.type)).toEqual(['GAIN']);
+      expect(await tokensFor(inX.submissionId)).toEqual([]);
+      expect(await rowsFor(inX.submissionId)).toHaveLength(0);
+      expect(await rowsFor(inY.submissionId)).toHaveLength(0);
     });
   });
 
@@ -784,12 +944,44 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
 
   /**
    * One change per function, made on a fresh submission and recorded for
-   * `actor`: what the call answered about its rows, and the rows written.
+   * `actor`: what the call answered (its rows in `audit`), and `stood`, which
+   * checks that the change itself was saved.
    */
-  const CHANGES: Array<{
-    name: string;
-    run: (actor: AuditActor | null) => Promise<{ audit: { written: number; missed: number } }>;
-  }> = [
+  interface Change {
+    result: { audit: { written: number; missed: number } };
+    stood: () => Promise<void>;
+  }
+  const lateOverrideOf = async (submissionId: string) =>
+    (
+      await prisma.gitRepoAssignment.findUniqueOrThrow({
+        where: { id: submissionId },
+        select: { is_late_override: true },
+      })
+    ).is_late_override;
+  const gradersOn = (submissionId: string) =>
+    prisma.gitRepoAssignmentGrader.count({ where: { git_repo_assignment_id: submissionId } });
+
+  const CHANGES: Array<{ name: string; run: (actor: AuditActor | null) => Promise<Change> }> = [
+    {
+      name: 'addGradeToGitRepoAssignment',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        const result = await addGrade(X, submissionId, '🟢', actor);
+        return {
+          result,
+          stood: async () => {
+            const grades = await prisma.assignmentGrade.findMany({
+              where: { git_repo_assignment_id: submissionId },
+              select: { emoji: true },
+            });
+            expect(grades).toEqual([{ emoji: '🟢' }]);
+            expect(await tokensFor(submissionId)).toMatchObject([
+              { type: 'GAIN', amount: tokensOf('🟢') },
+            ]);
+          },
+        };
+      },
+    },
     {
       name: 'removeGradeFromGitRepoAssignment',
       run: async actor => {
@@ -799,12 +991,22 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
           where: { id: created!.id },
           include: { token_transaction: true },
         });
-        return HelperService.removeGradeFromGitRepoAssignment({
+        const result = await HelperService.removeGradeFromGitRepoAssignment({
           classroom: { id: X.classroomId },
           gitRepoAssignment: { id: submissionId },
           grade,
           actor,
         });
+        return {
+          result,
+          stood: async () => {
+            expect(await prisma.assignmentGrade.count({ where: { id: grade.id } })).toBe(0);
+            expect(await tokensFor(submissionId)).toMatchObject([
+              { type: 'GAIN', amount: tokensOf('🟠') },
+              { type: 'REMOVAL', amount: -tokensOf('🟠') },
+            ]);
+          },
+        };
       },
     },
     {
@@ -813,7 +1015,10 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
         const { submissionId } = await makeSubmission(X);
         const result = await grader('add', X, submissionId, X.teacherId, actor);
         if (!('audit' in result)) throw new Error(`not added: ${result.status}`);
-        return result;
+        return {
+          result,
+          stood: async () => expect(await gradersOn(submissionId)).toBe(1),
+        };
       },
     },
     {
@@ -823,54 +1028,98 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
         await grader('add', X, submissionId, X.teacherId, null);
         const result = await grader('remove', X, submissionId, X.teacherId, actor);
         if (!('audit' in result)) throw new Error(`not removed: ${result.status}`);
-        return result;
+        return {
+          result,
+          stood: async () => expect(await gradersOn(submissionId)).toBe(0),
+        };
       },
     },
     {
       name: 'assignGradersToAssignment',
       run: async actor => {
         const { assignmentId } = await makeSubmission(X);
-        return graderService.assignGradersToAssignment({
+        const queuedBefore = trigger.batchTrigger.mock.calls.length;
+        const result = await graderService.assignGradersToAssignment({
           classroomId: X.classroomId,
           assignmentId,
           method: 'RANDOM',
           actor,
         });
+        return {
+          result,
+          // Its change is the queued run.
+          stood: async () => expect(trigger.batchTrigger.mock.calls.length).toBe(queuedBefore + 1),
+        };
       },
     },
     {
       name: 'setLateOverrideForSubmission',
       run: async actor => {
         const { submissionId } = await makeSubmission(X);
-        return gitRepoAssignmentService.setLateOverrideForSubmission({
+        const result = await gitRepoAssignmentService.setLateOverrideForSubmission({
           classroomId: X.classroomId,
           gitRepoAssignmentId: submissionId,
           isLateOverride: true,
           actor,
         });
+        return {
+          result,
+          stood: async () => expect(await lateOverrideOf(submissionId)).toBe(true),
+        };
+      },
+    },
+    {
+      name: 'setLateOverrideInClassroom',
+      run: async actor => {
+        const { submissionId } = await makeSubmission(X);
+        const result = await gitRepoAssignmentService.setLateOverrideInClassroom({
+          classroomId: X.classroomId,
+          selector: { ids: [submissionId] },
+          isLateOverride: true,
+          actor,
+        });
+        return {
+          result,
+          stood: async () => expect(await lateOverrideOf(submissionId)).toBe(true),
+        };
       },
     },
     {
       name: 'setGradesReleased',
       run: async actor => {
         const { assignmentId } = await makeSubmission(X);
-        return assignmentService.setGradesReleased({
+        const result = await assignmentService.setGradesReleased({
           assignmentId,
           classroomId: X.classroomId,
           released: true,
           actor,
         });
+        return {
+          result,
+          stood: async () => {
+            const assignment = await prisma.assignment.findUniqueOrThrow({
+              where: { id: assignmentId },
+              select: { grades_released: true },
+            });
+            expect(assignment.grades_released).toBe(true);
+          },
+        };
       },
     },
     {
       name: 'deleteSubmission',
       run: async actor => {
         const { submissionId, assignmentId, gitRepo } = await makeSubmission(X);
-        return HelperService.deleteSubmission({
+        const result = await HelperService.deleteSubmission({
           classroomId: X.classroomId,
           submission: { id: submissionId, assignment_id: assignmentId, git_repo: gitRepo },
           actor,
         });
+        return {
+          result,
+          stood: async () =>
+            expect(await prisma.gitRepoAssignment.count({ where: { id: submissionId } })).toBe(0),
+        };
       },
     },
   ];
@@ -894,7 +1143,8 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
   describe.each(CHANGES)('$name', ({ run }) => {
     it('a web actor: one row with its user, role and tool, nothing more', async () => {
       const { value, rows } = await rowsWrittenBy(() => run(webActor(X, 'web:test')));
-      expect(value.audit).toEqual({ written: 1, missed: 0 });
+      expect(value.result.audit).toEqual({ written: 1, missed: 0 });
+      await value.stood();
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ user_id: X.teacherId, role: 'TEACHER' });
       expect(rows[0].data).toMatchObject({ tool: 'web:test' });
@@ -904,7 +1154,9 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
     });
 
     it('an MCP actor under View as: via, client and the admin', async () => {
-      const { rows } = await rowsWrittenBy(() => run(mcpActor(X, 'mcp_test')));
+      const { value, rows } = await rowsWrittenBy(() => run(mcpActor(X, 'mcp_test')));
+      expect(value.result.audit).toEqual({ written: 1, missed: 0 });
+      await value.stood();
       expect(rows).toHaveLength(1);
       expect(rows[0].data).toMatchObject({
         tool: 'mcp_test',
@@ -914,15 +1166,17 @@ describe.skipIf(!RUN)('grading services write their audit rows (integration)', (
       });
     });
 
-    it('actor null: no row and no throw', async () => {
+    it('actor null: the change is saved, with no row and no throw', async () => {
       const { value, rows } = await rowsWrittenBy(() => run(null));
-      expect(value.audit).toEqual({ written: 0, missed: 0 });
+      expect(value.result.audit).toEqual({ written: 0, missed: 0 });
+      await value.stood();
       expect(rows).toHaveLength(0);
     });
 
     it('a row that cannot be written: the change stands, the call reports the miss', async () => {
       const { value, rows } = await rowsWrittenBy(() => quietly(() => run(ghost('web:test'))));
-      expect(value.value.audit).toEqual({ written: 0, missed: 1 });
+      expect(value.value.result.audit).toEqual({ written: 0, missed: 1 });
+      await value.value.stood();
       expect(value.misses).toHaveLength(1);
       expect(rows).toHaveLength(0);
     });
