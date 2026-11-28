@@ -26,6 +26,10 @@
  * The submission check runs before the eligibility check, so a foreign
  * submission id gets the same not_found whoever is named as grader.
  *
+ * Audit: the helpers (and assignGradersToAssignment for the bulk tool) write
+ * the row of each change for the actor the tool passes (`serviceActor`), the
+ * same rows the web's grader changes write; the tools write none of their own.
+ *
  * ⚠ EXTERNAL SIDE EFFECT / FAILURE MODE: the helper `await`s the GitHub
  * assignee call BEFORE the DB write with no try/catch, so a GitHub failure
  * aborts the whole operation — it fails CLOSED with no partial DB state. A
@@ -39,13 +43,14 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadAssignmentInClassroom,
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   OWNER_TEACHER,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   submissionIdSchema,
-  writeAudit,
 } from './shared.ts';
 
 interface GraderArgs {
@@ -100,6 +105,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
       gitOrganization,
       gitRepoAssignmentId: args.git_repo_assignment_id,
       graderId: args.grader_id,
+      actor: serviceActor(ctx, 'grader_assign'),
     });
 
     switch (result.status) {
@@ -116,19 +122,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
           git_repo_assignment_id: args.git_repo_assignment_id,
         });
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
-      resource_id: args.git_repo_assignment_id,
-      action: 'CREATE',
-      data: {
-        tool: 'grader_assign',
-        // `value`: the grader assigned.
-        value: args.grader_id,
-        grader_id: args.grader_id,
-        grader_login: result.graderLogin,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,
@@ -163,6 +157,7 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
       gitOrganization,
       gitRepoAssignmentId: args.git_repo_assignment_id,
       graderId: args.grader_id,
+      actor: serviceActor(ctx, 'grader_unassign'),
     });
 
     switch (result.status) {
@@ -174,18 +169,7 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
           'That person is not assigned as a grader on this submission'
         );
     }
-
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
-      resource_id: args.git_repo_assignment_id,
-      action: 'DELETE',
-      data: {
-        tool: 'grader_unassign',
-        value: args.grader_id,
-        grader_id: args.grader_id,
-        grader_login: result.graderLogin,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     return ok({ success: true, removed_grader: result.graderLogin });
   },
@@ -270,6 +254,7 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
         assignmentId: assignment.id,
         method: args.method,
         templateAssignmentId: args.template_assignment_id ?? null,
+        actor: serviceActor(ctx, 'grader_assign_bulk'),
       });
     } catch (error) {
       if (error instanceof AssignGradersError) {
@@ -291,18 +276,8 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
       throw error;
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
-      resource_id: assignment.id,
-      action: 'CREATE',
-      data: {
-        tool: 'grader_assign_bulk',
-        assignment_id: assignment.id,
-        method: args.method,
-        template_assignment_id: args.template_assignment_id ?? null,
-        submissions_assigned: result.numAssignmentsToAddGradersTo,
-      },
-    });
+    // The service recorded the queued runs (none queued: nothing to record).
+    noteServiceAudit(ctx, result.audit);
 
     return ok({
       success: true,

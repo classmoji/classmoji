@@ -150,7 +150,14 @@ export function assertBelongsToClassroom(
 
 // Lives in mcp/audit.ts so the registry can write read rows without importing
 // this module (and the slides engine it pulls in).
-export { viewingAs, writeAudit, writeAuditOrFail, type AuditEntry } from '../mcp/audit.ts';
+export {
+  noteServiceAudit,
+  serviceActor,
+  viewingAs,
+  writeAudit,
+  writeAuditOrFail,
+  type AuditEntry,
+} from '../mcp/audit.ts';
 
 // ─── S1 loaders (fetch target WITH classroom chain, compare ids) ────────────
 

@@ -1,5 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { AssignGradersMethod } from '@classmoji/services';
+import type { AuditActor } from '@classmoji/services/audit';
 
 interface AssignGradersData {
   selectedAssignmentId: string;
@@ -16,7 +17,9 @@ interface AssignGradersData {
  */
 export const assignGradersToAssignmentsHandler = async (
   data: AssignGradersData,
-  sessionId: string
+  sessionId: string,
+  /** Who the service records the bulk assignment for (it writes the row). */
+  actor: AuditActor
 ) => {
   return ClassmojiService.gitRepoAssignmentGrader.assignGradersToAssignment({
     classroomId: data.classroomId,
@@ -24,5 +27,6 @@ export const assignGradersToAssignmentsHandler = async (
     method: data.method,
     templateAssignmentId: data.templateAssignmentId,
     sessionId,
+    actor,
   });
 };

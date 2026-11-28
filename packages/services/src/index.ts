@@ -162,6 +162,10 @@ export type {
   StaffRemovalStart,
   UngradedSlotsOutcome,
 } from './helper/index.ts';
+export type {
+  LateOverrideMode,
+  LateOverrideOutcome,
+} from './classmoji/gitRepoAssignment.service.ts';
 export { waitForRunOutcome } from './helper/runWait.ts';
 export { isTriggerConfigured } from './helper/triggerConfig.ts';
 export type { RunOutcome } from './helper/runWait.ts';

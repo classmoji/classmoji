@@ -391,6 +391,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             choice: started.choice,
             departingName: started.name || started.login,
             expectedCount: started.ungradedCount,
+            // The slot moves write no grader audit rows.
+            actor: null,
           })
         : null;
 

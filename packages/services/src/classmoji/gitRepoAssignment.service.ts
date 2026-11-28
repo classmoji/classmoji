@@ -20,6 +20,13 @@ import {
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, IssueStatus, Prisma } from '@classmoji/database/client';
 import { getGitProvider } from '../git/index.ts';
+import {
+  addServiceAudit,
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 interface GitRepoAssignmentCreateData extends Omit<
   Prisma.GitRepoAssignmentUncheckedCreateInput,
@@ -682,6 +689,9 @@ export { isPastDeadlineIgnoringOverride };
 
 export type LateOverrideSelector = { ids: string[] } | { assignmentId: string };
 
+/** How the caller named the rows of a late-override change, as its audit rows say. */
+export type LateOverrideMode = 'single' | 'ids' | 'assignment';
+
 export interface LateOverrideResult {
   /** Ids this call actually flipped (returned by the scoped write itself). */
   updatedIds: string[];
@@ -695,6 +705,53 @@ export interface LateOverrideResult {
   notSubmittedIds: string[];
   /** Matched rows past their deadline, ignoring any exemption. */
   lateIds: string[];
+}
+
+/** `setLateOverrideInClassroom`'s answer: what it changed and what it recorded. */
+export interface LateOverrideOutcome extends LateOverrideResult {
+  /** Of `updatedIds`, the ones whose audit row could not be written. */
+  auditFailedIds: string[];
+  audit: ServiceAudit;
+}
+
+/** Late-override audit rows written concurrently per chunk. */
+export const LATE_OVERRIDE_AUDIT_CHUNK = 20;
+
+/**
+ * One audit row per submission whose exemption a call changed
+ * (GIT_REPO_ASSIGNMENT, UPDATE: the field, its new and previous value and how
+ * the rows were named), LATE_OVERRIDE_AUDIT_CHUNK at a time in parallel
+ * (distinct resource ids, so no row merges into another). Answers the ids
+ * whose row could not be written, and the totals.
+ */
+async function recordLateOverrideRows(
+  actor: AuditActor | null,
+  classroomId: string,
+  ids: string[],
+  data: { value: boolean; mode: LateOverrideMode; assignment_id?: string }
+): Promise<{ auditFailedIds: string[]; audit: ServiceAudit }> {
+  const auditFailedIds: string[] = [];
+  let audit = NO_SERVICE_AUDIT;
+  if (!actor) return { auditFailedIds, audit };
+  for (let i = 0; i < ids.length; i += LATE_OVERRIDE_AUDIT_CHUNK) {
+    const chunk = ids.slice(i, i + LATE_OVERRIDE_AUDIT_CHUNK);
+    const results = await Promise.all(
+      chunk.map(id =>
+        recordForActor(actor, {
+          classroomId,
+          resourceType: 'GIT_REPO_ASSIGNMENT',
+          resourceId: id,
+          action: 'UPDATE',
+          data: { field: 'is_late_override', ...data, previous: !data.value },
+        })
+      )
+    );
+    results.forEach((result, index) => {
+      audit = addServiceAudit(audit, result);
+      if (result.missed > 0) auditFailedIds.push(chunk[index]);
+    });
+  }
+  return { auditFailedIds, audit };
 }
 
 const EMPTY_LATE_OVERRIDE_RESULT: LateOverrideResult = {
@@ -730,22 +787,32 @@ const EMPTY_LATE_OVERRIDE_RESULT: LateOverrideResult = {
  * eligibility rules run in JS over the scoped read; only the vetted ids reach
  * the write, which also filters on the current value, so `updatedIds` is what
  * the database reports it wrote.
+ *
+ * After the write, each row it changed gets one audit row for `actor`
+ * (`recordLateOverrideRows`; `mode` says how the caller named the rows,
+ * derived from the selector when left out). A row that could not be written
+ * is named in `auditFailedIds`; the change stands.
  */
 export const setLateOverrideInClassroom = async ({
   classroomId,
   selector,
   isLateOverride,
   now = new Date(),
+  actor,
+  mode,
 }: {
   classroomId: string;
   selector: LateOverrideSelector;
   isLateOverride: boolean;
   now?: Date;
-}): Promise<LateOverrideResult> => {
+  /** Who the change is recorded for; null writes no audit rows. */
+  actor: AuditActor | null;
+  mode?: LateOverrideMode;
+}): Promise<LateOverrideOutcome> => {
   if (!classroomId) throw new Error('setLateOverrideInClassroom requires a classroomId');
   const requestedIds = 'ids' in selector ? [...new Set(selector.ids)] : null;
   if (requestedIds && requestedIds.length === 0) {
-    return { ...EMPTY_LATE_OVERRIDE_RESULT };
+    return { ...EMPTY_LATE_OVERRIDE_RESULT, auditFailedIds: [], audit: NO_SERVICE_AUDIT };
   }
   const skipUnsubmitted = isLateOverride && 'assignmentId' in selector;
 
@@ -802,7 +869,60 @@ export const setLateOverrideInClassroom = async ({
   const settled = new Set([...updatedIds, ...notLateIds, ...notSubmittedIds]);
   const unchangedIds = rows.filter(r => !settled.has(r.id)).map(r => r.id);
 
-  return { updatedIds, unchangedIds, notFoundIds, notLateIds, notSubmittedIds, lateIds };
+  const assignmentId = 'assignmentId' in selector ? selector.assignmentId : undefined;
+  const recorded = await recordLateOverrideRows(actor, classroomId, updatedIds, {
+    value: isLateOverride,
+    mode: mode ?? (assignmentId ? 'assignment' : requestedIds?.length === 1 ? 'single' : 'ids'),
+    ...(assignmentId ? { assignment_id: assignmentId } : {}),
+  });
+
+  return {
+    updatedIds,
+    unchangedIds,
+    notFoundIds,
+    notLateIds,
+    notSubmittedIds,
+    lateIds,
+    ...recorded,
+  };
+};
+
+/**
+ * Set or clear the late-penalty exemption on ONE submission of a classroom,
+ * whether or not it is late: the web shield's write (the button shows only on
+ * late or exempt rows; `setLateOverrideInClassroom` is the rule that checks
+ * lateness). The write is scoped by the classroom and filtered on the current
+ * value, so `changed` is what the database reports it wrote, and only a change
+ * is recorded for `actor` (the same row `setLateOverrideInClassroom` writes,
+ * mode `single`).
+ */
+export const setLateOverrideForSubmission = async ({
+  classroomId,
+  gitRepoAssignmentId,
+  isLateOverride,
+  actor,
+}: {
+  classroomId: string;
+  gitRepoAssignmentId: string;
+  isLateOverride: boolean;
+  /** Who the change is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
+}): Promise<{ changed: boolean; audit: ServiceAudit }> => {
+  if (!classroomId) throw new Error('setLateOverrideForSubmission requires a classroomId');
+  const { count } = await getPrisma().gitRepoAssignment.updateMany({
+    where: {
+      id: gitRepoAssignmentId,
+      git_repo: { classroom_id: classroomId },
+      is_late_override: !isLateOverride,
+    },
+    data: { is_late_override: isLateOverride },
+  });
+  if (count === 0) return { changed: false, audit: NO_SERVICE_AUDIT };
+  const { audit } = await recordLateOverrideRows(actor, classroomId, [gitRepoAssignmentId], {
+    value: isLateOverride,
+    mode: 'single',
+  });
+  return { changed: true, audit };
 };
 
 /**

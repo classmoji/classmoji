@@ -519,6 +519,9 @@ export const staffRemoveTool: StaffRemoveTool = {
             choice: started.choice,
             departingName: started.name || started.login,
             expectedCount: started.ungradedCount,
+            // The slot moves are recorded on this tool's STAFF row (its
+            // `ungraded_submissions`), not as grader rows of their own.
+            actor: null,
           });
         }
       } else if (removal === 'completed') {
@@ -655,6 +658,8 @@ async function settleLeftover(
     choice,
     departingName: leftover.name || leftover.login,
     expectedCount: leftover.ungradedCount,
+    // Recorded on the STAFF row below (`ungraded_submissions`), not as grader rows.
+    actor: null,
   });
   const ungraded = describeUngraded(outcome);
 

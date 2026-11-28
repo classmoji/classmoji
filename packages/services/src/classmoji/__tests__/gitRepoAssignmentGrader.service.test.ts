@@ -89,6 +89,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
     ]);
 
     const result = await service.assignGradersToAssignment({
+      actor: null,
       classroomId: 'class-1',
       assignmentId: 'a-1',
       method: 'RANDOM',
@@ -100,7 +101,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
     expect(findUsersByRoles).toHaveBeenCalledWith('class-1', ['ASSISTANT', 'TEACHER'], {
       is_grader: true,
     });
-    expect(result).toEqual({ numAssignmentsToAddGradersTo: 3 });
+    expect(result).toEqual({ numAssignmentsToAddGradersTo: 3, audit: { written: 0, missed: 0 } });
 
     const [taskId, items] = batchTrigger.mock.calls[0];
     expect(taskId).toBe('add_grader_to_git_repo_assignment');
@@ -117,6 +118,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
     findUsersByRoles.mockResolvedValue([{ id: 'ta-1', login: 'ada' }]);
 
     await service.assignGradersToAssignment({
+      actor: null,
       classroomId: 'class-1',
       assignmentId: 'a-1',
       method: 'RANDOM',
@@ -131,6 +133,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
 
     await expect(
       service.assignGradersToAssignment({
+        actor: null,
         classroomId: 'class-1',
         assignmentId: 'a-1',
         method: 'RANDOM',
@@ -167,6 +170,7 @@ describe('assignGradersToAssignment — EXISTING', () => {
     });
 
     const result = await service.assignGradersToAssignment({
+      actor: null,
       classroomId: 'class-1',
       assignmentId: 'a-target',
       method: 'EXISTING',
@@ -174,7 +178,7 @@ describe('assignGradersToAssignment — EXISTING', () => {
     });
 
     // 1 (student match) + 2 (team match, two graders) + 0 (no template row).
-    expect(result).toEqual({ numAssignmentsToAddGradersTo: 3 });
+    expect(result).toEqual({ numAssignmentsToAddGradersTo: 3, audit: { written: 0, missed: 0 } });
     const items = batchTrigger.mock.calls[0][1];
     expect(
       items.map((i: { payload: { gitRepoAssignmentId: string; graderLogin: string } }) => [
@@ -203,13 +207,14 @@ describe('assignGradersToAssignment — EXISTING', () => {
     });
 
     const result = await service.assignGradersToAssignment({
+      actor: null,
       classroomId: 'class-1',
       assignmentId: 'a-target',
       method: 'EXISTING',
       templateAssignmentId: 'a-template',
     });
 
-    expect(result).toEqual({ numAssignmentsToAddGradersTo: 0 });
+    expect(result).toEqual({ numAssignmentsToAddGradersTo: 0, audit: { written: 0, missed: 0 } });
     expect(batchTrigger).not.toHaveBeenCalled();
   });
 
@@ -217,6 +222,7 @@ describe('assignGradersToAssignment — EXISTING', () => {
     findByAssignmentId.mockResolvedValue([]);
 
     await service.assignGradersToAssignment({
+      actor: null,
       classroomId: 'class-1',
       assignmentId: 'a-target',
       method: 'EXISTING',
@@ -230,6 +236,7 @@ describe('assignGradersToAssignment — EXISTING', () => {
   it('requires a templateAssignmentId', async () => {
     await expect(
       service.assignGradersToAssignment({
+        actor: null,
         classroomId: 'class-1',
         assignmentId: 'a-1',
         method: 'EXISTING',

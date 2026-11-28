@@ -114,6 +114,7 @@ beforeEach(() => {
 describe('addGradeToGitRepoAssignment token reward', () => {
   it('passes repositoryAssignmentId so the transaction links to the assignment', async () => {
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -143,6 +144,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     findEmojiMappingsMock.mockResolvedValue([{ emoji: '✅', extra_tokens: 0 }]);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -156,6 +158,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
 
   it('runs the grade, its reward and the link in one read-committed transaction', async () => {
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -176,6 +179,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
 
   it('pays the student who owns the repo, not a caller-supplied id', async () => {
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -193,6 +197,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     ownedByTeam(['student-b', 'student-a']);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -214,6 +219,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     ownedByTeam(['student-c', 'student-a', 'student-b']);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -235,6 +241,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     ownedByTeam(['student-b', 'student-a']);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -254,6 +261,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     ownedByTeam([]);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -271,6 +279,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
 
     await expect(
       HelperService.addGradeToGitRepoAssignment({
+        actor: null,
         classroom,
         gitRepoAssignment,
         graderId: 'grader-1',
@@ -286,6 +295,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
 
     await expect(
       HelperService.addGradeToGitRepoAssignment({
+        actor: null,
         classroom,
         gitRepoAssignment,
         graderId: 'grader-1',
@@ -297,6 +307,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
   it('rejects a grade outside the scale before opening a transaction', async () => {
     await expect(
       HelperService.addGradeToGitRepoAssignment({
+        actor: null,
         classroom,
         gitRepoAssignment,
         graderId: 'grader-1',
@@ -324,6 +335,7 @@ describe('addGradeToGitRepoAssignment numeric score replace', () => {
 
   it('reverses the old score and pays the new one in the same transaction', async () => {
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -348,6 +360,7 @@ describe('addGradeToGitRepoAssignment numeric score replace', () => {
     tx.assignmentGrade.deleteMany.mockResolvedValue({ count: 0 });
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -371,6 +384,7 @@ describe('addGradeToGitRepoAssignment numeric score replace', () => {
     ]);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -388,12 +402,13 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
 
   it('deletes the grade and writes its REMOVAL row in one transaction', async () => {
     const removed = await HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       grade,
     });
 
-    expect(removed).toBe(true);
+    expect(removed.removed).toBe(true);
     expect(lockSubmissionMock).toHaveBeenCalledWith(tx, 'gra-1');
     expect(lockSubmissionMock.mock.invocationCallOrder[0]).toBeLessThan(
       lockLedgersMock.mock.invocationCallOrder[0]
@@ -427,6 +442,7 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     });
 
     await HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       grade,
@@ -439,12 +455,13 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     tx.assignmentGrade.deleteMany.mockResolvedValue({ count: 0 });
 
     const removed = await HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       grade,
     });
 
-    expect(removed).toBe(false);
+    expect(removed.removed).toBe(false);
     expect(assignToStudentMock).not.toHaveBeenCalled();
   });
 
@@ -452,12 +469,13 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     tx.assignmentGrade.findFirst.mockResolvedValue(null);
 
     const removed = await HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       grade,
     });
 
-    expect(removed).toBe(false);
+    expect(removed.removed).toBe(false);
     expect(tx.assignmentGrade.deleteMany).not.toHaveBeenCalled();
     expect(assignToStudentMock).not.toHaveBeenCalled();
   });
@@ -466,7 +484,12 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     assignToStudentMock.mockRejectedValue(new Error('ledger write failed'));
 
     await expect(
-      HelperService.removeGradeFromGitRepoAssignment({ classroom, gitRepoAssignment, grade })
+      HelperService.removeGradeFromGitRepoAssignment({
+        classroom,
+        gitRepoAssignment,
+        grade,
+        actor: null,
+      })
     ).rejects.toThrow('ledger write failed');
     expect(assignToStudentMock).toHaveBeenCalledWith(
       expect.objectContaining({ studentId: 'student-1', amount: -5, type: 'REMOVAL' }),
@@ -485,6 +508,7 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     });
 
     await HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment: { id: 'gra-1', teamId: 'team-1' },
       grade,
