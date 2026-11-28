@@ -122,6 +122,8 @@ const WRITES: Record<string, Entry> = {
     fn: 'letterGradeMapping.save',
     actor: 'serviceActor',
   },
+  // A created tag only; one that already existed records nothing.
+  tag_create: { kind: 'service', fn: 'organizationTag.findOrCreate', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -191,7 +193,6 @@ const WRITES: Record<string, Entry> = {
   team_rename: TOOL,
   team_members_add: TOOL,
   team_member_remove: TOOL,
-  tag_create: TOOL,
   team_tag_add: TOOL,
   team_tag_remove: TOOL,
   // ── no row ──

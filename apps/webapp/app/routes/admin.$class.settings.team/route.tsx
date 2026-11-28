@@ -3,7 +3,7 @@ import { namedAction } from '~/utils/namedAction.server';
 import { ClassmojiService } from '@classmoji/services';
 import TagSection from './TagSection';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { addClassroomAuditLog } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -31,10 +31,11 @@ const SettingsTeams = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_team_settings',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -47,29 +48,25 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const name = typeof data.name === 'string' ? data.name.trim() : '';
       if (!name) return { error: 'Please enter a tag name.' };
 
-      return ClassmojiService.organizationTag.upsert(classroom.id, name);
+      // A new tag is recorded by the service; an existing one is returned as is.
+      const { tag } = await ClassmojiService.organizationTag.findOrCreate(
+        classroom.id,
+        name,
+        await auditActor(request, gate, 'web:settings.team.create_tag')
+      );
+      return tag;
     },
 
     async deleteTag() {
       // Only a tag of this classroom is deleted; any other id deletes nothing.
-      const deleted = await ClassmojiService.organizationTag.deleteInClassroom(
+      // The service records the delete (a failed audit write is reported as
+      // `audit_miss`, not as a failed delete).
+      const { tag: deleted } = await ClassmojiService.organizationTag.deleteInClassroom(
         classroom.id,
-        data.tagId
+        data.tagId,
+        await auditActor(request, gate, 'web:settings.team.delete_tag')
       );
       if (!deleted) return { error: 'That tag was not found in this class.' };
-
-      // The tag is gone either way: a failed audit write is reported
-      // (`audit_miss`), not as a failed delete.
-      await addClassroomAuditLog({
-        request,
-        classroomId: classroom.id,
-        userId,
-        role: membership!.role,
-        action: 'DELETE',
-        resourceType: 'TAGS',
-        resourceId: deleted.id,
-        metadata: { tool: 'web:settings.team.delete_tag', name: deleted.name },
-      });
       return { deleted: deleted.id };
     },
   });
