@@ -62,7 +62,8 @@ describe('move_grader_slot', () => {
       status: 'moved',
       toLogin: 'ta-bob',
     });
-    expect(moveGraderSlot).toHaveBeenCalledWith(payload);
+    // A background run acts for no person: no grader audit rows.
+    expect(moveGraderSlot).toHaveBeenCalledWith({ ...payload, actor: null });
   });
 
   it('lets a provider error throw so the retry policy runs', async () => {
