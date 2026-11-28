@@ -11,6 +11,9 @@
  * same dependency-free module, which is NOT mocked here, so this asserts the
  * real decision rather than a copy of it.
  *
+ * Each write it makes is recorded with the rows the owner/teacher calendar
+ * writes for the same write (`calendarAudit.ts`), with the assistant's role.
+ *
  * The last block pins the loader's link picker: no quiz assignment on offer
  * where the classroom's quizzes are hidden.
  */
@@ -29,11 +32,13 @@ const mocks = vi.hoisted(() => ({
   deleteEvent: vi.fn(),
   deleteEventWithScope: vi.fn(),
   getEventById: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
@@ -339,6 +344,93 @@ describe('an event still has to be this assistant’s own, in this classroom', (
 
     expect(response.init?.status).toBe(403);
     expect(mocks.updateEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('the rows it records: the owner/teacher calendar’s, with the assistant’s role', () => {
+  /** The one row the action wrote. */
+  const row = () => {
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
+    return mocks.addClassroomAuditLog.mock.calls[0][0] as Record<string, unknown>;
+  };
+  const WHO = { classroomId: 'class-1', userId: 'ta-1', role: 'ASSISTANT' };
+
+  it('records a create, with the links the service saved', async () => {
+    mocks.updateEventLinks.mockResolvedValue({ linked: { pages: 1, slides: 0, assignments: 0 } });
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        event_type: 'OFFICE_HOURS',
+        linkedPageIds: ['p-1'],
+      }),
+    });
+    expect(row()).toEqual({
+      request: expect.any(Request),
+      ...WHO,
+      action: 'CREATE',
+      resourceType: 'CALENDAR',
+      resourceId: 'event-new',
+      metadata: {
+        tool: 'web:calendar.create_event',
+        title: 'Office hours',
+        event_type: 'OFFICE_HOURS',
+        is_recurring: false,
+        linked: { pages: 1, slides: 0, assignments: 0 },
+      },
+    });
+    expect(mocks.createEvent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.addClassroomAuditLog.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records an update and a delete', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours (moved)' }),
+    });
+    expect(row()).toEqual({
+      request: expect.any(Request),
+      ...WHO,
+      action: 'UPDATE',
+      resourceType: 'CALENDAR',
+      resourceId: 'event-1',
+      metadata: {
+        tool: 'web:calendar.update_event',
+        fields: ['title'],
+        edit_scope: null,
+        occurrence_date: null,
+        links_updated: false,
+        linked: null,
+      },
+    });
+
+    mocks.addClassroomAuditLog.mockReset();
+    await submit({ intent: 'delete', eventId: 'event-1' });
+    expect(row()).toEqual({
+      request: expect.any(Request),
+      ...WHO,
+      action: 'DELETE',
+      resourceType: 'CALENDAR',
+      resourceId: 'event-1',
+      metadata: {
+        tool: 'web:calendar.delete_event',
+        title: 'Office hours',
+        delete_scope: null,
+        occurrence_date: null,
+      },
+    });
+  });
+
+  it('records nothing for a write it refused', async () => {
+    mocks.getEventById.mockResolvedValue(ownOfficeHours({ created_by: 'someone-else' }));
+    await submit({ intent: 'delete', eventId: 'event-1' });
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Lecture', event_type: 'LECTURE' }),
+    });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 
