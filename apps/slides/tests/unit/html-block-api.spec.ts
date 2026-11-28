@@ -262,7 +262,7 @@ test.describe('html-block route', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(read).toBeGreaterThan(gate);
     expect(source).toContain('where: { id: slideId }');
-    expect(source).toContain('{ slideId: slide.id, userId, body }');
+    expect(source).toContain('{ slideId: slide.id, userId, body, impersonatedBy }');
     expect(source).toContain("'Cache-Control': 'no-store'");
   });
 
