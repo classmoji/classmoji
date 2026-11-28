@@ -633,10 +633,10 @@ export const claimInstallationIfNull = async ({
 /**
  * Clear an installation id, but only where it is still THAT installation.
  *
- * The uninstall webhook used to clear by account id alone, so a stale or
- * replayed `installation.deleted` could wipe the id a later reinstall had
- * already written — which is half of why 45 orgs are disconnected. Matching the
- * id makes the clear idempotent and makes a late delivery a no-op.
+ * The uninstall webhook clears by account id AND installation id, so a stale
+ * or replayed `installation.deleted` cannot wipe the id a later reinstall has
+ * already written. Matching the id makes the clear idempotent and makes a late
+ * delivery a no-op.
  *
  * @param {Object} params
  * @param {string} params.providerId - The GitHub org account id from the payload.

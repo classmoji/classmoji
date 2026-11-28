@@ -12,14 +12,14 @@
  * emailed, again. It does NOT touch GitHub — activation stays student-driven.
  *
  * REMOVE triggers the single-source-of-truth remove_user_from_organization
- * task (never reimplemented). Unlike the web action — which forwards a
- * client-supplied `data.user` straight into the task (an S1 hole) — this tool
- * resolves the target from the DB by (classroom, login/user_id) and builds the
- * task payload ENTIRELY server-side. It is destructive and requires confirm:
- * true, because when the student belongs to no other class in the GitHub org
- * the task removes them from the org (revoking access and deleting their
- * private forks). Fire-and-forget: a dropped job leaves the student in place
- * (fails safe) and there is no wait-timeout window for a retry to re-fire.
+ * task (never reimplemented). Like the web action, this tool resolves the
+ * student from the database by (classroom, login/user_id), never from the
+ * request, and builds the task payload server-side (buildRemoveUserPayload).
+ * It is destructive and requires confirm: true, because when the student
+ * belongs to no other class in the GitHub org the task removes them from the
+ * org (revoking access and deleting their private forks). Fire-and-forget: a
+ * dropped job leaves the student in place (fails safe) and there is no
+ * wait-timeout window for a retry to re-fire.
  */
 
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
