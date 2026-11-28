@@ -10,7 +10,8 @@
  *   - deleteRepo: the git repo is loaded from this classroom and this page's
  *     repository; the stored name is what is deleted, never the body's;
  *   - addGrader/removeGrader: only ids and the classroom reach the scoped
- *     helper; its refusals come back in the route's error shape;
+ *     helper, with the gate's caller as the actor it records the change for;
+ *     its refusals come back in the route's error shape;
  *   - calculateContributions/createProjects: the repository must be in this
  *     classroom before any task is triggered.
  *
@@ -32,6 +33,12 @@ const mocks = vi.hoisted(() => ({
   removeGraderInClassroom: vi.fn(),
   tasksTrigger: vi.fn(),
   calculateContributions: vi.fn(),
+  requestImpersonator: vi.fn(async (..._a: unknown[]) => null as string | null),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -228,12 +235,14 @@ describe('repository page: addGrader / removeGrader', () => {
     });
 
     expect(result).toEqual({ action: 'add-grader', success: 'Grader added' });
+    const TOOL = 'web:graders.add';
     expect(mocks.addGraderInClassroom).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
       graderId: 'u-bob',
       repositoryId: 'repo-1',
+      actor: { userId: 'owner-1', role: 'OWNER', tool: TOOL, impersonatedBy: null },
     });
   });
 
@@ -253,12 +262,14 @@ describe('repository page: addGrader / removeGrader', () => {
     const result = await detailAction('removeGrader', GRADER_BODY);
 
     expect(result).toEqual({ action: 'remove-grader', success: 'Grader removed' });
+    const TOOL = 'web:graders.remove';
     expect(mocks.removeGraderInClassroom).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
       gitOrganization: ORG,
       gitRepoAssignmentId: 'ra-1',
       graderId: 'u-bob',
       repositoryId: 'repo-1',
+      actor: { userId: 'owner-1', role: 'OWNER', tool: TOOL, impersonatedBy: null },
     });
   });
 

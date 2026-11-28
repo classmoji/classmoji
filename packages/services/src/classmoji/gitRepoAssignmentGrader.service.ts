@@ -18,6 +18,12 @@ import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
 import * as notificationService from './notification.service.ts';
 import { planGraderReassignment } from './graderReassignPlan.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 
 const notifyGraderAssigned = async (repositoryAssignmentId: string, graderIds: string[]) => {
   if (graderIds.length === 0) return;
@@ -300,6 +306,8 @@ export type AssignGradersMethod = 'RANDOM' | 'EXISTING';
 
 export interface AssignGradersResult {
   numAssignmentsToAddGradersTo: number;
+  /** The row recording the queued runs (none when nothing was queued or `actor` is null). */
+  audit: ServiceAudit;
 }
 
 /** Thrown for caller-fixable failures so routes/tools can map them to a message. */
@@ -336,6 +344,10 @@ interface GraderInfo {
  * Fans out one `add_grader_to_git_repo_assignment` run per (submission, grader).
  * `sessionId` is optional: the web route passes one so the run tags can drive
  * its progress stream; MCP omits it and the runs go out untagged.
+ *
+ * When at least one run was queued, one audit row is written for `actor`
+ * (GIT_REPO_ASSIGNMENT_GRADER on the assignment, CREATE: the method, the
+ * template and how many runs were queued). The runs themselves record nothing.
  */
 export const assignGradersToAssignment = async ({
   classroomId,
@@ -343,12 +355,15 @@ export const assignGradersToAssignment = async ({
   method,
   templateAssignmentId,
   sessionId,
+  actor,
 }: {
   classroomId: string;
   assignmentId: string;
   method: AssignGradersMethod;
   templateAssignmentId?: string | null;
   sessionId?: string | null;
+  /** Who the bulk assignment is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
 }): Promise<AssignGradersResult> => {
   const classroom = await classroomService.findById(classroomId);
   if (!classroom) {
@@ -459,11 +474,26 @@ export const assignGradersToAssignment = async ({
 
   const flatPayloads = _.flatten(taskPayloads);
 
-  if (flatPayloads.length > 0) {
-    await tasks.batchTrigger('add_grader_to_git_repo_assignment', flatPayloads);
+  if (flatPayloads.length === 0) {
+    return { numAssignmentsToAddGradersTo: 0, audit: NO_SERVICE_AUDIT };
   }
+  await tasks.batchTrigger('add_grader_to_git_repo_assignment', flatPayloads);
 
-  return { numAssignmentsToAddGradersTo: flatPayloads.length };
+  const audit = await recordForActor(actor, {
+    classroomId: classroom.id,
+    resourceType: 'GIT_REPO_ASSIGNMENT_GRADER',
+    resourceId: assignmentId,
+    action: 'CREATE',
+    data: {
+      assignment_id: assignmentId,
+      method,
+      // Only EXISTING reads the template (through this classroom's
+      // submissions); RANDOM ignores whatever was sent with it.
+      template_assignment_id: method === 'EXISTING' ? (templateAssignmentId ?? null) : null,
+      submissions_assigned: flatPayloads.length,
+    },
+  });
+  return { numAssignmentsToAddGradersTo: flatPayloads.length, audit };
 };
 
 // ─── Grading report ──────────────────────────────────────────────────────────

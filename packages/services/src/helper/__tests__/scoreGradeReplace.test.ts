@@ -114,6 +114,8 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
     expect(outcome).toEqual({
       removed: [{ id: 'grade-old', emoji: 'score-85', grader_id: 'ta-1' }],
       created: { id: 'grade-new', emoji: 'score-90' },
+      // The payload names no actor: no row owed.
+      audit: { written: 0, missed: 0 },
     });
   });
 
@@ -125,7 +127,11 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     const outcome = await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
-    expect(outcome).toEqual({ removed: [], created: { id: 'grade-new', emoji: 'score-90' } });
+    expect(outcome).toEqual({
+      removed: [],
+      created: { id: 'grade-new', emoji: 'score-90' },
+      audit: { written: 0, missed: 0 },
+    });
   });
 
   it("leaves another grader's score in place", async () => {
@@ -148,7 +154,7 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     expect(removed()).toEqual([]);
     expect(mocks.addGrade).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ removed: [], created: null });
+    expect(outcome).toEqual({ removed: [], created: null, audit: { written: 0, missed: 0 } });
   });
 
   it('answers nothing changed when the grade is already there', async () => {
@@ -158,7 +164,7 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
     const outcome = await svc.addGradeToGitRepoAssignment(payload('heart'));
 
     expect(mocks.addGrade).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ removed: [], created: null });
+    expect(outcome).toEqual({ removed: [], created: null, audit: { written: 0, missed: 0 } });
   });
 
   it('reverses the tokens of the replaced score', async () => {

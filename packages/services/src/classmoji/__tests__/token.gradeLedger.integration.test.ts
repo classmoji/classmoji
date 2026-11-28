@@ -154,6 +154,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
     owner: { studentId?: string; teamId?: string } = {}
   ) =>
     HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom: classroom(),
       gitRepoAssignment: { id: gitRepoAssignmentId },
       graderId,
@@ -171,6 +172,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
       include: { token_transaction: true },
     });
     return HelperService.removeGradeFromGitRepoAssignment({
+      actor: null,
       classroom: classroom(),
       gitRepoAssignment: { id: gitRepoAssignmentId, ...owner },
       grade,
@@ -288,7 +290,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
 
     // Nothing was lost, so trying again completes the removal.
     ledgerHook.failWhen = null;
-    expect(await remove(submission, grade.id, { teamId })).toBe(true);
+    expect((await remove(submission, grade.id, { teamId })).removed).toBe(true);
     expect(await grades(submission)).toHaveLength(0);
     for (const member of members) {
       expect(await expectChained(member)).toBe(START);
@@ -308,6 +310,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
     const results = await Promise.all(
       Array.from({ length: 3 }, () =>
         HelperService.removeGradeFromGitRepoAssignment({
+          actor: null,
           classroom: classroom(),
           gitRepoAssignment: { id: submission, teamId },
           grade: loaded,
@@ -315,7 +318,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
       )
     );
 
-    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.filter(r => r.removed)).toHaveLength(1);
     expect(await grades(submission)).toHaveLength(0);
     for (const member of members) {
       const rows = await rowsOf(member, submission);
@@ -461,7 +464,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
       expect(grade.emoji).toBe('⭐');
       expect(grade.token_transaction_id).toBeNull();
 
-      expect(await remove(submission, grade.id)).toBe(true);
+      expect((await remove(submission, grade.id)).removed).toBe(true);
       expect(await grades(submission)).toHaveLength(0);
       expect(
         await prisma.tokenTransaction.count({ where: { git_repo_assignment_id: submission } })

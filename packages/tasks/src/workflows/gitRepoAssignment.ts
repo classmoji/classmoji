@@ -641,7 +641,9 @@ export const moveGraderSlotTask = task({
   id: 'move_grader_slot',
   retry: MOVE_GRADER_SLOT_RETRY,
   run: async (payload: MoveGraderSlotPayload) => {
-    const result = await HelperService.moveGraderSlot(payload);
+    // A background run acts for no person here: the payload names none, so
+    // the move writes no grader audit rows.
+    const result = await HelperService.moveGraderSlot({ ...payload, actor: null });
     if (result.status !== 'moved' && result.status !== 'unassigned') {
       logger.info('move_grader_slot finished without a move', { ...payload, ...result });
     }

@@ -16,6 +16,11 @@
  * derived from the DB and verified against the authorized classroom before
  * any mutation. studentId/teamId (the token recipients) come from the DB
  * git_repo row — NEVER from the request.
+ *
+ * Audit: the HelperService functions write the row of each change they make,
+ * for the actor the tool passes (`serviceActor`), the same row the web's
+ * grading writes; the tools write none of their own and report a row that
+ * could not be written through `noteServiceAudit`.
  */
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
@@ -26,13 +31,14 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadGitRepoAssignmentInClassroom,
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   submissionIdSchema,
   TEACHING_TEAM,
-  writeAudit,
 } from './shared.ts';
 
 interface GradeAddArgs {
@@ -87,7 +93,8 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
 
     // What THIS call changed, read inside the grade transaction: a call that
     // found its grade already there (a repeat, or the second of two identical
-    // calls racing on the submission lock) changed nothing.
+    // calls racing on the submission lock) changed nothing, and the service
+    // records only a change.
     const outcome = await HelperService.addGradeToGitRepoAssignment({
       classroom: { id: classroom.classroomId },
       gitRepoAssignment: { id: gra.id },
@@ -96,26 +103,9 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       grade: args.emoji,
       studentId: gra.git_repo.student_id ?? undefined,
       teamId: gra.git_repo.team_id ?? undefined,
+      actor: serviceActor(ctx, 'grade_add'),
     });
-
-    if (outcome.created || outcome.removed.length > 0) {
-      // The caller's own grades this call removed (their previous score on the
-      // numeric scale, their pre-regrade grades), so the change can be read
-      // back from the row.
-      const replaced = outcome.removed
-        .filter(g => g.grader_id === ctx.viewer.userId)
-        .map(g => g.emoji);
-      await writeAudit(ctx, {
-        resource_type: 'GIT_REPO_ASSIGNMENT',
-        resource_id: gra.id,
-        action: 'CREATE',
-        data: {
-          tool: 'grade_add',
-          emoji: args.emoji,
-          ...(replaced.length > 0 ? { replaced } : {}),
-        },
-      });
-    }
+    noteServiceAudit(ctx, outcome.audit);
 
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
     // No new row: the grade was already there and stays.
@@ -160,9 +150,9 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
       throw scopedNotFound('Grade');
     }
 
-    // False when the grade was already gone (a concurrent removal got there
-    // first): nothing changed, so nothing is audited.
-    const removed = await HelperService.removeGradeFromGitRepoAssignment({
+    // `removed` is false when the grade was already gone (a concurrent
+    // removal got there first): nothing changed, so nothing is audited.
+    const { removed, audit } = await HelperService.removeGradeFromGitRepoAssignment({
       classroom: { id: classroom.classroomId },
       gitRepoAssignment: {
         id: gra.id,
@@ -170,16 +160,9 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
         teamId: gra.git_repo.team_id ?? undefined,
       },
       grade,
+      actor: serviceActor(ctx, 'grade_remove'),
     });
-
-    if (removed) {
-      await writeAudit(ctx, {
-        resource_type: 'GIT_REPO_ASSIGNMENT',
-        resource_id: gra.id,
-        action: 'DELETE',
-        data: { tool: 'grade_remove', emoji: grade.emoji, grade_id: grade.id },
-      });
-    }
+    noteServiceAudit(ctx, audit);
 
     return ok({
       success: true,
@@ -214,9 +197,15 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
     // orchestrated removal to reverse tokens. A bare
     // assignmentGrade.removeAllGrades would delete rows but strand tokens.
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    const actor = serviceActor(ctx, 'grade_remove_all');
     let removedCount = 0;
     for (const grade of grades) {
-      const removed = await HelperService.removeGradeFromGitRepoAssignment({
+      // U9: each real removal is audited as it lands (by the service, one row
+      // per grade in grade_remove's shape), not once at the end — a mid-loop
+      // failure still leaves every completed removal audited. A grade a
+      // concurrent request already removed changed nothing here: not counted,
+      // not audited.
+      const { removed, audit } = await HelperService.removeGradeFromGitRepoAssignment({
         classroom: { id: classroom.classroomId },
         gitRepoAssignment: {
           id: gra.id,
@@ -224,20 +213,10 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
           teamId: gra.git_repo.team_id ?? undefined,
         },
         grade,
+        actor,
       });
-      // A grade a concurrent request already removed changed nothing here:
-      // not counted, not audited.
-      if (!removed) continue;
-      // U9: audit each real removal as it lands, not once at the end — a
-      // mid-loop failure must still leave every completed removal audited.
-      // Per-grade rows match grade_remove's audit shape (emoji + grade_id).
-      await writeAudit(ctx, {
-        resource_type: 'GIT_REPO_ASSIGNMENT',
-        resource_id: gra.id,
-        action: 'DELETE',
-        data: { tool: 'grade_remove_all', emoji: grade.emoji, grade_id: grade.id },
-      });
-      removedCount += 1;
+      noteServiceAudit(ctx, audit);
+      if (removed) removedCount += 1;
     }
 
     return ok({ success: true, removed_count: removedCount });

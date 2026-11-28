@@ -13,6 +13,12 @@ import type { AssignmentType, Prisma } from '@classmoji/database/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
+import {
   QUIZ_ASSIGNMENT_CREATE_REFUSAL,
   QUIZ_ASSIGNMENT_DELETE_REFUSAL,
   QuizAssignmentError,
@@ -479,7 +485,14 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
+export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) =>
+  (await updateWithPrevious(id, updates)).updated;
+
+/**
+ * `update`, also answering the fields it read just before writing (under the
+ * row lock), so a caller can tell what its own write changed.
+ */
+const updateWithPrevious = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
   // One transaction: a QUIZ row's quiz is mirrored from the row as written
   // (read back, so any update shape the caller used is covered). The row is
   // locked before the previous values are read, so two writes at once see
@@ -511,7 +524,51 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
   // Notifications only once the write has committed.
   await notifyAfterUpdate(id, updates, previous, updated);
 
-  return updated;
+  return { previous, updated };
+};
+
+/**
+ * Release (or hide) an assignment's grades to its students: the notifying
+ * write `update` makes (a false→true flip notifies the graded students). The
+ * caller has checked the assignment belongs to `classroomId`.
+ *
+ * When the flag changed, one audit row is written for `actor` after the
+ * write, in `assignment_update`'s shape (ASSIGNMENT, UPDATE: `fields`,
+ * `values`, `value`) plus the previous value. A repeat that changes nothing
+ * records nothing.
+ */
+export const setGradesReleased = async ({
+  assignmentId,
+  classroomId,
+  released,
+  actor,
+}: {
+  assignmentId: string;
+  classroomId: string;
+  released: boolean;
+  /** Who the change is recorded for; null writes no audit row. */
+  actor: AuditActor | null;
+}): Promise<{ changed: boolean; audit: ServiceAudit }> => {
+  const { previous, updated } = await updateWithPrevious(assignmentId, {
+    grades_released: released,
+  });
+  if (previous?.grades_released === updated.grades_released) {
+    return { changed: false, audit: NO_SERVICE_AUDIT };
+  }
+  const values = { grades_released: updated.grades_released };
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'ASSIGNMENT',
+    resourceId: assignmentId,
+    action: 'UPDATE',
+    data: {
+      fields: ['grades_released'],
+      values,
+      value: JSON.stringify(values),
+      previous: { grades_released: previous?.grades_released ?? null },
+    },
+  });
+  return { changed: true, audit };
 };
 
 type AssignmentNotificationSnapshot = {

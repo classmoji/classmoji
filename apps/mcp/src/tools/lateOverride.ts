@@ -39,15 +39,17 @@
  * scopes through `repository`, so an assignment without one (quiz/form
  * coursework) is not_found too — it has no repo submissions to exempt.
  *
- * Audit (the web action writes none): ONE row per submission actually changed,
- * resource GIT_REPO_ASSIGNMENT/<id>, with the value under `data.value`. A
- * single row per call would need a resource_id, and list mode has none, so it
- * would not say which submissions changed. Per-submission rows name each one
- * and can be written in parallel chunks. The rows are written AFTER
- * the committed update, so an audit failure cannot undo it: the call still
- * reports what it changed and names the ids whose row failed
- * (`audit_failed_ids`); the registry adds `audit_incomplete`, as for every
- * write, and the audit service logs the miss server-side (never to the client).
+ * Audit: ONE row per submission actually changed, resource
+ * GIT_REPO_ASSIGNMENT/<id>, with the value under `data.value`, written by the
+ * service (setLateOverrideInClassroom) for the actor the tool passes, as the
+ * web shield's rows are. A single row per call would need a resource_id, and
+ * list mode has none, so it would not say which submissions changed.
+ * Per-submission rows name each one and are written in parallel chunks. The
+ * rows are written AFTER the committed update, so an audit failure cannot undo
+ * it: the call still reports what it changed and names the ids whose row
+ * failed (`audit_failed_ids`); the registry adds `audit_incomplete`, as for
+ * every write, and the audit service logs the miss server-side (never to the
+ * client).
  *
  * QUIZ MODE (`quiz_id`, or a QUIZ `assignment_id`, with `student_id`):
  * mirrors apps/webapp/app/routes/api.quizLateWaiver.$class (the quiz shield):
@@ -71,6 +73,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import type { LateOverrideMode } from '@classmoji/services';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -80,9 +83,11 @@ import {
   loadCourseworkAssignmentInClassroom,
   loadQuizInClassroom,
   ok,
+  noteServiceAudit,
   OWNER_TEACHER,
   requireClassroomCtx,
   scopedNotFound,
+  serviceActor,
   submissionIdSchema,
   writeAudit,
 } from './shared.ts';
@@ -91,8 +96,6 @@ import {
 export const LATE_OVERRIDE_MAX_IDS = 500;
 /** Each id list in the response is cut to this many; the counts stay exact. */
 export const LATE_OVERRIDE_ID_LIST_CAP = 100;
-/** Audit rows written concurrently per chunk. */
-export const LATE_OVERRIDE_AUDIT_CHUNK = 20;
 
 interface LateOverrideArgs {
   classroom: string;
@@ -104,7 +107,7 @@ interface LateOverrideArgs {
   is_late_override: boolean;
 }
 
-type Mode = 'single' | 'ids' | 'assignment';
+type Mode = LateOverrideMode;
 
 /** The audit `resource_type` of a quiz waiver row, shared with the web shield. */
 export const QUIZ_LATE_WAIVER_RESOURCE = 'QUIZ_LATE_WAIVER';
@@ -220,37 +223,6 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
     updated_count: result.changed ? 1 : 0,
     unchanged_count: result.changed ? 0 : 1,
   });
-}
-
-/**
- * Write one audit row per changed submission, LATE_OVERRIDE_AUDIT_CHUNK at a
- * time in parallel (distinct resource ids, so no row dedups another). Returns
- * the ids whose row could not be written; the audit service logs each miss,
- * and nothing about it reaches the client but the ids.
- */
-async function auditChangedRows(
-  ctx: ToolContext,
-  ids: string[],
-  data: { value: boolean; mode: Mode; assignment_id?: string }
-): Promise<string[]> {
-  const failed: string[] = [];
-  for (let i = 0; i < ids.length; i += LATE_OVERRIDE_AUDIT_CHUNK) {
-    const chunk = ids.slice(i, i + LATE_OVERRIDE_AUDIT_CHUNK);
-    const written = await Promise.all(
-      chunk.map(id =>
-        writeAudit(ctx, {
-          resource_type: 'GIT_REPO_ASSIGNMENT',
-          resource_id: id,
-          action: 'UPDATE',
-          data: { tool: 'submission_late_override', field: 'is_late_override', ...data },
-        })
-      )
-    );
-    written.forEach((ok, index) => {
-      if (!ok) failed.push(chunk[index]);
-    });
-  }
-  return failed;
 }
 
 export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
@@ -369,7 +341,11 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
       classroomId: classroom.classroomId,
       selector,
       isLateOverride: args.is_late_override,
+      // The service writes one row per submission it changed.
+      actor: serviceActor(ctx, 'submission_late_override'),
+      mode,
     });
+    noteServiceAudit(ctx, result.audit);
 
     // One submission asked for and not in this classroom: the same uniform
     // not_found grade_add gives, so a probe learns nothing either way.
@@ -378,11 +354,7 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
     }
 
     const assignmentId = 'assignmentId' in selector ? selector.assignmentId : undefined;
-    const auditFailedIds = await auditChangedRows(ctx, result.updatedIds, {
-      value: args.is_late_override,
-      mode,
-      ...(assignmentId ? { assignment_id: assignmentId } : {}),
-    });
+    const auditFailedIds = result.auditFailedIds;
 
     const late = new Set(result.lateIds);
     const cap = (ids: string[]) => ids.slice(0, LATE_OVERRIDE_ID_LIST_CAP);
