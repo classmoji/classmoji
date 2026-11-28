@@ -124,6 +124,19 @@ const WRITES: Record<string, Entry> = {
   },
   // A created tag only; one that already existed records nothing.
   tag_create: { kind: 'service', fn: 'organizationTag.findOrCreate', actor: 'serviceActor' },
+  // ── modules: the module service writes the row for the actor ──
+  module_create: { kind: 'service', fn: 'module.create', actor: 'serviceActor' },
+  // Only when the title or description changed.
+  module_update: { kind: 'service', fn: 'module.updateForClassroom', actor: 'serviceActor' },
+  // Only when the flag changed.
+  module_publish: { kind: 'service', fn: 'module.setPublished', actor: 'serviceActor' },
+  module_item_add: { kind: 'service', fn: 'module.addItem', actor: 'serviceActor' },
+  module_item_remove: { kind: 'service', fn: 'module.removeItem', actor: 'serviceActor' },
+  module_item_move: { kind: 'service', fn: 'module.moveItemToModuleEnd', actor: 'serviceActor' },
+  module_delete: { kind: 'service', fn: 'module.deleteById', actor: 'serviceActor' },
+  // ITEMS: module.reorderItems; MODULES: module.reorderModules; ASSIGNMENTS:
+  // assignment.reorderInModule. Each records the moved rows when the order changed.
+  module_reorder: { kind: 'service', fn: 'module.reorderItems', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -149,14 +162,6 @@ const WRITES: Record<string, Entry> = {
   file_upload_start: TOOL,
   file_upload_finish: TOOL,
   file_import_url: TOOL,
-  module_create: TOOL,
-  module_update: TOOL,
-  module_publish: TOOL,
-  module_item_add: TOOL,
-  module_item_remove: TOOL,
-  module_item_move: TOOL,
-  module_delete: TOOL,
-  module_reorder: TOOL,
   page_comment_create: TOOL,
   page_comment_update: TOOL,
   page_comment_delete: TOOL,

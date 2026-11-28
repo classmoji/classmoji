@@ -53,7 +53,9 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
   let authorId: string;
 
   const makeModule = (inClassroom = classroomId) =>
-    moduleService.create(inClassroom, { title: `Module ${randomUUID().slice(0, 8)} ${suite}` });
+    moduleService
+      .create(inClassroom, { title: `Module ${randomUUID().slice(0, 8)} ${suite}` }, null)
+      .then(r => r.module);
 
   // Assignment titles are unique per repository, so each stored title carries a
   // serial after `#`; `layout` reads it back off.
@@ -269,7 +271,7 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     ];
     for (const ordered of wrongOrderings) {
       await expect(
-        assignmentService.moveToModule(moving.id, to.id, ordered, classroomId)
+        assignmentService.moveToModule(moving.id, to.id, ordered, classroomId, null)
       ).rejects.toThrow('Ordered assignment ids must match the module assignments');
     }
     expect(await layout(from.id)).toEqual(['moving@0', 'stays@1']);
@@ -281,7 +283,8 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
       moving.id,
       to.id,
       [thereA.id, moving.id, thereB.id],
-      classroomId
+      classroomId,
+      null
     );
     expect(await layout(to.id)).toEqual(['there-a@0', 'moving@1', 'there-b@2']);
     expect(await layout(from.id)).toEqual(['stays@0']);
@@ -367,9 +370,9 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
       },
       select: { id: true },
     });
-    const item = await moduleService.addItem(module.id, 'PAGE', page.id, classroomId);
+    const { item } = await moduleService.addItem(module.id, 'PAGE', page.id, classroomId, null);
 
-    await moduleService.deleteById(module.id, classroomId);
+    await moduleService.deleteById(module.id, classroomId, {}, null);
 
     expect(await prisma.module.findUnique({ where: { id: module.id } })).toBeNull();
     expect(await prisma.moduleItem.findUnique({ where: { id: item.id } })).toBeNull();
@@ -380,10 +383,10 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     const module = await makeModule();
     const assignment = await makeAssignment(module.id, { title: 'owned' });
 
-    await expect(moduleService.deleteById(module.id, classroomId)).rejects.toThrow(
+    await expect(moduleService.deleteById(module.id, classroomId, {}, null)).rejects.toThrow(
       'Module still has assignments'
     );
-    await expect(moduleService.deleteById(module.id, otherClassroomId)).rejects.toThrow(
+    await expect(moduleService.deleteById(module.id, otherClassroomId, {}, null)).rejects.toThrow(
       'Module not found in classroom'
     );
 
@@ -405,10 +408,10 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
         round % 2 === 0
           ? [
               assignmentService.moveToModuleEnd(assignment.id, doomed.id, classroomId),
-              moduleService.deleteById(doomed.id, classroomId),
+              moduleService.deleteById(doomed.id, classroomId, {}, null),
             ]
           : [
-              moduleService.deleteById(doomed.id, classroomId),
+              moduleService.deleteById(doomed.id, classroomId, {}, null),
               assignmentService.moveToModuleEnd(assignment.id, doomed.id, classroomId),
             ].reverse()
       );
@@ -461,7 +464,7 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     await new Promise(resolve => setTimeout(resolve, 150));
 
     let settled = false;
-    const outcome = moduleService.deleteById(doomedId, classroomId).then(
+    const outcome = moduleService.deleteById(doomedId, classroomId, {}, null).then(
       () => {
         settled = true;
         return 'deleted';
@@ -520,8 +523,8 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     const doomed = await makeModule();
 
     const outcomes = await Promise.allSettled([
-      moduleService.deleteById(doomed.id, classroomId),
-      moduleService.deleteById(doomed.id, classroomId),
+      moduleService.deleteById(doomed.id, classroomId, {}, null),
+      moduleService.deleteById(doomed.id, classroomId, {}, null),
     ]);
 
     expect(outcomes.filter(o => o.status === 'fulfilled')).toHaveLength(1);
@@ -531,7 +534,7 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
 
   it('student module list: published assignments only, a REPO one only with its repository published', async () => {
     const module = await makeModule();
-    await moduleService.setPublished(module.id, true, classroomId);
+    await moduleService.setPublished(module.id, true, classroomId, null);
     await makeAssignment(module.id, { position: 0, title: 'visible', published: true });
     await makeAssignment(module.id, { position: 1, title: 'draft-assignment', published: false });
     await makeAssignment(module.id, {

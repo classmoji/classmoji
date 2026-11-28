@@ -70,7 +70,7 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
   };
 
   const makeModule = async (title = `Module ${randomUUID().slice(0, 8)}`) =>
-    moduleService.create(classroomId, { title: `${title} ${suite}` });
+    (await moduleService.create(classroomId, { title: `${title} ${suite}` }, null)).module;
 
   beforeAll(async () => {
     const org = await prisma.gitOrganization.create({
@@ -140,7 +140,7 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
     const mod = await makeModule();
     const formId = await makeForm();
 
-    const item = await moduleService.addItem(mod.id, 'FORM', formId, classroomId);
+    const { item: item } = await moduleService.addItem(mod.id, 'FORM', formId, classroomId, null);
 
     expect(item.item_type).toBe('FORM');
     expect(item.form_id).toBe(formId);
@@ -155,11 +155,11 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
     const first = await makeForm();
     const second = await makeForm();
 
-    const a = await moduleService.addItem(mod.id, 'FORM', first, classroomId);
-    const b = await moduleService.addItem(mod.id, 'FORM', second, classroomId);
+    const { item: a } = await moduleService.addItem(mod.id, 'FORM', first, classroomId, null);
+    const { item: b } = await moduleService.addItem(mod.id, 'FORM', second, classroomId, null);
     expect(b.position).toBeGreaterThan(a.position);
 
-    await moduleService.reorderItems(mod.id, [b.id, a.id], classroomId);
+    await moduleService.reorderItems(mod.id, [b.id, a.id], classroomId, null);
 
     const rows = await prisma.moduleItem.findMany({
       where: { module_id: mod.id },
@@ -172,9 +172,9 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
   it('removes a form item without touching the form', async () => {
     const mod = await makeModule();
     const formId = await makeForm();
-    const item = await moduleService.addItem(mod.id, 'FORM', formId, classroomId);
+    const { item: item } = await moduleService.addItem(mod.id, 'FORM', formId, classroomId, null);
 
-    await moduleService.removeItem(item.id, classroomId);
+    await moduleService.removeItem(item.id, classroomId, null);
 
     expect(await prisma.moduleItem.findUnique({ where: { id: item.id } })).toBeNull();
     expect(await prisma.form.findUnique({ where: { id: formId } })).not.toBeNull();
@@ -184,9 +184,9 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
     const mod = await makeModule();
     const foreignFormId = await makeForm({ inClassroom: otherClassroomId });
 
-    await expect(moduleService.addItem(mod.id, 'FORM', foreignFormId, classroomId)).rejects.toThrow(
-      'Module item target not found in classroom'
-    );
+    await expect(
+      moduleService.addItem(mod.id, 'FORM', foreignFormId, classroomId, null)
+    ).rejects.toThrow('Module item target not found in classroom');
   });
 
   // ── database invariants ──────────────────────────────────────────────────
@@ -225,17 +225,19 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
     const modB = await makeModule();
     const formId = await makeForm();
 
-    await moduleService.addItem(modA.id, 'FORM', formId, classroomId);
-    await expect(moduleService.addItem(modA.id, 'FORM', formId, classroomId)).rejects.toThrow();
+    await moduleService.addItem(modA.id, 'FORM', formId, classroomId, null);
+    await expect(
+      moduleService.addItem(modA.id, 'FORM', formId, classroomId, null)
+    ).rejects.toThrow();
 
-    const inB = await moduleService.addItem(modB.id, 'FORM', formId, classroomId);
+    const { item: inB } = await moduleService.addItem(modB.id, 'FORM', formId, classroomId, null);
     expect(inB.form_id).toBe(formId);
   });
 
   it('cascades: deleting a form deletes its module items', async () => {
     const mod = await makeModule();
     const formId = await makeForm();
-    const item = await moduleService.addItem(mod.id, 'FORM', formId, classroomId);
+    const { item: item } = await moduleService.addItem(mod.id, 'FORM', formId, classroomId, null);
 
     await prisma.form.delete({ where: { id: formId } });
 
@@ -253,10 +255,10 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
     const closedId = await makeForm();
     await formService.close(closedId);
 
-    await moduleService.addItem(mod.id, 'FORM', draftId, classroomId);
-    await moduleService.addItem(mod.id, 'FORM', openId, classroomId);
-    await moduleService.addItem(mod.id, 'FORM', closedId, classroomId);
-    await moduleService.setPublished(mod.id, true, classroomId);
+    await moduleService.addItem(mod.id, 'FORM', draftId, classroomId, null);
+    await moduleService.addItem(mod.id, 'FORM', openId, classroomId, null);
+    await moduleService.addItem(mod.id, 'FORM', closedId, classroomId, null);
+    await moduleService.setPublished(mod.id, true, classroomId, null);
 
     const forMembers = await moduleService.listForClassroom(classroomSlug);
     const target = forMembers.find(m => m.id === mod.id)!;
