@@ -13,6 +13,7 @@ import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
+  type AuditMetadata,
 } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
@@ -48,8 +49,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // server's invariant (apps/mcp/src/tools/shared.ts: every mutation writes an
   // audit row) and uses the same resource_type vocabulary — 'PAGES' — so the
   // two surfaces can be queried together.
-  const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
+  const audit = (action: string, resourceId: string, metadata: AuditMetadata) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

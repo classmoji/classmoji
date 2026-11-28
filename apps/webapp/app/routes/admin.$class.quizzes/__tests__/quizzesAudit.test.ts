@@ -158,6 +158,7 @@ describe('admin quizzes action — audit rows', () => {
     await submit({ _action: 'createQuiz', name: 'Week 1', assignment: { moduleId: 'mod-1' } });
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       // The role the gate ENFORCED, matching what MCP's writeAudit records.

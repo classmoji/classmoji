@@ -25,6 +25,7 @@ import { tasks } from '@trigger.dev/sdk';
 import { joinGitOrganization } from '~/utils/joinGitOrganization.server';
 import { autoSendGithubInvites } from './autoGithubInvites.server';
 import type { Route } from './+types/route';
+import { sessionImpersonator } from '~/utils/impersonationSession';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
   ClassroomsLandingScreen,
@@ -943,6 +944,8 @@ export const action = checkAuth(
       membership,
       classroom: membership.classroom,
       tool: 'select-organization',
+      // `user` is the session checkAuth read (getAuthSession).
+      impersonatedBy: sessionImpersonator(user),
     });
     if (!result.ok) return { error: result.message, action: ActionTypes.SEND_INVITATION };
     return {

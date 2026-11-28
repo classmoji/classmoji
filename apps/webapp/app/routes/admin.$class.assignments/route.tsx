@@ -187,6 +187,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             ? await openInExistingRepos(classroom.id, created.id, terms.repos)
             : null;
         await addClassroomAuditLog({
+          request,
           classroomId: classroom.id,
           userId,
           role: membership!.role,
@@ -231,6 +232,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             ? await openInExistingRepos(classroom.id, updated.id, terms.repos)
             : null;
         await addClassroomAuditLog({
+          request,
           classroomId: classroom.id,
           userId,
           role: membership!.role,
@@ -257,6 +259,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         const target = await ClassmojiService.assignment.findByIdInClassroom(data.id, classroom.id);
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
         await addClassroomAuditLog({
+          request,
           classroomId: classroom.id,
           userId,
           role: membership!.role,

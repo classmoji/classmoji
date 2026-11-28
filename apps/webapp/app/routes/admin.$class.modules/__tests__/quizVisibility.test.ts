@@ -325,6 +325,7 @@ describe('Modules action — delete', () => {
 
     expect(result).toEqual({ success: 'Module deleted' });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: CLASSROOM_ID,
       userId: 'owner-1',
       role: 'OWNER',

@@ -386,6 +386,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   }
 
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership?.role,

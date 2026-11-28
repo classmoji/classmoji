@@ -48,6 +48,11 @@ vi.mock('@classmoji/services', () => ({
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
+const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => viewAsAdmin.current,
+}));
+
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
   addClassroomAuditLog: (...a: unknown[]) => auditMock(...a),
@@ -204,6 +209,26 @@ describe('staff attempt loader — chat-runtime attempts', () => {
 });
 
 describe('staff attempt loader — a chat attempt past its session deadline', () => {
+  it('names the admin viewing as the staff reader on the close', async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock
+      .mockResolvedValueOnce({ attempt: expiredOf('student-1'), messages: RAW_ROWS })
+      .mockResolvedValueOnce({ attempt: closedOf('student-1'), messages: RAW_ROWS });
+    viewAsAdmin.current = 'admin-1';
+    try {
+      await load();
+    } finally {
+      viewAsAdmin.current = null;
+    }
+
+    expect(closeExpiredMock).toHaveBeenCalledWith('attempt-1', {
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      surface: 'staff_attempt_view',
+      impersonatedBy: 'admin-1',
+    });
+  });
+
   it("closes a student's expired attempt and serves it completed, naming the staff reader", async () => {
     signInAs('teacher-1', 'TEACHER');
     findWithMessagesMock
@@ -216,6 +241,7 @@ describe('staff attempt loader — a chat attempt past its session deadline', ()
       userId: 'teacher-1',
       role: 'TEACHER',
       surface: 'staff_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(findWithMessagesMock).toHaveBeenCalledTimes(2);
     expect(data.readOnly).toBe(true);
@@ -271,6 +297,7 @@ describe('staff attempt loader — the VIEW audit row', () => {
       await load();
 
       expect(auditMock).toHaveBeenCalledExactlyOnceWith({
+        request: expect.any(Request),
         classroomId: 'class-1',
         userId: 'staff-1',
         // The role the gate enforced.

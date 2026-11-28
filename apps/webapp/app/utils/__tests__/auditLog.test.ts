@@ -84,6 +84,7 @@ describe('addAuditLog — actor attribution', () => {
       action: 'VIEW',
       resourceType: 'QUIZ_DETAILS',
       resourceId: 'quiz-1',
+      metadata: { tool: 'web:quiz.view' },
     });
 
     expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
@@ -98,6 +99,30 @@ describe('addAuditLog — actor attribution', () => {
     );
   });
 
+  it('names the admin viewing as the user on a loader VIEW row', async () => {
+    mocks.resolveHighestMembership.mockResolvedValue({ role: 'OWNER' });
+    mocks.getAuthSession.mockResolvedValue({
+      userId: 'user-1',
+      session: { session: { impersonatedBy: 'admin-1' } },
+    });
+
+    await addAuditLog({
+      request: request(),
+      params: { class: 'cs52-26f' },
+      action: 'VIEW',
+      resourceType: 'CLASS_GRADES_SCREEN',
+      metadata: { tool: 'web:grades.view' },
+    });
+
+    expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        user_id: 'user-1',
+        action: 'VIEW',
+        data: { tool: 'web:grades.view', impersonated_by: 'admin-1' },
+      })
+    );
+  });
+
   it('asks the resolver for every role rather than a subset', async () => {
     // `null` roles = consider all four. Passing a subset here would reintroduce
     // the same class of bug from the other end.
@@ -108,6 +133,7 @@ describe('addAuditLog — actor attribution', () => {
       params: { class: 'cs52-26f' },
       action: 'VIEW',
       resourceType: 'PAGES',
+      metadata: { tool: 'web:pages.view' },
     });
 
     expect(mocks.resolveHighestMembership).toHaveBeenCalledExactlyOnceWith(
@@ -127,6 +153,7 @@ describe('addAuditLog — actor attribution', () => {
       params: { class: 'cs52-26f' },
       action: 'VIEW',
       resourceType: 'PAGES',
+      metadata: { tool: 'web:pages.view' },
     });
 
     expect(mocks.findByClassroomAndUser).not.toHaveBeenCalled();
@@ -168,6 +195,7 @@ describe('addAuditLog — actor attribution', () => {
         params: { class: 'cs52-26f' },
         action: 'VIEW',
         resourceType: 'PAGES',
+        metadata: { tool: 'web:pages.view' },
       })
     ).resolves.toBeUndefined();
   });
@@ -175,6 +203,7 @@ describe('addAuditLog — actor attribution', () => {
 
 describe('addClassroomAuditLog — the gate-result variant', () => {
   const entry = {
+    request: request(),
     classroomId: 'class-1',
     userId: 'user-1',
     role: 'TEACHER',
@@ -198,23 +227,44 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     });
   });
 
-  it('re-resolves nothing — no session, slug or membership lookup', async () => {
+  it('re-resolves no slug or membership — the session only for who is viewing as the user', async () => {
     // The point of this variant: the caller already holds the authorized
-    // classroom and the enforcing role, so re-deriving them would cost three
-    // queries AND unbind the logged classroom from the authorized one.
+    // classroom and the enforcing role, so re-deriving them would cost two
+    // queries AND unbind the logged classroom from the authorized one. The
+    // session read is the gate's own, again (a cache hit).
     await addClassroomAuditLog(entry);
 
-    expect(mocks.getAuthSession).not.toHaveBeenCalled();
+    expect(mocks.getAuthSession).toHaveBeenCalledExactlyOnceWith(entry.request);
     expect(mocks.findBySlug).not.toHaveBeenCalled();
     expect(mocks.resolveHighestMembership).not.toHaveBeenCalled();
   });
 
-  it('omits data entirely when there is no metadata', async () => {
-    await addClassroomAuditLog({ ...entry, metadata: null });
+  it('names the admin viewing as the user on the row, and only then', async () => {
+    mocks.getAuthSession.mockResolvedValue({
+      userId: 'user-1',
+      session: { session: { impersonatedBy: 'admin-1' } },
+    });
+    await addClassroomAuditLog(entry);
 
     expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
-      expect.not.objectContaining({ data: expect.anything() })
+      expect.objectContaining({
+        user_id: 'user-1',
+        data: { tool: 'web:pages.delete', title: 'Syllabus', impersonated_by: 'admin-1' },
+      })
     );
+  });
+
+  it('reports a session read that throws, writes nothing and resolves', async () => {
+    mocks.getAuthSession.mockRejectedValue(new Error('session store away'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(addClassroomAuditLog(entry)).resolves.toBeUndefined();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.logAuditMiss).toHaveBeenCalledExactlyOnceWith(
+      'audit session lookup failed: session store away',
+      expect.objectContaining({ classroom_id: 'class-1', data: entry.metadata })
+    );
+    error.mockRestore();
   });
 
   it('normalizes a null resourceId rather than dropping the row', async () => {
@@ -256,6 +306,7 @@ describe('addAuditLog — nothing before the write rejects', () => {
         params: { class: 'cs52-26f' },
         action: 'VIEW',
         resourceType: 'CLASS_GRADES_SCREEN',
+        metadata: { tool: 'web:grades.view' },
       })
     ).resolves.toBeUndefined();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
@@ -267,6 +318,7 @@ describe('addAuditLog — nothing before the write rejects', () => {
         resource_id: null,
         resource_type: 'CLASS_GRADES_SCREEN',
         action: 'VIEW',
+        data: { tool: 'web:grades.view' },
         user_id: null,
       }
     );
@@ -283,6 +335,7 @@ describe('addAuditLog — nothing before the write rejects', () => {
         params: { class: 'cs52-26f' },
         action: 'VIEW',
         resourceType: 'CLASS_GRADES_SCREEN',
+        metadata: { tool: 'web:grades.view' },
       })
     ).resolves.toBeUndefined();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
@@ -294,6 +347,7 @@ describe('addAuditLog — nothing before the write rejects', () => {
         resource_id: null,
         resource_type: 'CLASS_GRADES_SCREEN',
         action: 'VIEW',
+        data: { tool: 'web:grades.view' },
         user_id: 'user-1',
       }
     );
@@ -308,6 +362,7 @@ describe('addAuditLog — nothing before the write rejects', () => {
       params: { class: 'cs52-26f' },
       action: 'VIEW',
       resourceType: 'CLASS_GRADES_SCREEN',
+      metadata: { tool: 'web:grades.view' },
     });
 
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);

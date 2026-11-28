@@ -155,6 +155,7 @@ describe('live editing switch — turning it on and off', () => {
       mocks.notifyCollabFlag.mock.invocationCallOrder[0]
     );
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

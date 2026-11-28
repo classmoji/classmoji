@@ -39,7 +39,14 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-vi.mock('~/utils/helpers', () => ({
+const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => viewAsAdmin.current,
+}));
+
+// The real audit funnel (it reads the session for who is viewing as the user).
+vi.mock('~/utils/helpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/helpers')>()),
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
 }));
 
@@ -53,6 +60,13 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
+  // Re-exported by ~/utils/helpers; unused here.
+  resolveHighestMembership: vi.fn(),
+  assertClassroomAccess: vi.fn(),
+  assertClassroomMutationAllowed: vi.fn(),
+  formMutationBlocked: vi.fn(),
+  requireStudentAccess: vi.fn(),
+  assertProTier: vi.fn(),
 }));
 
 // The real shared Trigger rule: each test sets the env it runs under.
@@ -475,6 +489,7 @@ describe('api.quiz-chat.session — refusals', () => {
       userId: STUDENT,
       role: 'STUDENT',
       surface: 'session',
+      impersonatedBy: viewAsAdmin.current,
     });
     expectNothingStarted();
   });

@@ -93,6 +93,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (
     membership &&
     (await closeIfExpired(attemptData.attempt, {
+      request,
       userId: String(userId),
       role: membership.role,
       surface:
@@ -144,6 +145,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // counted on one row.
   if (isInstructor && !viewerOwnsAttempt) {
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId: String(userId),
       role: membership?.role,

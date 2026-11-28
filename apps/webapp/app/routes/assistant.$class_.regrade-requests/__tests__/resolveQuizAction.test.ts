@@ -304,7 +304,12 @@ describe('regrade queue loader', () => {
     expect(mocks.loadRows).toHaveBeenCalledWith(
       expect.objectContaining({
         classroomId: 'class-x',
-        viewer: { userId: 'staff-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
+        viewer: {
+          request: expect.any(Request),
+          userId: 'staff-1',
+          role: 'ASSISTANT',
+          tool: 'web:regrade_requests.view',
+        },
       })
     );
     expect(open.canResolve).toBe(true);

@@ -24,6 +24,19 @@ export const isImpersonatingSession = (authData: unknown): boolean =>
       ?.session?.session?.impersonatedBy
   );
 
+/**
+ * The platform admin behind a "View as" session (their user id), from the
+ * `getAuthSession` result; null on the user's own session. For the
+ * `impersonated_by` of audit rows (`~/utils/helpers` sets it on every row) and
+ * the services that write their own.
+ */
+export const sessionImpersonator = (authData: unknown): string | null => {
+  const by = (
+    authData as { session?: { session?: { impersonatedBy?: unknown } | null } } | null | undefined
+  )?.session?.session?.impersonatedBy;
+  return typeof by === 'string' && by !== '' ? by : null;
+};
+
 export const ORG_SETTINGS_IMPERSONATION_MESSAGE =
   "Changes to GitHub organization settings aren't available while viewing as another user.";
 

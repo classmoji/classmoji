@@ -160,6 +160,7 @@ describe('repository settings action', () => {
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledOnce();
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

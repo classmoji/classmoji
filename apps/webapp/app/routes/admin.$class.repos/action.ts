@@ -46,6 +46,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     metadata: Record<string, unknown> = {}
   ) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -97,6 +98,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!('error' in result)) {
         const session = 'triggerSession' in result ? result.triggerSession : null;
         await addClassroomAuditLog({
+          request,
           classroomId: classroom.id,
           userId,
           role: membership!.role,
@@ -172,6 +174,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: 'Repository not found.' };
       }
       return startContributionsCalculation({
+        request,
         classroom,
         repositoryId: repository.id,
         userId,

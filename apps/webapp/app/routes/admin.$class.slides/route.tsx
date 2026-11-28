@@ -170,6 +170,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return { error: 'Slide not found' };
     }
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

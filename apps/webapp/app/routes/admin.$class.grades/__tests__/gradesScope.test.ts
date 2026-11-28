@@ -641,6 +641,7 @@ describe('grades action — the letter-grade write is audited', () => {
     await route.action(actionArgs({ membership_id: OWN_MEMBERSHIP, letter_grade: 'A-' }));
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'teacher-1',
       role: 'TEACHER',
@@ -817,6 +818,7 @@ describe('grades action — releasing final grades', () => {
       final_grades_released: true,
     });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

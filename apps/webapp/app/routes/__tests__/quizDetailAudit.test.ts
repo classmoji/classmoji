@@ -135,6 +135,7 @@ describe('quiz detail action — clearMyAttempts audit row', () => {
     await submit({ _action: 'clearMyAttempts' });
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'ta-1',
       role: 'ASSISTANT',

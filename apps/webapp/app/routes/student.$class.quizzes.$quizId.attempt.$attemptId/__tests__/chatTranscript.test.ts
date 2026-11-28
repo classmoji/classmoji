@@ -52,6 +52,11 @@ vi.mock('@classmoji/services', () => ({
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
+const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => viewAsAdmin.current,
+}));
+
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
   addClassroomAuditLog: (...a: unknown[]) => auditMock(...a),
@@ -303,6 +308,7 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
       userId: 'student-1',
       role: 'STUDENT',
       surface: 'own_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(findWithMessagesMock).toHaveBeenCalledTimes(2);
     expect(data.readOnly).toBe(true);
@@ -334,6 +340,7 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
       userId: 'teacher-1',
       role: 'TEACHER',
       surface: 'staff_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(data.readOnly).toBe(true);
   });
@@ -381,6 +388,7 @@ describe('attempt loader — the VIEW audit row', () => {
       await load();
 
       expect(auditMock).toHaveBeenCalledExactlyOnceWith({
+        request: expect.any(Request),
         classroomId: 'class-1',
         userId: 'staff-1',
         // The role the gate enforced.

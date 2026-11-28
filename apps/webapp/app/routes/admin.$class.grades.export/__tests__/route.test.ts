@@ -87,6 +87,7 @@ describe('admin.$class.grades.export', () => {
     await call('intro-x');
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
+      request: expect.any(Request),
       classroomId: 'class-x',
       userId: 'teacher-a',
       role: 'TEACHER',

@@ -170,6 +170,7 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
       // the single blank/import case. Same 'PAGES'/'CREATE' shape as that
       // action and as the MCP page_create tool.
       await addClassroomAuditLog({
+        request,
         classroomId: classroom.id,
         userId,
         role: membership!.role,

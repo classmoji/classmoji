@@ -335,6 +335,7 @@ describe('submission panel loader — audit', () => {
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
+      request: expect.any(Request),
       classroomId: 'class-x',
       userId: 'teacher-1',
       role: 'TEACHER',

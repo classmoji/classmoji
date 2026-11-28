@@ -38,6 +38,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   // A staff read of a student's (or team's) submission.
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership?.role,

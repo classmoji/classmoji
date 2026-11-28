@@ -94,6 +94,7 @@ describe('add students action', () => {
     );
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog.mock.calls[0][0]).toEqual({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

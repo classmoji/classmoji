@@ -12,7 +12,7 @@ import { gitUsername } from '@classmoji/utils';
 import StudentsTable from './StudentsTable';
 import InviteLinkModal from './InviteLinkModal';
 import { ActionTypes } from '~/constants';
-import { waitForRunCompletion } from '~/utils/helpers';
+import { addClassroomAuditLog, waitForRunCompletion } from '~/utils/helpers';
 import {
   requireClassroomAdmin,
   requireClassroomTeachingTeam,
@@ -330,14 +330,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // The link is changed either way: a failed audit write is reported
       // (`audit_miss`), not as a failed change. The code itself stays out of
       // the row: it is a credential.
-      await ClassmojiService.audit.record({
-        user_id: userId,
-        classroom_id: classroom.id,
+      await addClassroomAuditLog({
+        request,
+        classroomId: classroom.id,
+        userId,
         role: membership!.role,
         action: 'UPDATE',
-        resource_type: 'CLASSROOM_JOIN_LINK',
-        resource_id: classroom.id,
-        data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
+        resourceType: 'CLASSROOM_JOIN_LINK',
+        resourceId: classroom.id,
+        metadata: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
       });
       return { joinLink };
     },
@@ -364,14 +365,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // The invite is gone either way: a failed audit write is reported
       // (`audit_miss`), not as a failed revoke.
-      await ClassmojiService.audit.record({
-        user_id: userId,
-        classroom_id: classroom.id,
+      await addClassroomAuditLog({
+        request,
+        classroomId: classroom.id,
+        userId,
         role: membership!.role,
         action: 'DELETE',
-        resource_type: 'STUDENT_ROSTER',
-        resource_id: String(data.inviteId),
-        data: { tool: 'web:roster.revoke_invite' },
+        resourceType: 'STUDENT_ROSTER',
+        resourceId: String(data.inviteId),
+        metadata: { tool: 'web:roster.revoke_invite' },
       });
 
       return {

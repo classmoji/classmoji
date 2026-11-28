@@ -263,6 +263,7 @@ describe('slides action — audit rows', () => {
     await route.action(actionArgs({ slideId: OWN_SLIDE, field: 'status', value: 'public' }));
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

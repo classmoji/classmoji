@@ -31,6 +31,11 @@ vi.mock('@classmoji/services', () => ({
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
+const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => viewAsAdmin.current,
+}));
+
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
 }));
@@ -192,6 +197,7 @@ describe('preview loader — a chat attempt past its session deadline', () => {
       userId: 'owner-1',
       role: 'OWNER',
       surface: 'preview_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(data.readOnly).toBe(true);
   });

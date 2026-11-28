@@ -1,5 +1,6 @@
 import { getAuthSession } from '@classmoji/auth/server';
 import { checkAuth } from '~/utils/helpers';
+import { sessionImpersonator } from '~/utils/impersonationSession';
 import {
   ClassmojiService,
   ClassroomSlugUnavailableError,
@@ -27,7 +28,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
   // A GitLab classroom: its own lean path (connection + group + subgroup).
   if (body?.intent === 'create-gitlab' && authData) {
-    return createGitLabClassroom(authData.userId, body);
+    return createGitLabClassroom(authData.userId, body, {
+      impersonatedBy: sessionImpersonator(authData),
+    });
   }
 
   if (!authData?.token) {
@@ -335,6 +338,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         newClassroomId: classroom.id,
         archiveClassroomId: gate.archiveClassroomId,
         userId: user.id,
+        impersonatedBy: sessionImpersonator(authData),
       })
     : null;
 

@@ -134,6 +134,7 @@ describe('admin.$class.pages.new — audit rows', () => {
 
     expect(result).toMatchObject({ created: true });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

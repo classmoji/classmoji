@@ -3,6 +3,7 @@ import { namedAction } from '~/utils/namedAction.server';
 import { ClassmojiService } from '@classmoji/services';
 import TagSection from './TagSection';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { addClassroomAuditLog } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -59,14 +60,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // The tag is gone either way: a failed audit write is reported
       // (`audit_miss`), not as a failed delete.
-      await ClassmojiService.audit.record({
-        user_id: userId,
-        classroom_id: classroom.id,
+      await addClassroomAuditLog({
+        request,
+        classroomId: classroom.id,
+        userId,
         role: membership!.role,
         action: 'DELETE',
-        resource_type: 'TEAMS',
-        resource_id: deleted.id,
-        data: { tool: 'web:settings.team.delete_tag', name: deleted.name },
+        resourceType: 'TEAMS',
+        resourceId: deleted.id,
+        metadata: { tool: 'web:settings.team.delete_tag', name: deleted.name },
       });
       return { deleted: deleted.id };
     },

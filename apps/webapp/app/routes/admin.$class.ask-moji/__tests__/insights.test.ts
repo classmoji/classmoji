@@ -38,7 +38,6 @@ const mocks = vi.hoisted(() => ({
   currentUser: 'owner-x',
   assertClassroomAccess: vi.fn(),
   addClassroomAuditLog: vi.fn(),
-  impersonationAuditFields: vi.fn(),
   askMojiAvailable: vi.fn(),
   usage: vi.fn(),
   feedbackReview: vi.fn(),
@@ -48,9 +47,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
-}));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: (...a: unknown[]) => mocks.impersonationAuditFields(...a),
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -192,7 +188,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = 'owner-x';
   mocks.assertClassroomAccess.mockImplementation(fakeGate);
-  mocks.impersonationAuditFields.mockResolvedValue({});
   mocks.askMojiAvailable.mockResolvedValue({ available: true });
   mocks.usage.mockResolvedValue(USAGE);
   mocks.feedbackReview.mockResolvedValue([REVIEW_ROW]);
@@ -298,6 +293,7 @@ describe('the insights page', () => {
     await loadPage('class-x', '?rating=up');
     expect(auditRows()).toEqual([
       {
+        request: expect.any(Request),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -307,6 +303,7 @@ describe('the insights page', () => {
         metadata: { tool: 'web:ask_moji.insights', weeks: 12 },
       },
       {
+        request: expect.any(Request),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -326,12 +323,11 @@ describe('the insights page', () => {
     expect(reviews.map(row => (row.metadata as { rating: string }).rating)).toEqual(['DOWN', 'UP']);
   });
 
-  it('records the admin behind a View As session on both rows', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
+  it('hands the audit funnel the request on both rows (it names any View As admin)', async () => {
     await loadPage('class-x');
     expect(
-      auditRows().map(row => (row.metadata as Record<string, unknown>).impersonated_by)
-    ).toEqual(['admin-9', 'admin-9']);
+      auditRows().map(row => (row as { request?: unknown }).request instanceof Request)
+    ).toEqual([true, true]);
   });
 
   it('writes no row for a refused caller', async () => {
@@ -406,10 +402,10 @@ describe('the exchange view', () => {
   });
 
   it('writes a VIEW row on the feedback id', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
     await loadExchange('class-x', 'fb-1');
     expect(auditRows()).toEqual([
       {
+        request: expect.any(Request),
         classroomId: 'X',
         userId: 'owner-x',
         role: 'OWNER',
@@ -419,7 +415,6 @@ describe('the exchange view', () => {
         metadata: {
           tool: 'web:ask_moji.exchange',
           asker_id: 'student-x',
-          impersonated_by: 'admin-9',
         },
       },
     ]);

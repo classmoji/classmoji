@@ -218,6 +218,7 @@ describe('the forms action audits what it changed', () => {
     expect(result).toEqual({ success: true });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledOnce();
     expect(auditEntry()).toEqual({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       // The role the gate ENFORCED, matching what the MCP form tools record.
@@ -234,6 +235,7 @@ describe('the forms action audits what it changed', () => {
 
     expect(result).toEqual({ success: true });
     expect(auditEntry()).toEqual({
+      request: expect.any(Request),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'TEACHER',

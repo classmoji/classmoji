@@ -30,6 +30,7 @@
  * The timing actions answer 409 for an `ai_agent` attempt too.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
+import { sessionImpersonator } from '~/utils/impersonationSession';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
@@ -372,6 +373,9 @@ export async function action({ request }: Route.ActionArgs) {
     // else's.
     const { getAuthSession } = await import('@classmoji/auth/server');
     const authData = await getAuthSession(request);
+    // The admin viewing as the caller, for the row of an expired attempt
+    // closed on the way to a new one.
+    const viewAs = { impersonatedBy: sessionImpersonator(authData) };
 
     switch (data._action) {
       case 'startQuiz': {
@@ -426,7 +430,8 @@ export async function action({ request }: Route.ActionArgs) {
             const result = await ClassmojiService.quizAttempt.createNew(
               data.quizId,
               userId,
-              access.membership!
+              access.membership!,
+              viewAs
             );
 
             if (!result.success) {
@@ -661,7 +666,8 @@ export async function action({ request }: Route.ActionArgs) {
           const result = await ClassmojiService.quizAttempt.createNew(
             data.quizId,
             userId,
-            access.membership!
+            access.membership!,
+            viewAs
           );
 
           if (!result.success) {

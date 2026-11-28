@@ -82,6 +82,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (
     membership &&
     (await closeIfExpired(attemptData.attempt, {
+      request,
       userId: String(userId),
       role: membership.role,
       surface:
@@ -134,6 +135,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // logged. Repeated loads within seconds are counted on one row.
   if (!viewerOwnsAttempt) {
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId: String(userId),
       role: membership?.role,

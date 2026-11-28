@@ -43,12 +43,19 @@ export const joinGitOrganization = async ({
   membership,
   classroom,
   tool,
+  impersonatedBy = null,
 }: {
   userId: string;
   membership: { id: string; role: string };
   classroom: { id: string; slug: string; name: string; git_organization: GitOrganizationRow };
   /** `data.tool` on the audit row: which surface the join came from. */
   tool: string;
+  /**
+   * The platform admin viewing as the user ("View as"), for the audit row.
+   * The join link and the class picker's automatic invites never run under
+   * View as; the picker's Accept can.
+   */
+  impersonatedBy?: string | null;
 }): Promise<GitJoinResult> => {
   const org = classroom.git_organization;
   const courseProvider = org.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB';
@@ -79,6 +86,7 @@ export const joinGitOrganization = async ({
         organization: org.login,
         login: studentLogin ?? null,
         ...detail,
+        ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
       } as Prisma.InputJsonValue,
     });
   };

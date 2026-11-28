@@ -10,12 +10,6 @@ const mocks = vi.hoisted(() => ({
   remapGradeEmojis: vi.fn(),
   replaceScale: vi.fn(),
   addClassroomAuditLog: vi.fn(),
-  impersonatedBy: null as string | null,
-}));
-
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: async () =>
-    mocks.impersonatedBy ? { impersonated_by: mocks.impersonatedBy } : {},
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -56,7 +50,6 @@ class RemapGradeEmojisError extends Error {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.impersonatedBy = null;
   mocks.requireClassroomAdmin.mockResolvedValue({
     classroom: { id: 'class-x', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
@@ -88,6 +81,7 @@ describe('remapOrphanedEmojis', () => {
     });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
+      request: expect.any(Request),
       classroomId: 'class-x',
       userId: 'owner-1',
       role: 'OWNER',
@@ -104,16 +98,13 @@ describe('remapOrphanedEmojis', () => {
     });
   });
 
-  it('records the platform admin behind a View As session', async () => {
-    mocks.impersonatedBy = 'admin-1';
+  it('hands the audit funnel the request, whose session names any View As admin', async () => {
     await post('remapOrphanedEmojis', { mappings: [{ oldEmoji: '+1', newEmoji: 'score-90' }] });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
+        request: expect.any(Request),
         userId: 'owner-1',
-        metadata: expect.objectContaining({
-          tool: 'web:settings.grades.remap_orphaned_emojis',
-          impersonated_by: 'admin-1',
-        }),
+        metadata: expect.objectContaining({ tool: 'web:settings.grades.remap_orphaned_emojis' }),
       })
     );
   });

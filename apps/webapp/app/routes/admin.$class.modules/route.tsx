@@ -133,6 +133,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         });
         if (deleted.deleted_quiz_assignment_ids.length > 0) {
           await addClassroomAuditLog({
+            request,
             classroomId: classroom.id,
             userId,
             role: membership!.role,
