@@ -32,6 +32,7 @@ import {
   type DnsRow,
 } from './customDomain.ts';
 import type { SubdomainAvailabilityResponse } from '../api.site.availability/availability.ts';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 /**
@@ -230,13 +231,16 @@ const provisionCert = async (domain: string): Promise<{ certError?: string }> =>
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SITE_SETTINGS',
     attemptedAction: 'modify',
   });
+  const { classroom, membership } = gate;
+  // Who the site service records each change for.
+  const actor = (tool: string) => auditActor(request, gate, tool);
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = (await request.json()) as {
@@ -252,9 +256,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(request, {
     async claimSubdomain() {
       try {
-        const site = await ClassmojiService.site.validateAndClaimSubdomain(
+        const { site } = await ClassmojiService.site.validateAndClaimSubdomain(
           classroom.id,
-          data.subdomain ?? ''
+          data.subdomain ?? '',
+          await actor('web:settings.website.claim_subdomain')
         );
         return { success: `Claimed ${site.subdomain}` };
       } catch (error: unknown) {
@@ -266,11 +271,15 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         // Only the keys actually submitted reach the service — `undefined`
         // means "leave it alone", and each control submits one key.
-        await ClassmojiService.site.upsertSiteSettings(classroom.id, {
-          ...(data.is_enabled === undefined ? {} : { is_enabled: data.is_enabled }),
-          ...(data.home_page_id === undefined ? {} : { home_page_id: data.home_page_id }),
-          ...(data.show_schedule === undefined ? {} : { show_schedule: data.show_schedule }),
-        });
+        await ClassmojiService.site.upsertSiteSettings(
+          classroom.id,
+          {
+            ...(data.is_enabled === undefined ? {} : { is_enabled: data.is_enabled }),
+            ...(data.home_page_id === undefined ? {} : { home_page_id: data.home_page_id }),
+            ...(data.show_schedule === undefined ? {} : { show_schedule: data.show_schedule }),
+          },
+          await actor('web:settings.website.save')
+        );
         return { success: 'Website settings updated' };
       } catch (error: unknown) {
         return siteErrorPayload(error) ?? unexpected('save', error);
@@ -279,7 +288,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async removeSite() {
       try {
-        const removed = await ClassmojiService.site.deleteSiteForClassroom(classroom.id);
+        const { removed } = await ClassmojiService.site.deleteSiteForClassroom(
+          classroom.id,
+          await actor('web:settings.website.remove_site')
+        );
         return { success: `Site removed — ${removed.subdomain} is free again` };
       } catch (error: unknown) {
         return siteErrorPayload(error) ?? unexpected('remove', error);
@@ -307,9 +319,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       }
 
       try {
-        const updated = await ClassmojiService.site.setCustomDomain(
+        const { site: updated } = await ClassmojiService.site.setCustomDomain(
           classroom.id,
-          data.custom_domain ?? ''
+          data.custom_domain ?? '',
+          await actor('web:settings.website.custom_domain')
         );
         const domain = updated.custom_domain!;
         const { certError } = await provisionCert(domain);
@@ -374,7 +387,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
      */
     async removeCustomDomain() {
       try {
-        const { released } = await ClassmojiService.site.clearCustomDomain(classroom.id);
+        const { released } = await ClassmojiService.site.clearCustomDomain(
+          classroom.id,
+          await actor('web:settings.website.remove_custom_domain')
+        );
         return {
           success: released
             ? `Disconnected ${released} — you can remove its DNS records now`

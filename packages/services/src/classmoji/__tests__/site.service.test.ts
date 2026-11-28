@@ -187,7 +187,7 @@ describe('site.validateAndClaimSubdomain', () => {
 
   it('upserts the normalized label and leaves the site switched off', async () => {
     classroomSiteUpsert.mockResolvedValue(siteRow({ is_enabled: false }));
-    await validateAndClaimSubdomain('class-1', 'CS52');
+    await validateAndClaimSubdomain('class-1', 'CS52', null);
 
     const arg = classroomSiteUpsert.mock.calls[0][0] as {
       create: Record<string, unknown>;
@@ -203,13 +203,13 @@ describe('site.validateAndClaimSubdomain', () => {
     ['not a label', 'SUBDOMAIN_INVALID'],
     ['app', 'SUBDOMAIN_RESERVED'],
   ])('rejects %s with %s', async (input, code) => {
-    await expect(validateAndClaimSubdomain('class-1', input)).rejects.toMatchObject({ code });
+    await expect(validateAndClaimSubdomain('class-1', input, null)).rejects.toMatchObject({ code });
     expect(classroomSiteUpsert).not.toHaveBeenCalled();
   });
 
   it('rejects a label another classroom already holds', async () => {
     classroomSiteFindUnique.mockResolvedValue({ classroom_id: 'class-2' });
-    await expect(validateAndClaimSubdomain('class-1', 'cs52')).rejects.toMatchObject({
+    await expect(validateAndClaimSubdomain('class-1', 'cs52', null)).rejects.toMatchObject({
       code: SITE_ERROR.SUBDOMAIN_TAKEN,
     });
   });
@@ -223,19 +223,21 @@ describe('site.validateAndClaimSubdomain', () => {
         meta: { target: ['subdomain'] },
       })
     );
-    await expect(validateAndClaimSubdomain('class-1', 'cs52')).rejects.toMatchObject({
+    await expect(validateAndClaimSubdomain('class-1', 'cs52', null)).rejects.toMatchObject({
       code: SITE_ERROR.SUBDOMAIN_TAKEN,
     });
   });
 
   it('propagates an unrelated write failure untouched', async () => {
     classroomSiteUpsert.mockRejectedValue(new Error('connection reset'));
-    await expect(validateAndClaimSubdomain('class-1', 'cs52')).rejects.toThrow('connection reset');
+    await expect(validateAndClaimSubdomain('class-1', 'cs52', null)).rejects.toThrow(
+      'connection reset'
+    );
   });
 
   it('refuses example classrooms', async () => {
     classroomFindUnique.mockResolvedValue({ id: 'class-1', is_example: true });
-    await expect(validateAndClaimSubdomain('class-1', 'cs52')).rejects.toMatchObject({
+    await expect(validateAndClaimSubdomain('class-1', 'cs52', null)).rejects.toMatchObject({
       code: SITE_ERROR.CLASSROOM_NOT_ELIGIBLE,
     });
     expect(classroomSiteUpsert).not.toHaveBeenCalled();
@@ -311,7 +313,7 @@ describe('site.upsertSiteSettings', () => {
       is_enabled: false,
       home_page_id: null,
     });
-    await expect(upsertSiteSettings('class-1', { is_enabled: true })).rejects.toMatchObject({
+    await expect(upsertSiteSettings('class-1', { is_enabled: true }, null)).rejects.toMatchObject({
       code: SITE_ERROR.HOME_PAGE_REQUIRED,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -325,9 +327,11 @@ describe('site.upsertSiteSettings', () => {
       is_enabled: true,
       home_page_id: 'page-1',
     });
-    await expect(upsertSiteSettings('class-1', { home_page_id: null })).rejects.toMatchObject({
-      code: SITE_ERROR.HOME_PAGE_REQUIRED,
-    });
+    await expect(upsertSiteSettings('class-1', { home_page_id: null }, null)).rejects.toMatchObject(
+      {
+        code: SITE_ERROR.HOME_PAGE_REQUIRED,
+      }
+    );
   });
 
   it('allows clearing the home page while switching the site off', async () => {
@@ -337,7 +341,7 @@ describe('site.upsertSiteSettings', () => {
       home_page_id: 'page-1',
     });
     classroomSiteUpdate.mockResolvedValue({});
-    await upsertSiteSettings('class-1', { is_enabled: false, home_page_id: null });
+    await upsertSiteSettings('class-1', { is_enabled: false, home_page_id: null }, null);
     expect(classroomSiteUpdate).toHaveBeenCalled();
   });
 
@@ -352,7 +356,7 @@ describe('site.upsertSiteSettings', () => {
     pageFindFirst.mockResolvedValue(null);
 
     await expect(
-      upsertSiteSettings('class-1', { home_page_id: 'other-classroom-page' })
+      upsertSiteSettings('class-1', { home_page_id: 'other-classroom-page' }, null)
     ).rejects.toMatchObject({ code: SITE_ERROR.HOME_PAGE_INVALID });
 
     expect(pageFindFirst).toHaveBeenCalledWith(
@@ -371,7 +375,7 @@ describe('site.upsertSiteSettings', () => {
     });
     pageFindFirst.mockResolvedValue({ id: 'page-1', is_draft: true });
     await expect(
-      upsertSiteSettings('class-1', { home_page_id: 'page-1', is_enabled: true })
+      upsertSiteSettings('class-1', { home_page_id: 'page-1', is_enabled: true }, null)
     ).rejects.toMatchObject({ code: SITE_ERROR.HOME_PAGE_INVALID });
   });
 
@@ -384,7 +388,7 @@ describe('site.upsertSiteSettings', () => {
     pageFindFirst.mockResolvedValue({ id: 'page-1', is_draft: false });
     classroomSiteUpdate.mockResolvedValue({});
 
-    await upsertSiteSettings('class-1', { home_page_id: 'page-1', is_enabled: true });
+    await upsertSiteSettings('class-1', { home_page_id: 'page-1', is_enabled: true }, null);
 
     expect((classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data).toEqual({
       is_enabled: true,
@@ -402,7 +406,7 @@ describe('site.upsertSiteSettings', () => {
     // this patch never mentions it — see 'enable-only' below.
     pageFindFirst.mockResolvedValue({ id: 'page-1', is_draft: false });
     classroomSiteUpdate.mockResolvedValue({});
-    await upsertSiteSettings('class-1', { show_schedule: false });
+    await upsertSiteSettings('class-1', { show_schedule: false }, null);
     expect((classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data).toEqual({
       show_schedule: false,
     });
@@ -418,10 +422,14 @@ describe('site.upsertSiteSettings', () => {
       home_page_id: 'page-1',
     });
     classroomSiteUpdate.mockResolvedValue({});
-    await upsertSiteSettings('class-1', {
-      show_schedule: true,
-      timezone: 'America/New_York',
-    } as Parameters<typeof upsertSiteSettings>[1]);
+    await upsertSiteSettings(
+      'class-1',
+      {
+        show_schedule: true,
+        timezone: 'America/New_York',
+      } as Parameters<typeof upsertSiteSettings>[1],
+      null
+    );
     expect((classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data).toEqual({
       show_schedule: true,
     });
@@ -440,7 +448,7 @@ describe('site.upsertSiteSettings', () => {
     });
     pageFindFirst.mockResolvedValue({ id: 'page-1', is_draft: true });
 
-    await expect(upsertSiteSettings('class-1', { is_enabled: true })).rejects.toMatchObject({
+    await expect(upsertSiteSettings('class-1', { is_enabled: true }, null)).rejects.toMatchObject({
       code: SITE_ERROR.HOME_PAGE_INVALID,
     });
     // Vetted the stored id, scoped to the classroom — not the (absent) patch value.
@@ -461,7 +469,7 @@ describe('site.upsertSiteSettings', () => {
     });
     pageFindFirst.mockResolvedValue(null);
 
-    await expect(upsertSiteSettings('class-1', { is_enabled: true })).rejects.toMatchObject({
+    await expect(upsertSiteSettings('class-1', { is_enabled: true }, null)).rejects.toMatchObject({
       code: SITE_ERROR.HOME_PAGE_INVALID,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -476,7 +484,7 @@ describe('site.upsertSiteSettings', () => {
     pageFindFirst.mockResolvedValue({ id: 'page-1', is_draft: false });
     classroomSiteUpdate.mockResolvedValue({});
 
-    await upsertSiteSettings('class-1', { is_enabled: true });
+    await upsertSiteSettings('class-1', { is_enabled: true }, null);
 
     // Only the field that was patched is written — the re-vetting must not
     // rewrite home_page_id back onto the row.
@@ -495,7 +503,7 @@ describe('site.upsertSiteSettings', () => {
     });
     classroomSiteUpdate.mockResolvedValue({});
 
-    await upsertSiteSettings('class-1', { show_schedule: true });
+    await upsertSiteSettings('class-1', { show_schedule: true }, null);
 
     expect(pageFindFirst).not.toHaveBeenCalled();
     expect(classroomSiteUpdate).toHaveBeenCalled();
@@ -503,7 +511,9 @@ describe('site.upsertSiteSettings', () => {
 
   it('refuses when the classroom has no site row yet', async () => {
     classroomSiteFindUnique.mockResolvedValue(null);
-    await expect(upsertSiteSettings('class-1', { show_schedule: true })).rejects.toMatchObject({
+    await expect(
+      upsertSiteSettings('class-1', { show_schedule: true }, null)
+    ).rejects.toMatchObject({
       code: SITE_ERROR.SITE_NOT_FOUND,
     });
   });
@@ -1155,9 +1165,9 @@ describe('site.deleteSiteForClassroom', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', subdomain: 'cs52' });
     classroomSiteDelete.mockResolvedValue({ id: 'site-1' });
 
-    await expect(deleteSiteForClassroom('class-1')).resolves.toEqual({
-      id: 'site-1',
-      subdomain: 'cs52',
+    await expect(deleteSiteForClassroom('class-1', null)).resolves.toEqual({
+      removed: { id: 'site-1', subdomain: 'cs52' },
+      audit: { written: 0, missed: 0 },
     });
     expect(classroomSiteDelete).toHaveBeenCalledWith({ where: { classroom_id: 'class-1' } });
   });
@@ -1165,7 +1175,7 @@ describe('site.deleteSiteForClassroom', () => {
   it('refuses a classroom with no site instead of letting prisma throw P2025', async () => {
     classroomSiteFindUnique.mockResolvedValue(null);
 
-    await expect(deleteSiteForClassroom('class-1')).rejects.toMatchObject({
+    await expect(deleteSiteForClassroom('class-1', null)).rejects.toMatchObject({
       code: SITE_ERROR.SITE_NOT_FOUND,
     });
     // The whole reason for the pre-check: a double-submit must not reach the DB.
@@ -1181,7 +1191,7 @@ describe('site.setCustomDomain', () => {
     // `prisma.update` on a missing row throws an error no caller can render.
     classroomSiteFindUnique.mockResolvedValue(null);
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).rejects.toMatchObject({
       code: SITE_ERROR.SITE_NOT_FOUND,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -1198,7 +1208,7 @@ describe('site.setCustomDomain', () => {
       subscription: null,
     });
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).rejects.toMatchObject({
       code: SITE_ERROR.PRO_REQUIRED,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -1213,7 +1223,7 @@ describe('site.setCustomDomain', () => {
       subscription: { id: 'sub-lapsed' },
     });
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).rejects.toMatchObject({
       code: SITE_ERROR.PRO_REQUIRED,
     });
   });
@@ -1224,7 +1234,7 @@ describe('site.setCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
 
-    await setCustomDomain('class-1', '  CS52.ME.  ');
+    await setCustomDomain('class-1', '  CS52.ME.  ', null);
 
     expect(classroomSiteUpdate).toHaveBeenCalledWith({
       where: { classroom_id: 'class-1' },
@@ -1246,7 +1256,7 @@ describe('site.setCustomDomain', () => {
   ])('rejects %j — %s', async domain => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
 
-    await expect(setCustomDomain('class-1', domain)).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', domain, null)).rejects.toMatchObject({
       code: SITE_ERROR.DOMAIN_INVALID,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -1266,7 +1276,7 @@ describe('site.setCustomDomain', () => {
     // our own wildcard certificate already answers for.
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
 
-    await expect(setCustomDomain('class-1', domain)).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', domain, null)).rejects.toMatchObject({
       code: SITE_ERROR.DOMAIN_RESERVED,
     });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
@@ -1276,8 +1286,8 @@ describe('site.setCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).resolves.toBeTruthy();
-    await expect(setCustomDomain('class-1', 'www.cs.dartmouth.edu')).resolves.toBeTruthy();
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).resolves.toBeTruthy();
+    await expect(setCustomDomain('class-1', 'www.cs.dartmouth.edu', null)).resolves.toBeTruthy();
   });
 
   it('turns the unique violation into DOMAIN_TAKEN', async () => {
@@ -1287,7 +1297,7 @@ describe('site.setCustomDomain', () => {
       meta: { target: ['custom_domain'] },
     });
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).rejects.toMatchObject({
       code: SITE_ERROR.DOMAIN_TAKEN,
     });
   });
@@ -1298,7 +1308,9 @@ describe('site.setCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
     classroomSiteUpdate.mockRejectedValue({ code: 'P2002', meta: { target: ['subdomain'] } });
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({ code: 'P2002' });
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).rejects.toMatchObject({
+      code: 'P2002',
+    });
   });
 
   it('clears the verification stamp on a RE-CLAIM of the same hostname', async () => {
@@ -1306,7 +1318,7 @@ describe('site.setCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'cs52.me' });
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
 
-    await setCustomDomain('class-1', 'cs52.me');
+    await setCustomDomain('class-1', 'cs52.me', null);
 
     expect(classroomSiteUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1323,7 +1335,7 @@ describe('site.setCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'old.example' });
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
 
-    await setCustomDomain('class-1', 'cs52.me');
+    await setCustomDomain('class-1', 'cs52.me', null);
 
     expect(removeCert).toHaveBeenCalledWith('old.example');
   });
@@ -1336,7 +1348,7 @@ describe('site.setCustomDomain', () => {
     removeCert.mockRejectedValue(new Error('fly down'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(setCustomDomain('class-1', 'cs52.me')).resolves.toBeTruthy();
+    await expect(setCustomDomain('class-1', 'cs52.me', null)).resolves.toBeTruthy();
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });
@@ -1347,7 +1359,10 @@ describe('site.clearCustomDomain', () => {
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'cs52.me' });
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
 
-    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: 'cs52.me' });
+    await expect(clearCustomDomain('class-1', null)).resolves.toEqual({
+      released: 'cs52.me',
+      audit: { written: 0, missed: 0 },
+    });
     expect(classroomSiteUpdate).toHaveBeenCalledWith({
       where: { classroom_id: 'class-1' },
       data: { custom_domain: null, custom_domain_verified_at: null },
@@ -1359,14 +1374,17 @@ describe('site.clearCustomDomain', () => {
     // A double-submitted Remove button is not an error state.
     classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
 
-    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: null });
+    await expect(clearCustomDomain('class-1', null)).resolves.toEqual({
+      released: null,
+      audit: { written: 0, missed: 0 },
+    });
     expect(classroomSiteUpdate).not.toHaveBeenCalled();
     expect(removeCert).not.toHaveBeenCalled();
   });
 
   it('refuses a classroom with no site row', async () => {
     classroomSiteFindUnique.mockResolvedValue(null);
-    await expect(clearCustomDomain('class-1')).rejects.toMatchObject({
+    await expect(clearCustomDomain('class-1', null)).rejects.toMatchObject({
       code: SITE_ERROR.SITE_NOT_FOUND,
     });
   });
@@ -1376,7 +1394,10 @@ describe('site.clearCustomDomain', () => {
     classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
     isFlyCertsConfigured.mockReturnValue(false);
 
-    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: 'cs52.me' });
+    await expect(clearCustomDomain('class-1', null)).resolves.toEqual({
+      released: 'cs52.me',
+      audit: { written: 0, missed: 0 },
+    });
     expect(removeCert).not.toHaveBeenCalled();
   });
 });
