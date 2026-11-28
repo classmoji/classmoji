@@ -53,6 +53,7 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
@@ -239,6 +240,8 @@ function messageFor(error: unknown, fallback: string): string {
       return error.message;
     }
   }
+  // Not one of ours: an upstream or database fault, answered with the fallback.
+  reportError(error, { surface: 'slides.create' });
   return fallback;
 }
 

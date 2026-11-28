@@ -3,23 +3,37 @@
  * every document gets a fresh nonce, carried by React's own inline scripts
  * (`renderToPipeableStream`), React Router's (`ServerRouter`) and the root's
  * (through `NonceContext`), and named in the policy header (csp.server.ts).
+ *
+ * Also server-side error reports: `handleError` (loader, action and render
+ * errors) and streaming render errors after the shell. Both log exactly what
+ * the default did, then report; with Sentry off (no `SENTRY_DSN`) the reports
+ * do nothing.
  */
 
 import { randomBytes } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { createElement } from 'react';
 
-import type { EntryContext, RouterContextProvider } from 'react-router';
+import type { EntryContext, HandleErrorFunction, RouterContextProvider } from 'react-router';
 import { createReadableStreamFromReadable } from '@react-router/node';
 import { ServerRouter } from 'react-router';
 import { isbot } from 'isbot';
 import type { RenderToPipeableStreamOptions } from 'react-dom/server';
 import { renderToPipeableStream } from 'react-dom/server';
+import { reportRenderError, reportRouteError } from '@classmoji/utils/sentry-server';
 
 import { NonceContext } from '~/utils/cspNonce';
 import { appContentSecurityPolicy, cspHeaderName } from '~/utils/csp.server';
 
 export const streamTimeout = 5_000;
+
+/**
+ * Replaces React Router's default `handleError`: logs exactly what the
+ * default logged, then reports real failures (`reportRouteError`). React
+ * Router's mode is `NODE_ENV` under `@react-router/express`.
+ */
+export const handleError: HandleErrorFunction = (error, { request }) =>
+  reportRouteError(error, request, { mode: process.env.NODE_ENV });
 
 export default function handleRequest(
   request: Request,
@@ -102,6 +116,9 @@ export default function handleRequest(
           // reject and get logged in handleDocumentRequest.
           if (shellRendered) {
             console.error(error);
+            // Reported here only: a shell error reaches handleError instead.
+            // Not when the client went away or the stream timeout stopped it.
+            reportRenderError(error, request);
           }
         },
       }

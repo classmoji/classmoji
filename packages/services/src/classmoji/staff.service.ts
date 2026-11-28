@@ -30,6 +30,7 @@
  */
 import { tasks } from '@trigger.dev/sdk';
 
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma, {
   GIT_IDENTITY,
   gitScopeProvider,
@@ -213,6 +214,19 @@ const loadClassroom = async (classroomId: string) => {
  * instructor-supplied overrides from the web form; when omitted the git
  * profile's name and email are used.
  */
+/**
+ * Report a failed staff org invite, unless it is the provider saying no (a
+ * 4xx: an invite already pending, say), which is an answer, not a fault.
+ */
+export const reportOrgInviteFailure = (error: unknown): void => {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500) return;
+  reportError(error, {
+    surface: 'staff.org_invite',
+    tags: { status: typeof status === 'number' ? status : undefined },
+  });
+};
+
 export const addStaff = async ({
   actor,
   ...input
@@ -385,6 +399,7 @@ const addStaffMembership = async ({
       await gitProvider.inviteToOrganization(gitOrganization.login, String(gitUser.id), [team.id]);
     } catch (error: unknown) {
       console.error('Error inviting staff member to organization:', error);
+      reportOrgInviteFailure(error);
     }
   }
 

@@ -30,6 +30,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import {
   withImpersonator,
   type AuditActor,
@@ -252,7 +253,10 @@ export async function auditRead(
     if (audit.when && !audit.when(classroom)) return;
     ids = audit.ids?.(input, classroom) ?? {};
   } catch (error) {
+    // The surface's own `when`/`ids` failed, so the row never reached the
+    // audit service (which reports a write it could not make): reported here.
     console.warn(`[mcp] read audit (${surface}) failed:`, error);
+    reportError(error, { surface: 'mcp.audit_read', tags: { tool: surface } });
     return;
   }
   await ClassmojiService.audit.record(

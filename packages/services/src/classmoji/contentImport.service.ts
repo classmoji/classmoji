@@ -24,6 +24,7 @@
  * — see `openImportMediaCopy` and `media/mediaImportCopy.ts`.
  */
 
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES, repoFileSkippedWarning } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
@@ -1211,6 +1212,10 @@ export const importClassroomContent = async (
     sourceRepoExists = await provider.repositoryExists(source.login, source.repo);
   } catch (error: unknown) {
     warn('source', `could not check source content repo: ${errText(error)}`);
+    reportError(error, {
+      surface: 'content_import.source_check',
+      extra: { sourceClassroomId, targetClassroomId },
+    });
     return summary;
   }
   if (!sourceRepoExists) {
@@ -1272,6 +1277,10 @@ export const importClassroomContent = async (
       // of one. It has to leave the orchestrator.
       if (isPageSlugConflict(error)) throw error;
       warn('pages', `page import failed: ${errText(error)}`);
+      reportError(error, {
+        surface: 'content_import.pages',
+        extra: { sourceClassroomId, targetClassroomId },
+      });
     }
   }
 
@@ -1293,6 +1302,10 @@ export const importClassroomContent = async (
       if (created > 0) createdAny = true;
     } catch (error: unknown) {
       warn('slides', `slide import failed: ${errText(error)}`);
+      reportError(error, {
+        surface: 'content_import.slides',
+        extra: { sourceClassroomId, targetClassroomId },
+      });
     }
   }
 
@@ -1481,6 +1494,11 @@ async function importPages({
     await recordContentAssets(target.classroomId, result.files);
   } catch (error: unknown) {
     warn('pages', `page content commit failed: ${errText(error)}`);
+    reportError(error, {
+      surface: 'content_import.commit',
+      tags: { kind: 'pages' },
+      extra: { targetClassroomId: target.classroomId },
+    });
     // Nothing committed references the copies this pass made.
     await media?.discard();
     return 0;
@@ -1904,6 +1922,11 @@ async function importSlides({
       await recordContentAssets(target.classroomId, result.files);
     } catch (error: unknown) {
       warn('slides', `slide content commit failed: ${errText(error)}`);
+      reportError(error, {
+        surface: 'content_import.commit',
+        tags: { kind: 'slides' },
+        extra: { targetClassroomId: target.classroomId },
+      });
       // No deck and no slide row is created, so nothing references the copies
       // this pass made; the ones the committed pages use were kept above.
       await media?.discard();

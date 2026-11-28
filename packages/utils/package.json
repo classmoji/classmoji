@@ -28,13 +28,20 @@
     "./ai-models": "./src/aiModels.ts",
     "./sentry": "./src/sentry.ts",
     "./webapp-links": "./src/webappLinks.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./sentry-server": "./src/sentryServer.ts",
+    "./sentry-scrub": "./src/sentryScrub.ts",
+    "./sentry-node": "./src/sentryNode.ts",
+    "./error-report": "./src/errorReport.ts"
   },
   "dependencies": {
+    "@sentry/core": "11.11.0",
+    "@sentry/node": "11.11.0",
     "ai": "7.0.122",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@sentry/cloudflare": "11.11.0",
     "vitest": "^5.1.0"
   }
 }

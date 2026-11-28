@@ -1,5 +1,6 @@
 import { assertClassroomMutationAllowed, type ClassroomStatusInput } from '@classmoji/auth/server';
 import { getAuthSession } from '~/utils/db.server.ts';
+import { sessionReadFailed } from '~/utils/sessionRead.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
 
@@ -72,12 +73,8 @@ export async function assertPageAccess({
   };
 
   // Try to get auth (may be null for public pages)
-  let authData = null;
-  try {
-    authData = await getAuthSession(request);
-  } catch {
-    // Auth failed — only public pages accessible
-  }
+  // A failed read leaves only public pages accessible.
+  const authData = await getAuthSession(request).catch(sessionReadFailed);
 
   if (authData) {
     result.userId = authData.userId;

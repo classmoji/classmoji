@@ -6,6 +6,7 @@ import { useToast } from '~/hooks';
 import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
+import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { isDeckSlide, slideService } from '@classmoji/services/slides';
@@ -225,6 +226,7 @@ export const action = async ({ request }: { request: Request }) => {
       return { success: true, intent: 'delete', deletedSlideId: slideId };
     } catch (error: unknown) {
       console.error('Failed to delete slide:', error);
+      reportError(error, { surface: 'slides.list_action', tags: { intent: 'delete' } });
       const message = error instanceof Error ? error.message : 'Failed to delete slide';
       return { error: message };
     }
@@ -320,6 +322,7 @@ export const action = async ({ request }: { request: Request }) => {
       return { success: true, intent: 'rename', slide };
     } catch (error: unknown) {
       console.error('Failed to rename slide:', error);
+      reportError(error, { surface: 'slides.list_action', tags: { intent: 'rename' } });
       const message = error instanceof Error ? error.message : 'Failed to rename slide';
       return { error: message };
     }
@@ -436,7 +439,13 @@ export const action = async ({ request }: { request: Request }) => {
         existingPaths = await ClassmojiService.contentAssets.listContentAssetPaths(
           slide.classroom_id
         );
-      } catch {
+      } catch (error: unknown) {
+        // The copy goes ahead treating every asset as new.
+        reportError(error, {
+          surface: 'slides.list_action',
+          level: 'warning',
+          tags: { intent: 'duplicate' },
+        });
         existingPaths = new Set<string>();
       }
 
@@ -567,6 +576,7 @@ export const action = async ({ request }: { request: Request }) => {
       return { success: true, intent: 'duplicate', newSlide: toSlideCard(newSlide) };
     } catch (error: unknown) {
       console.error('Failed to duplicate slide:', error);
+      reportError(error, { surface: 'slides.list_action', tags: { intent: 'duplicate' } });
       const message = error instanceof Error ? error.message : 'Failed to duplicate slide';
       return { error: message };
     }

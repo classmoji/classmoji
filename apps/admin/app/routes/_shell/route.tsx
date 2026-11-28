@@ -5,6 +5,7 @@ import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { IconLogout, IconSearch } from '@tabler/icons-react';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { CommandPalette } from '~/components/CommandPalette';
+import { setSentryUser } from '~/utils/sentry.client';
 import type { LoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router';
 
 /**
@@ -73,6 +74,9 @@ const AdminShell = () => {
   const [signingOut, setSigningOut] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // Browser errors carry the signed-in admin's internal id, nothing else.
+  useEffect(() => setSentryUser(admin.id), [admin.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

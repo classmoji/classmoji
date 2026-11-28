@@ -13,7 +13,8 @@
 import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
 import type { Account as PrismaAccount } from '@classmoji/database/client';
-import { gitlabFetch, oauthClient } from './gitlabInstance.service.ts';
+import { reportError } from '@classmoji/utils/error-report';
+import { GitLabInstanceError, gitlabFetch, oauthClient } from './gitlabInstance.service.ts';
 
 export interface GitLabTokenResult {
   token: string;
@@ -48,6 +49,43 @@ async function withRefreshLock(
   return promise;
 }
 
+/** The OAuth `error` code in GitLab's refusal body (`invalid_grant`), else undefined. */
+function errorCode(detail: string): string | undefined {
+  try {
+    const code = (JSON.parse(detail) as { error?: unknown } | null)?.error;
+    return typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An instance that was removed, is still waiting for approval, or is turned off. */
+const isGoneInstance = (error: unknown): boolean =>
+  error instanceof GitLabInstanceError &&
+  (error.code === 'not_found' || error.code === 'pending' || error.code === 'disabled');
+
+/**
+ * Report a failed refresh: the network, a 5xx, an answer we could not read, a
+ * refusal we did not expect. Not `invalid_grant` (the person must sign in
+ * again, or another machine used the token first) and not an instance that is
+ * gone: both recur on every request for that person and are expected. Never
+ * the tokens or GitLab's text.
+ */
+function reportRefreshFailure(
+  error: unknown,
+  tags: { reason: string; status?: number; code?: string }
+): void {
+  if (tags.code === 'invalid_grant') return;
+  reportError(error, { surface: 'gitlab.token_refresh', tags });
+}
+
+/**
+ * The one error the gitlab.com client being unset is reported as: the same
+ * object every time, so `reportError` sends it once per process, not per
+ * request (`oauthClient` throws a new error on each call).
+ */
+const NOT_CONFIGURED = new Error('GitLab token refresh: client not configured');
+
 async function refreshGitLabToken(
   account: Pick<PrismaAccount, 'refresh_token' | 'account_id'>
 ): Promise<RefreshedTokens | null> {
@@ -64,6 +102,13 @@ async function refreshGitLabToken(
       '[gitlabUserToken] No usable Gitlab OAuth client:',
       error instanceof Error ? error.message : error
     );
+    if (!isGoneInstance(error)) {
+      const notConfigured = error instanceof GitLabInstanceError && error.code === 'not_configured';
+      reportRefreshFailure(notConfigured ? NOT_CONFIGURED : error, {
+        reason: notConfigured ? 'not_configured' : 'no_client',
+        code: error instanceof GitLabInstanceError ? error.code : undefined,
+      });
+    }
     return null;
   }
 
@@ -74,24 +119,46 @@ async function refreshGitLabToken(
     refresh_token: account.refresh_token,
   });
 
-  const response = await gitlabFetch(`${client.host}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      accept: 'application/json',
-    },
-    body: body.toString(),
-  });
+  let response: Response;
+  try {
+    response = await gitlabFetch(`${client.host}/oauth/token`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+  } catch (error: unknown) {
+    reportRefreshFailure(error, { reason: 'network' });
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
     console.error(`[gitlabUserToken] GitLab token refresh failed (${response.status}): ${detail}`);
+    const code = errorCode(detail);
+    reportRefreshFailure(new Error(`GitLab token refresh failed: ${code ?? response.status}`), {
+      reason: 'refused',
+      status: response.status,
+      code,
+    });
     return null;
   }
 
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error: unknown) {
+    reportRefreshFailure(error, { reason: 'unreadable_response', status: response.status });
+    throw error;
+  }
   if (!data.access_token) {
     console.error('[gitlabUserToken] GitLab token refresh returned no access_token');
+    reportRefreshFailure(new Error('GitLab token refresh returned no access_token'), {
+      reason: 'no_access_token',
+      status: response.status,
+    });
     return null;
   }
 

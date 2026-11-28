@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 import dayjs from 'dayjs';
+import { setErrorReporter, type ReportContext } from '@classmoji/utils/error-report';
 
 const PRO_PRICE_ID = 'price_pro_test';
 
@@ -923,5 +924,101 @@ describe('stripe webhook route', () => {
       expect(JSON.parse(second.body)).toMatchObject({ duplicate: true });
       expect(subCreate).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('stripe webhook error reports', () => {
+  let captured: Array<{ error: unknown; context: ReportContext }>;
+
+  beforeEach(() => {
+    process.env.STRIPE_PRO_PRICE_ID = PRO_PRICE_ID;
+    [constructWebhookEvent, userFindBy, subGetCurrent, subCreate, subFindBy].forEach(m =>
+      m.mockReset()
+    );
+    processedFindUnique.mockResolvedValue(null);
+    processedCreate.mockResolvedValue({});
+    captured = [];
+    setErrorReporter({
+      capture: (error, context) => {
+        captured.push({ error, context });
+      },
+      flush: async () => true,
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    delete process.env.STRIPE_PRO_PRICE_ID;
+    setErrorReporter(null);
+    vi.restoreAllMocks();
+  });
+
+  it('reports a price mismatch as an error, still answering 200', async () => {
+    constructWebhookEvent.mockReturnValue({
+      id: 'evt_mismatch',
+      type: 'customer.subscription.created',
+      data: { object: proSub({ items: { data: [{ price: { id: 'price_other' } }] } }) },
+    });
+    userFindBy.mockResolvedValue({ id: 'user-1' });
+
+    const res = await post(await buildApp(), {}, { 'stripe-signature': 'sig' });
+
+    expect(res.statusCode).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].context).toEqual({
+      surface: 'stripe.price_mismatch',
+      level: 'error',
+      tags: {
+        provider: 'stripe',
+        stripe_event_id: 'evt_mismatch',
+        stripe_subscription_id: 'sub_new',
+        subscription_status: 'active',
+      },
+    });
+  });
+
+  it('reports a failed handler once (the 500 Stripe retries), with the event type and id only', async () => {
+    const failure = new Error('db down');
+    constructWebhookEvent.mockReturnValue({
+      id: 'evt_err',
+      type: 'customer.subscription.created',
+      data: { object: proSub() },
+    });
+    userFindBy.mockResolvedValue({ id: 'user-1' });
+    subGetCurrent.mockResolvedValue(null);
+    subFindBy.mockResolvedValue(null);
+    subCreate.mockRejectedValue(failure);
+
+    const res = await post(await buildApp(), {}, { 'stripe-signature': 'sig' });
+
+    expect(res.statusCode).toBe(500);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].error).toBe(failure);
+    expect(captured[0].context).toEqual({
+      surface: 'stripe.handler',
+      tags: {
+        provider: 'stripe',
+        event: 'customer.subscription.created',
+        stripe_event_id: 'evt_err',
+      },
+    });
+  });
+
+  it('reports nothing for a grant that succeeds', async () => {
+    constructWebhookEvent.mockReturnValue({
+      id: 'evt_ok',
+      type: 'customer.subscription.created',
+      data: { object: proSub() },
+    });
+    userFindBy.mockResolvedValue({ id: 'user-1' });
+    subGetCurrent.mockResolvedValue(null);
+    subFindBy.mockResolvedValue(null);
+    subCreate.mockResolvedValue({});
+
+    const res = await post(await buildApp(), {}, { 'stripe-signature': 'sig' });
+
+    expect(res.statusCode).toBe(200);
+    expect(captured).toEqual([]);
   });
 });

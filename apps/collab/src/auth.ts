@@ -15,10 +15,12 @@ import {
   type CollabConnectionContext,
   type CollabRejectReason,
 } from '@classmoji/collab';
+import { reportError } from '@classmoji/utils/error-report';
 
 import type { AdapterRegistry } from './adapters/registry.ts';
 import { recordAudit, recordNonMemberRefusal, type AuditSink } from './audit.ts';
 import type { CollabConfig } from './config.ts';
+import { roomTags } from './report.ts';
 import { currentEpoch, type CollabDocStore } from './store/types.ts';
 
 export interface CollabSession {
@@ -55,11 +57,20 @@ export class CollabAuthError extends Error {
 /**
  * Any error as a refusal the client can act on: a CollabAuthError as is;
  * anything unexpected (DB blip, git read failure) as `unavailable` — "try
- * again", never a permanent read-only state.
+ * again", never a permanent read-only state. The unexpected one is also
+ * reported (the error itself, tagged with the room's ids and the stage).
  */
-export function asAuthError(err: unknown, where: string): CollabAuthError {
+export function asAuthError(
+  err: unknown,
+  where: string,
+  report: { stage: 'authenticate' | 'load'; documentName: string }
+): CollabAuthError {
   if (err instanceof CollabAuthError) return err;
   console.error(`[collab] ${where} failed:`, err);
+  reportError(err, {
+    surface: 'collab.hook',
+    tags: { hook: report.stage, ...roomTags(report.documentName) },
+  });
   return new CollabAuthError(
     'unavailable',
     `${where}: ${err instanceof Error ? err.message : String(err)}`,
@@ -103,7 +114,10 @@ export async function authenticate(
   try {
     return await authenticateOrRefuse(payload, deps);
   } catch (err) {
-    throw asAuthError(err, `authenticating ${payload.documentName}`);
+    throw asAuthError(err, `authenticating ${payload.documentName}`, {
+      stage: 'authenticate',
+      documentName: payload.documentName,
+    });
   }
 }
 

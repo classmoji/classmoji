@@ -5,8 +5,10 @@ import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
 
 // The Sentry plugins a build keeps: the config `buildEnd` reads, hidden source
-// maps and Sentry's bundler plugin. The others add a tunnel route and a hook to
-// the server build for Sentry on the server, which no app here runs.
+// maps (client and server builds) and Sentry's bundler plugin. The others add a
+// tunnel route and a hook to the server build for `@sentry/react-router`'s
+// server SDK. The server reports errors through `@sentry/node` instead
+// (app/utils/sentry.server.ts, errors only), which needs neither.
 const SENTRY_BUILD_PLUGINS = new Set([
   'sentry-react-router-config-injector',
   'sentry-react-router-update-source-map-setting',
@@ -56,8 +58,9 @@ export default async ({ command, mode }) => {
               finalize: false,
               setCommits: false,
             },
-            // Sentry runs in the browser only: no build-time instrumentation
-            // of server modules, which would also bundle them into the server build.
+            // The server reports errors only, with no tracing: no build-time
+            // instrumentation of server modules, which would also bundle them
+            // into the server build.
             buildTimeInstrumentation: false,
           },
           { command, mode }

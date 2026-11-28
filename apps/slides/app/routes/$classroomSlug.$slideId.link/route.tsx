@@ -14,6 +14,7 @@
 import { useState, type FormEvent } from 'react';
 import { useLoaderData, useNavigation, Form, redirect, useActionData, data } from 'react-router';
 import getPrisma from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SlideKindError, slideFileService, validateSlideLinkUrl } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
@@ -102,6 +103,7 @@ export const action = async ({
       error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError
         ? error.status
         : 500;
+    if (status === 500) reportError(error, { surface: 'slides.link.update' });
     const message = error instanceof Error ? error.message : 'Failed to update the link';
     return data({ error: message }, { status });
   }

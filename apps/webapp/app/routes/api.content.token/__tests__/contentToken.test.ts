@@ -24,6 +24,7 @@ vi.mock('@classmoji/services', () => ({
   getGitProvider: (...a: unknown[]) => getGitProviderMock(...a),
   describeTokenMintError: (org: string, error: unknown) =>
     `mint failed for ${org}: ${error instanceof Error ? error.message : String(error)}`,
+  tokenMintErrorStatus: () => null,
 }));
 
 const { action, loader } = await import('../route.ts');

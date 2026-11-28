@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 
-import { ClassmojiService, getGitProvider, describeTokenMintError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  getGitProvider,
+  describeTokenMintError,
+  tokenMintErrorStatus,
+} from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 
 import type { Route } from './+types/route';
 
@@ -68,6 +74,13 @@ function secureCompare(a: string, b: string): boolean {
  */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * Reported once per process (one object) when the secret is unset: this path
+ * is asked on every edge cache miss, so a new error per request would only be
+ * volume.
+ */
+const SECRET_NOT_SET = new Error('CONTENT_WORKER_SHARED_SECRET is not set');
+
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -95,6 +108,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   const sharedSecret = process.env.CONTENT_WORKER_SHARED_SECRET;
   if (!sharedSecret) {
     console.warn('[api.content.token] CONTENT_WORKER_SHARED_SECRET is not set; refusing');
+    reportError(SECRET_NOT_SET, { surface: 'content_token.config', level: 'warning' });
     return json({ error: 'not configured' }, 503);
   }
 
@@ -194,10 +208,20 @@ export const action = async ({ request }: Route.ActionArgs) => {
     );
   } catch (error: unknown) {
     // Laundered before it is logged: raw mint failures echo credentials back.
-    console.error(
-      `[api.content.token] Mint failed for classroom ${classroomId}: ` +
-        describeTokenMintError(org, error)
-    );
+    const laundered = describeTokenMintError(org, error);
+    console.error(`[api.content.token] Mint failed for classroom ${classroomId}: ` + laundered);
+    // Only the status (or that there was none) and the provider, never the
+    // raw error nor the laundered text: without a status that text still
+    // carries up to 200 characters of the provider's own message.
+    const status = tokenMintErrorStatus(error);
+    reportError(new Error(`Token mint failed (${status ?? 'no status'})`), {
+      surface: 'content_token.mint',
+      tags: {
+        classroom_id: classroomId,
+        status: status ?? undefined,
+        provider: classroom.git_organization.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB',
+      },
+    });
     // The Worker gets no detail. It cannot act on the reason — its only move is
     // to fall back — and the reason is about this deployment's GitHub App, not
     // about the request.

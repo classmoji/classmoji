@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { reportError } from '@classmoji/utils/error-report';
 import {
   UploadTooLargeError,
   declaredBodyTooLarge,
@@ -142,6 +143,7 @@ export function mediaErrorResponse(error: unknown): Response {
   }
 
   console.error('[api.media] Unexpected failure:', error);
+  reportError(error, { surface: 'media.http' });
   return mediaError('INTERNAL', 500, { message: 'Something went wrong.' });
 }
 

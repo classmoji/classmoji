@@ -42,6 +42,7 @@
  * audit the user actions they perform.
  */
 
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import {
   canonicalTimeZone,
@@ -937,8 +938,12 @@ export const admitUserMessage = async (i: {
   let pro: boolean;
   try {
     pro = (await canUseSyllabusBot(pre.classroom_id)).allowed;
-  } catch {
+  } catch (error: unknown) {
     // A failed lookup is not a verdict; the next message tries again.
+    reportError(error, {
+      surface: 'ask_moji.pro_lookup',
+      extra: { classroomId: pre.classroom_id },
+    });
     pro = false;
   }
 

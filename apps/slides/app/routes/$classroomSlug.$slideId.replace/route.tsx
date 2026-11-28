@@ -25,6 +25,7 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
+import { reportError } from '@classmoji/utils/error-report';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
@@ -222,6 +223,7 @@ async function replaceFromMedia({
     console.error('Failed to replace slide file from media:', error);
     const ours =
       error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
+    if (!ours) reportError(error, { surface: 'slides.replace', tags: { source: 'media' } });
     return data(
       {
         error: ours ? error.message : "Couldn't save the slide. Please try again.",
@@ -294,6 +296,7 @@ async function replaceFromForm({
     // paths and remedies (`git push`) that mean nothing on this screen.
     const ours =
       error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
+    if (!ours) reportError(error, { surface: 'slides.replace', tags: { source: 'file' } });
     return data(
       {
         error: ours

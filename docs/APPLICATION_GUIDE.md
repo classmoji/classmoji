@@ -1277,7 +1277,7 @@ Secrets: Environment variables
 - [ ] Enable HTTPS everywhere
 - [ ] Configure CORS for production domains
 - [ ] Set up database backups
-- [ ] Set `SENTRY_DSN` in Infisical (`prod`/`sta`; synced to the webapp, pages and slides Fly apps) for browser error tracking
+- [ ] Set `SENTRY_DSN` in Infisical (`prod`/`sta` root, synced to the Fly apps and the admin Worker; `/content-worker` for the content Worker) for server and browser error tracking
 - [ ] Test webhook delivery
 - [ ] Verify GitHub OAuth redirect URLs
 - [ ] Test a quiz attempt end to end (Trigger.dev chat task)
@@ -1290,7 +1290,7 @@ Secrets: Environment variables
 - Structured logging for production
 
 **Error Tracking**
-- Sentry for browser errors in the webapp, pages and slides (errors + 5% tracing; user id only, no replay); see AGENTS.md
+- Sentry for server errors from the webapp, pages, slides, admin, mcp, collab and hook-station servers and the admin and content Workers (errors only, scrubbed) and browser errors in the webapp, pages, slides and admin (errors + 5% tracing); user id only, no replay; see AGENTS.md
 - Audit logs for security events
 
 **Performance Monitoring**

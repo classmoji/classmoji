@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { useLoaderData, useNavigation, Form, data, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
+import { reportError } from '@classmoji/utils/error-report';
 import { closeLiveDeck, liveEditingEnv } from '~/utils/collab/collab.server';
 import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
@@ -154,6 +155,7 @@ export const action = async ({
       await closeLiveDeck(liveEnv, slideId);
     } catch (error: unknown) {
       console.warn('[slides] Could not close the live deck before deleting it:', error);
+      reportError(error, { surface: 'slides.delete.close_live', level: 'warning' });
     }
   }
 
@@ -168,6 +170,7 @@ export const action = async ({
     return redirect(webappClassUrl(webappUrl, membership?.role, classroomSlug, 'slides'));
   } catch (error: unknown) {
     console.error('Failed to delete slide:', error);
+    reportError(error, { surface: 'slides.delete' });
     const message = error instanceof Error ? error.message : 'Failed to delete slide';
     return { error: message };
   }

@@ -19,6 +19,7 @@
  */
 
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES, formatMegabytes, repoFileSkippedWarning } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
@@ -776,6 +777,7 @@ export const duplicateImportedTemplates = async (
         summary.template_map[sourceRef] = newName;
       } catch (error: unknown) {
         warn(scope, `duplication failed: ${errText(error)}`);
+        reportError(error, { surface: 'template_import.duplicate' });
       }
     } finally {
       consumed++;

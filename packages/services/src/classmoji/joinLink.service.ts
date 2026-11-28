@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { reportError } from '@classmoji/utils/error-report';
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@classmoji/database/client';
 import * as classroomInviteService from './classroomInvite.service.ts';
@@ -171,6 +172,10 @@ export const joinByCode = async ({
     matchedRosterInvite = classroomIds.includes(classroom.id);
   } catch (error: unknown) {
     console.error('[joinLink] claiming roster invites failed:', error);
+    reportError(error, {
+      surface: 'join_link.claim_invites',
+      extra: { classroomId: classroom.id },
+    });
   }
 
   await prisma.classroomMembership.createMany({

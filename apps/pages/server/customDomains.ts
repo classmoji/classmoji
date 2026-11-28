@@ -58,6 +58,8 @@
  * are shared.
  */
 
+import { reportError } from '@classmoji/utils/error-report';
+
 /** custom hostname → tenant subdomain. */
 export type CustomDomainMap = ReadonlyMap<string, string>;
 
@@ -131,6 +133,8 @@ function createDefaultLoader(): () => Promise<Array<readonly [string, string]>> 
         return createPgPrismaClient(url, { max: 2 }) as unknown as RoutingClient;
       })().catch(error => {
         console.error('[customDomains] could not initialize the routing database client', error);
+        // Runs on a timer, outside any request: nothing else reports it.
+        reportError(error, { surface: 'pages.custom_domains.client' });
         return null;
       });
     }
@@ -196,6 +200,7 @@ export function createCustomDomainSnapshot(
         // instructor's site offline for a transient error the site itself
         // never depended on.
         console.error('[customDomains] refresh failed; keeping the previous map', error);
+        reportError(error, { surface: 'pages.custom_domains.refresh' });
       } finally {
         inFlight = null;
       }
