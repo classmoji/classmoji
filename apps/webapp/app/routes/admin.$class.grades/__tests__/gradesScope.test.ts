@@ -846,7 +846,7 @@ describe('grades action — releasing final grades', () => {
       'class-1',
       { final_grades_released: true },
       releaseActor('web:grades.release_final_grades'),
-      { resourceType: 'GRADES', data: { final_grades_released: true } }
+      { resourceType: 'GRADES', topLevelFields: ['final_grades_released'] }
     );
     expect(mocks.requestImpersonator).toHaveBeenCalledWith(sameObject(routeRequest));
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
@@ -865,7 +865,7 @@ describe('grades action — releasing final grades', () => {
       'class-1',
       { final_grades_released: false },
       releaseActor('web:grades.hide_final_grades', 'admin-1'),
-      { resourceType: 'GRADES', data: { final_grades_released: false } }
+      { resourceType: 'GRADES', topLevelFields: ['final_grades_released'] }
     );
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });

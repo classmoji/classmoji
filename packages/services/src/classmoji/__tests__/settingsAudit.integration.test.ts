@@ -374,7 +374,7 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
           X.classroomId,
           { final_grades_released: true },
           webActor(X, 'web:grades.release_final_grades'),
-          { resourceType: 'GRADES', data: { final_grades_released: true } }
+          { resourceType: 'GRADES', topLevelFields: ['final_grades_released'] }
         )
       );
       expect(rows).toEqual([
@@ -391,6 +391,34 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
           },
         }),
       ]);
+    });
+
+    it('top-level fields go through the allow-list: a key and owner text add nothing', async () => {
+      const { rows } = await newRows(X, () =>
+        classroom.updateSettings(
+          X.classroomId,
+          {
+            anthropic_api_key: OTHER_KEY,
+            syllabus_bot_instructions: INSTRUCTIONS,
+            show_pages: false,
+          },
+          webActor(X, 'web:settings.top_level'),
+          { topLevelFields: ['anthropic_api_key', 'syllabus_bot_instructions', 'show_pages'] }
+        )
+      );
+      expect(rows).toHaveLength(1);
+      const data = rows[0].data as Record<string, unknown>;
+      // Unchanged, so not among `fields`, but asked for at the top level.
+      expect(data).toMatchObject({ show_pages: false });
+      expect(data).not.toHaveProperty('anthropic_api_key');
+      expect(data).not.toHaveProperty('syllabus_bot_instructions');
+      expect(JSON.stringify(rows)).not.toContain('OTHERSECRET');
+      expect(JSON.stringify(rows)).not.toContain(INSTRUCTIONS);
+      await classroom.updateSettings(
+        X.classroomId,
+        { anthropic_api_key: null, syllabus_bot_instructions: null },
+        null
+      );
     });
 
     it('writes no row when nothing changed', async () => {

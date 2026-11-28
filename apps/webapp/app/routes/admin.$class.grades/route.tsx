@@ -474,7 +474,7 @@ const setFinalGradesReleased = async (request: Request, classSlug: string, relea
       gate,
       released ? 'web:grades.release_final_grades' : 'web:grades.hide_final_grades'
     ),
-    { resourceType: 'GRADES', data: { final_grades_released: released } }
+    { resourceType: 'GRADES', topLevelFields: ['final_grades_released'] }
   );
 
   return { success: true, final_grades_released: released };

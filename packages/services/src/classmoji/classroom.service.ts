@@ -19,6 +19,7 @@ import {
   describeSettingsChange,
   mergeSettingsChanges,
   settingsChangeData,
+  settingsValues,
 } from './settingsAudit.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
 // classroom is actually deleted.
@@ -1059,8 +1060,13 @@ export interface ClassroomSettingsSave {
 export interface ClassroomSettingsAuditOptions {
   /** Default SETTINGS; the gradebook's release keeps GRADES. */
   resourceType?: AuditResourceType;
-  /** Keys the surface's rows carried before (e.g. `final_grades_released`). */
-  data?: Record<string, unknown>;
+  /**
+   * Saved settings columns the row also carries at its top level, as the
+   * surface's rows did before (the release's `final_grades_released`). Each
+   * goes through the allow-list like `values`: only a safe column's value,
+   * in its shape, is added.
+   */
+  topLevelFields?: readonly (keyof Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput)[];
 }
 
 /**
@@ -1076,7 +1082,9 @@ export interface ClassroomSettingsAuditOptions {
  * changed: `fields` (the changed columns), `values` / `previous` (new and old
  * values of the columns `settingsAudit.ts` allows), `<key>_set` /
  * `<key>_cleared` for a key, and `instructions_length` for the Ask Moji
- * instructions. `actor: null` records nothing. The previous values are read
+ * instructions, after the saved values of `topLevelFields` (allow-listed the
+ * same way). Nothing else goes into the row. `actor: null` records nothing.
+ * The previous values are read
  * in the transaction that writes, under a lock on the classroom row, so two
  * overlapping saves are recorded one after the other, each against what the
  * other left. The row is written after the commit.
@@ -1085,7 +1093,7 @@ export const updateClassroomSettings = async (
   classroomId: string,
   save: ClassroomSettingsSave,
   actor: AuditActor | null,
-  { resourceType = 'SETTINGS', data }: ClassroomSettingsAuditOptions = {}
+  { resourceType = 'SETTINGS', topLevelFields = [] }: ClassroomSettingsAuditOptions = {}
 ) => {
   let updates = save.settings;
   // Turning the syllabus bot ON is Pro-only. Enforced here rather than in the
@@ -1203,7 +1211,10 @@ export const updateClassroomSettings = async (
         resourceType,
         resourceId: classroomId,
         action: 'UPDATE',
-        data: { ...data, ...settingsChangeData(change) },
+        data: {
+          ...(settings ? settingsValues('ClassroomSettings', settings, topLevelFields) : {}),
+          ...settingsChangeData(change),
+        },
       });
     }
   }
