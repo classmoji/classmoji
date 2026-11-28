@@ -657,6 +657,8 @@ describe('staff_remove — ungraded submissions', () => {
       choice: 'reassign',
       departingName: 'Ann Grader',
       expectedCount: 9,
+      // The slot moves are recorded on the tool's STAFF row, not as grader rows.
+      actor: null,
     });
     expect(payload).toMatchObject({ success: true, queued: false, removal_completed: true });
     expect(payload.ungraded_submissions).toEqual({

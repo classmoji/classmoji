@@ -190,6 +190,7 @@ beforeEach(() => {
 describe('moveGraderSlot', () => {
   it('adds the new grader before removing the old one, with stored names', async () => {
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's2',
       fromGraderId: 'u-gone',
@@ -211,6 +212,7 @@ describe('moveGraderSlot', () => {
   it('leaves a slot that was graded since the plan alone', async () => {
     mocks.gradesFor.mockResolvedValue([{ id: 'g1' }]);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -224,6 +226,7 @@ describe('moveGraderSlot', () => {
     // Ungraded before the add, graded by the time the old grader would go.
     mocks.gradesFor.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'g1' }]);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -239,6 +242,7 @@ describe('moveGraderSlot', () => {
   it('without the fallback, keeps the old grader when the new one is no longer eligible', async () => {
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -251,6 +255,7 @@ describe('moveGraderSlot', () => {
   it('with the fallback (reassign), unassigns when the planned grader left the pool', async () => {
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -267,6 +272,7 @@ describe('moveGraderSlot', () => {
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
       toGraderId: 'u-ann',
+      actor: null,
     };
     await HelperService.moveGraderSlot(payload);
     const again = await HelperService.moveGraderSlot(payload);
@@ -282,6 +288,7 @@ describe('moveGraderSlot', () => {
     submissions.set('s1', { graderIds: ['u-gone', 'u-ann'] });
     mocks.findEligibleGrader.mockResolvedValue(null);
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -295,6 +302,7 @@ describe('moveGraderSlot', () => {
   it('the departing grader already gone after a successful add is still a move', async () => {
     submissions.set('s1', { graderIds: [] });
     const result = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-1',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -307,6 +315,7 @@ describe('moveGraderSlot', () => {
   it('refuses a submission outside the classroom', async () => {
     mocks.classroomFindById.mockResolvedValue({ id: 'class-2', git_organization: ORG });
     const scoped = await HelperService.moveGraderSlot({
+      actor: null,
       classroomId: 'class-2',
       gitRepoAssignmentId: 's1',
       fromGraderId: 'u-gone',
@@ -319,7 +328,12 @@ describe('moveGraderSlot', () => {
 
 describe('resolveUngradedSlots', () => {
   const resolve = (choice: 'reassign' | 'unassign' | 'keep') =>
-    HelperService.resolveUngradedSlots({ classroomId: 'class-1', graderId: 'u-gone', choice });
+    HelperService.resolveUngradedSlots({
+      classroomId: 'class-1',
+      graderId: 'u-gone',
+      choice,
+      actor: null,
+    });
 
   it('keep changes nothing', async () => {
     const outcome = await resolve('keep');
@@ -357,6 +371,7 @@ describe('resolveUngradedSlots', () => {
 
   it('sends ONE summary notification per receiving grader', async () => {
     await HelperService.resolveUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'reassign',
@@ -572,6 +587,7 @@ describe('startStaffRemoval', () => {
 describe('settleUngradedSlots', () => {
   it('carries out the choice', async () => {
     const outcome = await HelperService.settleUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'unassign',
@@ -584,6 +600,7 @@ describe('settleUngradedSlots', () => {
   it('never throws: a failure counts every expected slot as failed', async () => {
     mocks.findUngradedSlotsForGrader.mockRejectedValue(new Error('db down'));
     const outcome = await HelperService.settleUngradedSlots({
+      actor: null,
       classroomId: 'class-1',
       graderId: 'u-gone',
       choice: 'unassign',

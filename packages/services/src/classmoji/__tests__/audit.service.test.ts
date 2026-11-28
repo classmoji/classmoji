@@ -226,3 +226,78 @@ describe('withImpersonator: who was viewing as the user', () => {
     });
   });
 });
+
+describe('recordForActor: the row a shared service writes for its caller', () => {
+  const row = {
+    classroomId: 'class-1',
+    resourceType: 'GIT_REPO_ASSIGNMENT' as const,
+    resourceId: 'gra-1',
+    action: 'CREATE' as const,
+    data: { emoji: '🟢', grade_id: 'g-1' },
+  };
+
+  it('a web actor: the user, role and tool; no via, client or admin', async () => {
+    const result = await audit.recordForActor(
+      { userId: 'user-1', role: 'TEACHER', tool: 'web:grades.add' },
+      row
+    );
+    expect(result).toEqual({ written: 1, missed: 0 });
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(createMock.mock.calls[0][0].data).toEqual({
+      user_id: 'user-1',
+      classroom_id: 'class-1',
+      role: 'TEACHER',
+      resource_type: 'GIT_REPO_ASSIGNMENT',
+      resource_id: 'gra-1',
+      action: 'CREATE',
+      data: { emoji: '🟢', grade_id: 'g-1', tool: 'web:grades.add' },
+    });
+  });
+
+  it('an MCP actor under View as: via, client and the admin, which data cannot set', async () => {
+    await audit.recordForActor(
+      {
+        userId: 'user-1',
+        role: 'ASSISTANT',
+        tool: 'grade_add',
+        impersonatedBy: 'admin-1',
+        clientId: 'client-1',
+        via: 'mcp',
+      },
+      { ...row, data: { ...row.data, tool: 'forged', client_id: 'x', impersonated_by: 'y' } }
+    );
+    expect(createMock.mock.calls[0][0].data.data).toEqual({
+      via: 'mcp',
+      emoji: '🟢',
+      grade_id: 'g-1',
+      tool: 'grade_add',
+      client_id: 'client-1',
+      impersonated_by: 'admin-1',
+    });
+  });
+
+  it('actor null: no row, nothing owed, no throw', async () => {
+    await expect(audit.recordForActor(null, row)).resolves.toEqual({ written: 0, missed: 0 });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('a failed write: tried twice, one audit_miss line, reported missed, no throw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const write = vi.fn().mockRejectedValue(new Error('database away'));
+    const result = await audit.recordForActorWith(
+      write,
+      { userId: 'user-1', role: 'OWNER', tool: 'web:grades.remove' },
+      row
+    );
+    expect(result).toEqual({ written: 0, missed: 1 });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls.filter(c => c[0] === 'audit_miss')).toHaveLength(1);
+  });
+
+  it('adds up several calls', () => {
+    expect(audit.addServiceAudit({ written: 2, missed: 0 }, { written: 0, missed: 1 })).toEqual({
+      written: 2,
+      missed: 1,
+    });
+  });
+});

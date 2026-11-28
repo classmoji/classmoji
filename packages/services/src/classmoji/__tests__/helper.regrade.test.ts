@@ -109,6 +109,7 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
     });
 
     const outcome = await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -142,6 +143,7 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
 
     // The callers pass the submission id alone: no studentId on it.
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -165,6 +167,7 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
     findOpenByAssignmentIdMock.mockResolvedValue(null);
 
     await HelperService.addGradeToGitRepoAssignment({
+      actor: null,
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',

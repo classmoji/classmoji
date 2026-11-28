@@ -26,6 +26,7 @@ import SubmissionsTable, {
 } from './SubmissionsTable';
 import type { Route } from './+types/route';
 import { classroomForClient } from '~/utils/classroomForClient';
+import { auditActor } from '~/utils/auditActor.server';
 import { withContributions } from '~/utils/repoContributions.server';
 
 /**
@@ -143,15 +144,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 /**
  * Grader changes from the table. Assistants can open the page (they grade
- * here), but only owners and teachers decide who grades what.
+ * here), but only owners and teachers decide who grades what. Each change is
+ * recorded by the helper that makes it, for the gate's user and role.
  */
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomTeachingTeam(request, classSlug, {
+  const gate = await requireClassroomTeachingTeam(request, classSlug, {
     resourceType: 'ASSIGNMENT',
     action: 'manage_graders',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   if (membership!.role !== 'OWNER' && membership!.role !== 'TEACHER') {
     throw new Response('Only owners and teachers can change graders', { status: 403 });
@@ -173,7 +176,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async addGrader() {
-      const result = await HelperService.addGraderInClassroom(scope);
+      const result = await HelperService.addGraderInClassroom({
+        ...scope,
+        actor: await auditActor(request, gate, 'web:graders.add'),
+      });
       if (result.status === 'submission_not_found') {
         return { action: ActionTypes.ADD_GRADER, error: SUBMISSION_NOT_FOUND };
       }
@@ -190,7 +196,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async removeGrader() {
-      const result = await HelperService.removeGraderInClassroom(scope);
+      const result = await HelperService.removeGraderInClassroom({
+        ...scope,
+        actor: await auditActor(request, gate, 'web:graders.remove'),
+      });
       if (result.status === 'submission_not_found') {
         return { action: ActionTypes.REMOVE_GRADER, error: SUBMISSION_NOT_FOUND };
       }

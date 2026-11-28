@@ -82,13 +82,26 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assignmentFindById.mockImplementation(async (id: string) => assignmentIn('class-1', id));
-  mocks.assignGraders.mockResolvedValue({ numAssignmentsToAddGradersTo: 12 });
+  mocks.assignGraders.mockResolvedValue({
+    numAssignmentsToAddGradersTo: 12,
+    audit: { written: 1, missed: 0 },
+  });
 });
+
+/** The actor grader_assign_bulk passes for CTX's caller. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'grader_assign_bulk',
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+};
 
 describe('grader_assign_bulk — RANDOM', () => {
   const ARGS = { classroom: 'org/w26', assignment_id: ASSIGNMENT_ID, method: 'RANDOM' as const };
 
-  it('distributes graders via the service using ctx classroomId and audits the run', async () => {
+  it('distributes graders via the service using ctx classroomId, the caller as actor', async () => {
     const payload = parse(await graderAssignBulkTool.handler(ARGS, CTX));
     expect(payload).toMatchObject({
       success: true,
@@ -104,21 +117,22 @@ describe('grader_assign_bulk — RANDOM', () => {
       assignmentId: ASSIGNMENT_ID,
       method: 'RANDOM',
       templateAssignmentId: null,
+      actor: ACTOR,
     });
     expect(mocks.assignGraders.mock.calls[0][0]).not.toHaveProperty('sessionId');
+    // The service records the run; the tool writes no row of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
 
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      action: string;
-      classroom_id: string;
-      data: Record<string, unknown>;
-    };
-    expect(audit.action).toBe('CREATE');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.data).toMatchObject({
-      tool: 'grader_assign_bulk',
-      method: 'RANDOM',
-      submissions_assigned: 12,
+  it('marks the call when the service could not write its row', async () => {
+    mocks.assignGraders.mockResolvedValue({
+      numAssignmentsToAddGradersTo: 12,
+      audit: { written: 0, missed: 1 },
     });
+    const ctx = { ...CTX } as ToolContext;
+    const payload = parse(await graderAssignBulkTool.handler(ARGS, ctx));
+    expect(payload).toMatchObject({ success: true, submissions_assigned: 12 });
+    expect(ctx.auditIncomplete).toBe(true);
   });
 
   it('maps no_graders to invalid_params and audits nothing', async () => {
@@ -157,6 +171,7 @@ describe('grader_assign_bulk — EXISTING', () => {
       assignmentId: ASSIGNMENT_ID,
       method: 'EXISTING',
       templateAssignmentId: TEMPLATE_ID,
+      actor: ACTOR,
     });
   });
 

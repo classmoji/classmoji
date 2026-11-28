@@ -437,3 +437,103 @@ export async function recordWith<Row>(
  * is recorded before its data is handed over).
  */
 export const record = (data: AuditLogData): Promise<AuditRecordResult> => recordWith(create, data);
+
+// ─── Rows a shared service writes for its caller ─────────────────────────────
+
+/**
+ * Who a shared service acts for, when the service writes the audit row of its
+ * own change (grading: grades, graders, late overrides, grade release,
+ * submission delete). Routes and tools pass one instead of writing the row.
+ *
+ * `role` is the actor's classroom role as the caller's gate resolved it;
+ * `tool` names the surface (`web:grades.add` on the web, the tool's name on
+ * the MCP). `impersonatedBy` is the platform admin viewing as the actor ("View
+ * as"); `clientId` and `via` are the MCP's (`via: 'mcp'`, the OAuth client).
+ */
+export interface AuditActor {
+  userId: string;
+  role: Role;
+  tool: string;
+  impersonatedBy?: string | null;
+  clientId?: string | null;
+  via?: string;
+}
+
+/**
+ * What a service did about the audit rows of one call: how many it wrote and
+ * how many it owed but could not write (each left an `audit_miss` line). Both
+ * are 0 when no row was owed: the call changed nothing, or its caller passed
+ * `actor: null` (no person acting: a webhook, a background run).
+ */
+export interface ServiceAudit {
+  written: number;
+  missed: number;
+}
+
+/** No row owed. */
+export const NO_SERVICE_AUDIT: ServiceAudit = Object.freeze({ written: 0, missed: 0 });
+
+/** Two calls' audit outcomes, added up. */
+export const addServiceAudit = (a: ServiceAudit, b: ServiceAudit): ServiceAudit => ({
+  written: a.written + b.written,
+  missed: a.missed + b.missed,
+});
+
+/** One row of a service's change, without who made it (the actor says that). */
+export interface ActorAuditRow {
+  classroomId: string;
+  resourceType: AuditResourceType;
+  resourceId?: string | null;
+  action: AuditLogAction;
+  /** Ids, codes, values and counts only: never names, emails or free text. */
+  data?: Record<string, unknown>;
+}
+
+/**
+ * The `audit_logs` row `row` stands for when `actor` made the change: the
+ * actor's id and role, `data.tool` from the actor, and, when the actor has
+ * them, `via`, `client_id` and `impersonated_by` (never from `row.data`).
+ */
+export function actorAuditRow(actor: AuditActor, row: ActorAuditRow): AuditLogData {
+  const data: Record<string, unknown> = {
+    ...(actor.via ? { via: actor.via } : {}),
+    ...row.data,
+    tool: actor.tool,
+    ...(actor.clientId !== undefined ? { client_id: actor.clientId } : {}),
+  };
+  return {
+    user_id: actor.userId,
+    classroom_id: row.classroomId,
+    role: actor.role,
+    resource_type: row.resourceType,
+    resource_id: row.resourceId ?? null,
+    action: row.action,
+    data: withImpersonator(data, actor.impersonatedBy) as Prisma.InputJsonValue,
+  };
+}
+
+/**
+ * `recordForActor` over any writer with `create`'s contract (see `recordWith`),
+ * so tests can run the real rule over a writer that fails.
+ */
+export async function recordForActorWith(
+  write: (row: AuditLogData) => Promise<unknown>,
+  actor: AuditActor | null,
+  row: ActorAuditRow
+): Promise<ServiceAudit> {
+  if (!actor) return NO_SERVICE_AUDIT;
+  const { written } = await recordWith(write, actorAuditRow(actor, row));
+  return written ? { written: 1, missed: 0 } : { written: 0, missed: 1 };
+}
+
+/**
+ * Write the audit row of a change a shared service has ALREADY saved, for
+ * `actor`, through `record` (a failed write is tried once more, then logged as
+ * `audit_miss`; it never throws). `actor: null` writes nothing: the caller
+ * acts for no person. Call it after the change commits, never inside its
+ * transaction, and only when the call changed something.
+ */
+export const recordForActor = (
+  actor: AuditActor | null,
+  row: ActorAuditRow
+): Promise<ServiceAudit> => recordForActorWith(create, actor, row);

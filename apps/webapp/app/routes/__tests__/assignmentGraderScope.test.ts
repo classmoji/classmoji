@@ -5,7 +5,9 @@
  * Only the ids in the body are used: they go to the classroom-scoped helper
  * together with the authorized classroom and this page's assignment, and the
  * helper's refusals come back in the route's error shape. The role gate (owner
- * or teacher) is unchanged.
+ * or teacher) is unchanged. The helper records each change for the actor the
+ * route builds from its gate (user, role, the admin viewing as them) and the
+ * route's tool name; the route writes no audit row of its own.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   assertClassroomMutationAllowed: vi.fn(),
   addGraderInClassroom: vi.fn(),
   removeGraderInClassroom: vi.fn(),
+  requestImpersonator: vi.fn(),
+  auditRecord: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -23,7 +31,7 @@ vi.mock('~/utils/routeAuth.server', () => ({
 }));
 
 vi.mock('@classmoji/services', () => ({
-  ClassmojiService: {},
+  ClassmojiService: { audit: { record: (...a: unknown[]) => mocks.auditRecord(...a) } },
   HelperService: {
     addGraderInClassroom: (...a: unknown[]) => mocks.addGraderInClassroom(...a),
     removeGraderInClassroom: (...a: unknown[]) => mocks.removeGraderInClassroom(...a),
@@ -40,12 +48,14 @@ vi.mock('../admin.$class.assignments_.$id/SubmissionsTable', () => ({
 }));
 
 const route = await import('../admin.$class.assignments_.$id/route.tsx');
+const teacherRoute = await import('../teacher.$class_.assignments_.$id/route.tsx');
+const assistantRoute = await import('../assistant.$class_.assignments_.$id/route.tsx');
 
 const CLASS_SLUG = 'cs52-26f';
 const ORG = { login: 'acme', provider: 'GITHUB' };
 
-const submit = (name: 'addGrader' | 'removeGrader', body: unknown) =>
-  route.action({
+const submit = (name: 'addGrader' | 'removeGrader', body: unknown, action = route.action) =>
+  action({
     params: { class: CLASS_SLUG, id: 'asg-1' },
     request: new Request(`http://localhost/admin/${CLASS_SLUG}/assignments/asg-1?/${name}`, {
       method: 'POST',
@@ -77,8 +87,24 @@ beforeEach(() => {
     classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG },
     membership: { role: 'TEACHER' },
   });
-  mocks.addGraderInClassroom.mockResolvedValue({ status: 'added', graderLogin: 'ta-bob' });
-  mocks.removeGraderInClassroom.mockResolvedValue({ status: 'removed', graderLogin: 'ta-bob' });
+  mocks.addGraderInClassroom.mockResolvedValue({
+    status: 'added',
+    graderLogin: 'ta-bob',
+    audit: { written: 1, missed: 0 },
+  });
+  mocks.removeGraderInClassroom.mockResolvedValue({
+    status: 'removed',
+    graderLogin: 'ta-bob',
+    audit: { written: 1, missed: 0 },
+  });
+  mocks.requestImpersonator.mockResolvedValue(null);
+});
+
+const actor = (tool: string, role = 'TEACHER', impersonatedBy: string | null = null) => ({
+  userId: 'teacher-1',
+  role,
+  tool,
+  impersonatedBy,
 });
 
 describe('assignment page: grader actions', () => {
@@ -87,7 +113,11 @@ describe('assignment page: grader actions', () => {
       action: 'add-grader',
       success: 'Grader added',
     });
-    expect(mocks.addGraderInClassroom).toHaveBeenCalledExactlyOnceWith(EXPECTED_SCOPE);
+    expect(mocks.addGraderInClassroom).toHaveBeenCalledExactlyOnceWith({
+      ...EXPECTED_SCOPE,
+      actor: actor('web:graders.add'),
+    });
+    expect(mocks.auditRecord).not.toHaveBeenCalled();
   });
 
   it('removes through the scoped helper with ids, classroom and assignment only', async () => {
@@ -95,8 +125,55 @@ describe('assignment page: grader actions', () => {
       action: 'remove-grader',
       success: 'Grader removed',
     });
-    expect(mocks.removeGraderInClassroom).toHaveBeenCalledExactlyOnceWith(EXPECTED_SCOPE);
+    expect(mocks.removeGraderInClassroom).toHaveBeenCalledExactlyOnceWith({
+      ...EXPECTED_SCOPE,
+      actor: actor('web:graders.remove'),
+    });
+    expect(mocks.auditRecord).not.toHaveBeenCalled();
   });
+
+  it('names the admin viewing as the caller, from the request', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-9');
+    await submit('addGrader', BODY);
+    expect(mocks.addGraderInClassroom.mock.calls[0][0].actor).toEqual(
+      actor('web:graders.add', 'TEACHER', 'admin-9')
+    );
+    // The impersonator is read for this very request.
+    expect(mocks.requestImpersonator.mock.calls[0][0]).toBeInstanceOf(Request);
+  });
+
+  it.each(['OWNER', 'TEACHER'])(
+    'the /teacher re-export records the role its gate resolved (%s)',
+    async role => {
+      mocks.requireClassroomTeachingTeam.mockResolvedValue({
+        userId: 'teacher-1',
+        classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG },
+        membership: { role },
+      });
+      await submit('removeGrader', BODY, teacherRoute.action);
+      expect(mocks.removeGraderInClassroom.mock.calls[0][0].actor).toEqual(
+        actor('web:graders.remove', role)
+      );
+    }
+  );
+
+  it.each(['addGrader', 'removeGrader'] as const)(
+    'the /assistant re-export refuses an assistant’s %s before anything is looked up',
+    async name => {
+      mocks.requireClassroomTeachingTeam.mockResolvedValue({
+        userId: 'ta-1',
+        classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', git_organization: ORG },
+        membership: { role: 'ASSISTANT' },
+      });
+      await expect(submit(name, BODY, assistantRoute.action)).rejects.toMatchObject({
+        status: 403,
+      });
+      expect(mocks.addGraderInClassroom).not.toHaveBeenCalled();
+      expect(mocks.removeGraderInClassroom).not.toHaveBeenCalled();
+      expect(mocks.requestImpersonator).not.toHaveBeenCalled();
+      expect(mocks.auditRecord).not.toHaveBeenCalled();
+    }
+  );
 
   it('reports a grader already on the submission as a success', async () => {
     mocks.addGraderInClassroom.mockResolvedValueOnce({

@@ -141,6 +141,8 @@ describe('removeStaff — ungraded submissions', () => {
         choice,
         departingName: 'Gone Person',
         expectedCount: 3,
+        // The slot moves write no grader rows of their own.
+        actor: null,
       });
     }
   );
