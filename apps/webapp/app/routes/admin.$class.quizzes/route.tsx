@@ -27,6 +27,7 @@ import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
+  type AuditMetadata,
 } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
@@ -276,8 +277,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // resource_type ('QUIZ') and keyed on the quiz id. The AuditLogAction enum
   // has no PUBLISH, so publish and weight changes are UPDATE with the intent
   // carried in `tool`.
-  const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
+  const audit = (action: string, resourceId: string, metadata: AuditMetadata) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

@@ -37,7 +37,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Authorize on the id, not on a slug read back off the record — see the
   // sibling status route: binding to the id is what makes the classroom that was
   // authorized and the row updated below provably the same one.
-  const { userId } = await assertClassroomAccess({
+  const { userId, impersonatedBy } = await assertClassroomAccess({
     request,
     classroomId,
     allowedRoles: ['OWNER'],
@@ -47,7 +47,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 
   const lifecycle = ClassmojiService.classroomLifecycle;
-  const args = { classroomId, actorUserId: userId, tool: 'web:classroom.archive' };
+  const args = { classroomId, actorUserId: userId, tool: 'web:classroom.archive', impersonatedBy };
   try {
     const updated =
       body.lock === true

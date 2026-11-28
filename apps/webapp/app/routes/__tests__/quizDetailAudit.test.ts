@@ -19,6 +19,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -112,11 +117,14 @@ const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
 const submit = (body: Record<string, unknown>) =>
   route.action({
     params: { class: CLASS_SLUG, quizId: QUIZ_ID },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
+    request: (routeRequest = new Request(
+      `http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    )),
   } as unknown as Parameters<typeof route.action>[0]);
 
 beforeEach(() => {
@@ -135,6 +143,7 @@ describe('quiz detail action — clearMyAttempts audit row', () => {
     await submit({ _action: 'clearMyAttempts' });
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'ta-1',
       role: 'ASSISTANT',
@@ -230,7 +239,9 @@ describe('quiz detail — hidden quizzes', () => {
     const thrown = await route
       .loader({
         params: { class: CLASS_SLUG, quizId: QUIZ_ID },
-        request: new Request(`http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`),
+        request: (routeRequest = new Request(
+          `http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`
+        )),
       } as unknown as Parameters<typeof route.loader>[0])
       .catch((e: unknown) => e);
 

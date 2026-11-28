@@ -1,4 +1,5 @@
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { READER_API_JSON_HEADERS, isForeignFetch } from '~/utils/pageSections.server.ts';
 import { activeSiteFor, siteSubdomainOf } from './apiBinding.server.ts';
 import { buildSitePayload, readSitePageContent, type SitePageRow } from './pageRender.server.ts';
@@ -87,20 +88,18 @@ export async function sitePageReaderResponse({
     if (viewer.impersonated && request.method !== 'HEAD') {
       // The read is the viewer's either way: a failed log line is reported
       // (`audit_miss`) and does not fail it.
-      await ClassmojiService.audit.record({
-        user_id: viewer.userId,
-        classroom_id: site.classroom_id,
-        role: viewer.role,
-        resource_type: 'PAGES',
-        resource_id: page.id,
-        action: 'VIEW',
-        data: {
-          tool: 'page_reader',
-          via: 'site',
-          page_id: page.id,
-          ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+      await recordAudit(
+        {
+          user_id: viewer.userId,
+          classroom_id: site.classroom_id,
+          role: viewer.role,
+          resource_type: 'PAGES',
+          resource_id: page.id,
+          action: 'VIEW',
+          data: { tool: 'page_reader', via: 'site', page_id: page.id },
         },
-      });
+        { impersonatedBy: viewer.impersonatedBy }
+      );
     }
 
     return json({ payload });

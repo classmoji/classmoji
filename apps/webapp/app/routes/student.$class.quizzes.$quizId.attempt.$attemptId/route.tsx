@@ -25,7 +25,7 @@ import {
   studentQuizRegradeView,
   studentQuizScoring,
 } from '~/utils/quizPayloads';
-import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 import { isTriggerChatAttempt, redactQuizEvaluationBlocks } from '@classmoji/utils';
 import { attemptAnswerRules } from '@classmoji/utils/quiz-agent';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
@@ -93,6 +93,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (
     membership &&
     (await closeIfExpired(attemptData.attempt, {
+      request,
       userId: String(userId),
       role: membership.role,
       surface:
@@ -144,6 +145,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // counted on one row.
   if (isInstructor && !viewerOwnsAttempt) {
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId: String(userId),
       role: membership?.role,
@@ -398,7 +400,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       comment: typeof body.comment === 'string' ? body.comment : '',
       actorUserId: userId,
       tool: 'web:quiz_attempt.request_regrade',
-      impersonatedBy: await impersonatedBy(request),
+      impersonatedBy: await requestImpersonator(request),
     });
     return { ok: true, created };
   } catch (error) {

@@ -137,7 +137,9 @@ describe('api.quiz — new attempts', () => {
 
     expect(response.status).toBe(200);
     expect(createNewMock).toHaveBeenCalledTimes(1);
-    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP);
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP, {
+      impersonatedBy: null,
+    });
   });
 
   it('startQuiz without an attempt id creates one and answers its id', async () => {
@@ -145,7 +147,9 @@ describe('api.quiz — new attempts', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ attemptId: 'attempt-new' });
-    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP);
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP, {
+      impersonatedBy: null,
+    });
   });
 
   it("a student's code-aware quiz without a repository still gets an attempt", async () => {

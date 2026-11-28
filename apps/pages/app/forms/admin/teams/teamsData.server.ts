@@ -67,6 +67,7 @@ import {
 } from '~/components/forms/teams/types.ts';
 import { webappUrl } from '~/site/env.server.ts';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { createAudit, recordAudit } from '~/utils/audit.server.ts';
 import {
   assertFormAdmin,
   formMutationBlocked,
@@ -494,7 +495,7 @@ export async function auditTeamSets(
     data?: Record<string, unknown>;
   }
 ) {
-  return ClassmojiService.audit.record(teamSetsRow(context, entry));
+  return recordAudit(teamSetsRow(context, entry), context);
 }
 
 /**
@@ -505,7 +506,7 @@ export async function auditTeamSetsRead(
   context: TeamsFormContext,
   entry: { tool: string; resourceId: string; data?: Record<string, unknown> }
 ) {
-  return ClassmojiService.audit.create(teamSetsRow(context, { ...entry, action: 'VIEW' }));
+  return createAudit(teamSetsRow(context, { ...entry, action: 'VIEW' }), context);
 }
 
 /**
@@ -1627,24 +1628,27 @@ export async function setAction({ params, request, url }: TeamsRouteArgs) {
   const refused = intentRefusal(intent, access.membership.role);
   if (refused) {
     // The refusal stands whether or not its row is written.
-    await ClassmojiService.audit.record({
-      user_id: access.userId,
-      classroom_id: access.classroom.id,
-      role: access.membership.role,
-      resource_type: TEAM_SETS_RESOURCE,
-      resource_id: access.classroom.id,
-      action: 'ACCESS_DENIED',
-      data: {
-        // The tool names the intent refused.
-        tool: `teams.set.${intent}`,
-        attempted_action: `team_set_${intent}`,
-        required_roles: ['OWNER'],
-        has_membership: true,
-        denial_reasons: ['insufficient_role'],
-        form_slug: params.formSlug ?? null,
-        team_set: params.setSlug ?? null,
+    await recordAudit(
+      {
+        user_id: access.userId,
+        classroom_id: access.classroom.id,
+        role: access.membership.role,
+        resource_type: TEAM_SETS_RESOURCE,
+        resource_id: access.classroom.id,
+        action: 'ACCESS_DENIED',
+        data: {
+          // The tool names the intent refused.
+          tool: `teams.set.${intent}`,
+          attempted_action: `team_set_${intent}`,
+          required_roles: ['OWNER'],
+          has_membership: true,
+          denial_reasons: ['insufficient_role'],
+          form_slug: params.formSlug ?? null,
+          team_set: params.setSlug ?? null,
+        },
       },
-    });
+      access
+    );
     return data(refused, { status: 403 });
   }
 

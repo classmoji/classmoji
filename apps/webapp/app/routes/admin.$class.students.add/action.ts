@@ -28,6 +28,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Audit before the emails, as the MCP tool does: the rows are committed, so
   // a failing email send must not leave the change unrecorded.
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership!.role,

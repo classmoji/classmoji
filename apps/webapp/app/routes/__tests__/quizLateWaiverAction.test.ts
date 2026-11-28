@@ -7,13 +7,17 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   role: 'OWNER' as string,
   assertClassroomAccess: vi.fn(),
   status: 'ACTIVE' as string,
   addClassroomAuditLog: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
-  impersonationAuditFields: vi.fn(),
   setQuizLateWaiver: vi.fn(),
 }));
 
@@ -24,10 +28,6 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
-}));
-
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: (...a: unknown[]) => mocks.impersonationAuditFields(...a),
 }));
 
 vi.mock('@classmoji/services', () => {
@@ -59,11 +59,11 @@ const CLASS_X = { id: 'class-x', slug: 'cs52-26f' };
 const post = (body: Record<string, unknown>, slug = CLASS_X.slug) =>
   route.action({
     params: { class: slug },
-    request: new Request(`http://localhost/api/quizLateWaiver/${slug}`, {
+    request: (routeRequest = new Request(`http://localhost/api/quizLateWaiver/${slug}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   } as unknown as Parameters<typeof route.action>[0]);
 
 /** A react-router `data()` result: its payload and status. */
@@ -94,7 +94,6 @@ beforeEach(() => {
     }
   );
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
-  mocks.impersonationAuditFields.mockResolvedValue({});
   mocks.setQuizLateWaiver.mockResolvedValue({ changed: true, waived: true, quizId: 'quiz-1' });
 });
 
@@ -245,6 +244,7 @@ describe('api.quizLateWaiver — audit', () => {
   it('writes one row per change, in the MCP shape', async () => {
     await post(BODY);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'staff-1',
       role: 'OWNER',
@@ -277,11 +277,11 @@ describe('api.quizLateWaiver — audit', () => {
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('allows a write while impersonated and records the admin behind it', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'platform-admin-1' });
+  it('hands the audit funnel the request, whose session names any admin viewing as the user', async () => {
     expect(unwrap(await post(BODY)).status).toBe(200);
-    expect(mocks.addClassroomAuditLog.mock.calls[0][0].metadata).toMatchObject({
-      impersonated_by: 'platform-admin-1',
-    });
+    // The funnel adds `impersonated_by` (helpers' auditLog test); the route adds nothing.
+    const entry = mocks.addClassroomAuditLog.mock.calls[0][0];
+    expect(entry.request).toBeInstanceOf(Request);
+    expect(entry.metadata).not.toHaveProperty('impersonated_by');
   });
 });

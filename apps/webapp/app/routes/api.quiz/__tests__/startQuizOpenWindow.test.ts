@@ -129,7 +129,12 @@ describe.each(START_PATHS)('api.quiz %s — a quiz that is not open now', (_path
 
       expect(response.status).toBe(403);
       expect(await response.json()).toEqual(refusal);
-      expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
+      expect(createNewMock).toHaveBeenCalledWith(
+        QUIZ_ID,
+        'student-1',
+        { role: 'STUDENT' },
+        { impersonatedBy: null }
+      );
       // No attempt exists to configure, read or start.
       expect(updateAgentConfigMock).not.toHaveBeenCalled();
       expect(findWithMessagesMock).not.toHaveBeenCalled();

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 /**
  * The attempt drawer loader and chat-runtime attempts.
  *
@@ -50,6 +55,12 @@ vi.mock('@classmoji/services', () => ({
     },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
+}));
+
+const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => viewAsAdmin.current,
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -126,7 +137,7 @@ const closedOf = (userId: string) => ({
 const load = () =>
   route.loader({
     params: { class: 'cs52-26f', quizId: QUIZ_ID, attemptId: 'attempt-1' },
-    request: new Request('http://localhost/x'),
+    request: (routeRequest = new Request('http://localhost/x')),
   } as unknown as Parameters<typeof route.loader>[0]);
 
 const signInAs = (userId: string, role: string, classroomId = 'class-1') =>
@@ -303,6 +314,7 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
       userId: 'student-1',
       role: 'STUDENT',
       surface: 'own_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(findWithMessagesMock).toHaveBeenCalledTimes(2);
     expect(data.readOnly).toBe(true);
@@ -334,6 +346,7 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
       userId: 'teacher-1',
       role: 'TEACHER',
       surface: 'staff_attempt_view',
+      impersonatedBy: viewAsAdmin.current,
     });
     expect(data.readOnly).toBe(true);
   });
@@ -381,6 +394,7 @@ describe('attempt loader — the VIEW audit row', () => {
       await load();
 
       expect(auditMock).toHaveBeenCalledExactlyOnceWith({
+        request: sameObject(routeRequest),
         classroomId: 'class-1',
         userId: 'staff-1',
         // The role the gate enforced.

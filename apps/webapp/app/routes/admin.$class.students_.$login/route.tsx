@@ -27,7 +27,7 @@ import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import Emoji from '~/components/ui/display/Emoji';
 import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
-import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
+import { addAuditLog, addClassroomAuditLog, type AuditMetadata } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { canMutate } from '~/utils/mutationRefusal.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
@@ -208,6 +208,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     action: 'VIEW',
     resourceType: 'STUDENT_GRADES_SCREEN',
     resourceId: String(studentId),
+    metadata: { tool: 'web:student.view' },
   });
 
   return {
@@ -299,8 +300,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   );
   if (!enrollment) throw new Response('Student not found', { status: 404 });
 
-  const audit = (resourceType: string, metadata: Record<string, unknown>) =>
+  const audit = (resourceType: string, metadata: AuditMetadata) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -352,7 +354,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         action: 'UPDATE',
         resourceType: 'STUDENT_ROSTER',
         resourceId: String(enrollment.user.id),
-        metadata: { field: 'school_id' },
+        metadata: { tool: 'web:student.update_school_id', field: 'school_id' },
       });
       return { ok: true, intent: body.intent };
     }

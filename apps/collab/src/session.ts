@@ -26,6 +26,12 @@ async function displayName(userId: string, fallback?: string | null): Promise<st
   return withIdentity?.name || withIdentity?.login || fallback || 'Someone';
 }
 
+/** The platform admin behind a "View as" session (better-auth's `impersonatedBy`), else null. */
+function impersonatorOf(session: unknown): string | null {
+  const by = (session as { impersonatedBy?: unknown } | null | undefined)?.impersonatedBy;
+  return typeof by === 'string' && by !== '' ? by : null;
+}
+
 export function createSessionResolver(): SessionResolver {
   return {
     async resolve(cookieHeader) {
@@ -40,6 +46,7 @@ export function createSessionResolver(): SessionResolver {
           userId: session.user.id,
           name: await displayName(session.user.id, session.user.name),
           sessionToken: session.session.token,
+          impersonatedBy: impersonatorOf(session.session),
         } satisfies CollabSession;
       }
 
@@ -55,6 +62,7 @@ export function createSessionResolver(): SessionResolver {
               userId: direct.user_id,
               name: await displayName(direct.user_id),
               sessionToken: direct.token,
+              impersonatedBy: impersonatorOf(direct),
             };
           }
         }

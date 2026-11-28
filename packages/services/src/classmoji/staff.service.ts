@@ -828,12 +828,15 @@ export const removeStaff = async ({
   login,
   role,
   actorUserId = null,
+  impersonatedBy = null,
 }: {
   classroomId: string;
   login: string;
   role: StaffRole;
   /** The owner asking; audits a plan-owner hand-off the removal causes. */
   actorUserId?: string | null;
+  /** The platform admin viewing as that owner ("View as"), for the same row. */
+  impersonatedBy?: string | null;
 }): Promise<RemoveStaffResult> => {
   assertStaffRole(role);
 
@@ -871,6 +874,7 @@ export const removeStaff = async ({
       classroom,
       role,
       actorUserId,
+      impersonatedBy,
     }),
   });
 

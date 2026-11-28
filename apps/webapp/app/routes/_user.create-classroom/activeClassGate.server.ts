@@ -63,10 +63,13 @@ export const finishArchiveAndContinue = async ({
   newClassroomId,
   archiveClassroomId,
   userId,
+  impersonatedBy = null,
 }: {
   newClassroomId: string;
   archiveClassroomId: string;
   userId: string;
+  /** The platform admin viewing as the user ("View as"), for the audit rows. */
+  impersonatedBy?: string | null;
 }): Promise<string | null> => {
   try {
     await ClassmojiService.classroomLifecycle.swapActive({
@@ -74,6 +77,7 @@ export const finishArchiveAndContinue = async ({
       archiveClassroomId,
       actorUserId: userId,
       tool: 'web:classroom.create_archive_and_continue',
+      ...(impersonatedBy ? { impersonatedBy } : {}),
     });
     return null;
   } catch (error: unknown) {

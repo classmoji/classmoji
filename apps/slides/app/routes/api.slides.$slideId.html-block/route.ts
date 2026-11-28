@@ -58,7 +58,7 @@ export const action = async ({
   });
   if (!slide) return json({ error: 'Slide not found' }, 404);
 
-  const { userId, membership } = await assertSlideAccess({
+  const { userId, membership, impersonatedBy } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -88,7 +88,7 @@ export const action = async ({
   }
 
   const answer = await handleHtmlBlockRequest(
-    { slideId: slide.id, userId, body },
+    { slideId: slide.id, userId, body, impersonatedBy },
     {
       write: writeHtmlBlockFile,
       read: readHtmlBlockSource,

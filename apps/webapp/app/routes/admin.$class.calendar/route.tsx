@@ -22,6 +22,7 @@ import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
+  type AuditMetadata,
 } from '~/utils/helpers';
 import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
@@ -173,9 +174,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: string,
     resourceType: string,
     resourceId: string,
-    metadata: Record<string, unknown>
+    metadata: AuditMetadata
   ) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

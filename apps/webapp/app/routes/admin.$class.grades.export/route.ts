@@ -18,6 +18,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const gradebook = await ClassmojiService.gradebookExport.buildGradebookExport(classroom);
 
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership!.role,

@@ -213,7 +213,7 @@ export function realCheckpointDeps(): CheckpointDeps {
         // = COLLAB_AUDIT_RESOURCE in @classmoji/collab (what joins and the MCP tools write).
         resource_type: kind === 'deck' ? 'SLIDES' : 'PAGES',
         resource_id: docId,
-        data: { commit, version, runId },
+        data: { tool: 'task:content_checkpoint', commit, version, runId },
       });
     },
     repoSizeKb: async classroom => {

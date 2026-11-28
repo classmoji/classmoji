@@ -47,6 +47,17 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
+// The audit funnel reads the session for who is viewing as the user: none here.
+vi.mock('@classmoji/auth/server', () => ({
+  getAuthSession: async () => ({ userId: 'owner-1', session: { session: {} } }),
+  resolveHighestMembership: vi.fn(),
+  assertClassroomAccess: vi.fn(),
+  assertClassroomMutationAllowed: vi.fn(),
+  formMutationBlocked: vi.fn(),
+  requireStudentAccess: vi.fn(),
+  assertProTier: vi.fn(),
+}));
+
 vi.mock('@classmoji/tasks', () => ({
   default: {
     assignTokensToStudentTask: { batchTrigger: (...a: unknown[]) => mocks.batchTrigger(...a) },

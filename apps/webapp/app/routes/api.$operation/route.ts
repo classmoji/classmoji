@@ -6,7 +6,7 @@ import { getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
 import { mutationRefusal } from '~/utils/mutationRefusal.server';
-import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -180,7 +180,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           // the surface, for the audit row.
           resolved_by_id: userId,
           tool: 'web:api.updateRegradeRequest',
-          impersonated_by: await impersonatedBy(request),
+          impersonated_by: await requestImpersonator(request),
         });
 
         await waitForRunCompletion(run.id);

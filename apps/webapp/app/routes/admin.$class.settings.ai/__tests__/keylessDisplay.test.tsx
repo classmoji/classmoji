@@ -35,9 +35,6 @@ vi.mock('~/utils/helpers', () => ({
   assertClassroomMutationAllowed: vi.fn(),
   addClassroomAuditLog: vi.fn(),
 }));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: async () => ({}),
-}));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {},
   ClassroomSettingsEntitlementError: class extends Error {},

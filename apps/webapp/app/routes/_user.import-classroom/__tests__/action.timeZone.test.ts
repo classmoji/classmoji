@@ -17,6 +17,7 @@ vi.mock('~/utils/helpers', () => ({
     (fn: (args: unknown) => unknown) =>
     ({ request }: { request: Request }) =>
       fn({ request, user: { id: 'owner-1' } }),
+  addClassroomAuditLog: async () => {},
 }));
 
 vi.mock('~/constants', () => ({ ActionTypes: { IMPORT_CLASSROOM: 'import' } }));

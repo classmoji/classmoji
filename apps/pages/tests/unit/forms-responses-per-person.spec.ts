@@ -14,7 +14,11 @@
  */
 import { test, expect } from '@playwright/test';
 
-import { importWithStubs, stubModule } from '../helpers/dataRequest.helpers.ts';
+import {
+  importTreeWithStubs,
+  importWithStubs,
+  stubModule,
+} from '../helpers/dataRequest.helpers.ts';
 import {
   publicSwitchBlockedReason,
   responsesPerPersonChoices,
@@ -751,14 +755,16 @@ test.describe('the builder’s settings save, audited', () => {
   type Fakes = {
     form: Record<string, unknown>;
     updates: unknown[];
-    audits: Array<{ data: object }>;
+    audits: Array<{ user_id?: string; data: object }>;
+    impersonatedBy: string | null;
   };
-  const builder: Fakes = { form: {}, updates: [], audits: [] };
+  const builder: Fakes = { form: {}, updates: [], audits: [], impersonatedBy: null };
   (globalThis as unknown as { __builderFakes: Fakes }).__builderFakes = builder;
   let builderAction: Action;
 
   test.beforeAll(async () => {
-    ({ action: builderAction } = await importWithStubs<{ action: Action }>(
+    // The whole tree, so the save runs through the real audit funnel.
+    ({ action: builderAction } = await importTreeWithStubs<{ action: Action }>(
       new URL('../../app/forms/admin/builder.tsx', import.meta.url),
       {
         '.css': STUB(''),
@@ -778,6 +784,7 @@ export const assertFormAdmin = async () => ({
   classroom: { id: 'class-1' },
   userId: 'staff-1',
   membership: { role: 'OWNER' },
+  impersonatedBy: globalThis.__builderFakes.impersonatedBy,
 });
 export const formMutationBlocked = () => null;
 `),
@@ -785,7 +792,8 @@ export const formMutationBlocked = () => null;
 export const formsListUrl = () => '';
 export const publicFormUrlFor = () => '';
 `),
-      }
+      },
+      'builder-settings-save'
     ));
   });
 
@@ -804,6 +812,25 @@ export const publicFormUrlFor = () => '';
     builder.form = { id: FORM_ID, slug: 'check-in', responses_per_person: 'ONE' };
     builder.updates = [];
     builder.audits = [];
+    builder.impersonatedBy = null;
+  });
+
+  test('a save while an admin views as the staff member names the admin, and only then', async () => {
+    builder.impersonatedBy = 'admin-1';
+    await saveMeta({ responsesPerPerson: 'MANY' });
+    expect(builder.audits[0]).toMatchObject({
+      user_id: 'staff-1',
+      data: {
+        tool: 'forms.builder.save-meta',
+        slug: 'check-in',
+        responses_per_person: 'MANY',
+        impersonated_by: 'admin-1',
+      },
+    });
+
+    builder.impersonatedBy = null;
+    await saveMeta({ responsesPerPerson: 'ONE' });
+    expect(builder.audits[1].data).not.toHaveProperty('impersonated_by');
   });
 
   test('a change of responses per person records the new value', async () => {

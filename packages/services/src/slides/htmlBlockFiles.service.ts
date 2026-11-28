@@ -29,7 +29,7 @@
 import getPrisma from '@classmoji/database';
 import type { Role } from '@classmoji/database/client';
 import { ContentService } from '../content/ContentService.ts';
-import { record as recordAudit } from '../classmoji/audit.service.ts';
+import { record as recordAudit, withImpersonator } from '../classmoji/audit.service.ts';
 import {
   recordContentAsset,
   recordFolderTreesAfterCommit,
@@ -205,7 +205,8 @@ async function audit(
   target: DeckTarget,
   actorUserId: string,
   action: 'UPDATE' | 'DELETE',
-  data: Record<string, string>
+  data: Record<string, string>,
+  impersonatedBy: string | null | undefined
 ): Promise<void> {
   // The commit already landed: a failed write is reported (`audit_miss`), not
   // the write undone.
@@ -216,7 +217,7 @@ async function audit(
     resource_type: 'SLIDES',
     resource_id: target.slideId,
     action,
-    data,
+    data: withImpersonator(data, impersonatedBy),
   });
 }
 
@@ -256,6 +257,8 @@ export interface WriteHtmlBlockFileArgs {
   /** For the audit row. */
   blockId?: string;
   surface?: HtmlBlockSurface;
+  /** The platform admin viewing as the actor ("View as"), for the audit row. */
+  impersonatedBy?: string | null;
 }
 
 /** A block's file as the deck stores it: `data-cm-src` and `data-cm-rev`. */
@@ -291,6 +294,7 @@ export async function writeHtmlBlockFile({
   mode = 'live',
   blockId,
   surface = 'slides',
+  impersonatedBy,
 }: WriteHtmlBlockFileArgs): Promise<HtmlBlockFileRef> {
   const target = await loadDeckFor(slideId, actorUserId, 'edit');
   if (typeof html !== 'string') throw new HtmlBlockFileError('invalid', 'html must be a string');
@@ -351,13 +355,19 @@ export async function writeHtmlBlockFile({
   const path = `${target.deckFolder}/${written.src}`;
   await recordContentAsset(target.classroomId, { path, sha: written.sha, size: bytes });
   await recordCommit(target, written.commit, written.treeSha);
-  await audit(target, actorUserId, 'UPDATE', {
-    tool: `${surface}:html_block.save`,
-    slide_id: target.slideId,
-    path,
-    rev: written.sha,
-    ...(blockId ? { block_id: blockId } : {}),
-  });
+  await audit(
+    target,
+    actorUserId,
+    'UPDATE',
+    {
+      tool: `${surface}:html_block.save`,
+      slide_id: target.slideId,
+      path,
+      rev: written.sha,
+      ...(blockId ? { block_id: blockId } : {}),
+    },
+    impersonatedBy
+  );
   return { src: written.src, rev: written.sha };
 }
 
@@ -439,12 +449,15 @@ export async function deleteHtmlBlockFile({
   src,
   blockId,
   surface = 'slides',
+  impersonatedBy,
 }: {
   slideId: string;
   actorUserId: string;
   src: string;
   blockId?: string;
   surface?: HtmlBlockSurface;
+  /** The platform admin viewing as the actor ("View as"), for the audit row. */
+  impersonatedBy?: string | null;
 }): Promise<{ deleted: boolean }> {
   const target = await loadDeckFor(slideId, actorUserId, 'edit');
   const path = blockFilePath(target, src);
@@ -464,12 +477,18 @@ export async function deleteHtmlBlockFile({
   }
   await removeContentAssets(target.classroomId, [path]);
   await recordCommit(target, commit, undefined);
-  await audit(target, actorUserId, 'DELETE', {
-    tool: `${surface}:html_block.delete`,
-    slide_id: target.slideId,
-    path,
-    ...(blockId ? { block_id: blockId } : {}),
-  });
+  await audit(
+    target,
+    actorUserId,
+    'DELETE',
+    {
+      tool: `${surface}:html_block.delete`,
+      slide_id: target.slideId,
+      path,
+      ...(blockId ? { block_id: blockId } : {}),
+    },
+    impersonatedBy
+  );
   return { deleted: true };
 }
 

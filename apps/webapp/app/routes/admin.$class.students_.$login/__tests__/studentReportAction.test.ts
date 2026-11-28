@@ -119,7 +119,10 @@ describe('student report action', () => {
     );
     expect(result).toEqual({ ok: true, intent: 'update-school-id' });
     expect(mocks.addAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'UPDATE', metadata: { field: 'school_id' } })
+      expect.objectContaining({
+        action: 'UPDATE',
+        metadata: { tool: 'web:student.update_school_id', field: 'school_id' },
+      })
     );
   });
 

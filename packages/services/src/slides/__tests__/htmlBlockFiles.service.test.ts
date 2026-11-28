@@ -62,8 +62,13 @@ vi.mock('@classmoji/database', () => ({
 vi.mock('../../content/ContentService.ts', () => ({ ContentService: content }));
 vi.mock('../../classmoji/contentAssets.service.ts', () => assets);
 vi.mock('../../classmoji/audit.service.ts', async importOriginal => {
-  const { recordWith } = await importOriginal<typeof import('../../classmoji/audit.service.ts')>();
-  return { create: auditCreate, record: (row: unknown) => recordWith(auditCreate, row) };
+  const { recordWith, withImpersonator } =
+    await importOriginal<typeof import('../../classmoji/audit.service.ts')>();
+  return {
+    withImpersonator,
+    create: auditCreate,
+    record: (row: unknown) => recordWith(auditCreate, row),
+  };
 });
 
 const {
@@ -191,6 +196,34 @@ describe('writeHtmlBlockFile', () => {
     });
     expect(content.put.mock.calls[0][0].createOnly).toBeUndefined();
     expect(auditCreate.mock.calls[0][0].data.tool).toBe('mcp:html_block.save');
+    expect(auditCreate.mock.calls[0][0].data).not.toHaveProperty('impersonated_by');
+  });
+
+  it('names the admin viewing as the author on the save row', async () => {
+    await writeHtmlBlockFile({
+      slideId: 'deck-x',
+      actorUserId: 'teacher-x',
+      html: 'v2',
+      src: 'blocks/0a0b0c0d.html',
+      expectedRev: REV,
+      surface: 'slides',
+      impersonatedBy: 'admin-1',
+    });
+    expect(auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-x',
+      user_id: 'teacher-x',
+      role: 'TEACHER',
+      resource_type: 'SLIDES',
+      resource_id: 'deck-x',
+      action: 'UPDATE',
+      data: {
+        tool: 'slides:html_block.save',
+        slide_id: 'deck-x',
+        path: 'slides/deck-x/blocks/0a0b0c0d.html',
+        rev: NEW_REV,
+        impersonated_by: 'admin-1',
+      },
+    });
   });
 
   it('maps a compare-and-swap conflict to changed (409)', async () => {
@@ -497,6 +530,32 @@ describe('deleteHtmlBlockFile', () => {
         slide_id: 'deck-x',
         path: 'slides/deck-x/blocks/0a0b0c0d.html',
         block_id: 'b1',
+      },
+    });
+  });
+
+  it('names the admin viewing as the author on the delete row', async () => {
+    content.delete.mockResolvedValue({ commit: 'commit-d' });
+    await deleteHtmlBlockFile({
+      slideId: 'deck-x',
+      actorUserId: 'teacher-x',
+      src: 'blocks/0a0b0c0d.html',
+      blockId: 'b1',
+      impersonatedBy: 'admin-1',
+    });
+    expect(auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-x',
+      user_id: 'teacher-x',
+      role: 'TEACHER',
+      resource_type: 'SLIDES',
+      resource_id: 'deck-x',
+      action: 'DELETE',
+      data: {
+        tool: 'slides:html_block.delete',
+        slide_id: 'deck-x',
+        path: 'slides/deck-x/blocks/0a0b0c0d.html',
+        block_id: 'b1',
+        impersonated_by: 'admin-1',
       },
     });
   });

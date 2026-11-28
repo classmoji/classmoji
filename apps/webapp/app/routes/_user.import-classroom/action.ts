@@ -1,6 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 import { canonicalTimeZone } from '@classmoji/utils';
-import { checkAuth } from '~/utils/helpers';
+import { addClassroomAuditLog, checkAuth } from '~/utils/helpers';
 import { ActionTypes } from '~/constants';
 
 type ImportInputs = Parameters<
@@ -71,14 +71,16 @@ export const action = checkAuth(async ({ request, user }) => {
       console.error('Default grading scale seeding failed:', error);
     }
     // After the import: a failed write is reported (`audit_miss`), not thrown.
-    await ClassmojiService.audit.record({
-      user_id: user.id,
-      classroom_id: r.classroomId,
+    await addClassroomAuditLog({
+      request,
+      classroomId: r.classroomId,
+      userId: user.id,
       role: 'OWNER',
       action: 'CREATE',
-      resource_type: 'GITHUB_CLASSROOM_IMPORT',
-      resource_id: r.classroomSlug,
-      data: {
+      resourceType: 'GITHUB_CLASSROOM_IMPORT',
+      resourceId: r.classroomSlug,
+      metadata: {
+        tool: 'web:github_classroom.import',
         classroomName: r.classroomName,
         organizationLogin: r.organizationLogin,
         appInstalled: r.appInstalled,

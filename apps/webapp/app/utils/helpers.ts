@@ -2,6 +2,7 @@ import { runs } from '@trigger.dev/sdk';
 import { redirect } from 'react-router';
 
 import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server';
+import { requestImpersonator, sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { ClassmojiService } from '@classmoji/services';
 
 export const sleep = async (ms: number) => {
@@ -53,16 +54,28 @@ const normalizeAuditResourceId = (resourceId: string | number | null | undefined
   }
 };
 
+/**
+ * A row's `data`: `tool` names the route and intent (`web:<area>.<intent>`);
+ * the rest is ids and values, never free text.
+ */
+export type AuditMetadata = { tool: string } & Record<string, unknown>;
+
 interface AuditLogParams {
   request: Request;
   params: Record<string, string | undefined>;
   action: string;
   resourceType: string;
   resourceId?: string | number | null;
-  metadata?: Record<string, unknown> | null;
+  metadata: AuditMetadata;
 }
 
 interface ClassroomAuditParams {
+  /**
+   * The request the action answers (the same object the gate was given): its
+   * session says whether a platform admin is viewing as the user ("View as"),
+   * recorded as `impersonated_by`.
+   */
+  request: Request;
   /** The classroom the gate authorized — never a slug re-resolved afterwards. */
   classroomId: string | undefined;
   /** The acting user, as returned by the gate. */
@@ -79,8 +92,11 @@ interface ClassroomAuditParams {
   action: string;
   resourceType: string;
   resourceId?: string | number | null;
-  metadata?: Record<string, unknown> | null;
+  metadata: AuditMetadata;
 }
+
+/** A resolved row: who, where, what, and the admin viewing as the user, if any. */
+type AuditRow = Omit<ClassroomAuditParams, 'request'> & { impersonatedBy: string | null };
 
 /**
  * THE audit write site for the webapp. Both `addAuditLog` (which resolves the
@@ -94,6 +110,11 @@ interface ClassroomAuditParams {
  * `audit_miss` line, and the caller answers as it would have. Callers await it
  * (so the row is written before the response, and tests can assert it).
  * Invalid input still throws outside production: that is a bug to fix.
+ *
+ * Every row names its surface (`metadata.tool`, required) and, when the
+ * request's session is a platform admin viewing as the user ("View as"),
+ * carries `impersonated_by` (the admin's user id) in its data: set here, for
+ * every row, never by the route.
  */
 const writeAuditRow = async ({
   classroomId,
@@ -102,8 +123,9 @@ const writeAuditRow = async ({
   action,
   resourceType,
   resourceId = null,
-  metadata = null,
-}: ClassroomAuditParams) => {
+  metadata,
+  impersonatedBy,
+}: AuditRow) => {
   const auditData: {
     classroom_id: string | undefined;
     user_id: string;
@@ -121,13 +143,9 @@ const writeAuditRow = async ({
     action,
   };
 
-  const dataPayload = {
-    ...(metadata || {}),
-  };
-
-  if (Object.keys(dataPayload).length > 0) {
-    auditData.data = dataPayload;
-  }
+  auditData.data = impersonatedBy
+    ? { ...metadata, impersonated_by: impersonatedBy }
+    : { ...metadata };
 
   await ClassmojiService.audit.record(
     auditData as Parameters<typeof ClassmojiService.audit.record>[0]
@@ -150,8 +168,11 @@ const writeAuditRow = async ({
  * row; a repeated read is counted on its row (see
  * packages/services/src/classmoji/audit.service.ts).
  */
-export const addClassroomAuditLog = async (auditParams: ClassroomAuditParams) =>
-  writeAuditRow(auditParams);
+export const addClassroomAuditLog = async ({ request, ...row }: ClassroomAuditParams) =>
+  // The gate's session read for this request left the answer behind
+  // (`requestImpersonator`); a request no gate read is read now, and a failed
+  // read writes the row without `impersonated_by`.
+  writeAuditRow({ ...row, impersonatedBy: await requestImpersonator(request) });
 
 /**
  * Record an action, resolving the caller and classroom from the request.
@@ -171,7 +192,7 @@ export const addAuditLog = async ({
   action,
   resourceType,
   resourceId = null,
-  metadata = null,
+  metadata,
 }: AuditLogParams) => {
   // Re-resolving the caller and classroom can fail too (the session or the
   // database away). That is reported and the request goes on, as a failed
@@ -182,10 +203,10 @@ export const addAuditLog = async ({
     resource_id: normalizeAuditResourceId(resourceId),
     resource_type: resourceType,
     action,
-    ...(metadata && Object.keys(metadata).length > 0 ? { data: metadata } : {}),
+    data: metadata,
   };
   let userId: string | undefined;
-  let row: ClassroomAuditParams;
+  let row: AuditRow;
   try {
     const authData = await getAuthSession(request);
     if (!authData) {
@@ -208,6 +229,7 @@ export const addAuditLog = async ({
       resourceType,
       resourceId,
       metadata,
+      impersonatedBy: sessionImpersonator(authData),
     };
   } catch (error: unknown) {
     console.error('[audit] Failed to resolve audit context', error);

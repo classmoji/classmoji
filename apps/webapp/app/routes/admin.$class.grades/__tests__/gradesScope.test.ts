@@ -22,6 +22,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomStaff: vi.fn(),
   requireClassroomAdmin: vi.fn(),
@@ -165,17 +170,17 @@ const CONTACT_FIELDS = ['email', 'school_id'] as const;
 const actionArgs = (body: unknown) =>
   ({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/grades`, {
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/grades`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   }) as unknown as Parameters<typeof route.action>[0];
 
 const loaderArgs = (prefix: 'admin' | 'teacher' = 'admin') =>
   ({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/${prefix}/${CLASS_SLUG}/grades`),
+    request: (routeRequest = new Request(`http://localhost/${prefix}/${CLASS_SLUG}/grades`)),
   }) as unknown as Parameters<typeof route.loader>[0];
 
 /**
@@ -641,6 +646,7 @@ describe('grades action — the letter-grade write is audited', () => {
     await route.action(actionArgs({ membership_id: OWN_MEMBERSHIP, letter_grade: 'A-' }));
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'teacher-1',
       role: 'TEACHER',
@@ -817,6 +823,7 @@ describe('grades action — releasing final grades', () => {
       final_grades_released: true,
     });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

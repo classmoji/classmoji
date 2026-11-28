@@ -24,6 +24,8 @@ export interface CollabSession {
   userId: string;
   name: string;
   sessionToken: string;
+  /** The platform admin viewing as the user ("View as"); null on their own session. */
+  impersonatedBy?: string | null;
 }
 
 /** Reads the session behind a Cookie header (null = signed out / expired / revoked). */
@@ -136,6 +138,7 @@ async function authenticateOrRefuse(
   if (!session) throw new CollabAuthError('forbidden', 'no session');
 
   const access = await adapter.authorize({ userId: session.userId, docId: room.id });
+  const impersonatedBy = session.impersonatedBy || null;
   // A refusal for a doc that exists is recorded in its classroom: a member's
   // with their role, a non-member's as the classroom's one row for the day. A
   // doc that does not exist has no classroom to record it in.
@@ -148,12 +151,14 @@ async function authenticateOrRefuse(
         action: 'ACCESS_DENIED',
         resourceType: `collab_${room.kind}`,
         resourceId: room.id,
-        data: { reason: access.reason },
+        data: { tool: 'collab', reason: access.reason },
+        ...(impersonatedBy ? { impersonatedBy } : {}),
       });
     } else {
       recordNonMemberRefusal(deps.audit, {
         userId: session.userId,
         classroomId: access.classroomId,
+        ...(impersonatedBy ? { impersonatedBy } : {}),
       });
     }
   }
@@ -177,6 +182,7 @@ async function authenticateOrRefuse(
     kind: room.kind,
     docId: room.id,
     ...(access.role ? { role: access.role } : {}),
+    ...(impersonatedBy ? { impersonatedBy } : {}),
   };
 }
 

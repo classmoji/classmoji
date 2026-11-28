@@ -330,6 +330,8 @@ describe('assignment_update: grader_deadline and release_at', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
     expect(audit.data).toEqual({
       tool: 'assignment_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['grader_deadline', 'release_at'],
       values: {
         grader_deadline: new Date(GRADER).toISOString(),
@@ -357,6 +359,8 @@ describe('assignment_update: grader_deadline and release_at', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
     expect(audit.data).toEqual({
       tool: 'assignment_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['grader_deadline', 'release_at'],
       values: { grader_deadline: null, release_at: null },
       value: expect.any(String),
@@ -378,6 +382,8 @@ describe('assignment_update: grader_deadline and release_at', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
     expect(audit.data).toEqual({
       tool: 'assignment_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['student_deadline', 'weight', 'grades_released', 'release_at'],
       values: {
         student_deadline: new Date('2026-07-21T23:59:00-04:00').toISOString(),
@@ -560,6 +566,8 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     expect(auditData(0)).toMatchObject({ fields: ['module_id'], from_module_id: 'mod-1' });
     expect(auditData(1)).toEqual({
       tool: 'assignment_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['weight'],
       values: { weight: 40 },
       value: JSON.stringify({ weight: 40 }),

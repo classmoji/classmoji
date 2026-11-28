@@ -26,6 +26,7 @@ export interface HtmlBlockApiDeps {
     fork?: boolean;
     blockId?: string;
     surface: 'slides';
+    impersonatedBy?: string;
   }): Promise<HtmlBlockFileRef>;
   read(args: {
     slideId: string;
@@ -39,6 +40,7 @@ export interface HtmlBlockApiDeps {
     src: string;
     blockId?: string;
     surface: 'slides';
+    impersonatedBy?: string;
   }): Promise<{ deleted: boolean }>;
   list(args: {
     slideId: string;
@@ -79,7 +81,18 @@ const optionalString = (value: unknown): value is string | undefined =>
  * 400 for a body that does not fit an intent.
  */
 export async function handleHtmlBlockRequest(
-  { slideId, userId, body }: { slideId: string; userId: string; body: unknown },
+  {
+    slideId,
+    userId,
+    body,
+    impersonatedBy = null,
+  }: {
+    slideId: string;
+    userId: string;
+    body: unknown;
+    /** The platform admin viewing as the user ("View as"), for the audit rows. */
+    impersonatedBy?: string | null;
+  },
   deps: HtmlBlockApiDeps
 ): Promise<HtmlBlockApiAnswer> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -87,6 +100,7 @@ export async function handleHtmlBlockRequest(
   }
   const input = body as Record<string, unknown>;
   const base = { slideId, actorUserId: userId };
+  const viewAs = impersonatedBy ? { impersonatedBy } : {};
   try {
     switch (input.intent) {
       case 'save': {
@@ -105,6 +119,7 @@ export async function handleHtmlBlockRequest(
           ...(fork ? { fork } : {}),
           ...(typeof blockId === 'string' ? { blockId: blockId.slice(0, 64) } : {}),
           surface: 'slides',
+          ...viewAs,
         });
         return { status: 200, body: { src: ref.src, rev: ref.rev } };
       }
@@ -127,6 +142,7 @@ export async function handleHtmlBlockRequest(
           src,
           ...(typeof blockId === 'string' ? { blockId: blockId.slice(0, 64) } : {}),
           surface: 'slides',
+          ...viewAs,
         });
         return { status: 200, body: { deleted: result.deleted } };
       }

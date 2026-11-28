@@ -69,6 +69,25 @@ function fakeDeps(overrides: Partial<HtmlBlockApiDeps> = {}) {
 }
 
 test.describe('html-block API handler', () => {
+  test('save and delete hand the services the admin viewing as the user, and only then', async () => {
+    const { deps, calls } = fakeDeps();
+    const save = { intent: 'save', html: '<p>hi</p>' };
+    const remove = { intent: 'delete', src: 'blocks/0a0b0c0d.html' };
+    for (const body of [save, remove]) {
+      await handleHtmlBlockRequest(
+        { slideId: 'deck-x', userId: 'editor', body, impersonatedBy: 'admin-1' },
+        deps
+      );
+      await handleHtmlBlockRequest({ slideId: 'deck-x', userId: 'editor', body }, deps);
+    }
+    expect(calls.map(([name, args]) => [name, args.impersonatedBy])).toEqual([
+      ['write', 'admin-1'],
+      ['write', undefined],
+      ['remove', 'admin-1'],
+      ['remove', undefined],
+    ]);
+  });
+
   test('save: passes the code, the block file and its rev; answers { src, rev }', async () => {
     const { deps, calls } = fakeDeps();
     const answer = await handleHtmlBlockRequest(
@@ -243,7 +262,7 @@ test.describe('html-block route', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(read).toBeGreaterThan(gate);
     expect(source).toContain('where: { id: slideId }');
-    expect(source).toContain('{ slideId: slide.id, userId, body }');
+    expect(source).toContain('{ slideId: slide.id, userId, body, impersonatedBy }');
     expect(source).toContain("'Cache-Control': 'no-store'");
   });
 

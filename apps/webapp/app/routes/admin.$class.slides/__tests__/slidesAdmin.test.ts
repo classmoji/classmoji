@@ -14,6 +14,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -99,10 +104,10 @@ const actionArgs = (body: Record<string, string>) => {
   for (const [key, value] of Object.entries(body)) formData.append(key, value);
   return {
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`, {
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/slides`, {
       method: 'POST',
       body: formData,
-    }),
+    })),
   } as unknown as Parameters<typeof route.action>[0];
 };
 
@@ -263,6 +268,7 @@ describe('slides action — audit rows', () => {
     await route.action(actionArgs({ slideId: OWN_SLIDE, field: 'status', value: 'public' }));
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',
@@ -401,7 +407,7 @@ describe('slides loader', () => {
   it('lists only decks of the authorized classroom', async () => {
     await route.loader({
       params: { class: CLASS_SLUG },
-      request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`),
+      request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/slides`)),
     } as unknown as Parameters<typeof route.loader>[0]);
 
     expect(mocks.findMany).toHaveBeenCalledWith(
@@ -414,7 +420,7 @@ describe('slides loader', () => {
     // capabilities, not list data — so the list selects explicitly.
     await route.loader({
       params: { class: CLASS_SLUG },
-      request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`),
+      request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/slides`)),
     } as unknown as Parameters<typeof route.loader>[0]);
 
     const select = mocks.findMany.mock.calls[0][0].select as Record<string, unknown>;
@@ -438,7 +444,7 @@ describe('slides loader', () => {
 
     const data = await route.loader({
       params: { class: CLASS_SLUG },
-      request: new Request(`http://localhost/admin/${CLASS_SLUG}/slides`),
+      request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/slides`)),
     } as unknown as Parameters<typeof route.loader>[0]);
 
     expect(data.slides.map(s => [s.kindLabel, s.linkHost])).toEqual([

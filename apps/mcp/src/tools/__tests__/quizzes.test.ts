@@ -558,6 +558,8 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
       const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
       expect(audit.data).toEqual({
         tool: 'quiz_update',
+        via: 'mcp',
+        client_id: 'c',
         fields: ['code_sandbox_enabled'],
         code_sandbox_enabled: value,
       });
@@ -680,6 +682,8 @@ describe('hint_cost and max_answers (answer rules, author settings)', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(audit.data).toEqual({
       tool: 'quiz_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['hint_cost', 'max_answers'],
       hint_cost: 25,
       max_answers: 8,

@@ -23,6 +23,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   addClassroomAuditLog: vi.fn(),
@@ -140,17 +145,17 @@ const listedModule = () => ({
 const load = () =>
   loader({
     params: { class: 'cs52' },
-    request: new Request('http://x/admin/cs52/modules'),
+    request: (routeRequest = new Request('http://x/admin/cs52/modules')),
   } as never);
 
 const post = (name: string, body: unknown) =>
   action({
     params: { class: 'cs52' },
-    request: new Request(`http://x/admin/cs52/modules?/${name}`, {
+    request: (routeRequest = new Request(`http://x/admin/cs52/modules?/${name}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   } as never) as Promise<{ success?: string; error?: string }>;
 
 beforeEach(() => {
@@ -325,6 +330,7 @@ describe('Modules action — delete', () => {
 
     expect(result).toEqual({ success: 'Module deleted' });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: CLASSROOM_ID,
       userId: 'owner-1',
       role: 'OWNER',
