@@ -511,10 +511,7 @@ describe.skipIf(!RUN)('team services write their audit rows (integration)', () =
       );
       const newSlug = renamed.value.newSlug;
       expect(renamed.value.renamedRepos.sort()).toEqual([`hw1-${newSlug}`, `hw2-${newSlug}`]);
-      expect(await storedNames(repos.map(r => r.id))).toEqual([
-        `hw1-${newSlug}`,
-        `hw2-${newSlug}`,
-      ]);
+      expect(await storedNames(repos.map(r => r.id))).toEqual([`hw1-${newSlug}`, `hw2-${newSlug}`]);
       expect(await storedNames([unrelated.id])).toEqual([unrelated.name]);
       expect(renamed.rows.map(r => r.data)).toEqual([
         {

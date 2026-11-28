@@ -568,9 +568,7 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
       expect(
         (await prisma.moduleItem.findUniqueOrThrow({ where: { id: item.id } })).module_id
       ).toBe(to.id);
-      expect((await storedItems(to.id)).map(i => i.id).sort()).toEqual(
-        [item.id, there.id].sort()
-      );
+      expect((await storedItems(to.id)).map(i => i.id).sort()).toEqual([item.id, there.id].sort());
       expect(rows.map(r => [r.resource_type, r.resource_id, r.action, r.data])).toEqual([
         [
           'MODULE_ITEM',
