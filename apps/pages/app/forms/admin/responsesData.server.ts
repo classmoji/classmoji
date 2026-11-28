@@ -342,30 +342,50 @@ export function toResponseRow(
   };
 }
 
+interface ResponsesAuditEntry {
+  context: ResponsesContext;
+  tool: string;
+  responseId?: string;
+  data?: Record<string, unknown>;
+}
+
 /**
- * Audit one act on response data.
+ * Audit one READ of response data: the list, a reveal of identity answers, an
+ * export.
  *
- * Every read, export, triage edit and delete on this surface goes through here.
  * The AuditLog action enum is closed (CREATE/UPDATE/DELETE/ACCESS_DENIED/VIEW),
  * so the specific act is carried in `data.tool` — the same discriminator the
  * phase-2 list actions use. A view is logged once per loader hit; the audit
  * service counts an identical repeat within seconds on the same row, with no
  * session bookkeeping of our own to get wrong.
+ *
+ * Written BEFORE the data is handed over, through `create`: a failed write
+ * fails the read, so no one's answers leave unrecorded.
  */
-export async function auditResponses({
+export async function auditResponses(entry: ResponsesAuditEntry & { action: 'VIEW' }) {
+  return ClassmojiService.audit.create(responsesRow(entry));
+}
+
+/**
+ * Audit one CHANGE to response data (a triage edit, a delete), written after
+ * it. The change is saved: a failed write is reported (`audit_miss`), the
+ * action answers as it would have, and a bulk edit goes on to the next
+ * response.
+ */
+export async function auditResponsesChange(
+  entry: ResponsesAuditEntry & { action: 'UPDATE' | 'DELETE' }
+) {
+  return ClassmojiService.audit.record(responsesRow(entry));
+}
+
+function responsesRow({
   context,
   tool,
   action,
   responseId,
   data,
-}: {
-  context: ResponsesContext;
-  tool: string;
-  action: 'VIEW' | 'UPDATE' | 'DELETE';
-  responseId?: string;
-  data?: Record<string, unknown>;
-}) {
-  return ClassmojiService.audit.create({
+}: ResponsesAuditEntry & { action: 'VIEW' | 'UPDATE' | 'DELETE' }) {
+  return {
     user_id: context.userId,
     classroom_id: context.classroom.id,
     role: context.membership.role,
@@ -373,7 +393,7 @@ export async function auditResponses({
     resource_id: responseId ?? context.form.id,
     action,
     data: { tool, form_id: context.form.id, form_slug: context.form.slug, ...(data ?? {}) },
-  });
+  };
 }
 
 /**

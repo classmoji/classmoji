@@ -81,7 +81,7 @@ import {
   QUIZ_STAFF,
   requireClassroomCtx,
   scopedNotFound,
-  writeAudit,
+  writeAuditOrFail,
 } from './shared.ts';
 
 interface GetQuizAttemptArgs {
@@ -844,7 +844,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     // Reading one's own attempt (a preview) is not logged, as on the web. A
     // transcript read is told apart from a plain read by include_transcript.
     if (!ownsAttempt)
-      await writeAudit(ctx, {
+      await writeAuditOrFail(ctx, {
         resource_type: 'QUIZ_ATTEMPT',
         resource_id: attempt.id,
         action: 'VIEW',

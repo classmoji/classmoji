@@ -17,7 +17,7 @@ import { createAdapterRegistry } from '../src/adapters/registry.ts';
 import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
 import type { CollabAdapter } from '../src/adapters/types.ts';
 import type { CollabSession, SessionResolver } from '../src/auth.ts';
-import type { AuditEntry, AuditSink } from '../src/audit.ts';
+import type { AuditEntry, AuditSink, NonMemberRefusal } from '../src/audit.ts';
 import type { CheckpointTrigger, CheckpointTriggerOptions } from '../src/checkpoint.ts';
 import { loadConfig, type CollabConfig } from '../src/config.ts';
 import { createCollabServer, type CollabRuntime } from '../src/server.ts';
@@ -337,8 +337,16 @@ export function pageAdapterFor(world: FakeWorld) {
 
 export class RecordingAudit implements AuditSink {
   entries: AuditEntry[] = [];
+  /** Every call to `recordNonMemberRefusal`, with exactly what it was given. */
+  nonMemberRefusals: unknown[][] = [];
+  /** Set to make `recordNonMemberRefusal` reject (after recording the call). */
+  failNonMemberRefusals = false;
   async record(entry: AuditEntry) {
     this.entries.push(entry);
+  }
+  async recordNonMemberRefusal(...args: [NonMemberRefusal]) {
+    this.nonMemberRefusals.push(args);
+    if (this.failNonMemberRefusals) throw new Error('database down');
   }
 }
 

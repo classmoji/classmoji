@@ -193,7 +193,9 @@ export const action = async ({
       if (code === 'FORM_NOT_FOUND') return { error: 'Form not found' };
       throw error;
     }
-    await ClassmojiService.audit.create({
+    // The status is changed: a failed write is reported (`audit_miss`), not
+    // answered as a failed change.
+    await ClassmojiService.audit.record({
       user_id: userId,
       classroom_id: classroom.id,
       role: membership.role,
@@ -217,7 +219,7 @@ export const action = async ({
     // Deleting a form cascades to its responses, which is the point and also
     // why it is audited: this is the one action here that destroys collected
     // PII, and the row is the only record it happened.
-    await ClassmojiService.audit.create({
+    await ClassmojiService.audit.record({
       user_id: userId,
       classroom_id: classroom.id,
       role: membership.role,

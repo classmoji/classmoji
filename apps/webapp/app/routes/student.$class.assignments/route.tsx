@@ -167,7 +167,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const gitRepoAssignmentId = idFrom(data.git_repo_assignment_id);
       const assignmentId = idFrom(data.assignment_id);
       const metadata = {
-        hours_requested: data.hours_purchased,
+        // Recorded by the gate as a number, or null for anything else.
+        hours_requested:
+          typeof data.hours_purchased === 'number' && Number.isFinite(data.hours_purchased)
+            ? data.hours_purchased
+            : null,
         ...(gitRepoAssignmentId ? { git_repo_assignment_id: gitRepoAssignmentId } : {}),
         ...(assignmentId ? { assignment_id: assignmentId } : {}),
       };

@@ -203,7 +203,9 @@ export function realCheckpointDeps(): CheckpointDeps {
         select: { role: true },
       });
       if (!membership) return;
-      await ClassmojiService.audit.create({
+      // After the push: a failed write is reported (`audit_miss`); the
+      // checkpoint neither fails nor retries for it.
+      await ClassmojiService.audit.record({
         classroom_id: classroomId,
         user_id: userId,
         role: membership.role,

@@ -444,10 +444,22 @@ export function liveConvertDeps(): ConvertDeps {
         folders: [deck.content_path, `${deck.content_path}/blocks`],
       });
     },
+    // After the commit: neither the actor lookup nor the write may fail the
+    // deck. A failed lookup or write is reported (`audit_miss`) and the deck
+    // still counts as converted.
     audit: async (deck, data) => {
-      const actor = await auditActor(deck);
+      let actor: Awaited<ReturnType<typeof auditActor>>;
+      try {
+        actor = await auditActor(deck);
+      } catch (error) {
+        ClassmojiService.audit.logAuditMiss(
+          `audit actor lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+          { classroom_id: deck.classroom_id, resource_type: 'SLIDES', resource_id: deck.id, data }
+        );
+        return;
+      }
       if (!actor) return;
-      await ClassmojiService.audit.create({
+      await ClassmojiService.audit.record({
         classroom_id: deck.classroom_id,
         user_id: actor.userId,
         role: actor.role,

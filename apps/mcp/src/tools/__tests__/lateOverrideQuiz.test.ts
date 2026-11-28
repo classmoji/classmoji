@@ -44,7 +44,13 @@ vi.mock('@classmoji/services', () => ({
       quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a),
       quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     classroom: {
       findAll: (...a: unknown[]) => mocks.classroomFindAll(...a),
       getClassroomForUI: (c: unknown) => c,
@@ -323,13 +329,16 @@ describe('submission_late_override (quiz) — set and clear', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('still reports the change when its audit row fails, flagged audit_incomplete', async () => {
+  it('still reports the change when its audit row fails, and marks the call', async () => {
     mocks.auditCreate.mockRejectedValue(new Error('db down'));
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    const ctx = { ...CTX } as ToolContext;
 
-    const result = parse(await handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A }));
+    const result = parse(await handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A }, ctx));
 
-    expect(result).toMatchObject({ updated_count: 1, audit_incomplete: true });
+    expect(result).toMatchObject({ updated_count: 1 });
+    // The registry turns the mark into `audit_incomplete` (tested through it below).
+    expect(ctx.auditIncomplete).toBe(true);
   });
 });
 
@@ -453,6 +462,17 @@ describe('submission_late_override (quiz) — through the registry', () => {
     expect(result.isError).toBe(true);
     expect(parse(result)).toMatchObject({ error: 'forbidden', code: 'CLASSROOM_LOCKED' });
     expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+  });
+
+  it('flags audit_incomplete on the normal answer when the audit row fails', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    mocks.auditCreate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await call(ARGS);
+    expect(result.isError).toBeFalsy();
+    expect(parse(result)).toMatchObject({ mode: 'quiz', updated_count: 1, audit_incomplete: true });
+    expect(mocks.setQuizLateWaiver).toHaveBeenCalledTimes(1);
   });
 
   it('keeps quiz_id and student_id uuids at the schema', async () => {

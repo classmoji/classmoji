@@ -1,14 +1,15 @@
 /**
- * audit.service error reports, with the database mocked: a failed write is
- * reported once as `audit.write` and still thrown exactly as before; a row
- * dropped for invalid input in production is reported as `audit.skipped`; a
- * designed no-op (role NONE, a repeat counted on its row) reports nothing;
- * and with no reporter registered nothing changes.
+ * audit.service error reports, with the database mocked. `record` retries a
+ * failed write once: a row that is finally NOT written is reported once as
+ * `audit.write` (beside its `audit_miss` line), a blip the retry recovered is
+ * not reported at all. `create` itself reports nothing (it throws to its
+ * caller as before). A row dropped for invalid input in production is
+ * reported as `audit.skipped`; a repeat counted on its row reports nothing;
+ * with no reporter registered nothing changes.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  reportError,
   setErrorReporter,
   type ErrorReporter,
   type ReportContext,
@@ -18,6 +19,7 @@ const findManyMock = vi.fn();
 const createMock = vi.fn();
 const updateMock = vi.fn();
 const platformCreateMock = vi.fn();
+const executeRawMock = vi.fn();
 
 class FakeKnownRequestError extends Error {
   code: string;
@@ -35,6 +37,7 @@ vi.mock('@classmoji/database', () => ({
       update: (...args: unknown[]) => updateMock(...args),
     },
     platformAuditLog: { create: (...args: unknown[]) => platformCreateMock(...args) },
+    $executeRaw: (...args: unknown[]) => executeRawMock(...args),
   }),
 }));
 
@@ -65,6 +68,7 @@ beforeEach(() => {
   captured = [];
   setErrorReporter(reporter);
   findManyMock.mockResolvedValue([]);
+  executeRawMock.mockResolvedValue(1);
   createMock.mockImplementation(({ data }: { data: unknown }) => Promise.resolve(data));
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -75,40 +79,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('a failed audit write', () => {
-  it('is reported once as audit.write and thrown unchanged', async () => {
-    const failure = new Error('connection terminated');
-    createMock.mockRejectedValueOnce(failure);
+describe('record: a failed audit write', () => {
+  it('is reported once as audit.write after the retry gives up, and never throws', async () => {
+    const first = new Error('connection terminated');
+    const second = new Error('connection terminated again');
+    createMock.mockRejectedValueOnce(first).mockRejectedValueOnce(second);
 
-    await expect(audit.create(entry)).rejects.toBe(failure);
+    await expect(audit.record(entry)).resolves.toMatchObject({ written: false });
 
+    expect(createMock).toHaveBeenCalledTimes(2);
     expect(captured).toHaveLength(1);
-    expect(captured[0].error).toBe(failure);
+    expect(captured[0].error).toBe(second);
     expect(captured[0].context).toEqual({
       surface: 'audit.write',
       tags: { action: 'UPDATE', resource_type: 'SLIDES', tool: 'web:slides.save' },
     });
+    // The audit_miss line staging writes is still there, once.
+    const misses = vi.mocked(console.error).mock.calls.filter(call => call[0] === 'audit_miss');
+    expect(misses).toHaveLength(1);
   });
 
-  it('is not reported again by a caller that reports what it caught', async () => {
-    const failure = new Error('connection terminated');
-    createMock.mockRejectedValueOnce(failure);
+  it('is not reported when the retry writes the row', async () => {
+    createMock.mockRejectedValueOnce(new Error('blip'));
 
-    try {
-      await audit.create(entry);
-    } catch (error) {
-      reportError(error, { surface: 'caller.audit' });
-    }
+    await expect(audit.record(entry)).resolves.toEqual({ written: true });
 
-    expect(captured).toHaveLength(1);
-    expect(captured[0].context.surface).toBe('audit.write');
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(captured).toHaveLength(0);
   });
 
-  it('is reported when the repeat lookup of a read fails', async () => {
-    const failure = new Error('query timeout');
-    findManyMock.mockRejectedValueOnce(failure);
+  it('is reported when the repeat lookup of a read fails twice', async () => {
+    findManyMock.mockRejectedValue(new Error('query timeout'));
 
-    await expect(audit.create({ ...entry, action: 'VIEW' })).rejects.toBe(failure);
+    await audit.record({ ...entry, action: 'VIEW' });
 
     expect(captured).toHaveLength(1);
     expect(captured[0].context.tags).toMatchObject({ action: 'VIEW' });
@@ -116,6 +119,15 @@ describe('a failed audit write', () => {
 
   it('changes nothing without a reporter', async () => {
     setErrorReporter(null);
+    createMock.mockRejectedValue(new Error('connection terminated'));
+
+    await expect(audit.record(entry)).resolves.toMatchObject({ written: false });
+    expect(captured).toHaveLength(0);
+  });
+});
+
+describe('create: a failed write', () => {
+  it('is thrown unchanged and not reported (the caller decides)', async () => {
     const failure = new Error('connection terminated');
     createMock.mockRejectedValueOnce(failure);
 
@@ -125,9 +137,8 @@ describe('a failed audit write', () => {
 });
 
 describe('writes that succeed', () => {
-  it('report nothing and return the row', async () => {
-    const row = await audit.create(entry);
-    expect(row).toMatchObject({ action: 'UPDATE', resource_id: 'slide-1' });
+  it('report nothing', async () => {
+    await expect(audit.record(entry)).resolves.toEqual({ written: true });
     expect(captured).toHaveLength(0);
   });
 
@@ -138,14 +149,10 @@ describe('writes that succeed', () => {
     ]);
     updateMock.mockResolvedValueOnce({ id: 'row-1', count: 2 });
 
-    const row = await audit.create({ ...entry, action: 'VIEW' });
+    await expect(audit.record({ ...entry, action: 'VIEW' })).resolves.toEqual({ written: true });
 
-    expect(updateMock).toHaveBeenCalledExactlyOnceWith({
-      where: { id: 'row-1' },
-      data: { count: { increment: 1 } },
-    });
+    expect(updateMock).toHaveBeenCalledTimes(1);
     expect(createMock).not.toHaveBeenCalled();
-    expect(row).toEqual({ id: 'row-1', count: 2 });
     expect(captured).toHaveLength(0);
   });
 
@@ -156,20 +163,20 @@ describe('writes that succeed', () => {
     ]);
     updateMock.mockRejectedValueOnce(new FakeKnownRequestError('P2025'));
 
-    const row = await audit.create({ ...entry, action: 'VIEW' });
+    await expect(audit.record({ ...entry, action: 'VIEW' })).resolves.toEqual({ written: true });
 
-    expect(updateMock).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(1);
-    expect(row).toMatchObject({ action: 'VIEW' });
     expect(captured).toHaveLength(0);
   });
 });
 
 describe('a row dropped for invalid input', () => {
-  it('in production, is reported as audit.skipped (warning) and still returns null', async () => {
+  it('in production, is reported once as audit.skipped (warning) and not written', async () => {
     vi.stubEnv('NODE_ENV', 'production');
 
-    expect(await audit.create({ ...entry, role: 'ADMIN' })).toBeNull();
+    await expect(audit.record({ ...entry, role: 'ADMIN' })).resolves.toMatchObject({
+      written: false,
+    });
 
     expect(createMock).not.toHaveBeenCalled();
     expect(captured).toHaveLength(1);
@@ -198,19 +205,64 @@ describe('a row dropped for invalid input', () => {
     expect(captured[0].context.tags).toMatchObject({ action: undefined, reason: 'invalid_action' });
   });
 
-  it('outside production, throws as before and reports nothing', async () => {
+  it('outside production, throws AuditInputError from create and record, and reports nothing', async () => {
     vi.stubEnv('NODE_ENV', 'development');
 
-    await expect(audit.create({ ...entry, classroom_id: '' })).rejects.toThrow(
+    await expect(audit.create({ ...entry, classroom_id: '' })).rejects.toSatisfy(
+      audit.isAuditInputError
+    );
+    await expect(audit.record({ ...entry, classroom_id: '' })).rejects.toThrow(
       'missing classroom_id'
     );
+    expect(createMock).not.toHaveBeenCalled();
     expect(captured).toHaveLength(0);
   });
 
-  it('reports nothing for the role NONE, which is skipped by design', async () => {
+  it('in production, an AuditInputError from the writer is reported as audit.skipped', async () => {
     vi.stubEnv('NODE_ENV', 'production');
 
-    expect(await audit.create({ ...entry, role: 'NONE', action: 'ACCESS_DENIED' })).toBeNull();
+    const result = await audit.recordWith(async () => {
+      throw new audit.AuditInputError('missing role');
+    }, entry);
+
+    expect(result).toMatchObject({ written: false });
+    expect(captured).toHaveLength(1);
+    expect(captured[0].context).toMatchObject({
+      surface: 'audit.skipped',
+      tags: { reason: 'invalid_input' },
+    });
+  });
+});
+
+describe('recordNonMemberRefusal', () => {
+  it('reports a failed write as audit.write and still resolves', async () => {
+    const failure = new Error('connection terminated');
+    executeRawMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      audit.recordNonMemberRefusal({ userId: 'user-1', classroomId: 'class-1' })
+    ).resolves.toBeUndefined();
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].error).toBe(failure);
+    expect(captured[0].context).toEqual({
+      surface: 'audit.write',
+      tags: { action: 'ACCESS_DENIED', resource_type: 'CLASSROOM', tool: 'gate' },
+    });
+  });
+
+  it('reports a row dropped for a missing id as audit.skipped', async () => {
+    await audit.recordNonMemberRefusal({ userId: '', classroomId: 'class-1' });
+    expect(executeRawMock).not.toHaveBeenCalled();
+    expect(captured).toHaveLength(1);
+    expect(captured[0].context).toMatchObject({
+      surface: 'audit.skipped',
+      tags: { reason: 'missing_user' },
+    });
+  });
+
+  it('reports nothing when the write succeeds', async () => {
+    await audit.recordNonMemberRefusal({ userId: 'user-1', classroomId: 'class-1' });
     expect(captured).toHaveLength(0);
   });
 });

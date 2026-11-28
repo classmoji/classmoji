@@ -332,15 +332,12 @@ async function guarded(label: string, run: () => Promise<Response>): Promise<Res
 
 /**
  * Write the audit row without letting a logging failure undo or fail what the
- * user just did (the write has already happened).
+ * user just did (the write has already happened): `deps.audit` is the audit
+ * service's `record`, which reports a failed write (`audit_miss`) instead of
+ * throwing.
  */
 async function auditQuietly(deps: Pick<PageCommentsDeps, 'audit'>, row: CommentAuditRow) {
-  try {
-    await deps.audit(row);
-  } catch (error) {
-    console.warn(`[page-comments] audit (${String(row.data.tool)}) failed:`, error);
-    reportError(error, { surface: 'audit.write', tags: { tool: String(row.data.tool) } });
-  }
+  await deps.audit(row);
 }
 
 type Resolved<P> =

@@ -257,8 +257,8 @@ export const action = async ({
 
   /**
    * One audit row per change, naming the page by id (and title or new value
-   * where known). Written after the change; a failure to write it is logged,
-   * never reported as a failed change.
+   * where known). Written after the change; a failure to write it is reported
+   * (`audit_miss`), never as a failed change.
    */
   const audit = async (
     action: 'CREATE' | 'UPDATE' | 'DELETE',
@@ -266,20 +266,15 @@ export const action = async ({
     tool: string,
     detail: Record<string, unknown> = {}
   ) => {
-    try {
-      await ClassmojiService.audit.create({
-        user_id: authData.userId,
-        classroom_id: classroom.id,
-        role,
-        action,
-        resource_type: 'PAGES',
-        resource_id: pageId,
-        data: { tool, ...detail },
-      });
-    } catch (error: unknown) {
-      console.error('[pages] audit row not written:', error);
-      reportError(error, { surface: 'audit.write', tags: { tool } });
-    }
+    await ClassmojiService.audit.record({
+      user_id: authData.userId,
+      classroom_id: classroom.id,
+      role,
+      action,
+      resource_type: 'PAGES',
+      resource_id: pageId,
+      data: { tool, ...detail },
+    });
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape

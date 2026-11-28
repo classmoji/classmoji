@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
+  recordNonMemberRefusal: vi.fn(),
   getGitHubTokenForUser: vi.fn(),
 }));
 
@@ -63,7 +64,14 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('./support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+      recordNonMemberRefusal: (...a: unknown[]) => mocks.recordNonMemberRefusal(...a),
+    },
     githubUserToken: {
       getGitHubTokenForUser: (...a: unknown[]) => mocks.getGitHubTokenForUser(...a),
     },
@@ -123,6 +131,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.getGitHubTokenForUser.mockResolvedValue(null);
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.recordNonMemberRefusal.mockResolvedValue(undefined);
 });
 
 // ─── VIEW: the whole teaching team ───────────────────────────────────────────
@@ -145,24 +154,116 @@ describe('draft deck — who may VIEW', () => {
     signedInAs('STUDENT', 'student-1');
 
     await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
-    // The refusal is recorded, as for any denied member.
-    expect(mocks.auditCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'ACCESS_DENIED', resource_type: 'SLIDE' })
-    );
+    // The refusal is recorded once, with the member's real role.
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
+    expect(mocks.auditCreate.mock.calls).toEqual([
+      [
+        {
+          classroom_id: 'class-1',
+          user_id: 'student-1',
+          role: 'STUDENT',
+          resource_id: SLIDE_ID,
+          resource_type: 'SLIDE',
+          action: 'ACCESS_DENIED',
+          data: {
+            attempted_action: 'view',
+            is_draft: true,
+            is_public: false,
+            is_creator: false,
+            allow_team_edit: false,
+          },
+        },
+      ],
+    ]);
   });
 
-  it('refuses someone with no membership in the classroom', async () => {
+  it('refuses someone with no membership in the classroom, recorded as a non-member refusal', async () => {
     signedInAs(null, 'outsider-1');
 
     await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
-    // Nothing to audit for a non-member — there is no membership to attribute.
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'outsider-1', classroomId: 'class-1' }],
+    ]);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('refuses an anonymous request', async () => {
+  it('refuses a non-member of a published private deck, recorded in its classroom', async () => {
+    signedInAs(null, 'outsider-1');
+
+    const error = await accessTo({ ...DRAFT, is_draft: false }, 'view').then(
+      () => {
+        throw new Error('expected the gate to refuse');
+      },
+      (e: unknown) => e as Response
+    );
+    expect(error).toBeInstanceOf(Response);
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Not a member of this classroom');
+    expect(mocks.recordNonMemberRefusal.mock.calls).toEqual([
+      [{ userId: 'outsider-1', classroomId: 'class-1' }],
+    ]);
+  });
+
+  it('records no non-member refusal when the caller turns it off, and refuses the same', async () => {
+    signedInAs(null, 'outsider-1');
+
+    const error = await assertSlideAccess({
+      request: request(),
+      slideId: SLIDE_ID,
+      slide: { ...DRAFT, is_draft: false },
+      accessType: 'view',
+      recordNonMemberRefusal: false,
+    }).then(
+      () => {
+        throw new Error('expected the gate to refuse');
+      },
+      (e: unknown) => e as Response
+    );
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Not a member of this classroom');
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("still records a member's refusal when non-member recording is turned off", async () => {
+    signedInAs('STUDENT', 'student-1');
+
+    await expect(
+      assertSlideAccess({
+        request: request(),
+        slideId: SLIDE_ID,
+        slide: DRAFT,
+        accessType: 'view',
+        recordNonMemberRefusal: false,
+      })
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ role: 'STUDENT' });
+  });
+
+  it('still answers 403 when writing the refusal fails', async () => {
+    signedInAs(null, 'outsider-1');
+    mocks.recordNonMemberRefusal.mockRejectedValue(new Error('database down'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const error = await accessTo(DRAFT, 'view').then(
+      () => {
+        throw new Error('expected the gate to refuse');
+      },
+      (e: unknown) => e as Response
+    );
+    expect(mocks.recordNonMemberRefusal).toHaveBeenCalledTimes(1);
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('This slide is still in draft mode');
+    logged.mockRestore();
+  });
+
+  it('refuses an anonymous request and records nothing', async () => {
     mocks.getSession.mockResolvedValue(null);
 
     await expect(accessTo(DRAFT, 'view')).rejects.toMatchObject({ status: 403 });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.recordNonMemberRefusal).not.toHaveBeenCalled();
   });
 });
 

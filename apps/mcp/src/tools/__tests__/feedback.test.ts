@@ -38,7 +38,13 @@ vi.mock('@classmoji/services', async () => {
     ...feedback,
     ClassmojiService: {
       feedback,
-      audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
+      audit: {
+        create: (...args: unknown[]) => mocks.auditCreate(...args),
+        record: (row: unknown) =>
+          import('../../__tests__/support/auditRecord.ts').then(m =>
+            m.recordThrough(r => mocks.auditCreate(r))(row)
+          ),
+      },
     },
   };
 });

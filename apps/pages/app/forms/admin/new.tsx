@@ -133,7 +133,9 @@ export const action = async ({
     throw error;
   }
 
-  await ClassmojiService.audit.create({
+  // The form exists: a failed write is reported (`audit_miss`) and the drawer
+  // still opens it.
+  await ClassmojiService.audit.record({
     user_id: userId,
     classroom_id: classroom.id,
     role: membership.role,

@@ -56,6 +56,11 @@ const invalid = [
   ['an undefined role', { ...baseEntry, role: undefined as unknown as string }, 'missing role'],
   ['an empty role', { ...baseEntry, role: '' }, 'missing role'],
   [
+    'the role NONE on a refusal',
+    { ...baseEntry, role: 'NONE', action: 'ACCESS_DENIED' as const },
+    'invalid role "NONE"',
+  ],
+  [
     'an unknown action',
     { ...baseEntry, action: 'EXPORT' as unknown as 'UPDATE' },
     'invalid action "EXPORT"',
@@ -80,20 +85,6 @@ describe('audit.create refuses invalid input', () => {
       expect(createMock).not.toHaveBeenCalled();
     }
   );
-
-  it('skips the role NONE quietly, in every environment', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    for (const env of ['development', 'production']) {
-      vi.stubEnv('NODE_ENV', env);
-      expect(
-        await audit.create({ ...baseEntry, role: 'NONE', action: 'ACCESS_DENIED' })
-      ).toBeNull();
-    }
-    expect(error).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-    expect(createMock).not.toHaveBeenCalled();
-  });
 
   it('accepts a null role on ACCESS_DENIED', async () => {
     await audit.create({ ...baseEntry, role: null, action: 'ACCESS_DENIED' });
@@ -152,4 +143,63 @@ describe('audit.create: changes are never merged', () => {
       expect(query.take).toBe(2);
     }
   );
+});
+
+describe('audit.record: report a failed write and continue', () => {
+  it('writes once when the first attempt lands', async () => {
+    expect(await audit.record(baseEntry)).toEqual({ written: true });
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries once more after a database error, and the row is written', async () => {
+    createMock.mockRejectedValueOnce(new Error('connection reset'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await audit.record(baseEntry)).toEqual({ written: true });
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('after two database errors: not written, one audit_miss line with the row, no throw', async () => {
+    createMock.mockRejectedValue(new Error('database away'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await audit.record(baseEntry);
+    expect(result).toEqual({ written: false, reason: 'audit write failed: database away' });
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      'audit_miss',
+      JSON.stringify({ reason: 'audit write failed: database away', row: baseEntry })
+    );
+  });
+
+  it('rethrows invalid input outside production, without writing', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const entry = { ...baseEntry, user_id: '' };
+    await expect(audit.record(entry)).rejects.toMatchObject({
+      name: 'AuditInputError',
+      code: audit.AUDIT_INPUT_INVALID,
+    });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('does not throw on invalid input in production: one audit_miss line, not written', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const entry = { ...baseEntry, user_id: '' };
+    expect(await audit.record(entry)).toEqual({ written: false, reason: 'invalid input' });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      'audit_miss',
+      JSON.stringify({ reason: 'missing user_id', row: entry })
+    );
+  });
+
+  it('tells an input refusal from another copy of the module by its code', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const foreign = Object.assign(new Error('Audit row not written: x'), {
+      code: audit.AUDIT_INPUT_INVALID,
+    });
+    const write = vi.fn().mockRejectedValue(foreign);
+    await expect(audit.recordWith(write, baseEntry)).rejects.toBe(foreign);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
 });

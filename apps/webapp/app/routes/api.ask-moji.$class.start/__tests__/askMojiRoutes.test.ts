@@ -79,7 +79,13 @@ const auditCreate = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    audit: { create: (...a: unknown[]) => auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => auditCreate(r))(row)
+        ),
+    },
     askMojiSession: {
       askMojiAvailable: (i: unknown) => availability(i as never),
       start: async (a: Access, i: Record<string, unknown>) => {

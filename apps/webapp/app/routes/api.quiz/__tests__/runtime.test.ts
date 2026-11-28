@@ -39,7 +39,13 @@ vi.mock('@classmoji/services', () => ({
       deleteAttempt: vi.fn(),
     },
     quizSourceMaterial: { countStartable: vi.fn() },
-    audit: { create: (...a: unknown[]) => auditCreateMock(...a) },
+    audit: {
+      create: (...a: unknown[]) => auditCreateMock(...a),
+      record: (row: unknown) =>
+        import('../../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => auditCreateMock(r))(row)
+        ),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));

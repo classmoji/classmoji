@@ -49,6 +49,7 @@ vi.mock('@classmoji/auth/client', () => ({
 vi.mock('~/utils/impersonationReturn', () => ({ rememberImpersonationReturn: () => {} }));
 
 const route = await import('../route.tsx');
+const { expectAwaitsWrite } = await import('../../../__tests__/support/awaitedWrite.ts');
 
 const load = () =>
   route.loader({
@@ -95,5 +96,15 @@ describe('staff drawer loader — canViewAs', () => {
     const data = await load();
 
     expect(data.canViewAs).toBe(true);
+  });
+});
+
+describe('staff drawer loader — audit', () => {
+  it('waits for its VIEW row before answering', async () => {
+    asOwner('owner-1');
+    await expectAwaitsWrite(mocks.addAuditLog, load);
+    expect(mocks.addAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'VIEW', resourceType: 'TEACHING_STAFF_DETAILS' })
+    );
   });
 });

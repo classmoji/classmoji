@@ -453,20 +453,17 @@ export async function requireTeamSet(
 
 // ─── Audit ──────────────────────────────────────────────────────────────────
 
-/**
- * One audit row on this surface. `data.tool` names the act (and `value`, when
- * there is one, what it was about).
- */
-export async function auditTeamSets(
+/** One audit row on this surface, as `ClassmojiService.audit` takes it. */
+function teamSetsRow(
   context: TeamsFormContext,
   entry: {
-    action: 'VIEW' | 'CREATE' | 'UPDATE' | 'ACCESS_DENIED';
+    action: 'VIEW' | 'CREATE' | 'UPDATE';
     tool: string;
     resourceId: string;
     data?: Record<string, unknown>;
   }
 ) {
-  return ClassmojiService.audit.create({
+  return {
     user_id: context.userId,
     classroom_id: context.classroom.id,
     role: context.membership.role,
@@ -479,7 +476,36 @@ export async function auditTeamSets(
       form_slug: context.form.slug,
       ...(entry.data ?? {}),
     },
-  });
+  };
+}
+
+/**
+ * The audit row of a change on this surface, written after it. `data.tool`
+ * names the act (and `value`, when there is one, what it was about). The
+ * change is saved: a failed write is reported (`audit_miss`) and the page
+ * answers as it would have.
+ */
+export async function auditTeamSets(
+  context: TeamsFormContext,
+  entry: {
+    action: 'CREATE' | 'UPDATE';
+    tool: string;
+    resourceId: string;
+    data?: Record<string, unknown>;
+  }
+) {
+  return ClassmojiService.audit.record(teamSetsRow(context, entry));
+}
+
+/**
+ * The VIEW row of a read that names people, written BEFORE the data is handed
+ * over: a failed write fails the read, so nothing is shown unrecorded.
+ */
+export async function auditTeamSetsRead(
+  context: TeamsFormContext,
+  entry: { tool: string; resourceId: string; data?: Record<string, unknown> }
+) {
+  return ClassmojiService.audit.create(teamSetsRow(context, { ...entry, action: 'VIEW' }));
 }
 
 /**
@@ -1212,8 +1238,7 @@ export async function loadTeamSetLayout(args: TeamsRouteArgs) {
       : []),
   ];
   if (peopleIn.length > 0) {
-    await auditTeamSets(context, {
-      action: 'VIEW',
+    await auditTeamSetsRead(context, {
       tool: 'teams.set.view',
       resourceId: teamSetId,
       data: { team_set_id: teamSetId, people_in: peopleIn },
@@ -1305,8 +1330,7 @@ export async function loadSetupPage(args: TeamsRouteArgs) {
   ]);
 
   // Pitchers, pins and the roster name students; a created set lists its teams.
-  await auditTeamSets(context, {
-    action: 'VIEW',
+  await auditTeamSetsRead(context, {
     tool: 'teams.setup.view',
     resourceId: context.set.id,
     data: { team_set_id: context.set.id, created_teams: landing.createdTeams.length > 0 },
@@ -1384,8 +1408,7 @@ export async function loadRunPage(args: TeamsRouteArgs) {
   // the pinned.
   const peopleIn = runPeopleShown(view, placements.length);
   if (peopleIn.length > 0) {
-    await auditTeamSets(context, {
-      action: 'VIEW',
+    await auditTeamSetsRead(context, {
       tool: 'teams.run.view',
       resourceId: row.id,
       data: {
@@ -1461,8 +1484,7 @@ export async function loadComparePage(args: TeamsRouteArgs) {
   }
   const comparison = compared.comparison;
 
-  await auditTeamSets(context, {
-    action: 'VIEW',
+  await auditTeamSetsRead(context, {
     tool: 'teams.compare.view',
     resourceId: teamSetId,
     data: {
@@ -1604,28 +1626,25 @@ export async function setAction({ params, request, url }: TeamsRouteArgs) {
 
   const refused = intentRefusal(intent, access.membership.role);
   if (refused) {
-    try {
-      await ClassmojiService.audit.create({
-        user_id: access.userId,
-        classroom_id: access.classroom.id,
-        role: access.membership.role,
-        resource_type: TEAM_SETS_RESOURCE,
-        resource_id: access.classroom.id,
-        action: 'ACCESS_DENIED',
-        data: {
-          // The tool names the intent refused.
-          tool: `teams.set.${intent}`,
-          attempted_action: `team_set_${intent}`,
-          required_roles: ['OWNER'],
-          has_membership: true,
-          denial_reasons: ['insufficient_role'],
-          form_slug: params.formSlug ?? null,
-          team_set: params.setSlug ?? null,
-        },
-      });
-    } catch (error) {
-      console.error('[teams] could not write the access-denied audit row', error);
-    }
+    // The refusal stands whether or not its row is written.
+    await ClassmojiService.audit.record({
+      user_id: access.userId,
+      classroom_id: access.classroom.id,
+      role: access.membership.role,
+      resource_type: TEAM_SETS_RESOURCE,
+      resource_id: access.classroom.id,
+      action: 'ACCESS_DENIED',
+      data: {
+        // The tool names the intent refused.
+        tool: `teams.set.${intent}`,
+        attempted_action: `team_set_${intent}`,
+        required_roles: ['OWNER'],
+        has_membership: true,
+        denial_reasons: ['insufficient_role'],
+        form_slug: params.formSlug ?? null,
+        team_set: params.setSlug ?? null,
+      },
+    });
     return data(refused, { status: 403 });
   }
 
@@ -1696,8 +1715,7 @@ async function runIntent(
         // The refusal lists the checks that stopped the run with the people
         // each names, as Setup's Checks card does: audited like that card.
         if (checkLinesNamePeople(lines)) {
-          await auditTeamSets(context, {
-            action: 'VIEW',
+          await auditTeamSetsRead(context, {
             tool: 'teams.set.run_refused',
             resourceId: teamSetId,
             data: {
@@ -1828,8 +1846,7 @@ async function runIntent(
         teamSetId,
         runRef: runNumber,
       });
-      await auditTeamSets(context, {
-        action: 'VIEW',
+      await auditTeamSetsRead(context, {
         tool: 'teams.run.identity_missed',
         resourceId: teamSetId,
         data: {

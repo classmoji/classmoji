@@ -229,17 +229,13 @@ async function auditWrite(
 ): Promise<void> {
   const row = ClassmojiService.pageComments.commentAuditRow({ ctx: commentCtx, event, via: 'mcp' });
   if (!row) return;
-  try {
-    await writeAudit(ctx, {
-      role: row.role,
-      resource_type: row.resource_type,
-      resource_id: row.resource_id,
-      action: row.action,
-      data: row.data,
-    });
-  } catch (error) {
-    console.warn(`[mcp] page comments audit (${String(row.data.tool)}) failed:`, error);
-  }
+  await writeAudit(ctx, {
+    role: row.role,
+    resource_type: row.resource_type,
+    resource_id: row.resource_id,
+    action: row.action,
+    data: row.data,
+  });
 }
 
 /** Run one service write for the caller, audit it, and present its answer. */

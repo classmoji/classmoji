@@ -297,7 +297,8 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
         r.data && typeof r.data === 'object' && 'tool' in r.data
           ? String((r.data as { tool?: unknown }).tool)
           : null,
-      // A repeated read (or refusal) counted on one row, within seconds.
+      // A repeated read (or a member's refusal) counted on one row, within
+      // seconds; a non-member's refusals counted on one row per UTC day.
       count: r.count,
     })),
     ...adminRows.map(r => ({
@@ -314,7 +315,9 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
 
 /**
  * The classroom's content-delivery switch. Re-runs the admin gate (a layout
- * loader runs after an action, never before) and writes an audit row.
+ * loader runs after an action, never before) and saves the switch and its
+ * platform row in one transaction: both are saved or neither is, so an action
+ * that cannot be recorded does not happen (utils/audit.server.ts).
  */
 export async function classroomAction({ request, params }: ActionFunctionArgs) {
   const { user: admin } = await requirePlatformAdmin(request);
@@ -326,17 +329,34 @@ export async function classroomAction({ request, params }: ActionFunctionArgs) {
     select: { id: true, name: true },
   });
   if (!classroom) return { error: 'That classroom no longer exists.' };
-  await prisma.classroom.update({
-    where: { id: classroom.id },
-    data: { content_delivery_enabled: enabled },
-  });
-  await platformAudit({
-    actorId: admin.id,
-    action: 'delivery.toggle',
-    targetType: 'classroom',
-    targetId: classroom.id,
-    classroomId: classroom.id,
-    data: { enabled, classroomName: classroom.name },
-  });
+  try {
+    await prisma.$transaction([
+      prisma.classroom.update({
+        where: { id: classroom.id },
+        data: { content_delivery_enabled: enabled },
+        select: { id: true },
+      }),
+      platformAudit({
+        actorId: admin.id,
+        action: 'delivery.toggle',
+        targetType: 'classroom',
+        targetId: classroom.id,
+        classroomId: classroom.id,
+        data: { enabled, classroomName: classroom.name },
+      }),
+    ]);
+  } catch (error) {
+    // P2025: the classroom was deleted between the read and the switch.
+    if (isRecordNotFound(error)) return { error: 'That classroom no longer exists.' };
+    console.error('[admin] content-delivery toggle failed:', error);
+    return { error: 'Could not change that classroom. Try again.' };
+  }
   return { ok: true };
+}
+
+/** Prisma's "record not found" for an update/delete, without importing its client. */
+function isRecordNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2025'
+  );
 }

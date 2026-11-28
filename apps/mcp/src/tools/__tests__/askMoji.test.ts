@@ -46,7 +46,13 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => mocks.findByClassroomAndUser(...args),
     },
-    audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
+    audit: {
+      create: (...args: unknown[]) => mocks.auditCreate(...args),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     askMojiInsights: {
       usage: (...args: unknown[]) => mocks.usage(...args),
       feedbackReview: (...args: unknown[]) => mocks.feedbackReview(...args),

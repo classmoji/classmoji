@@ -647,6 +647,13 @@ interface AssertSlideAccessOptions {
   slide?: SlideForAccess | null;
   accessType: SlideAccessType;
   shareCode?: string | null;
+  /**
+   * Whether a refusal of a signed-in person who holds no role in the slide's
+   * classroom is recorded there (`recordNonMemberRefusal`). On by default;
+   * off for a check the person did not ask for, such as the deck rows of
+   * other classrooms that share a content path.
+   */
+  recordNonMemberRefusal?: boolean;
 }
 
 interface SlideAccessResult {
@@ -2266,11 +2273,13 @@ export const assertClassroomAccess = async ({
       }
     }
 
-    try {
-      await auditService.create({
+    // The refusal stands whether or not its row is written: `record` does not
+    // throw for a failed write (it leaves an `audit_miss` line).
+    if (actualMembership) {
+      await auditService.record({
         classroom_id: classroom.id,
         user_id: authData.userId,
-        role: actualMembership?.role || 'NONE',
+        role: actualMembership.role,
         resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
         resource_type: resourceType,
         action: 'ACCESS_DENIED',
@@ -2284,8 +2293,17 @@ export const assertClassroomAccess = async ({
           ...metadata,
         },
       });
-    } catch (error: unknown) {
-      console.error('[assertClassroomAccess] Failed to write audit log', error);
+    } else {
+      // Someone who holds no role here: one fixed-shape row per person,
+      // classroom and UTC day, counted (nothing from the request).
+      try {
+        await auditService.recordNonMemberRefusal({
+          userId: authData.userId,
+          classroomId: classroom.id,
+        });
+      } catch (error: unknown) {
+        console.error('[assertClassroomAccess] Failed to write audit log', error);
+      }
     }
 
     // Provide specific error messages
@@ -2665,6 +2683,7 @@ export async function assertSlideAccess({
   slide = null,
   accessType,
   shareCode = null,
+  recordNonMemberRefusal = true,
 }: AssertSlideAccessOptions): Promise<SlideAccessResult> {
   // Fetch slide if not provided
   if (!slide) {
@@ -2765,24 +2784,31 @@ export async function assertSlideAccess({
     (accessType === 'speakerNotes' && (!canView || !canViewSpeakerNotes));
 
   if (accessDenied) {
-    // Log denied access for audit (only if user is authenticated and a member)
+    // A member's refusal is audited with their role. Someone signed in who
+    // holds no role in the slide's classroom gets the classroom's one
+    // non-member row for the day (unless the caller turned that off). An
+    // anonymous visitor has no user to record.
+    // The refusal stands whether or not its row is written: `record` does not
+    // throw for a failed write (it leaves an `audit_miss` line).
     if (membership) {
+      await auditService.record({
+        classroom_id: slide.classroom_id,
+        user_id: userId!,
+        role: role ?? membership.role,
+        resource_id: slideId,
+        resource_type: 'SLIDE',
+        action: 'ACCESS_DENIED',
+        data: {
+          attempted_action: accessType,
+          is_draft: slide.is_draft,
+          is_public: slide.is_public,
+          is_creator: isCreator,
+          allow_team_edit: slide.allow_team_edit,
+        },
+      });
+    } else if (userId && recordNonMemberRefusal) {
       try {
-        await auditService.create({
-          classroom_id: slide.classroom_id,
-          user_id: userId!,
-          role: role ?? membership.role,
-          resource_id: slideId,
-          resource_type: 'SLIDE',
-          action: 'ACCESS_DENIED',
-          data: {
-            attempted_action: accessType,
-            is_draft: slide.is_draft,
-            is_public: slide.is_public,
-            is_creator: isCreator,
-            allow_team_edit: slide.allow_team_edit,
-          },
-        });
+        await auditService.recordNonMemberRefusal({ userId, classroomId: slide.classroom_id });
       } catch (error: unknown) {
         console.error('[assertSlideAccess] Failed to write audit log', error);
       }

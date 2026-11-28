@@ -49,7 +49,13 @@ vi.mock('@classmoji/services', () => ({
     page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
     assignment: { findById: (...a: unknown[]) => mocks.assignmentFindById(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
     // holdsRole falls back to this when the context's own role is not in the
     // list it was asked about.
     classroomMembership: {

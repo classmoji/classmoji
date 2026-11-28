@@ -1,7 +1,7 @@
 /**
  * What collab reports to the error tracker, and what it never does: hook
  * failures once each with the room's ids, the internal API's 500s, a lost
- * checkpoint trigger, a failed audit write. Typed refusals (auth refusals,
+ * checkpoint trigger (a failed audit write is the audit service's to report). Typed refusals (auth refusals,
  * 4xx / 501 answers) and a caller that hung up are never reported, and with
  * no reporter registered nothing changes. No server, no port, no network.
  */
@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { COLLAB_SECRET_HEADER } from '@classmoji/collab';
 import {
-  markReported,
   setErrorReporter,
   type ErrorReporter,
   type ReportContext,
@@ -181,9 +180,12 @@ describe('the checkpoint trigger', () => {
 });
 
 describe('recordAudit', () => {
-  it('reports a failed audit write, and only once for an error the audit service already sent', async () => {
+  it('sends nothing itself: the audit service reports a row it finally could not write', async () => {
     const failure = new Error('audit insert failed');
-    const sink = { record: vi.fn(async () => Promise.reject(failure)) };
+    const sink = {
+      record: vi.fn(async () => Promise.reject(failure)),
+      recordNonMemberRefusal: vi.fn(async () => undefined),
+    };
     const entry = {
       userId: 'u1',
       classroomId: 'c1',
@@ -193,19 +195,9 @@ describe('recordAudit', () => {
       resourceId: 'page-1',
     };
     recordAudit(sink, entry);
-    recordAudit(sink, entry);
     await new Promise(resolve => setImmediate(resolve));
-    expect(captured).toHaveLength(1);
-    expect(captured[0].context).toEqual({
-      surface: 'collab.audit',
-      tags: { action: 'COLLAB_JOIN', classroom_id: 'c1' },
-    });
-
-    const alreadySent = new Error('reported by the audit service');
-    markReported(alreadySent);
-    recordAudit({ record: async () => Promise.reject(alreadySent) }, entry);
-    await new Promise(resolve => setImmediate(resolve));
-    expect(captured).toHaveLength(1);
+    expect(sink.record).toHaveBeenCalledTimes(1);
+    expect(captured).toHaveLength(0);
   });
 });
 

@@ -156,19 +156,31 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     if (!classroomId) return { error: 'No classroom named.' };
     const enabled = form.get('enabled') === 'true';
     try {
-      const updated = await prisma.classroom.update({
+      const classroom = await prisma.classroom.findUnique({
         where: { id: classroomId },
-        data: { content_delivery_enabled: enabled },
         select: { id: true, name: true },
       });
-      await platformAudit({
-        actorId: admin.id,
-        action: 'delivery.toggle',
-        targetType: 'classroom',
-        targetId: updated.id,
-        classroomId: updated.id,
-        data: { enabled, classroomName: updated.name },
-      });
+      if (!classroom) {
+        return { error: 'That classroom no longer exists — the list is out of date.' };
+      }
+      // The switch and its platform row in one transaction: both are saved or
+      // neither is, so an action that cannot be recorded does not happen
+      // (utils/audit.server.ts).
+      await prisma.$transaction([
+        prisma.classroom.update({
+          where: { id: classroom.id },
+          data: { content_delivery_enabled: enabled },
+          select: { id: true },
+        }),
+        platformAudit({
+          actorId: admin.id,
+          action: 'delivery.toggle',
+          targetType: 'classroom',
+          targetId: classroom.id,
+          classroomId: classroom.id,
+          data: { enabled, classroomName: classroom.name },
+        }),
+      ]);
     } catch (error) {
       // P2025 — the row is gone. An admin list is a snapshot, and a classroom
       // deleted in another tab (or by its owner, mid-session) is the ordinary
@@ -191,16 +203,24 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     // and clicked "Enable for all" must not switch on the whole platform.
     const { where, q, state, scope } = searchFilter(request);
     try {
-      const { count } = await prisma.classroom.updateMany({
-        where: { ...where, content_delivery_enabled: !enabled },
-        data: { content_delivery_enabled: enabled },
-      });
-      await platformAudit({
-        actorId: admin.id,
-        action: 'delivery.bulk',
-        targetType: 'classrooms',
-        data: { enabled, changed: count, filter: { q, state, scope } },
-      });
+      // The switch and its platform row in one transaction (as for one
+      // classroom). The row's `changed` is the count at the time of the
+      // switch, taken just before it with the same filter the update uses;
+      // the admin is told what the update itself changed.
+      const toChange = { ...where, content_delivery_enabled: !enabled };
+      const changing = await prisma.classroom.count({ where: toChange });
+      const [{ count }] = await prisma.$transaction([
+        prisma.classroom.updateMany({
+          where: toChange,
+          data: { content_delivery_enabled: enabled },
+        }),
+        platformAudit({
+          actorId: admin.id,
+          action: 'delivery.bulk',
+          targetType: 'classrooms',
+          data: { enabled, changed: changing, filter: { q, state, scope } },
+        }),
+      ]);
       return { ok: true, changed: count };
     } catch (error) {
       console.error('[admin] content-delivery bulk update failed:', error);

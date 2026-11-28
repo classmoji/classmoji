@@ -34,7 +34,7 @@ vi.mock('@classmoji/services', () => ({
       deleteAttempt: (...a: unknown[]) => deleteAttemptMock(...a),
     },
     quizSourceMaterial: { countStartable: (...a: unknown[]) => countStartableMock(...a) },
-    audit: { create: vi.fn() },
+    audit: { create: vi.fn(), record: vi.fn(async () => ({ written: true })) },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));

@@ -225,7 +225,7 @@ export const auditPlanOwnerChange = async (
     console.info('[plan_owner] changed without an actor', { ...change, reason });
     return;
   }
-  await auditService.create({
+  await auditService.record({
     user_id: actorUserId,
     classroom_id: change.classroomId,
     role: 'OWNER',

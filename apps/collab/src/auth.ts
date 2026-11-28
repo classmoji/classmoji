@@ -17,7 +17,7 @@ import {
 import { reportError } from '@classmoji/utils/error-report';
 
 import type { AdapterRegistry } from './adapters/registry.ts';
-import { recordAudit, type AuditSink } from './audit.ts';
+import { recordAudit, recordNonMemberRefusal, type AuditSink } from './audit.ts';
 import type { CollabConfig } from './config.ts';
 import { roomTags } from './report.ts';
 import { currentEpoch, type CollabDocStore } from './store/types.ts';
@@ -150,16 +150,26 @@ async function authenticateOrRefuse(
   if (!session) throw new CollabAuthError('forbidden', 'no session');
 
   const access = await adapter.authorize({ userId: session.userId, docId: room.id });
-  if (!access.ok && access.classroomId && access.role) {
-    recordAudit(deps.audit, {
-      userId: session.userId,
-      classroomId: access.classroomId,
-      role: access.role,
-      action: 'ACCESS_DENIED',
-      resourceType: `collab_${room.kind}`,
-      resourceId: room.id,
-      data: { reason: access.reason },
-    });
+  // A refusal for a doc that exists is recorded in its classroom: a member's
+  // with their role, a non-member's as the classroom's one row for the day. A
+  // doc that does not exist has no classroom to record it in.
+  if (!access.ok && access.classroomId) {
+    if (access.role) {
+      recordAudit(deps.audit, {
+        userId: session.userId,
+        classroomId: access.classroomId,
+        role: access.role,
+        action: 'ACCESS_DENIED',
+        resourceType: `collab_${room.kind}`,
+        resourceId: room.id,
+        data: { reason: access.reason },
+      });
+    } else {
+      recordNonMemberRefusal(deps.audit, {
+        userId: session.userId,
+        classroomId: access.classroomId,
+      });
+    }
   }
   if (!access.ok) {
     throw new CollabAuthError('forbidden', `${access.reason} for user ${session.userId}`);

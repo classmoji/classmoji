@@ -29,7 +29,7 @@
 import getPrisma from '@classmoji/database';
 import type { Role } from '@classmoji/database/client';
 import { ContentService } from '../content/ContentService.ts';
-import { create as createAudit } from '../classmoji/audit.service.ts';
+import { record as recordAudit } from '../classmoji/audit.service.ts';
 import {
   recordContentAsset,
   recordFolderTreesAfterCommit,
@@ -207,20 +207,17 @@ async function audit(
   action: 'UPDATE' | 'DELETE',
   data: Record<string, string>
 ): Promise<void> {
-  try {
-    await createAudit({
-      classroom_id: target.classroomId,
-      user_id: actorUserId,
-      role: target.role,
-      resource_type: 'SLIDES',
-      resource_id: target.slideId,
-      action,
-      data,
-    });
-  } catch (error: unknown) {
-    // The commit already landed; the row is reported, not the write undone.
-    console.error('[htmlBlockFiles] Failed to write audit row', error);
-  }
+  // The commit already landed: a failed write is reported (`audit_miss`), not
+  // the write undone.
+  await recordAudit({
+    classroom_id: target.classroomId,
+    user_id: actorUserId,
+    role: target.role,
+    resource_type: 'SLIDES',
+    resource_id: target.slideId,
+    action,
+    data,
+  });
 }
 
 /** The map rows for a just-made commit in the deck (never throws). */

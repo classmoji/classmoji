@@ -45,8 +45,9 @@
  * would not say which submissions changed. Per-submission rows name each one
  * and can be written in parallel chunks. The rows are written AFTER
  * the committed update, so an audit failure cannot undo it: the call still
- * reports what it changed, flags `audit_incomplete` with the ids whose row
- * failed, and logs the error server-side (never to the client).
+ * reports what it changed and names the ids whose row failed
+ * (`audit_failed_ids`); the registry adds `audit_incomplete`, as for every
+ * write, and the audit service logs the miss server-side (never to the client).
  *
  * QUIZ MODE (`quiz_id`, or a QUIZ `assignment_id`, with `student_id`):
  * mirrors apps/webapp/app/routes/api.quizLateWaiver.$class (the quiz shield):
@@ -192,27 +193,21 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
   }
 
   // One row per change, after the committed write (as the repo rows are).
-  let auditFailed = false;
   if (result.changed) {
-    try {
-      await writeAudit(ctx, {
-        resource_type: QUIZ_LATE_WAIVER_RESOURCE,
-        resource_id: assignmentId,
-        action: 'UPDATE',
-        data: {
-          tool: 'submission_late_override',
-          kind: 'quiz',
-          field: 'quiz_late_waiver',
-          value: args.is_late_override,
-          assignment_id: assignmentId,
-          quiz_id: result.quizId,
-          student_id: args.student_id,
-        },
-      });
-    } catch (error) {
-      auditFailed = true;
-      console.error('[mcp] submission_late_override: quiz audit write failed:', error);
-    }
+    await writeAudit(ctx, {
+      resource_type: QUIZ_LATE_WAIVER_RESOURCE,
+      resource_id: assignmentId,
+      action: 'UPDATE',
+      data: {
+        tool: 'submission_late_override',
+        kind: 'quiz',
+        field: 'quiz_late_waiver',
+        value: args.is_late_override,
+        assignment_id: assignmentId,
+        quiz_id: result.quizId,
+        student_id: args.student_id,
+      },
+    });
   }
 
   return ok({
@@ -224,15 +219,14 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
     student_id: args.student_id,
     updated_count: result.changed ? 1 : 0,
     unchanged_count: result.changed ? 0 : 1,
-    ...(auditFailed ? { audit_incomplete: true } : {}),
   });
 }
 
 /**
  * Write one audit row per changed submission, LATE_OVERRIDE_AUDIT_CHUNK at a
  * time in parallel (distinct resource ids, so no row dedups another). Returns
- * the ids whose row could not be written; the errors are logged here and never
- * reach the client.
+ * the ids whose row could not be written; the audit service logs each miss,
+ * and nothing about it reaches the client but the ids.
  */
 async function auditChangedRows(
   ctx: ToolContext,
@@ -242,7 +236,7 @@ async function auditChangedRows(
   const failed: string[] = [];
   for (let i = 0; i < ids.length; i += LATE_OVERRIDE_AUDIT_CHUNK) {
     const chunk = ids.slice(i, i + LATE_OVERRIDE_AUDIT_CHUNK);
-    const settled = await Promise.allSettled(
+    const written = await Promise.all(
       chunk.map(id =>
         writeAudit(ctx, {
           resource_type: 'GIT_REPO_ASSIGNMENT',
@@ -252,14 +246,8 @@ async function auditChangedRows(
         })
       )
     );
-    settled.forEach((outcome, index) => {
-      if (outcome.status === 'rejected') {
-        failed.push(chunk[index]);
-        console.error(
-          `[mcp] submission_late_override: audit write failed for ${chunk[index]}:`,
-          outcome.reason
-        );
-      }
+    written.forEach((ok, index) => {
+      if (!ok) failed.push(chunk[index]);
     });
   }
   return failed;
@@ -437,9 +425,7 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
       not_submitted_ids: cap(result.notSubmittedIds),
       not_found_ids: cap(result.notFoundIds),
       ids_truncated: idsTruncated,
-      ...(auditFailedIds.length > 0
-        ? { audit_incomplete: true, audit_failed_ids: cap(auditFailedIds) }
-        : {}),
+      ...(auditFailedIds.length > 0 ? { audit_failed_ids: cap(auditFailedIds) } : {}),
     });
   },
 };

@@ -460,8 +460,9 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const slide = await this.deps.findSlide(docId);
     if (!slide || !isDeckSlide(slide)) return { ok: false, reason: 'not-found' };
     const role = await this.deps.findRole(userId, slide.classroom_id);
-    // A member's refusal is audited (ACCESS_DENIED needs their role).
-    const member = role ? { classroomId: slide.classroom_id, role } : {};
+    // A refusal is audited in the deck's classroom: a member's with their
+    // role, someone who holds none there as the classroom's non-member row.
+    const member = { classroomId: slide.classroom_id, role: role ?? null };
     if (!slide.classroom?.collab_enabled) {
       return { ok: false, reason: 'collab-disabled', ...member };
     }

@@ -167,6 +167,7 @@ vi.mock('react-router', () => ({
 }));
 
 const detailRoute = await import('../admin.$class.quizzes_.$quizId.tsx');
+const { expectAwaitsWrite } = await import('../../__tests__/support/awaitedWrite.ts');
 const staffAttemptRoute =
   await import('../admin.$class.quizzes_.$quizId.attempt.$attemptId/route.tsx');
 const studentAttemptRoute =
@@ -423,6 +424,13 @@ describe('quiz results page payload', () => {
       membership: { role: 'ASSISTANT' },
     });
     payload = await detailRoute.loader(detailArgs());
+  });
+
+  it('waits for its VIEW row before answering', async () => {
+    await expectAwaitsWrite(mocks.addAuditLog, () => detailRoute.loader(detailArgs()));
+    expect(mocks.addAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'VIEW', resourceType: 'QUIZ_DETAILS' })
+    );
   });
 
   it('gives each student row exactly the user fields the thumbnail renders', () => {

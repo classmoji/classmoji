@@ -86,26 +86,22 @@ export async function sitePageReaderResponse({
     });
 
     if (viewer.impersonated && request.method !== 'HEAD') {
-      try {
-        await ClassmojiService.audit.create({
-          user_id: viewer.userId,
-          classroom_id: site.classroom_id,
-          role: viewer.role,
-          resource_type: 'PAGES',
-          resource_id: page.id,
-          action: 'VIEW',
-          data: {
-            tool: 'page_reader',
-            via: 'site',
-            page_id: page.id,
-            ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
-          },
-        });
-      } catch (error) {
-        // The read is the viewer's either way; a failed log line must not fail it.
-        console.warn('[page-reader] audit failed:', error);
-        reportError(error, { surface: 'audit.write', tags: { tool: 'page_reader', via: 'site' } });
-      }
+      // The read is the viewer's either way: a failed log line is reported
+      // (`audit_miss`) and does not fail it.
+      await ClassmojiService.audit.record({
+        user_id: viewer.userId,
+        classroom_id: site.classroom_id,
+        role: viewer.role,
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'VIEW',
+        data: {
+          tool: 'page_reader',
+          via: 'site',
+          page_id: page.id,
+          ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+        },
+      });
     }
 
     return json({ payload });

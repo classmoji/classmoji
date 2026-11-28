@@ -175,7 +175,7 @@ const auditLifecycle = async (
   to: Lifecycle
 ): Promise<void> => {
   if (from.status === to.status && from.is_archived === to.is_archived) return;
-  await auditService.create({
+  await auditService.record({
     user_id: actorUserId,
     classroom_id: classroomId,
     role: 'OWNER',

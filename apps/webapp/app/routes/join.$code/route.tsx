@@ -115,7 +115,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   let membershipId: string;
   if (result.status === 'joined') {
     membershipId = result.membershipId;
-    await ClassmojiService.audit.create({
+    // The join is saved: a failed write is reported (`audit_miss`), and the
+    // student goes on to the git step as they would have.
+    await ClassmojiService.audit.record({
       user_id: userId,
       classroom_id: classroom.id,
       role: 'STUDENT',

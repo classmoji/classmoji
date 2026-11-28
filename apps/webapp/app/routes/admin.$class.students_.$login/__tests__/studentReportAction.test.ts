@@ -40,6 +40,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const { action } = await import('../route');
+const { expectAwaitsWrite } = await import('../../../__tests__/support/awaitedWrite.ts');
 
 const call = (body: Record<string, unknown>) =>
   action({
@@ -105,6 +106,21 @@ describe('student report action', () => {
     });
     await call({ intent: 'update-school-id', school_id: ' 12345 ' });
     expect(mocks.userUpdate).toHaveBeenCalledWith('u-1', { school_id: '12345' });
+  });
+
+  it('waits for the school id audit row before answering', async () => {
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: { id: 'c-1', status: 'ACTIVE' },
+      membership: { role: 'OWNER' },
+    });
+    const result = await expectAwaitsWrite(mocks.addAuditLog, () =>
+      call({ intent: 'update-school-id', school_id: '12345' })
+    );
+    expect(result).toEqual({ ok: true, intent: 'update-school-id' });
+    expect(mocks.addAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'UPDATE', metadata: { field: 'school_id' } })
+    );
   });
 
   it('refuses a school id change from a teacher', async () => {

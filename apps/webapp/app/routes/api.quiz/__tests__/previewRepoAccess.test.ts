@@ -40,7 +40,7 @@ vi.mock('@classmoji/services', () => ({
       findWithMessages: vi.fn(),
     },
     aiConversation: { addMessage: vi.fn() },
-    audit: { create: vi.fn() },
+    audit: { create: vi.fn(), record: vi.fn(async () => ({ written: true })) },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));

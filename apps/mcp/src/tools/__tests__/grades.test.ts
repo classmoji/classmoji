@@ -35,7 +35,13 @@ vi.mock('@classmoji/services', () => ({
       findByAssignmentId: (...a: unknown[]) => mocks.findByAssignmentId(...a),
       findById: (...a: unknown[]) => mocks.gradeFindById(...a),
     },
-    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    audit: {
+      create: (...a: unknown[]) => mocks.auditCreate(...a),
+      record: (row: unknown) =>
+        import('../../__tests__/support/auditRecord.ts').then(m =>
+          m.recordThrough(r => mocks.auditCreate(r))(row)
+        ),
+    },
   },
   HelperService: {
     addGradeToGitRepoAssignment: (...a: unknown[]) => mocks.addGradeToGitRepoAssignment(...a),

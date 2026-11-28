@@ -37,8 +37,9 @@ interface AuditLogData {
   user_id: string;
   classroom_id: string;
   /**
-   * The actor's role in the classroom. `null` only on ACCESS_DENIED (someone
-   * refused who holds no role there); every other action needs one.
+   * The actor's role in the classroom. `null` only on ACCESS_DENIED; every
+   * other action needs one. A refusal of someone who holds no role in the
+   * classroom is recorded with `recordNonMemberRefusal`, not here.
    */
   role: string | null;
   resource_type: string;
@@ -65,18 +66,49 @@ export function logAuditMiss(reason: string, row: unknown): void {
 /**
  * What an error report may say about a row: its action, resource type and the
  * `data.tool` that names the surface. Never the row itself (data can carry
- * ids of other people, lengths, and whatever a caller put there).
+ * ids of other people, lengths, and whatever a caller put there). An action
+ * outside the schema's set is caller input, so only a known one is a tag.
  */
-function rowTags(row: { action?: unknown; resource_type?: unknown; data?: unknown }) {
+function rowTags(input: unknown) {
+  const row = (input && typeof input === 'object' ? input : {}) as {
+    action?: unknown;
+    resource_type?: unknown;
+    data?: unknown;
+  };
   const tool =
     row.data && typeof row.data === 'object' && !Array.isArray(row.data)
       ? (row.data as { tool?: unknown }).tool
       : undefined;
   return {
-    action: typeof row.action === 'string' ? row.action : undefined,
+    action:
+      typeof row.action === 'string' && (VALID_ACTIONS as string[]).includes(row.action)
+        ? row.action
+        : undefined,
     resource_type: typeof row.resource_type === 'string' ? row.resource_type : undefined,
     tool: typeof tool === 'string' ? tool : undefined,
   };
+}
+
+/** Why a row was dropped for its input, as a closed set (the reason text quotes the input). */
+type RefusalCode =
+  | 'missing_classroom'
+  | 'missing_user'
+  | 'invalid_action'
+  | 'missing_role'
+  | 'invalid_role'
+  | 'invalid_input';
+
+/**
+ * A row that should exist was dropped for its input (a bug in the caller,
+ * seen only in production, where it does not throw): one warning, with a
+ * fixed reason code and never the row.
+ */
+function reportSkipped(code: RefusalCode, row: unknown): void {
+  reportError(new Error(`Audit row not written: ${code}`), {
+    surface: 'audit.skipped',
+    level: 'warning',
+    tags: { ...rowTags(row), reason: code },
+  });
 }
 
 /** One `platform_audit_logs` row, as `recordPlatformAudit` takes it. */
@@ -109,34 +141,120 @@ export async function recordPlatformAudit(row: PlatformAuditRow): Promise<void> 
   }
 }
 
-/** Why `refuse` dropped a row, as a closed set (the reason text quotes the input). */
-type RefusalCode =
-  | 'missing_classroom'
-  | 'missing_user'
-  | 'invalid_action'
-  | 'missing_role'
-  | 'invalid_role';
+/** The one `data` a non-member's refusal row carries. */
+const NON_MEMBER_REFUSAL_DATA = JSON.stringify({ reason: 'not_classroom_member', tool: 'gate' });
+
+/**
+ * The id of a person's refusal row in a classroom on one UTC day: a SHA-256
+ * of the three, laid out as a UUID (version 8), so every refusal that day
+ * lands on the same row.
+ */
+async function nonMemberRefusalId(userId: string, classroomId: string, day: string) {
+  const key = JSON.stringify(['not_classroom_member', userId, classroomId, day]);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(
+    ''
+  );
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * Record that a signed-in person who holds no role in a classroom was
+ * refused there: ONE `ACCESS_DENIED` row per person, classroom and UTC day,
+ * with a fixed shape (null role, resource_type CLASSROOM, resource_id the
+ * classroom, data `{ reason: 'not_classroom_member', tool: 'gate' }`) and
+ * nothing taken from the request. A further refusal that day raises the
+ * row's `count` and moves `updated_at` to it; `timestamp` stays the first.
+ *
+ * One statement, `INSERT … ON CONFLICT (id) DO UPDATE` on an id derived from
+ * the three, so parallel refusals add up on the one row. Never throws: a
+ * failed write (an unknown user or classroom, the database away) leaves one
+ * `audit_miss` line. Writes nothing without a user id and a classroom id.
+ *
+ * `now` is for tests; the gates leave it out.
+ */
+export async function recordNonMemberRefusal(
+  { userId, classroomId }: { userId: string; classroomId: string },
+  { now = new Date() }: { now?: Date } = {}
+): Promise<void> {
+  const row = {
+    user_id: userId,
+    classroom_id: classroomId,
+    role: null,
+    action: 'ACCESS_DENIED',
+    resource_type: 'CLASSROOM',
+    resource_id: classroomId,
+    data: JSON.parse(NON_MEMBER_REFUSAL_DATA) as unknown,
+  };
+  if (!userId || !classroomId) {
+    logAuditMiss(!userId ? 'missing user_id' : 'missing classroom_id', row);
+    reportSkipped(!userId ? 'missing_user' : 'missing_classroom', row);
+    return;
+  }
+  try {
+    const at = now.toISOString();
+    const id = await nonMemberRefusalId(userId, classroomId, at.slice(0, 10));
+    // `timestamp` and `updated_at` are UTC wall times (timestamp without time
+    // zone), written from `now` so the row does not depend on the session's zone.
+    await getPrisma().$executeRaw`
+      INSERT INTO audit_logs
+        ("id", "classroom_id", "user_id", "role", "action", "resource_type", "resource_id",
+         "data", "count", "timestamp", "updated_at")
+      VALUES
+        (${id}, ${classroomId}, ${userId}, NULL, 'ACCESS_DENIED', 'CLASSROOM', ${classroomId},
+         ${NON_MEMBER_REFUSAL_DATA}::jsonb, 1,
+         ${at}::timestamptz AT TIME ZONE 'UTC', ${at}::timestamptz AT TIME ZONE 'UTC')
+      ON CONFLICT ("id") DO UPDATE SET
+        "count" = audit_logs."count" + 1,
+        "updated_at" = GREATEST(audit_logs."updated_at", EXCLUDED."updated_at")`;
+  } catch (error) {
+    reportError(error, { surface: 'audit.write', tags: rowTags(row) });
+    logAuditMiss(
+      `non-member refusal write failed: ${error instanceof Error ? error.message : String(error)}`,
+      row
+    );
+  }
+}
+
+/** `code` of the error `create` throws for invalid input outside production. */
+export const AUDIT_INPUT_INVALID = 'AUDIT_INPUT_INVALID';
+
+/**
+ * The row `create` was given is not a valid row (no classroom or user, an
+ * unknown role or action): a bug in the caller, not a failed write. Thrown
+ * only outside production.
+ */
+export class AuditInputError extends Error {
+  readonly code = AUDIT_INPUT_INVALID;
+  constructor(reason: string) {
+    super(`Audit row not written: ${reason}`);
+    this.name = 'AuditInputError';
+  }
+}
+
+/** Whether `error` is `create`'s input refusal (by its code, so any copy of this module counts). */
+export function isAuditInputError(error: unknown): error is AuditInputError {
+  return (
+    error instanceof AuditInputError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      (error as { code?: unknown }).code === AUDIT_INPUT_INVALID)
+  );
+}
 
 /**
  * Invalid input: outside production a bug to fix now, so it throws; in
  * production the caller's action has already happened, so the miss is logged,
- * reported (a row that should exist does not), and the call returns null.
+ * reported as `audit.skipped` (a row that should exist does not), and the
+ * call returns null.
  */
 function refuse(reason: string, code: RefusalCode, row: AuditLogData): null {
   if (process.env.NODE_ENV !== 'production') {
-    throw new Error(`Audit row not written: ${reason}`);
+    throw new AuditInputError(reason);
   }
   logAuditMiss(reason, row);
-  reportError(new Error(`Audit row not written: ${code}`), {
-    surface: 'audit.skipped',
-    level: 'warning',
-    tags: {
-      ...rowTags(row),
-      // An unknown action is caller input; only a known one is a safe tag.
-      action: VALID_ACTIONS.includes(row.action) ? row.action : undefined,
-      reason: code,
-    },
-  });
+  reportSkipped(code, row);
   return null;
 }
 
@@ -183,8 +301,7 @@ function jsonEqual(a: unknown, b: unknown): boolean {
  *
  * Invalid input (no classroom or user, an unknown role or action, a missing
  * role on anything but ACCESS_DENIED) throws outside production and, in
- * production, logs one `audit_miss` line, reports it and returns null. A
- * failed write is reported and thrown.
+ * production, logs one `audit_miss` line and returns null.
  */
 export const create = async (data: AuditLogData) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
@@ -194,11 +311,6 @@ export const create = async (data: AuditLogData) => {
   if (!VALID_ACTIONS.includes(action)) {
     return refuse(`invalid action "${action}"`, 'invalid_action', data);
   }
-
-  // 'NONE' is what the classroom gate passes today for a refused non-member.
-  // Those rows have never been written; the next change passes null instead
-  // (a role-less ACCESS_DENIED row) and removes this branch.
-  if (role === 'NONE') return null;
 
   if (role === null) {
     if (action !== 'ACCESS_DENIED') {
@@ -226,22 +338,6 @@ export const create = async (data: AuditLogData) => {
     auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
 
-  // A failed write is reported here, once, and still thrown to the caller,
-  // which logs it and carries on (its action has already happened).
-  return writeRow(data, auditData, normalizedResourceId, normalizedRole).catch((error: unknown) => {
-    reportError(error, { surface: 'audit.write', tags: rowTags(data) });
-    throw error;
-  });
-};
-
-/** Insert the row, or count a repeat read on the row it repeats (see `create`). */
-async function writeRow(
-  data: AuditLogData,
-  auditData: Prisma.AuditLogUncheckedCreateInput,
-  normalizedResourceId: string | null,
-  normalizedRole: Role | null
-) {
-  const { user_id, classroom_id, resource_type, action } = data;
   const prisma = getPrisma();
   if (!COUNTED_ACTIONS.has(action)) return prisma.auditLog.create({ data: auditData });
 
@@ -292,4 +388,62 @@ async function writeRow(
   }
 
   return prisma.auditLog.create({ data: auditData });
+};
+
+/** What `record` did: the row is in the log, or it is not (and a line says why). */
+export type AuditRecordResult = { written: true } | { written: false; reason: string };
+
+/**
+ * `record` over any writer with `create`'s contract (a row, or null when the
+ * input was refused and already logged; a throw on a database error). The
+ * writer is a parameter so tests can run the real rule over a fake `create`.
+ */
+export async function recordWith<Row>(
+  write: (row: Row) => Promise<unknown>,
+  row: Row
+): Promise<AuditRecordResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const written = await write(row);
+      // null: `create` refused the input in production and logged the miss.
+      if (written === null) return { written: false, reason: 'invalid input' };
+      return { written: true };
+    } catch (error) {
+      if (isAuditInputError(error)) {
+        // A bug in the caller: the developer hears about it.
+        if (process.env.NODE_ENV !== 'production') throw error;
+        logAuditMiss(error.message, row);
+        reportSkipped('invalid_input', row);
+        return { written: false, reason: error.message };
+      }
+      lastError = error;
+    }
+  }
+  const reason = `audit write failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`;
+  logAuditMiss(reason, row);
+  // Once per row that is finally not written; a failure the retry recovered
+  // is not reported.
+  reportError(lastError, {
+    surface: 'audit.write',
+    tags: rowTags(row),
+  });
+  return { written: false, reason };
 }
+
+/**
+ * Record one audit row for something that has ALREADY happened: the way every
+ * caller writes a row after its change. A database error is tried once more;
+ * if that fails too, one `audit_miss` line names the reason and the row, and
+ * the result says `{ written: false }`. It never throws for a failed write, so
+ * the caller answers as it would have: the change stands and the person is
+ * told what happened to it, not that the log line failed.
+ *
+ * Invalid input is a bug in the caller, not a failed write: outside production
+ * it throws (`AuditInputError`); in production `create` has already logged it
+ * and the result is `{ written: false }`.
+ *
+ * Use `create` only where a failed write must stop what follows (a read that
+ * is recorded before its data is handed over).
+ */
+export const record = (data: AuditLogData): Promise<AuditRecordResult> => recordWith(create, data);

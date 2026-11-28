@@ -227,6 +227,23 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   };
 }
 
+/** The action names this route answers (the handlers below are typed against it). */
+const QUIZ_ACTIONS = [
+  'createQuiz',
+  'updateQuiz',
+  'deleteQuiz',
+  'publishQuiz',
+  'updateWeight',
+  'clearMyAttempts',
+] as const;
+type QuizAction = (typeof QUIZ_ACTIONS)[number];
+
+/** The body's `_action` when it is one of this route's, else 'unknown'. */
+const knownQuizAction = (value: unknown): QuizAction | 'unknown' =>
+  typeof value === 'string' && (QUIZ_ACTIONS as readonly string[]).includes(value)
+    ? (value as QuizAction)
+    : 'unknown';
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -237,9 +254,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_ACTION',
-    attemptedAction: data._action || 'unknown',
+    attemptedAction: knownQuizAction(data._action),
     metadata: {
-      quiz_id: data.id || null,
+      quiz_id: typeof data.id === 'string' ? data.id : null,
     },
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
@@ -540,7 +557,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
       );
     },
-  });
+  } satisfies Record<QuizAction, () => Promise<unknown>>);
 };
 
 const STATUS_TAGS: Record<QuizListStatus, { color: string; text: string }> = {
