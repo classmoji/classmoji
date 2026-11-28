@@ -18,6 +18,7 @@ import * as githubUserTokenService from '@classmoji/services/github-user-token';
 import * as subscriptionService from '@classmoji/services/subscription';
 import { clientIpHeader } from '@classmoji/utils';
 import { noteSeen } from './lastSeen.ts';
+import { rememberSessionImpersonator, sessionImpersonator } from './requestImpersonator.ts';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
 // which only need to sign something (./siteReturnToken.ts) can share them
@@ -1931,18 +1932,18 @@ async function githubUsernameFor(userId: string): Promise<string> {
 }
 
 /**
- * The platform admin behind a "View as" session (`session.impersonatedBy`,
- * the admin's user id), from a `getAuthSession` result; null when the session
- * is the user's own (or there is none). For the `impersonated_by` of audit
- * rows: the row's `user_id` stays the viewed user.
+ * The signed-in session behind `request`, or null. Each result is remembered
+ * for this `Request` as who is viewing as the user, if anyone
+ * (`requestImpersonator`, ./requestImpersonator.ts), so the audit rows written
+ * for the request after a gate need no second read.
  */
-export function sessionImpersonator(authData: unknown): string | null {
-  const by = (authData as { session?: { session?: { impersonatedBy?: unknown } | null } } | null)
-    ?.session?.session?.impersonatedBy;
-  return typeof by === 'string' && by !== '' ? by : null;
+export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
+  const authData = await readAuthSession(request);
+  rememberSessionImpersonator(request, authData);
+  return authData;
 }
 
-export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
+async function readAuthSession(request: Request): Promise<AuthSessionResult | null> {
   // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
   // ./secret.ts for why this must never be a hardcoded `classmoji.`.
   const tokenFromCookie = sessionTokenFromCookieHeader(request.headers.get('cookie') || '');

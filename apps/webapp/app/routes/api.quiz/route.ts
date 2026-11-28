@@ -30,7 +30,7 @@
  * The timing actions answer 409 for an `ai_agent` attempt too.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
-import { sessionImpersonator } from '~/utils/impersonationSession';
+import { sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';

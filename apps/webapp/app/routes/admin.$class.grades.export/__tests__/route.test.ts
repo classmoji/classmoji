@@ -6,6 +6,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomStaff: vi.fn(),
   addClassroomAuditLog: vi.fn(),
@@ -34,7 +39,7 @@ const CLASSROOM_X = { id: 'class-x', slug: 'intro-x' };
 
 const call = (slug: string) =>
   loader({
-    request: new Request(`http://localhost/admin/${slug}/grades/export`),
+    request: (routeRequest = new Request(`http://localhost/admin/${slug}/grades/export`)),
     params: { class: slug },
     context: {},
   } as never) as Promise<Response>;
@@ -87,7 +92,7 @@ describe('admin.$class.grades.export', () => {
     await call('intro-x');
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'teacher-a',
       role: 'TEACHER',

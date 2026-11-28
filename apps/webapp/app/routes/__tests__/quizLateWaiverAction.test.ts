@@ -7,6 +7,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   role: 'OWNER' as string,
   assertClassroomAccess: vi.fn(),
@@ -54,11 +59,11 @@ const CLASS_X = { id: 'class-x', slug: 'cs52-26f' };
 const post = (body: Record<string, unknown>, slug = CLASS_X.slug) =>
   route.action({
     params: { class: slug },
-    request: new Request(`http://localhost/api/quizLateWaiver/${slug}`, {
+    request: (routeRequest = new Request(`http://localhost/api/quizLateWaiver/${slug}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   } as unknown as Parameters<typeof route.action>[0]);
 
 /** A react-router `data()` result: its payload and status. */
@@ -239,7 +244,7 @@ describe('api.quizLateWaiver — audit', () => {
   it('writes one row per change, in the MCP shape', async () => {
     await post(BODY);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'staff-1',
       role: 'OWNER',

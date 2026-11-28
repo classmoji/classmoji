@@ -12,6 +12,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomStaff: vi.fn(),
   addClassroomAuditLog: vi.fn(),
@@ -145,7 +150,9 @@ const teacherRoute =
 const loaderArgs = (submissionId: string, prefix = 'admin') =>
   ({
     params: { class: 'intro', submissionId },
-    request: new Request(`http://localhost/${prefix}/intro/grades/submissions/${submissionId}`),
+    request: (routeRequest = new Request(
+      `http://localhost/${prefix}/intro/grades/submissions/${submissionId}`
+    )),
   }) as unknown as Parameters<typeof route.loader>[0];
 
 const grant = (classroomId: string, role: 'OWNER' | 'TEACHER' = 'TEACHER') =>
@@ -335,7 +342,7 @@ describe('submission panel loader — audit', () => {
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'teacher-1',
       role: 'TEACHER',

@@ -12,6 +12,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   gate: vi.fn(),
   findMany: vi.fn(),
@@ -30,8 +35,9 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: () => undefined,
 }));
 
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => null,
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => null,
 }));
 
 vi.mock('@classmoji/services', () => {
@@ -96,11 +102,11 @@ const signInAs = (role: string, userId = 'staff-1') =>
 const call = (body: Record<string, unknown>, slug = 'class-x-slug') =>
   action({
     params: { class: slug },
-    request: new Request(`http://localhost/assistant/${slug}/regrade-requests`, {
+    request: (routeRequest = new Request(`http://localhost/assistant/${slug}/regrade-requests`, {
       method: 'POST',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
-    }),
+    })),
   } as unknown as Parameters<typeof action>[0]);
 
 const adjust = (over: Record<string, unknown> = {}) => ({
@@ -295,7 +301,7 @@ describe('regrade queue loader', () => {
   const load = (slug: string) =>
     loader({
       params: { class: slug },
-      request: new Request(`http://localhost/assistant/${slug}/regrade-requests`),
+      request: (routeRequest = new Request(`http://localhost/assistant/${slug}/regrade-requests`)),
     } as unknown as Parameters<typeof loader>[0]);
 
   it('reads the queue as the viewer (audited there) and offers Resolve where it can be used', async () => {
@@ -305,7 +311,7 @@ describe('regrade queue loader', () => {
       expect.objectContaining({
         classroomId: 'class-x',
         viewer: {
-          request: expect.any(Request),
+          request: sameObject(routeRequest),
           userId: 'staff-1',
           role: 'ASSISTANT',
           tool: 'web:regrade_requests.view',

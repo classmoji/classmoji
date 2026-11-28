@@ -25,7 +25,7 @@ import {
   studentQuizRegradeView,
   studentQuizScoring,
 } from '~/utils/quizPayloads';
-import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 import { isTriggerChatAttempt, redactQuizEvaluationBlocks } from '@classmoji/utils';
 import { attemptAnswerRules } from '@classmoji/utils/quiz-agent';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
@@ -400,7 +400,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       comment: typeof body.comment === 'string' ? body.comment : '',
       actorUserId: userId,
       tool: 'web:quiz_attempt.request_regrade',
-      impersonatedBy: await impersonatedBy(request),
+      impersonatedBy: await requestImpersonator(request),
     });
     return { ok: true, created };
   } catch (error) {

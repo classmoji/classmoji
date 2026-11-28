@@ -39,11 +39,6 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => viewAsAdmin.current,
-}));
-
 // The real audit funnel (it reads the session for who is viewing as the user).
 vi.mock('~/utils/helpers', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/helpers')>()),
@@ -489,7 +484,7 @@ describe('api.quiz-chat.session — refusals', () => {
       userId: STUDENT,
       role: 'STUDENT',
       surface: 'session',
-      impersonatedBy: viewAsAdmin.current,
+      impersonatedBy: null,
     });
     expectNothingStarted();
   });

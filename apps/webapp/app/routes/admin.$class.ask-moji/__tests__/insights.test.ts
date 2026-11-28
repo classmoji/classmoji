@@ -11,6 +11,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
 import { ASK_MOJI_INSIGHT_DEFAULT_WEEKS } from '@classmoji/utils/ask-moji/limits';
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
@@ -158,12 +163,12 @@ const EXCHANGE = {
 
 const pageArgs = (slug: string, search = '', prefix = 'admin') => ({
   params: { class: slug },
-  request: new Request(`http://x/${prefix}/${slug}/ask-moji${search}`),
+  request: (routeRequest = new Request(`http://x/${prefix}/${slug}/ask-moji${search}`)),
 });
 
 const exchangeArgs = (slug: string, feedbackId: string, prefix = 'admin') => ({
   params: { class: slug, feedbackId },
-  request: new Request(`http://x/${prefix}/${slug}/ask-moji/${feedbackId}`),
+  request: (routeRequest = new Request(`http://x/${prefix}/${slug}/ask-moji/${feedbackId}`)),
 });
 
 const loadPage = (slug: string, search = '', loader = adminPage.loader) =>
@@ -293,7 +298,7 @@ describe('the insights page', () => {
     await loadPage('class-x', '?rating=up');
     expect(auditRows()).toEqual([
       {
-        request: expect.any(Request),
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -303,7 +308,7 @@ describe('the insights page', () => {
         metadata: { tool: 'web:ask_moji.insights', weeks: 12 },
       },
       {
-        request: expect.any(Request),
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -323,11 +328,11 @@ describe('the insights page', () => {
     expect(reviews.map(row => (row.metadata as { rating: string }).rating)).toEqual(['DOWN', 'UP']);
   });
 
-  it('hands the audit funnel the request on both rows (it names any View As admin)', async () => {
+  it("hands the audit funnel the loader's own request on both rows (it names any View As admin)", async () => {
     await loadPage('class-x');
-    expect(
-      auditRows().map(row => (row as { request?: unknown }).request instanceof Request)
-    ).toEqual([true, true]);
+    const requests = auditRows().map(row => (row as { request?: unknown }).request);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) expect(request).toBe(routeRequest);
   });
 
   it('writes no row for a refused caller', async () => {
@@ -405,7 +410,7 @@ describe('the exchange view', () => {
     await loadExchange('class-x', 'fb-1');
     expect(auditRows()).toEqual([
       {
-        request: expect.any(Request),
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'owner-x',
         role: 'OWNER',

@@ -17,6 +17,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -75,17 +80,17 @@ const httpError = (status: number) =>
 const post = (body: unknown) =>
   route.action({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/settings/repos`, {
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/settings/repos`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   } as unknown as Parameters<typeof route.action>[0]) as Promise<Record<string, unknown>>;
 
 const load = () =>
   route.loader({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/settings/repos`),
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/settings/repos`)),
   } as unknown as Parameters<typeof route.loader>[0]) as Promise<Record<string, unknown>>;
 
 const patchCalls = () => mocks.userRequest.mock.calls.filter(c => c[0] === 'PATCH /orgs/{org}');
@@ -160,7 +165,7 @@ describe('repository settings action', () => {
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledOnce();
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

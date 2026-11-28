@@ -8,6 +8,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -47,11 +52,11 @@ const { action } = await import('../action.ts');
 const run = (students: Array<{ email: string; name?: string }>) =>
   (action as unknown as (args: { params: object; request: Request }) => Promise<unknown>)({
     params: { class: 'cs-1' },
-    request: new Request('http://localhost/admin/cs-1/students/add', {
+    request: (routeRequest = new Request('http://localhost/admin/cs-1/students/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ students }),
-    }),
+    })),
   });
 
 const result = (over: Record<string, unknown> = {}) => ({
@@ -94,7 +99,7 @@ describe('add students action', () => {
     );
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog.mock.calls[0][0]).toEqual({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',

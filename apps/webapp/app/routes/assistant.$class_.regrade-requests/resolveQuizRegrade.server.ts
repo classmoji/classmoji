@@ -22,7 +22,7 @@ import {
 } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { mutationRefusal } from '~/utils/mutationRefusal.server';
-import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 
 export const RESOLVE_QUIZ_INTENT = 'resolve-quiz';
 
@@ -47,7 +47,7 @@ export const resolveQuizRegradeAction = async (request: Request, classSlug: stri
     userId,
     body,
     tool: RESOLVE_QUIZ_TOOL,
-    impersonatedBy: await impersonatedBy(request),
+    impersonatedBy: await requestImpersonator(request),
   });
 };
 

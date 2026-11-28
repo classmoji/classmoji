@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 /**
  * The attempt drawer loader and chat-runtime attempts.
  *
@@ -53,8 +58,9 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => viewAsAdmin.current,
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => viewAsAdmin.current,
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -131,7 +137,7 @@ const closedOf = (userId: string) => ({
 const load = () =>
   route.loader({
     params: { class: 'cs52-26f', quizId: QUIZ_ID, attemptId: 'attempt-1' },
-    request: new Request('http://localhost/x'),
+    request: (routeRequest = new Request('http://localhost/x')),
   } as unknown as Parameters<typeof route.loader>[0]);
 
 const signInAs = (userId: string, role: string, classroomId = 'class-1') =>
@@ -388,7 +394,7 @@ describe('attempt loader — the VIEW audit row', () => {
       await load();
 
       expect(auditMock).toHaveBeenCalledExactlyOnceWith({
-        request: expect.any(Request),
+        request: sameObject(routeRequest),
         classroomId: 'class-1',
         userId: 'staff-1',
         // The role the gate enforced.

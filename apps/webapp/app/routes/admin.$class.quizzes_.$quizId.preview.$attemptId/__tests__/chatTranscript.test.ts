@@ -32,8 +32,9 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const viewAsAdmin = vi.hoisted(() => ({ current: null as string | null }));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => viewAsAdmin.current,
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => viewAsAdmin.current,
 }));
 
 vi.mock('~/utils/helpers', () => ({

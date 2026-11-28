@@ -23,6 +23,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertProTier: vi.fn(),
@@ -91,10 +96,10 @@ const FOREIGN_FORM = 'form-in-another-classroom';
 const submit = (body: Record<string, string>) =>
   route.action({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/forms`, {
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/forms`, {
       method: 'POST',
       body: new URLSearchParams(body),
-    }),
+    })),
   } as unknown as Parameters<typeof route.action>[0]);
 
 /** The single audit entry the action wrote. */
@@ -218,7 +223,7 @@ describe('the forms action audits what it changed', () => {
     expect(result).toEqual({ success: true });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledOnce();
     expect(auditEntry()).toEqual({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       // The role the gate ENFORCED, matching what the MCP form tools record.
@@ -235,7 +240,7 @@ describe('the forms action audits what it changed', () => {
 
     expect(result).toEqual({ success: true });
     expect(auditEntry()).toEqual({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'TEACHER',

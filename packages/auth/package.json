@@ -8,6 +8,7 @@
   },
   "exports": {
     "./server": "./src/server.ts",
+    "./request-impersonator": "./src/requestImpersonator.ts",
     "./client": "./src/client.ts",
     "./predicates": "./src/predicates.ts",
     "./classroom-role": "./src/classroomRole.ts",

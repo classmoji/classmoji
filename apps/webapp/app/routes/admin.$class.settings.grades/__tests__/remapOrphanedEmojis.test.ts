@@ -5,6 +5,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   remapGradeEmojis: vi.fn(),
@@ -34,11 +39,11 @@ const { DEFAULT_EMOJI_MAPPINGS, SCORE_EMOJI_MAPPINGS } = await import('@classmoj
 const post = (name: string, body: unknown) =>
   action({
     params: { class: 'cs52' },
-    request: new Request(`http://localhost/admin/cs52/settings/grades?/${name}`, {
+    request: (routeRequest = new Request(`http://localhost/admin/cs52/settings/grades?/${name}`, {
       method: 'POST',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
-    }),
+    })),
   } as unknown as Parameters<typeof action>[0]) as Promise<Record<string, unknown>>;
 
 class RemapGradeEmojisError extends Error {
@@ -81,7 +86,7 @@ describe('remapOrphanedEmojis', () => {
     });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-x',
       userId: 'owner-1',
       role: 'OWNER',
@@ -102,7 +107,7 @@ describe('remapOrphanedEmojis', () => {
     await post('remapOrphanedEmojis', { mappings: [{ oldEmoji: '+1', newEmoji: 'score-90' }] });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        request: expect.any(Request),
+        request: sameObject(routeRequest),
         userId: 'owner-1',
         metadata: expect.objectContaining({ tool: 'web:settings.grades.remap_orphaned_emojis' }),
       })

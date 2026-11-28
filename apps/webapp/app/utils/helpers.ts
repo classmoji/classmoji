@@ -2,9 +2,8 @@ import { runs } from '@trigger.dev/sdk';
 import { redirect } from 'react-router';
 
 import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server';
+import { requestImpersonator, sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import { ClassmojiService } from '@classmoji/services';
-
-import { sessionImpersonator } from './impersonationSession';
 
 export const sleep = async (ms: number) => {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -72,8 +71,9 @@ interface AuditLogParams {
 
 interface ClassroomAuditParams {
   /**
-   * The request the action answers: its session says whether a platform admin
-   * is viewing as the user ("View as"), recorded as `impersonated_by`.
+   * The request the action answers (the same object the gate was given): its
+   * session says whether a platform admin is viewing as the user ("View as"),
+   * recorded as `impersonated_by`.
    */
   request: Request;
   /** The classroom the gate authorized — never a slug re-resolved afterwards. */
@@ -168,31 +168,11 @@ const writeAuditRow = async ({
  * row; a repeated read is counted on its row (see
  * packages/services/src/classmoji/audit.service.ts).
  */
-export const addClassroomAuditLog = async ({ request, ...row }: ClassroomAuditParams) => {
-  // The gate read this request's session already; reading it again is a
-  // cache hit. If it fails, nothing may reject out of here: the row is
-  // reported (`audit_miss`) as a failed write is.
-  let impersonatedBy: string | null;
-  try {
-    impersonatedBy = sessionImpersonator(await getAuthSession(request));
-  } catch (error: unknown) {
-    console.error('[audit] Failed to read the session for the audit row', error);
-    ClassmojiService.audit.logAuditMiss(
-      `audit session lookup failed: ${error instanceof Error ? error.message : String(error)}`,
-      {
-        classroom_id: row.classroomId ?? null,
-        user_id: row.userId,
-        role: row.role ?? null,
-        resource_id: normalizeAuditResourceId(row.resourceId),
-        resource_type: row.resourceType,
-        action: row.action,
-        data: row.metadata,
-      }
-    );
-    return;
-  }
-  await writeAuditRow({ ...row, impersonatedBy });
-};
+export const addClassroomAuditLog = async ({ request, ...row }: ClassroomAuditParams) =>
+  // The gate's session read for this request left the answer behind
+  // (`requestImpersonator`); a request no gate read is read now, and a failed
+  // read writes the row without `impersonated_by`.
+  writeAuditRow({ ...row, impersonatedBy: await requestImpersonator(request) });
 
 /**
  * Record an action, resolving the caller and classroom from the request.

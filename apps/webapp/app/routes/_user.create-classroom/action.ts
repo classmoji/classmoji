@@ -1,6 +1,6 @@
 import { getAuthSession } from '@classmoji/auth/server';
 import { checkAuth } from '~/utils/helpers';
-import { sessionImpersonator } from '~/utils/impersonationSession';
+import { sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import {
   ClassmojiService,
   ClassroomSlugUnavailableError,

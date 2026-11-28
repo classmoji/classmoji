@@ -60,6 +60,8 @@ vi.mock('@classmoji/services', () => ({
 vi.mock('@trigger.dev/sdk', () => ({ runs: { retrieve: vi.fn(), subscribeToRun: vi.fn() } }));
 
 const { addAuditLog, addClassroomAuditLog } = await import('../helpers.ts');
+const { getAuthSession } = await import('@classmoji/auth/server');
+const { rememberSessionImpersonator } = await import('@classmoji/auth/request-impersonator');
 
 const CLASSROOM = { id: 'class-1', slug: 'cs52-26f' };
 
@@ -227,25 +229,51 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     });
   });
 
-  it('re-resolves no slug or membership — the session only for who is viewing as the user', async () => {
+  it('re-resolves no slug or membership', async () => {
     // The point of this variant: the caller already holds the authorized
     // classroom and the enforcing role, so re-deriving them would cost two
-    // queries AND unbind the logged classroom from the authorized one. The
-    // session read is the gate's own, again (a cache hit).
-    await addClassroomAuditLog(entry);
+    // queries AND unbind the logged classroom from the authorized one.
+    await addClassroomAuditLog({ ...entry, request: request() });
 
-    expect(mocks.getAuthSession).toHaveBeenCalledExactlyOnceWith(entry.request);
     expect(mocks.findBySlug).not.toHaveBeenCalled();
     expect(mocks.resolveHighestMembership).not.toHaveBeenCalled();
   });
 
-  it('names the admin viewing as the user on the row, and only then', async () => {
+  it("takes the admin from the gate's session read of the same request, without a second read", async () => {
+    // What the real getAuthSession does for every request it reads: remember
+    // who is viewing as the user, for that Request object.
+    mocks.getAuthSession.mockImplementation(async (req: Request) => {
+      const authData = { userId: 'user-1', session: { session: { impersonatedBy: 'admin-1' } } };
+      rememberSessionImpersonator(req, authData);
+      return authData;
+    });
+    const req = request();
+    await getAuthSession(req); // the gate's read
+
+    await addClassroomAuditLog({ ...entry, request: req });
+
+    expect(mocks.getAuthSession).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-1',
+      user_id: 'user-1',
+      role: 'TEACHER',
+      resource_type: 'PAGES',
+      resource_id: 'page-9',
+      action: 'DELETE',
+      data: { tool: 'web:pages.delete', title: 'Syllabus', impersonated_by: 'admin-1' },
+    });
+  });
+
+  it('reads the session itself for a request no gate read', async () => {
     mocks.getAuthSession.mockResolvedValue({
       userId: 'user-1',
       session: { session: { impersonatedBy: 'admin-1' } },
     });
-    await addClassroomAuditLog(entry);
+    const req = request();
 
+    await addClassroomAuditLog({ ...entry, request: req });
+
+    expect(mocks.getAuthSession).toHaveBeenCalledExactlyOnceWith(req);
     expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         user_id: 'user-1',
@@ -254,15 +282,33 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     );
   });
 
-  it('reports a session read that throws, writes nothing and resolves', async () => {
+  it("names no admin on the user's own session", async () => {
+    await addClassroomAuditLog({ ...entry, request: request() });
+
+    expect(mocks.auditCreate.mock.calls[0][0].data).toEqual({
+      tool: 'web:pages.delete',
+      title: 'Syllabus',
+    });
+  });
+
+  it('still writes the row, without the admin, when that session read throws, and logs it', async () => {
     mocks.getAuthSession.mockRejectedValue(new Error('session store away'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(addClassroomAuditLog(entry)).resolves.toBeUndefined();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
-    expect(mocks.logAuditMiss).toHaveBeenCalledExactlyOnceWith(
-      'audit session lookup failed: session store away',
-      expect.objectContaining({ classroom_id: 'class-1', data: entry.metadata })
+    await expect(addClassroomAuditLog({ ...entry, request: request() })).resolves.toBeUndefined();
+    expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith({
+      classroom_id: 'class-1',
+      user_id: 'user-1',
+      role: 'TEACHER',
+      resource_type: 'PAGES',
+      resource_id: 'page-9',
+      action: 'DELETE',
+      data: { tool: 'web:pages.delete', title: 'Syllabus' },
+    });
+    expect(mocks.logAuditMiss).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to read the session'),
+      expect.any(Error)
     );
     error.mockRestore();
   });

@@ -159,19 +159,17 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     const { userId } = access;
+    // The web session, for the grant's session id and expiry. The audit rows
+    // below take the View as admin from the gate's read of this request.
     const { getAuthSession } = await import('@classmoji/auth/server');
+    const { sessionImpersonator } = await import('@classmoji/auth/request-impersonator');
     const authData = await getAuthSession(request);
     const webSession = (
       authData as {
-        session?: {
-          session?: { id?: unknown; impersonatedBy?: unknown; expiresAt?: unknown };
-        };
+        session?: { session?: { id?: unknown; expiresAt?: unknown } };
       } | null
     )?.session?.session;
-    const impersonatedBy =
-      typeof webSession?.impersonatedBy === 'string' && webSession.impersonatedBy
-        ? webSession.impersonatedBy
-        : null;
+    const impersonatedBy = sessionImpersonator(authData);
     const webSessionId = typeof webSession?.id === 'string' ? webSession.id : null;
 
     // 5. Strict ownership.

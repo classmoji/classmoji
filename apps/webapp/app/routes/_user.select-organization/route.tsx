@@ -25,7 +25,7 @@ import { tasks } from '@trigger.dev/sdk';
 import { joinGitOrganization } from '~/utils/joinGitOrganization.server';
 import { autoSendGithubInvites } from './autoGithubInvites.server';
 import type { Route } from './+types/route';
-import { sessionImpersonator } from '~/utils/impersonationSession';
+import { sessionImpersonator } from '@classmoji/auth/request-impersonator';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
   ClassroomsLandingScreen,

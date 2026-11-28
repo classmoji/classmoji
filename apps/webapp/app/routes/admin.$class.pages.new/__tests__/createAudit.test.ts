@@ -15,6 +15,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -91,7 +96,7 @@ const CLASSROOM = {
 const formRequest = (url: string, body: Record<string, string | Blob>) => {
   const formData = new FormData();
   for (const [key, value] of Object.entries(body)) formData.append(key, value);
-  return new Request(url, { method: 'POST', body: formData });
+  return (routeRequest = new Request(url, { method: 'POST', body: formData }));
 };
 
 /** The single audit entry the action wrote. */
@@ -134,7 +139,7 @@ describe('admin.$class.pages.new — audit rows', () => {
 
     expect(result).toMatchObject({ created: true });
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
-      request: expect.any(Request),
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',
