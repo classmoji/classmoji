@@ -126,7 +126,7 @@ export const loadStaffRegradeRows = async ({
     userId: viewer.userId,
     role: viewer.role,
     action: 'VIEW',
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     metadata: { tool: viewer.tool, request_count: rows.length },
   });
   const lateness = await ClassmojiService.regradeRequest.openQuizRequestLateness(

@@ -335,7 +335,7 @@ describe('Modules action — delete', () => {
       userId: 'owner-1',
       role: 'OWNER',
       action: 'DELETE',
-      resourceType: 'MODULE',
+      resourceType: 'MODULES',
       resourceId: 'mod-2',
       metadata: {
         tool: 'web:modules.delete',

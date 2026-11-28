@@ -8,7 +8,7 @@ import { loadStudentRegradeRows } from '~/utils/regradeRequestRows.server';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { userId, classroom } = await requireStudentAccess(request, params.class!, {
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     action: 'view_regrade_requests',
   });
 

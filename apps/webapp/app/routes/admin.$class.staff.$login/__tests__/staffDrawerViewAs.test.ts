@@ -104,7 +104,7 @@ describe('staff drawer loader — audit', () => {
     asOwner('owner-1');
     await expectAwaitsWrite(mocks.addAuditLog, load);
     expect(mocks.addAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'VIEW', resourceType: 'TEACHING_STAFF_DETAILS' })
+      expect.objectContaining({ action: 'VIEW', resourceType: 'STAFF' })
     );
   });
 });

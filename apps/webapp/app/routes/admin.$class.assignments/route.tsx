@@ -26,7 +26,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'ASSIGNMENTS',
+    resourceType: 'ASSIGNMENT',
     action: 'view_assignments',
   });
 
@@ -72,7 +72,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'ASSIGNMENTS',
+    resourceType: 'ASSIGNMENT',
     action: 'manage_assignments',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
@@ -192,7 +192,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           userId,
           role: membership!.role,
           action: 'CREATE',
-          resourceType: 'ASSIGNMENTS',
+          resourceType: 'ASSIGNMENT',
           resourceId: created.id,
           metadata: {
             tool: 'web:assignments.create',
@@ -237,7 +237,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           userId,
           role: membership!.role,
           action: 'UPDATE',
-          resourceType: 'ASSIGNMENTS',
+          resourceType: 'ASSIGNMENT',
           resourceId: updated.id,
           metadata: {
             tool: 'web:assignments.update',
@@ -264,7 +264,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           userId,
           role: membership!.role,
           action: 'DELETE',
-          resourceType: 'ASSIGNMENTS',
+          resourceType: 'ASSIGNMENT',
           resourceId: data.id,
           metadata: {
             tool: 'web:assignments.delete',

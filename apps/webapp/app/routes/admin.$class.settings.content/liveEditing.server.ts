@@ -53,7 +53,7 @@ export interface LiveEditingDeps {
     userId: string;
     role: string | undefined;
     action: string;
-    resourceType: string;
+    resourceType: 'CONTENT_SETTINGS';
     resourceId: string;
     metadata: { tool: string } & Record<string, unknown>;
   }) => Promise<unknown>;

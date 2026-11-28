@@ -103,7 +103,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           userId,
           role: membership!.role,
           action: 'UPDATE',
-          resourceType: 'ASSIGNMENTS',
+          resourceType: 'ASSIGNMENT',
           resourceId: assignmentId,
           metadata: {
             tool: 'web:repos.publish_assignment',

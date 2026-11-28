@@ -149,7 +149,7 @@ describe('assignments action — deleting an assignment', () => {
         userId: 'owner-1',
         role: 'OWNER',
         action: 'DELETE',
-        resourceType: 'ASSIGNMENTS',
+        resourceType: 'ASSIGNMENT',
         resourceId: 'a-1',
         metadata: expect.objectContaining({ tool: 'web:assignments.delete', title: 'Lab 1' }),
       })
