@@ -664,7 +664,8 @@ export const clearInstallationIfMatches = async ({
   return count;
 };
 
-export type RepairInstallationResult =
+/** What a repair found, before `claimed` is added. */
+type RepairInstallationOutcome =
   | { status: 'connected'; org: GitOrganization }
   | { status: 'already-connected'; org: GitOrganization | null }
   | { status: 'not-installed' }
@@ -677,6 +678,15 @@ export type RepairInstallationResult =
   | { status: 'error'; message: string };
 
 /**
+ * A repair's answer. `claimed` is true exactly when THIS call saved the
+ * installation id (its conditional write changed the row), whatever the final
+ * status: the write can commit and the follow-up read still fail (`error`).
+ * A caller that joined another caller's in-flight lookup gets that lookup's
+ * status with `claimed: false`, since the write was the other call's.
+ */
+export type RepairInstallationResult = RepairInstallationOutcome & { claimed: boolean };
+
+/**
  * How long one org must wait between GitHub lookups, in ms.
  *
  * Per process, not per user: the "Check again" button, the create-classroom
@@ -687,7 +697,7 @@ const REPAIR_COOLDOWN_MS = 15_000;
 
 /** orgId → timestamp (ms) before which another GitHub lookup is refused. */
 const repairCooldowns = new Map<string, number>();
-/** orgId → the lookup already running, so concurrent callers share one result. */
+/** orgId → the lookup already running, so concurrent callers share one status. */
 const repairInFlight = new Map<string, Promise<RepairInstallationResult>>();
 
 /**
@@ -734,12 +744,23 @@ export interface RepairInstallationOptions {
 
 /**
  * The lookup-and-claim itself. Wrapped by `repairInstallation`, which owns the
- * cooldown and the in-flight sharing.
+ * cooldown and the in-flight sharing. `claimed` is read from the claim's own
+ * answer, so it stays true when a later step of this call fails.
  */
 const performRepair = async (
   orgId: string,
   opts: RepairInstallationOptions
 ): Promise<RepairInstallationResult> => {
+  const state = { claimed: false };
+  const outcome = await lookupAndClaim(orgId, opts, state);
+  return { ...outcome, claimed: state.claimed };
+};
+
+const lookupAndClaim = async (
+  orgId: string,
+  opts: RepairInstallationOptions,
+  state: { claimed: boolean }
+): Promise<RepairInstallationOutcome> => {
   let login: string | null = null;
 
   try {
@@ -800,6 +821,7 @@ const performRepair = async (
       installationId: lookup.synced.github_installation_id,
       login: lookup.synced.login,
     });
+    state.claimed = claim.claimed;
 
     if (!claim.claimed) {
       // Somebody (the webhook, another tab) filled the column first. Their id
@@ -846,8 +868,9 @@ const performRepair = async (
  *   rather than asking again.
  *
  * The in-flight map is keyed by org alone, so a caller that joins somebody
- * else's live lookup gets THAT lookup's answer — its own `opts` are not applied
- * to a request already in the air.
+ * else's live lookup gets THAT lookup's status — its own `opts` are not applied
+ * to a request already in the air — with `claimed: false`: only the caller that
+ * started the lookup made its write.
  *
  * @param {string} orgId - GitOrganization UUID.
  * @param {RepairInstallationOptions} [opts] - Sweep-friendly overrides.
@@ -861,14 +884,14 @@ export const repairInstallation = (
   pruneExpiredCooldowns(now);
 
   const inFlight = repairInFlight.get(orgId);
-  if (inFlight) return inFlight;
+  if (inFlight) return inFlight.then(result => ({ ...result, claimed: false }));
 
   if (!opts.bypassCooldown) {
     const until = repairCooldowns.get(orgId) ?? 0;
     if (until > now) {
       const retryAfterSeconds = Math.max(1, Math.ceil((until - now) / 1000));
       logRepair(orgId, null, 'rate-limited');
-      return Promise.resolve({ status: 'rate-limited', retryAfterSeconds });
+      return Promise.resolve({ status: 'rate-limited', retryAfterSeconds, claimed: false });
     }
   }
 

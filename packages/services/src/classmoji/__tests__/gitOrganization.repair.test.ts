@@ -407,6 +407,7 @@ describe('repairInstallation', () => {
     await expect(repairInstallation(ORG_ID)).resolves.toEqual({
       status: 'connected',
       org: repaired,
+      claimed: true,
     });
   });
 
@@ -417,6 +418,7 @@ describe('repairInstallation', () => {
     await expect(repairInstallation(ORG_ID)).resolves.toEqual({
       status: 'already-connected',
       org: connected,
+      claimed: false,
     });
     expect(mocks.getOrgInstallation).not.toHaveBeenCalled();
   });
@@ -430,13 +432,59 @@ describe('repairInstallation', () => {
     await expect(repairInstallation(ORG_ID)).resolves.toEqual({
       status: 'already-connected',
       org: winner,
+      claimed: false,
     });
+  });
+
+  it('says it claimed when the write committed but the follow-up read failed', async () => {
+    mocks.findUnique
+      .mockResolvedValueOnce(disconnectedOrg())
+      .mockRejectedValueOnce(new Error('connection reset'));
+    mocks.getOrgInstallation.mockResolvedValue({ data: installation() });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'error',
+      message: 'connection reset',
+      claimed: true,
+    });
+  });
+
+  it('says it claimed when the org disappeared after the write', async () => {
+    mocks.findUnique.mockResolvedValueOnce(disconnectedOrg()).mockResolvedValueOnce(null);
+    mocks.getOrgInstallation.mockResolvedValue({ data: installation() });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'error',
+      message: 'Organization disappeared while connecting',
+      claimed: true,
+    });
+  });
+
+  it('gives claimed: true to the caller that started a shared lookup only', async () => {
+    const repaired = disconnectedOrg({ github_installation_id: String(INSTALLATION_ID) });
+    mocks.findUnique.mockResolvedValueOnce(disconnectedOrg()).mockResolvedValueOnce(repaired);
+    mocks.getOrgInstallation.mockResolvedValue({ data: installation() });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    const [first, second] = await Promise.all([
+      repairInstallation(ORG_ID),
+      repairInstallation(ORG_ID),
+    ]);
+
+    expect(first).toEqual({ status: 'connected', org: repaired, claimed: true });
+    expect(second).toEqual({ status: 'connected', org: repaired, claimed: false });
+    expect(mocks.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a non-GitHub org without calling GitHub', async () => {
     mocks.findUnique.mockResolvedValue(disconnectedOrg({ provider: 'GITLAB' }));
 
-    await expect(repairInstallation(ORG_ID)).resolves.toEqual({ status: 'not-github' });
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'not-github',
+      claimed: false,
+    });
     expect(mocks.getOrgInstallation).not.toHaveBeenCalled();
   });
 
@@ -445,7 +493,10 @@ describe('repairInstallation', () => {
     mocks.getOrgInstallation.mockRejectedValue(httpError(404));
     mocks.paginate.mockResolvedValue([]);
 
-    await expect(repairInstallation(ORG_ID)).resolves.toEqual({ status: 'not-installed' });
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'not-installed',
+      claimed: false,
+    });
   });
 
   it('turns a GitHub rate limit into a retry-after answer, not a refusal', async () => {
@@ -455,6 +506,7 @@ describe('repairInstallation', () => {
     await expect(repairInstallation(ORG_ID)).resolves.toEqual({
       status: 'rate-limited',
       retryAfterSeconds: 42,
+      claimed: false,
     });
   });
 
@@ -470,7 +522,10 @@ describe('repairInstallation', () => {
     mocks.getOrgInstallation.mockRejectedValue(httpError(404));
     mocks.paginate.mockResolvedValue([]);
 
-    await expect(repairInstallation(ORG_ID)).resolves.toEqual({ status: 'not-installed' });
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'not-installed',
+      claimed: false,
+    });
 
     const second = await repairInstallation(ORG_ID);
     expect(second).toMatchObject({ status: 'rate-limited' });
@@ -489,9 +544,9 @@ describe('repairInstallation', () => {
     ]);
 
     expect([a, b, c]).toEqual([
-      { status: 'not-installed' },
-      { status: 'not-installed' },
-      { status: 'not-installed' },
+      { status: 'not-installed', claimed: false },
+      { status: 'not-installed', claimed: false },
+      { status: 'not-installed', claimed: false },
     ]);
     expect(mocks.getOrgInstallation).toHaveBeenCalledTimes(1);
   });
@@ -523,7 +578,7 @@ describe('repairInstallation', () => {
     // No timer is advanced anywhere in this test.
     const result = await repairInstallation(ORG_ID);
 
-    expect(result).toEqual({ status: 'rate-limited', retryAfterSeconds: 3600 });
+    expect(result).toEqual({ status: 'rate-limited', retryAfterSeconds: 3600, claimed: false });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -545,11 +600,11 @@ describe('repairInstallation', () => {
     // now have one second left on it and the next click would sail through.
     await vi.advanceTimersByTimeAsync(14_000);
     finish();
-    await expect(first).resolves.toEqual({ status: 'not-installed' });
+    await expect(first).resolves.toEqual({ status: 'not-installed', claimed: false });
 
     const second = await repairInstallation(ORG_ID);
 
-    expect(second).toEqual({ status: 'rate-limited', retryAfterSeconds: 15 });
+    expect(second).toEqual({ status: 'rate-limited', retryAfterSeconds: 15, claimed: false });
     expect(mocks.getOrgInstallation).toHaveBeenCalledTimes(1);
   });
 
@@ -578,9 +633,13 @@ describe('repairInstallation', () => {
     mocks.getOrgInstallation.mockRejectedValue(httpError(404));
     mocks.paginate.mockResolvedValue([]);
 
-    await expect(repairInstallation(ORG_ID)).resolves.toEqual({ status: 'not-installed' });
+    await expect(repairInstallation(ORG_ID)).resolves.toEqual({
+      status: 'not-installed',
+      claimed: false,
+    });
     await expect(repairInstallation(ORG_ID, { bypassCooldown: true })).resolves.toEqual({
       status: 'not-installed',
+      claimed: false,
     });
 
     expect(mocks.getOrgInstallation).toHaveBeenCalledTimes(2);
@@ -597,7 +656,7 @@ describe('repairInstallation', () => {
         appOctokit: octokitStub(),
         installations: [installation()],
       })
-    ).resolves.toEqual({ status: 'connected', org: repaired });
+    ).resolves.toEqual({ status: 'connected', org: repaired, claimed: true });
 
     // Neither a fresh app client nor a fresh paginated scan per org.
     expect(GitHubProvider.getAppOctokit).not.toHaveBeenCalled();
