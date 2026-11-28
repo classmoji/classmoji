@@ -163,6 +163,14 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
       select: { id: true },
     });
 
+  /** The stored (id, position) of a module's items, in order. */
+  const storedItems = (moduleId: string) =>
+    prisma.moduleItem.findMany({
+      where: { module_id: moduleId },
+      orderBy: { position: 'asc' },
+      select: { id: true, position: true },
+    });
+
   beforeAll(async () => {
     const org = await prisma.gitOrganization.create({
       data: {
@@ -468,6 +476,10 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
           },
         ],
       ]);
+      expect(await storedItems(to.id)).toEqual([
+        { id: there.id, position: 0 },
+        { id: item.id, position: 1 },
+      ]);
 
       // The drag back, to the top of `from`: the move's row only.
       const drag = await newRows(X, () =>
@@ -482,6 +494,9 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
       expect(drag.rows.map(r => r.data)).toEqual([
         { tool: 'web:modules.move_item', module_id: from.id, from_module_id: to.id, position: 0 },
       ]);
+      expect(await storedItems(from.id)).toEqual([{ id: item.id, position: 0 }]);
+      // The module it left is compacted behind it.
+      expect(await storedItems(to.id)).toEqual([{ id: there.id, position: 0 }]);
       // A drag within one module is a reorder.
       const { item: second } = await moduleService.addItem(
         from.id,
@@ -512,7 +527,106 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
           },
         ],
       ]);
-      expect(there.id).toBeTruthy();
+      expect(await storedItems(from.id)).toEqual([
+        { id: second.id, position: 0 },
+        { id: item.id, position: 1 },
+      ]);
+    });
+
+    it('records a saved move whose reorder then fails, and throws that failure', async () => {
+      const from = await makeModule(X);
+      const to = await makeModule(X);
+      const page = await makePage(X);
+      const other = await makePage(X);
+      const { item } = await moduleService.addItem(from.id, 'PAGE', page.id, X.classroomId, null);
+      const { item: there } = await moduleService.addItem(
+        to.id,
+        'PAGE',
+        other.id,
+        X.classroomId,
+        null
+      );
+      // The target's order leaves out the item already there: the move saves,
+      // the reorder is refused.
+      let thrown: unknown;
+      const { rows } = await newRows(X, async () => {
+        thrown = await moduleService
+          .moveItemToModule(
+            item.id,
+            to.id,
+            [item.id],
+            X.classroomId,
+            webActor(X, 'web:modules.move_item')
+          )
+          .then(
+            () => null,
+            (error: unknown) => error
+          );
+      });
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe('Ordered item ids must match module items');
+      expect(
+        (await prisma.moduleItem.findUniqueOrThrow({ where: { id: item.id } })).module_id
+      ).toBe(to.id);
+      expect((await storedItems(to.id)).map(i => i.id).sort()).toEqual(
+        [item.id, there.id].sort()
+      );
+      expect(rows.map(r => [r.resource_type, r.resource_id, r.action, r.data])).toEqual([
+        [
+          'MODULE_ITEM',
+          item.id,
+          'UPDATE',
+          { tool: 'web:modules.move_item', module_id: to.id, from_module_id: from.id },
+        ],
+      ]);
+    });
+
+    it('owner A of X cannot move an item into Y’s module nor reorder it: nothing in Y changes, no row', async () => {
+      const mine = await makeModule(X);
+      const theirs = await makeModule(Y);
+      const page = await makePage(X);
+      const theirPage = await makePage(Y);
+      const { item } = await moduleService.addItem(mine.id, 'PAGE', page.id, X.classroomId, null);
+      const { item: theirItem } = await moduleService.addItem(
+        theirs.id,
+        'PAGE',
+        theirPage.id,
+        Y.classroomId,
+        null
+      );
+      const beforeY = (await rowsIn(Y.classroomId)).length;
+      const { rows } = await newRows(X, async () => {
+        // X's classroom, Y's module: refused before anything is written.
+        await expect(
+          moduleService.moveItemToModule(
+            item.id,
+            theirs.id,
+            [theirItem.id, item.id],
+            X.classroomId,
+            webActor(X, 'web:modules.move_item')
+          )
+        ).rejects.toThrow();
+        await expect(
+          moduleService.moveItemToModuleEnd(
+            item.id,
+            theirs.id,
+            X.classroomId,
+            webActor(X, 'web:modules.move_item')
+          )
+        ).rejects.toThrow();
+        await expect(
+          moduleService.reorderItems(
+            theirs.id,
+            [theirItem.id],
+            X.classroomId,
+            webActor(X, 'web:modules.reorder_items')
+          )
+        ).rejects.toThrow();
+      });
+      expect(rows).toEqual([]);
+      expect((await rowsIn(Y.classroomId)).length).toBe(beforeY);
+      expect(await storedItems(theirs.id)).toEqual([{ id: theirItem.id, position: 0 }]);
+      expect(await storedItems(mine.id)).toEqual([{ id: item.id, position: 0 }]);
     });
   });
 
@@ -553,6 +667,9 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
           },
         },
       ]);
+      expect(await storedItems(module.id)).toEqual(
+        [d, a, b, c].map((id, position) => ({ id, position }))
+      );
       const again = await newRows(X, () =>
         moduleService.reorderItems(
           module.id,
@@ -609,6 +726,16 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
           },
         ],
       ]);
+      const storedAssignments = (moduleId: string) =>
+        prisma.assignment.findMany({
+          where: { module_id: moduleId },
+          orderBy: { position: 'asc' },
+          select: { id: true, position: true },
+        });
+      expect(await storedAssignments(from.id)).toEqual([
+        { id: two.id, position: 0 },
+        { id: one.id, position: 1 },
+      ]);
       const move = await newRows(X, () =>
         assignmentService.moveToModule(
           one.id,
@@ -636,6 +763,8 @@ describe.skipIf(!RUN)('module services write their audit rows (integration)', ()
           },
         },
       ]);
+      expect(await storedAssignments(to.id)).toEqual([{ id: one.id, position: 0 }]);
+      expect(await storedAssignments(from.id)).toEqual([{ id: two.id, position: 0 }]);
     });
   });
 

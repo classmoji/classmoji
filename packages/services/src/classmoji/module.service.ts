@@ -889,7 +889,10 @@ const compactItems = (moduleId: string) =>
  * behind it. Passing the module the item is already in is a plain reorder.
  *
  * A move is recorded for `actor`: MODULE_ITEM / UPDATE on the item, with the
- * `module_id` it moved to, `from_module_id` and its `position` there. A plain
+ * `module_id` it moved to, `from_module_id` and its `position` there. When
+ * the move is saved and the reorder or compaction after it fails, the move is
+ * still recorded (without `position` when its place was not saved) and the
+ * error is thrown. A plain
  * reorder is recorded as `reorderItems` records one. `actor: null`: no row.
  */
 export const moveItemToModule = async (
@@ -930,20 +933,31 @@ export const moveItemToModule = async (
     return reorderItems(toModuleId, orderedItemIds, classroomId, actor);
   }
   // The move's own row says where the item went; the reorder that places it
-  // is part of that move.
-  await reorderItems(toModuleId, orderedItemIds, classroomId, null);
-  await compactItems(fromModuleId);
-  const audit = await recordForActor(actor, {
-    classroomId,
-    resourceType: 'MODULE_ITEM',
-    resourceId: item.id,
-    action: 'UPDATE',
-    data: {
-      module_id: toModuleId,
-      from_module_id: fromModuleId,
-      position: orderedItemIds.indexOf(item.id),
-    },
-  });
+  // is part of that move. The move is saved by now, so it is recorded even
+  // when placing it fails (without a position, which was not saved), and the
+  // failure is then thrown as it came.
+  const recordMove = (placed: boolean) =>
+    recordForActor(actor, {
+      classroomId,
+      resourceType: 'MODULE_ITEM',
+      resourceId: item.id,
+      action: 'UPDATE',
+      data: {
+        module_id: toModuleId,
+        from_module_id: fromModuleId,
+        ...(placed ? { position: orderedItemIds.indexOf(item.id) } : {}),
+      },
+    });
+  let placed = false;
+  try {
+    await reorderItems(toModuleId, orderedItemIds, classroomId, null);
+    placed = true;
+    await compactItems(fromModuleId);
+  } catch (error: unknown) {
+    await recordMove(placed).catch(() => undefined);
+    throw error;
+  }
+  const audit = await recordMove(true);
   return { audit };
 };
 
