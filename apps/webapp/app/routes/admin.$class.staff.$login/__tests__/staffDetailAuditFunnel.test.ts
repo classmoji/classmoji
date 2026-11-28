@@ -97,7 +97,7 @@ describe('staff detail loader — its VIEW row through the audit funnel', () => 
       classroom_id: 'class-1',
       user_id: 'owner-1',
       role: 'OWNER',
-      resource_type: 'TEACHING_STAFF_DETAILS',
+      resource_type: 'STAFF',
       resource_id: 'user-1',
       action: 'VIEW',
       data: { tool: 'web:staff.view', impersonated_by: 'admin-1' },

@@ -43,7 +43,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // OWNER-only, deliberately narrower than the list page's loader: this is the
   // detail drawer, and widening the list read must never widen this.
   const { classroom, userId } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'TEACHING_STAFF',
+    resourceType: 'STAFF',
     action: 'view_staff_member',
   });
 
@@ -73,7 +73,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     request,
     params,
     action: 'VIEW',
-    resourceType: 'TEACHING_STAFF_DETAILS',
+    resourceType: 'STAFF',
     resourceId: String(staffUser.id),
     metadata: { tool: 'web:staff.view' },
   });

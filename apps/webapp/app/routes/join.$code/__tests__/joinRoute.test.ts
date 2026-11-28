@@ -172,8 +172,10 @@ describe('action', () => {
         classroom_id: 'class-x',
         role: 'STUDENT',
         action: 'CREATE',
-        resource_id: 'mem-a',
-        data: { tool: 'web:roster.join_link', matched_roster_invite: true },
+        resource_type: 'CLASSROOM_MEMBERSHIP',
+        // The person by user id; their new membership beside it.
+        resource_id: 'user-a',
+        data: { tool: 'web:roster.join_link', membership_id: 'mem-a', matched_roster_invite: true },
       })
     );
     expect(mocks.joinGitOrganization).toHaveBeenCalledWith(

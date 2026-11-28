@@ -289,7 +289,8 @@ describe('audit', () => {
         userId: 'student-1',
         classroomId: CLASSROOM_ID,
         role: 'STUDENT',
-        resourceType: 'collab_page',
+        // The joins' own name for the doc, not a collab-only one.
+        resourceType: 'PAGES',
         resourceId: PAGE,
         data: { tool: 'collab', reason: 'forbidden' },
       },
@@ -346,7 +347,7 @@ describe('audit', () => {
         userId: 'student-1',
         classroomId: CLASSROOM_ID,
         role: 'STUDENT',
-        resourceType: 'collab_page',
+        resourceType: 'PAGES',
         resourceId: PAGE,
         data: { tool: 'collab', reason: 'forbidden' },
         impersonatedBy: 'admin-1',

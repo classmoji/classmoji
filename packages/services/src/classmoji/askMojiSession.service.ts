@@ -160,7 +160,7 @@ const scopeOf = (a: AskMojiAccess): askMojiChat.AskMojiScope => ({
 const writeAudit = async (
   a: AskMojiAccess,
   row: {
-    resourceType: string;
+    resourceType: (typeof ASK_MOJI_AUDIT)[keyof typeof ASK_MOJI_AUDIT];
     resourceId: string;
     action: 'CREATE' | 'UPDATE' | 'DELETE';
     data: Record<string, unknown>;

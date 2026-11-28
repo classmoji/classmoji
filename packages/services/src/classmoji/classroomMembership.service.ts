@@ -453,6 +453,21 @@ export const updateInClassroom = async (
 };
 
 /**
+ * The user a membership of `classroomId` belongs to, or null when `id` is no
+ * membership of that classroom: bound to both, like `updateInClassroom`.
+ */
+export const findUserIdInClassroom = async (
+  id: string,
+  classroomId: string
+): Promise<string | null> => {
+  const row = await getPrisma().classroomMembership.findFirst({
+    where: { id, classroom_id: classroomId },
+    select: { user_id: true },
+  });
+  return row?.user_id ?? null;
+};
+
+/**
  * Delete a membership
  * @param {string} classroomId - UUID of the Classroom
  * @param {string} userId - UUID of the User

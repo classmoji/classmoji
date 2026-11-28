@@ -91,6 +91,29 @@ describe('student report action', () => {
     expect(JSON.stringify(entry.metadata)).not.toContain('private');
   });
 
+  it('names the student by user id on both rows, the membership beside it', async () => {
+    await call({ intent: 'update-comment', comment: 'Extension agreed' });
+    await call({ intent: 'update-letter-grade', letter_grade: 'B+' });
+    expect(mocks.addClassroomAuditLog.mock.calls.map(([row]) => row)).toEqual([
+      expect.objectContaining({
+        action: 'UPDATE',
+        resourceType: 'GRADES',
+        resourceId: 'u-1',
+        metadata: { tool: 'web:student.update_comment', cleared: false, membership_id: 'm-1' },
+      }),
+      expect.objectContaining({
+        action: 'UPDATE',
+        resourceType: 'GRADES',
+        resourceId: 'u-1',
+        metadata: {
+          tool: 'web:student.update_letter_grade',
+          letter_grade: 'B+',
+          membership_id: 'm-1',
+        },
+      }),
+    ]);
+  });
+
   it('sets and clears the letter override', async () => {
     await call({ intent: 'update-letter-grade', letter_grade: 'A' });
     expect(mocks.updateInClassroom).toHaveBeenCalledWith('m-1', 'c-1', { letter_grade: 'A' });

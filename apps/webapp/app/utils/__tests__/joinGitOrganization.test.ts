@@ -98,8 +98,15 @@ describe('joinGitOrganization', () => {
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
       user_id: 'user-a',
       classroom_id: 'class-x',
-      resource_id: 'mem-a',
-      data: { tool: 'web:roster.join_link', outcome: 'invited', login: 'ada' },
+      resource_type: 'CLASSROOM_MEMBERSHIP',
+      // The person by user id; the membership the step is for beside it.
+      resource_id: 'user-a',
+      data: {
+        tool: 'web:roster.join_link',
+        membership_id: 'mem-a',
+        outcome: 'invited',
+        login: 'ada',
+      },
     });
   });
 

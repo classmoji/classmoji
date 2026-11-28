@@ -50,6 +50,7 @@ import {
   type StoredQuestionResult,
 } from '@classmoji/utils/quiz-agent';
 import { resolveAttemptQuestionCount } from './quizAttempt.service.ts';
+import type { AuditResourceType } from './auditResourceTypes.ts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1414,7 +1415,7 @@ export const closeExpiredAttempt = (
         classroom_id: attempt.quiz.classroom_id,
         role: actor.role,
         action: 'UPDATE',
-        resource_type: 'QUIZ_ATTEMPT',
+        resource_type: 'QUIZ_ATTEMPT' satisfies AuditResourceType,
         resource_id: attempt.id,
         data: toJson({
           tool: 'quiz_chat.expired_close',

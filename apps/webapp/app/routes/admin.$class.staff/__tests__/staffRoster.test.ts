@@ -166,7 +166,7 @@ describe('staff loader — access', () => {
     expect(mocks.requireClassroomTeachingTeam).toHaveBeenCalledWith(
       expect.any(Request),
       CLASS_SLUG,
-      { resourceType: 'TEACHING_STAFF', action: 'view_staff' }
+      { resourceType: 'STAFF', action: 'view_staff' }
     );
     expect(mocks.requireClassroomAdmin).not.toHaveBeenCalled();
   });

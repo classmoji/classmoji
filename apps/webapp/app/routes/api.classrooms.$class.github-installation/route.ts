@@ -20,7 +20,7 @@ import type { Route } from './+types/route';
  * 4xx, and those two cases are told apart: `not-github` for a classroom hosted
  * somewhere else, `not-eligible` for the example classroom, which IS on GitHub
  * and would be misdescribed by the first. Everything else is
- * `repairInstallation`'s own union, unchanged, so the banner, the import
+ * `repairInstallation`'s own status, unchanged, so the banner, the import
  * wizard, the create-classroom guard and the operator sweep all describe
  * installations in the same words.
  */
@@ -56,23 +56,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const result = await ClassmojiService.gitOrganization.repairInstallation(org.id);
 
-  // Audit the attempt, not just the success: a run of `not-installed` against
-  // one org is the trail that explains why an instructor filed a ticket. This
-  // never fails the request — `addClassroomAuditLog` contains its write errors.
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership?.role,
-    action: 'UPDATE',
-    resourceType: 'GIT_ORGANIZATION',
-    resourceId: org.id,
-    metadata: {
-      tool: 'api.classrooms.github-installation',
-      git_org_login: org.login,
-      outcome: result.status,
-    },
-  });
+  // An UPDATE row exactly when this check saved the installation id
+  // (`claimed`), whatever the final status: the id can be saved and the
+  // follow-up read still fail. Every other answer (already connected, not
+  // installed, rate limited, a check that joined another's lookup) changed
+  // nothing. This never fails the request — `addClassroomAuditLog` contains
+  // its write errors.
+  if (result.claimed) {
+    await addClassroomAuditLog({
+      request,
+      classroomId: classroom.id,
+      userId,
+      role: membership?.role,
+      action: 'UPDATE',
+      resourceType: 'GIT_ORGANIZATION',
+      resourceId: org.id,
+      metadata: {
+        tool: 'api.classrooms.github-installation',
+        git_org_login: org.login,
+        outcome: result.status,
+      },
+    });
+  }
 
   return data({
     status: result.status,

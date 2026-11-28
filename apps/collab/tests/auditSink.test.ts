@@ -3,16 +3,18 @@
  * the user ("View as") reaches the row's data and the non-member refusal,
  * and a row written outside View as has no such key.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
+import { COLLAB_AUDIT_RESOURCE } from '@classmoji/collab';
 
-import { createServiceAuditSink } from '../src/audit.ts';
+import { createServiceAuditSink, type AuditEntry } from '../src/audit.ts';
 
 const entry = {
   userId: 'teacher-1',
   classroomId: 'class-1',
   role: 'TEACHER',
   action: 'COLLAB_JOIN' as const,
-  resourceType: 'PAGES',
+  resourceType: 'PAGES' as const,
   resourceId: 'page-1',
   data: { tool: 'collab' },
 };
@@ -54,5 +56,16 @@ describe('createServiceAuditSink', () => {
       [{ userId: 'u-1', classroomId: 'class-1' }],
       [{ userId: 'u-1', classroomId: 'class-1', impersonatedBy: 'admin-1' }],
     ]);
+  });
+});
+
+describe('the collab rows’ resource type', () => {
+  it('is the audit vocabulary, the doc kind’s for every collab row', () => {
+    expectTypeOf<AuditEntry['resourceType']>().toEqualTypeOf<AuditResourceType>();
+    expectTypeOf<
+      Parameters<Parameters<typeof createServiceAuditSink>[0]>[0]['resource_type']
+    >().toEqualTypeOf<AuditResourceType>();
+    // The names the MCP page and deck tools write.
+    expect(COLLAB_AUDIT_RESOURCE).toEqual({ page: 'PAGES', deck: 'SLIDES' });
   });
 });

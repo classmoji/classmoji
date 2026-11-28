@@ -172,7 +172,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // an Assignment, so it uses theirs ('ASSIGNMENT'). `tool` names the intent.
   const audit = (
     action: string,
-    resourceType: string,
+    resourceType: 'CALENDAR' | 'ASSIGNMENT',
     resourceId: string,
     metadata: AuditMetadata
   ) =>

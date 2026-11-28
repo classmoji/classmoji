@@ -107,7 +107,7 @@ export interface RegradeQueueViewer {
 /**
  * Every request in a classroom, for the teaching team. Open quiz requests also
  * carry the attempt's late hours and its counted emoji for the resolve modal.
- * The read is audited as `viewer` (VIEW on REGRADE_REQUESTS): the queue shows
+ * The read is audited as `viewer` (VIEW on REGRADE_REQUEST): the queue shows
  * students' grades.
  */
 export const loadStaffRegradeRows = async ({
@@ -126,7 +126,7 @@ export const loadStaffRegradeRows = async ({
     userId: viewer.userId,
     role: viewer.role,
     action: 'VIEW',
-    resourceType: 'REGRADE_REQUESTS',
+    resourceType: 'REGRADE_REQUEST',
     metadata: { tool: viewer.tool, request_count: rows.length },
   });
   const lateness = await ClassmojiService.regradeRequest.openQuizRequestLateness(

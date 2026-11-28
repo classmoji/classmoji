@@ -125,7 +125,7 @@ describe('staff action — authorization', () => {
     await run('createStaff', { login: 'ada', role: 'ASSISTANT' });
 
     expect(mocks.requireClassroomAdmin).toHaveBeenCalledWith(expect.any(Request), CLASS_SLUG, {
-      resourceType: 'TEACHING_STAFF',
+      resourceType: 'STAFF',
       action: 'manage_staff',
     });
     // The loader's wider gate must not be what admits a mutation.

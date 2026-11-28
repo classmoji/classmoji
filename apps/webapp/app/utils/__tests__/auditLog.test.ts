@@ -17,7 +17,8 @@
  *    observable, which only works if the failure is contained.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { AuditResourceType } from '@classmoji/services/audit-resource-types';
 
 const mocks = vi.hoisted(() => ({
   getAuthSession: vi.fn(),
@@ -210,7 +211,7 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     userId: 'user-1',
     role: 'TEACHER',
     action: 'DELETE',
-    resourceType: 'PAGES',
+    resourceType: 'PAGES' as const,
     resourceId: 'page-9',
     metadata: { tool: 'web:pages.delete', title: 'Syllabus' },
   };
@@ -413,5 +414,16 @@ describe('addAuditLog — nothing before the write rejects', () => {
 
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
     expect(mocks.logAuditMiss).not.toHaveBeenCalled();
+  });
+});
+
+describe('the resource type a route names', () => {
+  it('is the audit vocabulary, in both helpers', () => {
+    expectTypeOf<
+      Parameters<typeof addClassroomAuditLog>[0]['resourceType']
+    >().toEqualTypeOf<AuditResourceType>();
+    expectTypeOf<
+      Parameters<typeof addAuditLog>[0]['resourceType']
+    >().toEqualTypeOf<AuditResourceType>();
   });
 });

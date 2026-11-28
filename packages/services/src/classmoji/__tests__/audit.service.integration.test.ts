@@ -75,7 +75,7 @@ describe.skipIf(!RUN)('audit writer (integration)', () => {
     user_id: userA,
     classroom_id: classX,
     role: 'TEACHER' as string | null,
-    resource_type: 'PAGES',
+    resource_type: 'PAGES' as audit.AuditResourceType,
     resource_id: resource as string | null,
     action: 'VIEW' as Parameters<typeof audit.create>[0]['action'],
     data: { tool: 'test.read' } as Parameters<typeof audit.create>[0]['data'],
@@ -217,7 +217,8 @@ describe.skipIf(!RUN)('audit writer (integration)', () => {
     });
 
     it('a null resource_id matches only null', async () => {
-      const typed = `AUDIT_NULL_${suite}_${randomUUID().slice(0, 4)}`;
+      // A name of its own, so no other test's rows are in the way.
+      const typed = `AUDIT_NULL_${suite}_${randomUUID().slice(0, 4)}` as audit.AuditResourceType;
       const nullRows = () =>
         prisma.auditLog.findMany({ where: { classroom_id: classX, resource_type: typed } });
       await write(row({ resource_type: typed, resource_id: null }));
