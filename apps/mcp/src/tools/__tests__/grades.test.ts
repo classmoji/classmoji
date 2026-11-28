@@ -65,7 +65,7 @@ const CTX: ToolContext = {
 
 const ARGS = { classroom: 'org/winter-2025', git_repo_assignment_id: 'gra-1', emoji: '🟢' };
 
-function gra(grades: Array<{ id: string; emoji: string }>) {
+function gra(grades: Array<{ id: string; emoji: string; grader_id?: string }>) {
   return {
     id: 'gra-1',
     git_repo: { classroom_id: 'class-1', student_id: 'student-1', team_id: null },
@@ -140,6 +140,52 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(true);
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the score a numeric re-grade replaced: the caller’s own, not another grader’s', async () => {
+    const scale = ['score-70', 'score-80', 'score-90'].map(emoji => ({ emoji }));
+    mocks.findByClassroomId.mockResolvedValue(scale);
+    mocks.findById.mockResolvedValue(
+      gra([
+        { id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' },
+        { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
+      ])
+    );
+    // The orchestrator removed the caller's score-70 and added score-80.
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
+      { id: 'g-new', emoji: 'score-80', grader_id: 'ta-1' },
+    ]);
+
+    await gradeAddTool.handler({ ...ARGS, emoji: 'score-80' }, CTX);
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'GIT_REPO_ASSIGNMENT',
+      resource_id: 'gra-1',
+      action: 'CREATE',
+      data: { tool: 'grade_add', emoji: 'score-80', replaced: 'score-70' },
+    });
+  });
+
+  it('names nothing replaced on a first numeric score, or on the emoji scale', async () => {
+    mocks.findByClassroomId.mockResolvedValue([{ emoji: 'score-80' }]);
+    mocks.findById.mockResolvedValue(gra([]));
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g-new', emoji: 'score-80', grader_id: 'ta-1' },
+    ]);
+    await gradeAddTool.handler({ ...ARGS, emoji: 'score-80' }, CTX);
+
+    // On the emoji scale nothing is replaced, even when a regrade cleared a row.
+    mocks.findByClassroomId.mockResolvedValue([{ emoji: '🟢' }, { emoji: '🔴' }]);
+    mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🔴', grader_id: 'ta-1' }]));
+    mocks.findByAssignmentId.mockResolvedValue([{ id: 'g-green', emoji: '🟢', grader_id: 'ta-1' }]);
+    await gradeAddTool.handler(ARGS, CTX);
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    for (const [row] of mocks.auditCreate.mock.calls) {
+      expect((row as { data: Record<string, unknown> }).data).not.toHaveProperty('replaced');
+    }
   });
 
   it('records the grade when reading the grades back fails', async () => {

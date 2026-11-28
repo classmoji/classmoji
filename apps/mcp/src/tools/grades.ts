@@ -19,7 +19,7 @@
  */
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
-import { gitUsername } from '@classmoji/utils';
+import { gitUsername, parseScoreEmoji } from '@classmoji/utils';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -97,12 +97,19 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       teamId: gra.git_repo.team_id ?? undefined,
     });
 
-    const audit = () =>
+    const audit = (replaced: string[] = []) =>
       writeAudit(ctx, {
         resource_type: 'GIT_REPO_ASSIGNMENT',
         resource_id: gra.id,
         action: 'CREATE',
-        data: { tool: 'grade_add', emoji: args.emoji },
+        data: {
+          tool: 'grade_add',
+          emoji: args.emoji,
+          // The caller's own previous score this one replaced, so the change
+          // can be read back from the row (one per grader on the numeric scale).
+          ...(replaced.length === 1 ? { replaced: replaced[0] } : {}),
+          ...(replaced.length > 1 ? { replaced } : {}),
+        },
       });
     let grades: Awaited<ReturnType<typeof ClassmojiService.assignmentGrade.findByAssignmentId>>;
     try {
@@ -117,7 +124,23 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
     // cleared regrade) is a change and gets its row.
     const before = new Set(gra.grades.map(g => g.id));
     const unchanged = grades.length === before.size && grades.every(g => before.has(g.id));
-    if (!unchanged) await audit();
+    if (!unchanged) {
+      // On the numeric scale a grader's new score replaces their own previous
+      // one: the score rows of theirs that were there before and are gone now.
+      const after = new Set(grades.map(g => g.id));
+      const replaced =
+        parseScoreEmoji(args.emoji) === null
+          ? []
+          : gra.grades
+              .filter(
+                g =>
+                  g.grader_id === ctx.viewer.userId &&
+                  parseScoreEmoji(g.emoji) !== null &&
+                  !after.has(g.id)
+              )
+              .map(g => g.emoji);
+      await audit(replaced);
+    }
 
     // The orchestrator dedups silently — but on the regrade-replace path it
     // CLEARS the pre-request grade and mints a fresh row for the same emoji,
