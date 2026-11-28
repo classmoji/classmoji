@@ -4,6 +4,7 @@ import {
   ClassmojiService,
   HelperService,
   StaffServiceError,
+  ungradedCountsBeforeSettling,
   ungradedOutcomeCounts,
   type StaffRemovalStart,
   type UngradedChoice,
@@ -381,15 +382,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // reply is what it always was.)
       const completed = finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_SUCCESSFULLY';
       if (started.choice && !completed) {
-        // Still running: recorded as such, with nothing moved. The web offers
-        // no follow-up for it, so the row carries no follow-up marker.
+        // Still running: recorded as such, with nothing moved (the same counts
+        // as a completed removal's row, all zero). The web offers no follow-up
+        // for it, so the row carries no follow-up marker.
         await ClassmojiService.staff.recordStaffRemoval(actor, {
           classroomId: classroom.id,
           userId: started.userId,
           role: started.role,
           choice: started.choice,
           removal: 'in_progress',
-          ungraded: { choice: started.choice, total: started.ungradedCount, moved: 0 },
+          ungraded: ungradedCountsBeforeSettling(started.choice, started.ungradedCount),
         });
         return {
           action: ActionTypes.REMOVE_USER,

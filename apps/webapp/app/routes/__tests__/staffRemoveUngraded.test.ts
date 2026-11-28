@@ -48,21 +48,23 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
 }));
 
-vi.mock('@classmoji/services', async () => ({
-  ClassmojiService: {
-    staff: { recordStaffRemoval: (...a: unknown[]) => mocks.recordStaffRemoval(...a) },
-  },
-  ungradedOutcomeCounts: (
-    await vi.importActual<typeof import('@classmoji/services/staff-audit')>(
-      '@classmoji/services/staff-audit'
-    )
-  ).ungradedOutcomeCounts,
-  HelperService: {
-    startStaffRemoval: (...a: unknown[]) => mocks.startStaffRemoval(...a),
-    settleUngradedSlots: (...a: unknown[]) => mocks.settleUngradedSlots(...a),
-  },
-  StaffServiceError: class StaffServiceError extends Error {},
-}));
+vi.mock('@classmoji/services', async () => {
+  const { ungradedCountsBeforeSettling, ungradedOutcomeCounts } = await vi.importActual<
+    typeof import('@classmoji/services/staff-audit')
+  >('@classmoji/services/staff-audit');
+  return {
+    ClassmojiService: {
+      staff: { recordStaffRemoval: (...a: unknown[]) => mocks.recordStaffRemoval(...a) },
+    },
+    ungradedCountsBeforeSettling,
+    ungradedOutcomeCounts,
+    HelperService: {
+      startStaffRemoval: (...a: unknown[]) => mocks.startStaffRemoval(...a),
+      settleUngradedSlots: (...a: unknown[]) => mocks.settleUngradedSlots(...a),
+    },
+    StaffServiceError: class StaffServiceError extends Error {},
+  };
+});
 
 vi.mock('~/utils/helpers', () => ({
   waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
@@ -286,15 +288,31 @@ describe('removeStaff — ungraded submissions', () => {
     expect(mocks.settleUngradedSlots).not.toHaveBeenCalled();
     expect(result.error).toContain('still in progress');
     expect(result.error).toContain('ungraded submissions were not changed');
-    // Recorded as still running, nothing moved; no follow-up is offered.
+    // Recorded as still running, nothing moved, in the same counts a
+    // completed removal's row carries; no follow-up is offered.
     expect(mocks.recordStaffRemoval).toHaveBeenCalledExactlyOnceWith(ACTOR, {
       classroomId: 'class-1',
       userId: 'u-gone',
       role: 'ASSISTANT',
       choice: 'reassign',
       removal: 'in_progress',
-      ungraded: { choice: 'reassign', total: 3, moved: 0 },
+      ungraded: {
+        choice: 'reassign',
+        total: 3,
+        reassigned: 0,
+        unassigned: 0,
+        kept: 0,
+        failed: 0,
+        queued: false,
+      },
     });
+    // One shape: the keys a completed removal's row carries.
+    const { ungradedOutcomeCounts } = await vi.importActual<
+      typeof import('@classmoji/services/staff-audit')
+    >('@classmoji/services/staff-audit');
+    expect(Object.keys(mocks.recordStaffRemoval.mock.calls[0][1].ungraded).sort()).toEqual(
+      Object.keys(ungradedOutcomeCounts(outcome({ total: 3 }) as never)).sort()
+    );
   });
 
   it('with nothing at stake, an unknown final run is reported as before', async () => {

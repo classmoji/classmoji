@@ -65,6 +65,7 @@ const roster = await import('../roster.service.ts');
 const invites = await import('../classroomInvite.service.ts');
 const { parseAuditActor } = await import('../audit.service.ts');
 const { buildRemoveUserPayload } = await import('../removeUserPayload.ts');
+const { ungradedCountsBeforeSettling } = await import('../staffAudit.ts');
 const { default: HelperService } = await import('../../helper/index.ts');
 
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
@@ -550,7 +551,8 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
         // web's row keeps neither.
         removal: 'pending',
         followup: 'needs_decision',
-        ungraded: { choice: 'keep', total: 1, moved: 0 },
+        // What the web writes while its removal is still running.
+        ungraded: ungradedCountsBeforeSettling('keep', 1),
       });
       expect(audit).toEqual({ written: 1, missed: 0 });
       expect(await rowsFor(taId)).toEqual([
@@ -567,7 +569,15 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
             user_id: taId,
             role: 'ASSISTANT',
             removal: 'in_progress',
-            ungraded_submissions: { choice: 'keep', total: 1, moved: 0 },
+            ungraded_submissions: {
+              choice: 'keep',
+              total: 1,
+              reassigned: 0,
+              unassigned: 0,
+              kept: 0,
+              failed: 0,
+              queued: false,
+            },
           },
         },
       ]);

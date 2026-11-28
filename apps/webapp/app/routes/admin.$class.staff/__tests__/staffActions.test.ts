@@ -63,6 +63,7 @@ vi.mock('@classmoji/services', () => ({
     },
     audit: { record: (...a: unknown[]) => mocks.auditRecord(...a) },
   },
+  ungradedCountsBeforeSettling: () => ({}),
   ungradedOutcomeCounts: () => ({}),
   // Removal goes through the shared entry point (startStaffRemoval);
   // `mocks.removeStaff` stands in for it. The ungraded-slot choices, settled

@@ -151,3 +151,18 @@ export const ungradedOutcomeCounts = (outcome: UngradedSlotsOutcome) => ({
   queued: outcome.queued,
   ...(outcome.fallback ? { fallback: outcome.fallback } : {}),
 });
+
+/**
+ * The same counts while nothing has happened to the slots yet (the removal is
+ * still running): every count is zero, so a removal row's
+ * `ungraded_submissions` has one shape whatever the run's state.
+ */
+export const ungradedCountsBeforeSettling = (choice: UngradedChoice, total: number) => ({
+  choice,
+  total,
+  reassigned: 0,
+  unassigned: 0,
+  kept: 0,
+  failed: 0,
+  queued: false,
+});
