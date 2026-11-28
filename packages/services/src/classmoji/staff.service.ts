@@ -764,7 +764,7 @@ export const previewLeftoverSlots = async ({
   const openRemoval = await getPrisma().auditLog.findFirst({
     where: {
       classroom_id: classroomId,
-      // Every name a staff row has been written under (TEACHING_STAFF before).
+      // Every name the STAFF type has had, so the filter accepts each of them.
       resource_type: { in: auditResourceTypeNames('STAFF') },
       resource_id: user.id,
       action: 'DELETE',

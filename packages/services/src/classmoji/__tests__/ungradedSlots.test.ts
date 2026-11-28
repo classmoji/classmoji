@@ -324,7 +324,7 @@ describe('staff.previewLeftoverSlots', () => {
       resource_id: 'u-gone',
       action: 'DELETE',
     });
-    // The STAFF row staff_remove writes, under every name staff rows have had.
+    // The STAFF row staff_remove writes; the filter accepts every name the type has had.
     expect(where.resource_type).toEqual({
       in: ['STAFF', 'TEACHING_STAFF', 'TEACHING_STAFF_DETAILS'],
     });

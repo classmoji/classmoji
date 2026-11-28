@@ -74,6 +74,26 @@ describe('the audit resource vocabulary', () => {
     expect(currentAuditResourceType('UNKNOWN_THING')).toBe('UNKNOWN_THING');
   });
 
+  it('returns any other stored name unchanged, Object prototype keys included', () => {
+    for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const label = name.replace(/_/g, ' ').toLowerCase();
+      expect(currentAuditResourceType(name)).toBe(name);
+      expect(currentAuditResourceType(name, 'tag_create')).toBe(name);
+      expect(currentAuditResourceType('TEAMS', name)).toBe('TEAMS');
+      expect(currentAuditResourceType(name, name)).toBe(name);
+      expect(auditResourceLabel(name)).toBe(label);
+      expect(auditResourceLabel('TEAMS', name)).toBe('teams');
+      expect(auditResourceLabel(name, name)).toBe(label);
+    }
+  });
+
+  it('gives names only: rows told apart by their tool are not in the names', () => {
+    // Old tag rows carry TEAMS and a tag tool; a reader of either type also
+    // looks at `data.tool`.
+    expect(auditResourceTypeNames('TAGS')).toEqual(['TAGS']);
+    expect(auditResourceTypeNames('TEAMS')).toEqual(['TEAMS', 'TEAM']);
+  });
+
   it('labels old and new rows about the same thing alike', () => {
     expect(auditResourceLabel('REPOSITORY_ASSIGNMENT')).toBe('git repo assignment');
     expect(auditResourceLabel('GIT_REPO_ASSIGNMENT')).toBe('git repo assignment');

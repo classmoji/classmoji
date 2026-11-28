@@ -8,8 +8,9 @@
  * name is the one written now; the older names are kept in
  * `RETIRED_AUDIT_RESOURCE_TYPES`, because rows already written keep them. A
  * reader that matches on a resource type asks `auditResourceTypeNames` for
- * every name the thing has had, and a list that prints one uses
- * `auditResourceLabel`, so an old row and a new one read the same.
+ * every name the thing has had (names only: a reader of TAGS or TEAMS also
+ * looks at `data.tool`, see `auditResourceTypeNames`), and a list that prints
+ * one uses `auditResourceLabel`, so an old row and a new one read the same.
  *
  * No imports: types and helpers usable anywhere (browser bundles included),
  * by subpath `@classmoji/services/audit-resource-types` or, re-exported,
@@ -136,6 +137,10 @@ const RETIRED_BY_TOOL: Partial<Record<AuditResourceType, Record<string, AuditRes
   TEAMS: { tag_create: 'TAGS', 'web:settings.team.delete_tag': 'TAGS' },
 };
 
+/** `table[key]` when `key` is the table's own key; never an Object prototype member. */
+const ownValue = <T>(table: Record<string, T>, key: string): T | undefined =>
+  Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+
 /** Whether `value` is a name the product writes now. */
 export const isAuditResourceType = (value: unknown): value is AuditResourceType =>
   typeof value === 'string' && (AUDIT_RESOURCE_TYPES as readonly string[]).includes(value);
@@ -143,6 +148,11 @@ export const isAuditResourceType = (value: unknown): value is AuditResourceType 
 /**
  * Every name rows about `type` carry: the name written now, then each retired
  * one. A reader matching on a resource type filters with `{ in: names }`.
+ *
+ * Names only. Rows told apart by their `data.tool` (`RETIRED_BY_TOOL`) are not
+ * accounted for: tags were once written as TEAMS, so the names of TAGS miss
+ * those rows and the names of TEAMS include them. A reader of TAGS or TEAMS
+ * also looks at `data.tool` (or maps each row with `currentAuditResourceType`).
  */
 export const auditResourceTypeNames = (type: AuditResourceType): string[] => [
   type,
@@ -157,9 +167,10 @@ export const auditResourceTypeNames = (type: AuditResourceType): string[] => [
  * things); any other name is returned unchanged.
  */
 export const currentAuditResourceType = (stored: string, tool?: string | null): string => {
-  const byTool = tool ? RETIRED_BY_TOOL[stored as AuditResourceType]?.[tool] : undefined;
+  const toolTable = tool ? ownValue(RETIRED_BY_TOOL, stored) : undefined;
+  const byTool = toolTable && tool ? ownValue(toolTable, tool) : undefined;
   if (byTool) return byTool;
-  return (RETIRED_AUDIT_RESOURCE_TYPES as Record<string, string>)[stored] ?? stored;
+  return ownValue<string>(RETIRED_AUDIT_RESOURCE_TYPES, stored) ?? stored;
 };
 
 /**
