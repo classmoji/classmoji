@@ -163,7 +163,7 @@ describe('draft deck — who may VIEW', () => {
           user_id: 'student-1',
           role: 'STUDENT',
           resource_id: SLIDE_ID,
-          resource_type: 'SLIDE',
+          resource_type: 'SLIDES',
           action: 'ACCESS_DENIED',
           data: {
             tool: 'gate',
@@ -192,7 +192,7 @@ describe('draft deck — who may VIEW', () => {
           user_id: 'student-1',
           role: 'STUDENT',
           resource_id: SLIDE_ID,
-          resource_type: 'SLIDE',
+          resource_type: 'SLIDES',
           action: 'ACCESS_DENIED',
           data: {
             tool: 'gate',
