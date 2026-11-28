@@ -19,26 +19,35 @@
  *   task:<task id>      — a background run writes it, for the actor its
  *                         payload carries (`auditActor(…)`).
  *   exempt:<reason>     — writes no row, for the reason given.
- *   pending:<reason>    — what the action does, for an action whose row is
- *                         still to come. Only the entries of PENDING may say
+ *   unclassified:<what> — what the action does, for an action still to
+ *                         classify. Only the entries of UNCLASSIFIED may say
  *                         so, and that list may only shrink.
  *
- * The checks read the intent's own code (and the action's helpers that it
- * calls, and a file WRITER_IN names), comments left out: a check of the text,
- * not of a run, but enough that a `service:` intent that builds no actor, a
- * `route:` one that reaches no funnel, or an exempt one that writes a row
- * fails here.
+ * The checks read the intent's own code (the local functions it calls, the
+ * code the action runs before its intents, and a file WRITER_IN names),
+ * comments left out: a check of the text, not of a run. A `service:` intent
+ * must call its service and pass an actor built by `auditActor(…)` that it
+ * can see (its own, or one built before the dispatch that it does not
+ * redeclare); a `route:` one must reach the funnel and name its tool; a
+ * `task:` one must start that run (by id, or by the task's export) and hand
+ * it an actor; an exempt one must write no row and build no actor. A local
+ * wrapper or actor counts only where the intent calls or uses it.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import {
   ROUTES_DIR,
+  type WebActionIntent,
   actionIntents,
+  actionSource,
   declarationText,
+  exportsAction,
   reachableText,
+  routeModules,
   stripComments,
   webActionIntents,
 } from '../../__tests__/support/webActions.ts';
@@ -48,19 +57,19 @@ type Entry =
   | `route:${string}`
   | `task:${string}`
   | `exempt:${string}`
-  | `pending:${string}`;
+  | `unclassified:${string}`;
 
 const OWN_ACCOUNT = 'exempt:own account (sign-in, password, email, school id)';
 const OWN_PINS = 'exempt:own classroom pins';
 const FEEDBACK = 'exempt:the feedback board writes no audit rows (decided for #739)';
 const REFUSES = 'exempt:refuses an intent it does not know';
-const MEDIA = 'pending:media uploads and deletes (pages-app and MCP parity)';
+const MEDIA = 'unclassified:media uploads and deletes';
 
 /** Every (route, intent) the webapp handles, classified. Keys: `<route id>#<intent>`. */
 const ACTIONS: Record<string, Entry> = {
   // ── account and platform ──
-  '_user.create-classroom#create-gitlab': 'pending:classroom creation',
-  '_user.create-classroom#*': 'pending:classroom creation',
+  '_user.create-classroom#create-gitlab': 'unclassified:classroom creation',
+  '_user.create-classroom#*': 'unclassified:classroom creation',
   '_user.import-classroom#*': 'route:web:github_classroom.import',
   '_user.select-organization#*': 'route:select-organization',
   '_user.settings.billing#createCheckoutSession':
@@ -89,13 +98,13 @@ const ACTIONS: Record<string, Entry> = {
   'api.survey.answer#*': 'exempt:own survey answers',
   'api.unsplash#*': 'exempt:read-only image search',
   'api.content.token#*': 'exempt:read-only content token',
-  'api.example-classroom#*': 'pending:example course provisioning',
+  'api.example-classroom#*': 'unclassified:example course provisioning',
   'api.classrooms.$id.pin#*': OWN_PINS,
   'api.classrooms.reorder-pins#*': OWN_PINS,
   'api.classrooms.$id.archive#*': 'service:classroomLifecycle.setLifecycle',
   'api.classrooms.$id.status#*': 'service:classroomLifecycle.setLifecycle',
   'api.classrooms.$class.github-installation#*': 'route:api.classrooms.github-installation',
-  'api.import-jobs.$jobId#*': 'pending:import retry',
+  'api.import-jobs.$jobId#*': 'unclassified:import retry',
   'api.feedback#create-post': FEEDBACK,
   'api.feedback#vote': FEEDBACK,
   'api.feedback#comment-vote': FEEDBACK,
@@ -137,12 +146,12 @@ const ACTIONS: Record<string, Entry> = {
   'admin.$class.repos_.$title#deleteRepo': 'service:HelperService.deleteRepository',
   'admin.$class.repos_.$title#addGrader': 'service:HelperService.addGraderInClassroom',
   'admin.$class.repos_.$title#removeGrader': 'service:HelperService.removeGraderInClassroom',
-  'admin.$class.repos_.$title#createProjects': 'pending:project board creation',
+  'admin.$class.repos_.$title#createProjects': 'unclassified:project board creation',
   'admin.$class.repos_.form#createTag': 'service:organizationTag.findOrCreate',
   'admin.$class.repos_.form#create': 'service:repository.create',
   'admin.$class.repos_.form#update': 'service:repository.updateFromForm',
   'api.repos.$id.contributor-link#*': 'service:repoAnalytics.linkContributor',
-  'api.repos.$id.refresh#*': 'pending:analytics refresh',
+  'api.repos.$id.refresh#*': 'unclassified:analytics refresh',
   'admin.$class.teams#*': 'service:teamAdmin.deleteTeam',
   'admin.$class.teams.new#createTag': 'service:organizationTag.findOrCreate',
   'admin.$class.teams.new#createTeam': 'service:teamAdmin.createTeam',
@@ -171,7 +180,7 @@ const ACTIONS: Record<string, Entry> = {
   'admin.$class.pages#*': REFUSES,
   'admin.$class.pages.new#import': 'route:web:pages.create_import',
   'admin.$class.pages.new#*': 'route:web:pages.create_blank',
-  'api.pages.batch#batch-init': 'pending:content repository setup',
+  'api.pages.batch#batch-init': 'unclassified:content repository setup',
   'api.pages.batch#batch-import-single': 'route:web:pages.create_batch',
   'api.pages.batch#*': REFUSES,
   'admin.$class.slides#status': 'route:web:slides.status',
@@ -203,16 +212,16 @@ const ACTIONS: Record<string, Entry> = {
   'assistant.$class_.regrade-requests#*': 'service:regradeRequest.resolveQuiz',
   'student.$class.quizzes.$quizId.attempt.$attemptId#*':
     'service:regradeRequest.createForQuizAttempt',
-  'api.quiz#startQuiz': 'pending:quiz attempt start',
-  'api.quiz#restartQuiz': 'pending:quiz attempt start',
-  'api.quiz#updateMetrics': 'pending:quiz attempt timing',
-  'api.quiz#recordModalClose': 'pending:quiz attempt timing',
-  'api.quiz#recordModalOpen': 'pending:quiz attempt timing',
+  'api.quiz#startQuiz': 'unclassified:quiz attempt start',
+  'api.quiz#restartQuiz': 'unclassified:quiz attempt start',
+  'api.quiz#updateMetrics': 'unclassified:quiz attempt timing',
+  'api.quiz#recordModalClose': 'unclassified:quiz attempt timing',
+  'api.quiz#recordModalOpen': 'unclassified:quiz attempt timing',
   'api.quiz-chat.session#*': 'route:web:quiz_chat.session',
   'api.quizLateWaiver.$class#*': 'route:web:quiz_late_waiver',
 
   // ── grading ──
-  'api.gitRepoAssignment.$class#autograde': 'pending:autograde workflow dispatch',
+  'api.gitRepoAssignment.$class#autograde': 'unclassified:autograde workflow dispatch',
   'api.gitRepoAssignment.$class#addGrade': 'service:HelperService.addGradeToGitRepoAssignment',
   'api.gitRepoAssignment.$class#removeGrade':
     'service:HelperService.removeGradeFromGitRepoAssignment',
@@ -274,7 +283,7 @@ const ACTIONS: Record<string, Entry> = {
     'service:letterGradeMapping.replaceAll',
   'admin.$class.settings.grades#remapOrphanedEmojis':
     'route:web:settings.grades.remap_orphaned_emojis',
-  'admin.$class.settings.repos#repairWebhooks': 'pending:webhook repair',
+  'admin.$class.settings.repos#repairWebhooks': 'unclassified:webhook repair',
   'admin.$class.settings.repos#*': 'service:orgRepoSettings.updateOrgRepoSettings',
   'admin.$class.settings.team#createTag': 'service:organizationTag.findOrCreate',
   'admin.$class.settings.team#deleteTag': 'service:organizationTag.deleteInClassroom',
@@ -282,7 +291,8 @@ const ACTIONS: Record<string, Entry> = {
   'admin.$class.settings.website#saveSettings': 'service:site.upsertSiteSettings',
   'admin.$class.settings.website#removeSite': 'service:site.deleteSiteForClassroom',
   'admin.$class.settings.website#saveCustomDomain': 'service:site.setCustomDomain',
-  'admin.$class.settings.website#checkCustomDomainCert': 'exempt:read-only certificate check',
+  'admin.$class.settings.website#checkCustomDomainCert':
+    'exempt:checks the certificate at the host and may request it there again; writes nothing to the database',
   'admin.$class.settings.website#removeCustomDomain': 'service:site.clearCustomDomain',
   'admin.$class.settings.danger-zone#removeClassroom': 'service:classroom.deleteById',
 
@@ -297,10 +307,10 @@ const ACTIONS: Record<string, Entry> = {
 };
 
 /**
- * The `pending` entries there may be. A new action cannot be added as one:
- * it is classified, or recorded. This list only shrinks.
+ * The `unclassified` entries there may be. A new action is classified when it
+ * is added, never added here. This list only shrinks.
  */
-const PENDING = new Set([
+const UNCLASSIFIED = new Set([
   '_user.create-classroom#create-gitlab',
   '_user.create-classroom#*',
   'admin.$class.repos_.$title#createProjects',
@@ -349,6 +359,15 @@ const OWN_ACTOR_TASKS = new Set(['update_regrade_request']);
 
 /** Intents whose writer is in a helper file of their own, read with them. */
 const WRITER_IN: Record<string, string> = {
+  // The calendars' rows (and their tool names) come from one builder.
+  'admin.$class.calendar#create': 'apps/webapp/app/utils/calendarAudit.ts',
+  'admin.$class.calendar#update': 'apps/webapp/app/utils/calendarAudit.ts',
+  'admin.$class.calendar#delete': 'apps/webapp/app/utils/calendarAudit.ts',
+  'assistant.$class_.calendar#create': 'apps/webapp/app/utils/calendarAudit.ts',
+  'assistant.$class_.calendar#update': 'apps/webapp/app/utils/calendarAudit.ts',
+  'assistant.$class_.calendar#delete': 'apps/webapp/app/utils/calendarAudit.ts',
+  'admin.$class.settings.content#saveLiveEditing':
+    'apps/webapp/app/routes/admin.$class.settings.content/liveEditing.server.ts',
   '_user.select-organization#*': 'apps/webapp/app/utils/joinGitOrganization.server.ts',
   'admin.$class.repos#calculateContributions': 'apps/webapp/app/utils/repoContributions.server.ts',
   'admin.$class.repos_.$title#calculateContributions':
@@ -389,43 +408,36 @@ const callsService = (text: string, fn: string) => {
 };
 
 /**
- * The names of the action's local consts and functions whose own code matches
- * `pattern` (a `const audit = (…) => addClassroomAuditLog(…)` wrapper, a
- * `const actor = await auditActor(…)`), so an intent that uses one counts.
+ * The names of the consts and functions declared in `text` whose own code
+ * matches `pattern` (a `const audit = (…) => addClassroomAuditLog(…)` wrapper,
+ * a `const actor = await auditActor(…)`).
  */
-const localWriters = (action: string, pattern: RegExp): string[] =>
-  [...action.matchAll(/(?:^|\n)\s*(?:const|let|function|async\s+function)\s+([A-Za-z_$][\w$]*)/g)]
-    .map(m => m[1])
-    .filter(name => {
-      try {
-        const text = declarationText(action, name);
-        // The function an action hands its whole request to holds every
-        // intent: it is the intents' code, not a writer of one of them.
-        return pattern.test(text) && !/\b(?:intent|_action)\s*===/.test(text);
-      } catch {
-        return false;
-      }
-    });
-
-/**
- * Whether `text` reaches `pattern` directly, or through one of the action's
- * local writers: a wrapper it calls (`audit(…)`), or for the actor a value it
- * uses (`actor`, built once with `auditActor`).
- */
-const reaches = (text: string, action: string, pattern: RegExp) =>
-  pattern.test(text) ||
-  localWriters(action, pattern).some(name =>
-    new RegExp(
-      pattern === ACTOR ? `\\b${escape(name)}\\b` : `(?<![\\w$.])${escape(name)}\\s*\\(`
-    ).test(text)
-  );
-
-/** `text` without the declarations of the action's local writers. */
-const withoutWriters = (text: string, action: string) => {
-  let out = text;
-  for (const name of [...localWriters(action, FUNNEL), ...localWriters(action, ACTOR)]) {
+const localWriters = (text: string, pattern: RegExp): string[] =>
+  [
+    ...new Set(
+      [
+        ...text.matchAll(
+          /(?:^|\n)\s*(?:const|let|function|async\s+function)\s+([A-Za-z_$][\w$]*)/g
+        ),
+      ].map(m => m[1])
+    ),
+  ].filter(name => {
     try {
-      out = out.split(declarationText(action, name)).join('');
+      const declared = declarationText(text, name);
+      // The function an action hands its whole request to holds every
+      // intent: it is the intents' code, not a writer of one of them.
+      return pattern.test(declared) && !/\b(?:intent|_action)\s*===/.test(declared);
+    } catch {
+      return false;
+    }
+  });
+
+/** `text` without the declarations of `names` (as `text` declares them). */
+const withoutDeclarations = (text: string, names: string[]) => {
+  let out = text;
+  for (const name of names) {
+    try {
+      out = out.split(declarationText(out, name)).join('');
     } catch {
       // Not declared in a form this reader follows: left as it is.
     }
@@ -433,8 +445,150 @@ const withoutWriters = (text: string, action: string) => {
   return out;
 };
 
+/** Whether `text` declares `name` itself (a `const`, `let` or function). */
+const declaresName = (text: string, name: string) =>
+  new RegExp(`(?:^|[\\s;{(])(?:const|let|var|function)\\s+${escape(name)}\\b`).test(text);
+
+/**
+ * Whether an intent's `text` reaches `pattern`: directly, or through a writer
+ * it calls (`audit(…)`) or, for the actor, a value it uses (`actor`). A writer
+ * counts only where it is used: one the intent declares itself, or one
+ * declared in the code before the dispatch (`shared`) that the intent does
+ * not redeclare (a `const actor = null` of its own hides the shared one). A
+ * writer's declaration never satisfies the check by itself.
+ */
+const reaches = (text: string, shared: string, pattern: RegExp) => {
+  // The declaration the intent's text starts with is the intent itself (an
+  // action with no dispatch, or a shorthand key's function), not a writer.
+  const own = localWriters(text, pattern).filter(
+    name => !text.trimStart().startsWith(declarationText(text, name).trimStart())
+  );
+  const bare = withoutDeclarations(text, own);
+  if (pattern.test(bare)) return true;
+  const used = (name: string) =>
+    new RegExp(
+      pattern === ACTOR ? `\\b${escape(name)}\\b` : `(?<![\\w$.])${escape(name)}\\s*\\(`
+    ).test(bare);
+  if (own.some(used)) return true;
+  return localWriters(shared, pattern).some(name => used(name) && !declaresName(bare, name));
+};
+
+/** `task(` exports of packages/tasks, by export name: the id each one has. */
+const TASK_IDS: Map<string, string> = (() => {
+  const ids = new Map<string, string>();
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.ts$/.test(entry.name)) {
+        const text = readFileSync(path, 'utf8');
+        for (const m of text.matchAll(
+          /export\s+const\s+(\w+)\s*=\s*(?:schemaTask|task)\s*\(\s*\{\s*id:\s*['"]([^'"]+)['"]/g
+        )) {
+          ids.set(m[1], m[2]);
+        }
+      }
+    }
+  };
+  walk(resolve(REPO_ROOT, 'packages/tasks/src'));
+  return ids;
+})();
+
+/** Whether `text` starts the run `id`: by its id, or through the task export that has it. */
+const startsTask = (text: string, id: string) => {
+  if (!/\b(?:trigger|batchTrigger|triggerAndWait|batchTriggerAndWait)\s*\(/.test(text)) {
+    return false;
+  }
+  if (new RegExp(`['"\`]${escape(id)}['"\`]`).test(text)) return true;
+  return [...TASK_IDS].some(
+    ([name, taskId]) =>
+      taskId === id &&
+      new RegExp(`\\b${escape(name)}\\s*\\.\\s*(?:batchTrigger|trigger)\\w*\\s*\\(`).test(text)
+  );
+};
+
+/**
+ * Whether an intent's `text` names the tool `tool`: as written (`'web:x.y'`),
+ * through a constant of its file that holds it (`QUIZ_LATE_WAIVER_TOOL`), or
+ * as a template whose `${…}` is the intent itself (`web:slides.${field}`).
+ */
+const namesTool = (intent: WebActionIntent, text: string, tool: string) => {
+  if (new RegExp(`['"\`]${escape(tool)}['"\`]`).test(text)) return true;
+  const file = stripComments(readFileSync(resolve(REPO_ROOT, intent.file), 'utf8'));
+  const constants = [
+    ...file.matchAll(
+      new RegExp(
+        `(?:^|\\n)\\s*(?:export\\s+)?const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*['"]${escape(tool)}['"]`,
+        'g'
+      )
+    ),
+  ].map(m => m[1]);
+  if (constants.some(name => new RegExp(`(?<![\\w$.])${escape(name)}\\b`).test(text))) return true;
+  return [...text.matchAll(/`([^`]*)`/g)].some(
+    m => m[1].includes('${') && m[1].replace(/\$\{[^}]*\}/g, intent.intent) === tool
+  );
+};
+
+/**
+ * What is wrong with one intent's code for its entry: [] when it reaches the
+ * writer the entry names. `helper` is the text of a file WRITER_IN names.
+ */
+function problemsFor(intent: WebActionIntent, entry: Entry, helper = ''): string[] {
+  const key = `${intent.routeId}#${intent.intent}`;
+  const problems: string[] = [];
+  const [kind, ...rest] = entry.split(':');
+  const name = rest.join(':');
+  const text = `${intent.text}\n${helper}`;
+  const writesRow = reaches(intent.text, intent.shared, FUNNEL);
+  if (kind === 'service') {
+    if (!callsService(text, name)) problems.push(`${key}: should call ${name}`);
+    if (!OWN_ACTOR.has(name) && !reaches(text, intent.shared, ACTOR)) {
+      problems.push(`${key}: should pass auditActor(…) to ${name}`);
+    }
+    if (writesRow) problems.push(`${key}: ${name} writes the row; the route writes one too`);
+  } else if (kind === 'route') {
+    if (!reaches(text, intent.shared, FUNNEL)) {
+      problems.push(`${key}: should write its row through the audit funnel`);
+    }
+    if (!namesTool(intent, text, name)) problems.push(`${key}: should name its tool '${name}'`);
+  } else if (kind === 'task') {
+    if (!startsTask(text, name)) problems.push(`${key}: should start the ${name} run`);
+    if (!OWN_ACTOR_TASKS.has(name) && !reaches(text, intent.shared, ACTOR)) {
+      problems.push(`${key}: should hand the ${name} run its auditActor(…)`);
+    }
+  } else if (kind === 'exempt') {
+    if (writesRow || reaches(intent.text, intent.shared, ACTOR)) {
+      problems.push(`${key}: is exempt but records a row`);
+    }
+  }
+  return problems;
+}
+
 const intents = webActionIntents();
 const keyOf = (i: { routeId: string; intent: string }) => `${i.routeId}#${i.intent}`;
+
+/** Route modules written to a temporary routes folder, for the reader's own tests. */
+const fixtureDirs: string[] = [];
+const fixtureRoutes = (files: Record<string, string>) => {
+  const dir = mkdtempSync(join(tmpdir(), 'web-actions-'));
+  fixtureDirs.push(dir);
+  const routes = join(dir, 'routes');
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(routes, path)), { recursive: true });
+    writeFileSync(join(routes, path), text);
+  }
+  return routes;
+};
+afterAll(() => {
+  for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+});
+/** The intent read under `key`; a missing one fails the test that asked for it. */
+const readIntent = (intents: Map<string, WebActionIntent>, key: string): WebActionIntent => {
+  const intent = intents.get(key);
+  if (!intent) throw new Error(`no intent ${key} was read`);
+  return intent;
+};
 
 describe('the web-action reader', () => {
   const sample = stripComments(`
@@ -508,12 +662,183 @@ describe('the web-action reader', () => {
     expect(callsService('ClassmojiService.module.create(x)', 'module.create')).toBe(true);
     expect(callsService('ClassmojiService.module.creates(x)', 'module.create')).toBe(false);
   });
+
+  it('finds an index route, a local export under another name, an export *, and shorthand keys', () => {
+    const routes = fixtureRoutes({
+      'a.index/index.tsx': `export const action = async () => ({ ok: true });`,
+      'b.handler/route.tsx': `
+        const handler = async ({ request }) => {
+          await addClassroomAuditLog({ metadata: { tool: 'web:b' } });
+        };
+        export { handler as action };
+      `,
+      'c.star/route.tsx': `export * from './action';`,
+      'c.star/action.ts': `export async function action() { return null; }`,
+      'd.shorthand/route.tsx': `
+        async function create() {
+          await addClassroomAuditLog({ metadata: { tool: 'web:d.create' } });
+        }
+        const remove = async () => ({ ok: true });
+        export const action = ({ request }) => namedAction(request, { create, remove });
+      `,
+    });
+    const found = webActionIntents(routes);
+    expect(found.map(keyOf).sort()).toEqual([
+      'a.index#*',
+      'b.handler#*',
+      'c.star#*',
+      'd.shorthand#create',
+      'd.shorthand#remove',
+    ]);
+    const byKey = new Map(found.map(i => [keyOf(i), i]));
+    expect(problemsFor(readIntent(byKey, 'b.handler#*'), 'route:web:b')).toEqual([]);
+    expect(problemsFor(readIntent(byKey, 'd.shorthand#create'), 'route:web:d.create')).toEqual([]);
+    expect(problemsFor(readIntent(byKey, 'd.shorthand#remove'), 'route:web:d.create')).toHaveLength(
+      2
+    );
+    for (const module of routeModules(routes)) {
+      expect(exportsAction(module.file, routes)).toBe(true);
+      expect(actionSource(module.file, 'action', routes)).not.toBeNull();
+    }
+  });
+
+  it("bounds each intent to the dispatching body: the last intent and '*' do not borrow a helper's write", () => {
+    const route = (lastWrites: boolean) =>
+      fixtureRoutes({
+        'x.audit/route.tsx': `
+          export const action = async ({ request }) => {
+            const intent = (await request.formData()).get('intent');
+            if (intent === 'create') {
+              await save();
+              await audit({ tool: 'web:x.create' });
+              return { ok: true };
+            }
+            if (intent === 'delete') {
+              await remove();
+              ${lastWrites ? "await audit({ tool: 'web:x.delete' });" : ''}
+              return { ok: true };
+            }
+            return { error: 'unknown' };
+          };
+          const audit = (metadata) => addClassroomAuditLog({ metadata });
+          const save = async () => {};
+          const remove = async () => {};
+        `,
+      });
+    const read = (dir: string) => new Map(webActionIntents(dir).map(i => [i.intent, i]));
+    const writes = read(route(true));
+    expect(problemsFor(readIntent(writes, 'create'), 'route:web:x.create')).toEqual([]);
+    expect(problemsFor(readIntent(writes, 'delete'), 'route:web:x.delete')).toEqual([]);
+    expect(problemsFor(readIntent(writes, '*'), 'exempt:refuses')).toEqual([]);
+
+    const missing = read(route(false));
+    expect(problemsFor(readIntent(missing, 'delete'), 'route:web:x.delete')).toEqual([
+      'x.audit#delete: should write its row through the audit funnel',
+      "x.audit#delete: should name its tool 'web:x.delete'",
+    ]);
+    // The fall-through path writes nothing of its own either.
+    expect(problemsFor(readIntent(missing, '*'), 'route:web:x.create')).toContain(
+      'x.audit#*: should write its row through the audit funnel'
+    );
+  });
+
+  it('takes an actor only from what the intent can see, not a name another part declares', () => {
+    const route = (deleteActor: string) =>
+      fixtureRoutes({
+        'y.actor/route.tsx': `
+          export const action = async ({ request }) => {
+            const gate = await requireClassroomAdmin(request);
+            const actor = await auditActor(request, gate, 'web:y');
+            const intent = (await request.formData()).get('intent');
+            if (intent === 'create') {
+              return ClassmojiService.module.create({ actor });
+            }
+            if (intent === 'delete') {
+              ${deleteActor}
+              return ClassmojiService.module.deleteById({ actor });
+            }
+          };
+        `,
+      });
+    const read = (dir: string) => new Map(webActionIntents(dir).map(i => [i.intent, i]));
+    const shared = read(route(''));
+    expect(problemsFor(readIntent(shared, 'create'), 'service:module.create')).toEqual([]);
+    expect(problemsFor(readIntent(shared, 'delete'), 'service:module.deleteById')).toEqual([]);
+
+    const nulled = read(route('const actor = null;'));
+    expect(problemsFor(readIntent(nulled, 'delete'), 'service:module.deleteById')).toEqual([
+      'y.actor#delete: should pass auditActor(…) to module.deleteById',
+    ]);
+    expect(problemsFor(readIntent(nulled, 'create'), 'service:module.create')).toEqual([]);
+
+    // An actor built inside one intent is not another's.
+    const inner = fixtureRoutes({
+      'z.inner/route.tsx': `
+        export const action = async ({ request }) => {
+          const intent = (await request.formData()).get('intent');
+          if (intent === 'create') {
+            const actor = await auditActor(request, gate, 'web:z');
+            return ClassmojiService.module.create({ actor });
+          }
+          if (intent === 'delete') {
+            return ClassmojiService.module.deleteById({ actor });
+          }
+        };
+      `,
+    });
+    const z = read(inner);
+    expect(problemsFor(readIntent(z, 'create'), 'service:module.create')).toEqual([]);
+    expect(problemsFor(readIntent(z, 'delete'), 'service:module.deleteById')).toEqual([
+      'z.inner#delete: should pass auditActor(…) to module.deleteById',
+    ]);
+  });
+
+  it('checks the tool a route: entry names and the run a task: entry names', () => {
+    const routes = fixtureRoutes({
+      't.tools/route.tsx': `
+        export const action = async ({ request }) => {
+          const intent = (await request.formData()).get('intent');
+          if (intent === 'save') {
+            await addClassroomAuditLog({ metadata: { tool: 'web:t.save' } });
+          }
+          if (intent === 'run') {
+            const actor = await auditActor(request, gate, 'web:t.run');
+            await tasks.trigger('do_the_thing', { actor });
+          }
+        };
+      `,
+    });
+    const byIntent = new Map(webActionIntents(routes).map(i => [i.intent, i]));
+    expect(problemsFor(readIntent(byIntent, 'save'), 'route:web:t.save')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'save'), 'route:web:t.other')).toEqual([
+      "t.tools#save: should name its tool 'web:t.other'",
+    ]);
+    expect(problemsFor(readIntent(byIntent, 'run'), 'task:do_the_thing')).toEqual([]);
+    expect(problemsFor(readIntent(byIntent, 'run'), 'task:another_thing')).toEqual([
+      't.tools#run: should start the another_thing run',
+    ]);
+  });
 });
 
 describe('web action audit manifest', () => {
   it('finds the route actions, so this file cannot pass by finding nothing', () => {
     expect(new Set(intents.map(i => i.routeId)).size).toBeGreaterThanOrEqual(80);
     expect(intents.length).toBeGreaterThanOrEqual(190);
+  });
+
+  it('reads an action and at least one intent from every route module that exports one', () => {
+    const unread: string[] = [];
+    for (const module of routeModules()) {
+      if (!exportsAction(module.file)) continue;
+      const source = actionSource(module.file);
+      if (!source) {
+        unread.push(`${module.id}: exports an action this reader does not find`);
+        continue;
+      }
+      const routeId = source.routeId && source.routeId !== module.id ? source.routeId : module.id;
+      if (!intents.some(i => i.routeId === routeId)) unread.push(`${module.id}: no intent read`);
+    }
+    expect(unread).toEqual([]);
   });
 
   it('classifies every (route, intent), and nothing that no longer exists', () => {
@@ -523,20 +848,19 @@ describe('web action audit manifest', () => {
 
   it('gives every entry a known class and a reason', () => {
     const bad = Object.entries(ACTIONS).filter(
-      ([, entry]) => !/^(service|route|task|exempt|pending):\S/.test(entry)
+      ([, entry]) => !/^(service|route|task|exempt|unclassified):\S/.test(entry)
     );
     expect(bad).toEqual([]);
   });
 
-  const pending = Object.entries(ACTIONS)
-    .filter(([, entry]) => entry.startsWith('pending:'))
-    .map(([key]) => key)
-    .sort();
-  it(`adds no pending entry: the list only shrinks (${pending.length} pending)`, () => {
-    console.warn(`web actions pending an audit row: ${pending.length}`);
-    expect(pending.filter(key => !PENDING.has(key))).toEqual([]);
+  it('the list of actions still to classify only shrinks', () => {
+    const unclassified = Object.entries(ACTIONS)
+      .filter(([, entry]) => entry.startsWith('unclassified:'))
+      .map(([key]) => key)
+      .sort();
+    expect(unclassified.filter(key => !UNCLASSIFIED.has(key))).toEqual([]);
     // An allow-list entry whose action is now classified otherwise goes too.
-    expect([...PENDING].filter(key => !pending.includes(key))).toEqual([]);
+    expect([...UNCLASSIFIED].filter(key => !unclassified.includes(key))).toEqual([]);
   });
 
   it('names a helper file only for an intent that exists', () => {
@@ -549,36 +873,7 @@ describe('web action audit manifest', () => {
       const key = keyOf(intent);
       const entry = ACTIONS[key];
       if (!entry) continue;
-      const [kind, ...rest] = entry.split(':');
-      const name = rest.join(':');
-      const text = `${intent.text}\n${helperText(key)}`;
-      const action = `${intent.action}\n${helperText(key)}`;
-      const writesRow = reaches(intent.text, intent.action, FUNNEL);
-      if (kind === 'service') {
-        if (!callsService(text, name)) problems.push(`${key}: should call ${name}`);
-        if (!OWN_ACTOR.has(name) && !reaches(text, action, ACTOR)) {
-          problems.push(`${key}: should pass auditActor(…) to ${name}`);
-        }
-        if (writesRow) problems.push(`${key}: ${name} writes the row; the route writes one too`);
-      } else if (kind === 'route') {
-        if (!reaches(text, action, FUNNEL)) {
-          problems.push(`${key}: should write its row through the audit funnel`);
-        }
-      } else if (kind === 'task') {
-        if (!/\b(?:trigger|batchTrigger)\s*\(/.test(text)) {
-          problems.push(`${key}: should start the ${name} run`);
-        }
-        if (!OWN_ACTOR_TASKS.has(name) && !reaches(text, action, ACTOR)) {
-          problems.push(`${key}: should hand the ${name} run its auditActor(…)`);
-        }
-      } else if (kind === 'exempt') {
-        // The intent's own code: a writer the action declares for its other
-        // intents is not this one's.
-        const own = withoutWriters(intent.text, intent.action);
-        if (reaches(own, intent.action, FUNNEL) || ACTOR.test(own)) {
-          problems.push(`${key}: is exempt but records a row`);
-        }
-      }
+      problems.push(...problemsFor(intent, entry, helperText(key)));
     }
     expect(problems).toEqual([]);
   });
