@@ -8,7 +8,8 @@
  * for `actor: null`; and a saved change that reports `missed` when its row
  * could not be written (an actor with no user row, which the
  * `audit_logs.user_id` foreign key refuses), whose `audit_miss` line carries
- * no key. Rows are scoped to the classroom changed and to its actor: owner A
+ * no key, Ask Moji instructions, classroom name or mapping description; and
+ * two overlapping saves that are recorded one after the other. Rows are scoped to the classroom changed and to its actor: owner A
  * in classroom X and owner B in classroom Y never see each other's rows or
  * settings.
  *
@@ -1014,6 +1015,65 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
       expect(await prisma.tag.findUnique({ where: { id: yTag.tag.id } })).not.toBeNull();
     });
   });
+  // ─── what a row that cannot be written leaves in the logs ──────────────────
+
+  describe('the audit_miss line of a settings row it cannot write', () => {
+    /** Run `fn` for an actor whose row the database refuses; the logged text. */
+    const missText = async (fn: (actor: AuditActor) => Promise<{ audit: unknown }>) => {
+      const { value, misses, text } = await quietly(() => fn(ghost('ghost:miss_line')));
+      expect(value.audit).toEqual({ written: 0, missed: 1 });
+      expect(misses).toHaveLength(1);
+      return text;
+    };
+
+    it('carries no API key', async () => {
+      const text = await missText(actor =>
+        classroom.updateSettings(X.classroomId, { anthropic_api_key: OTHER_KEY }, actor)
+      );
+      expect(text).toContain('anthropic_api_key_set');
+      expect(text).not.toContain(OTHER_KEY);
+      expect(text).not.toContain('OTHERSECRET');
+      await classroom.updateSettings(X.classroomId, { anthropic_api_key: null }, null);
+    });
+
+    it('carries no Ask Moji instructions text', async () => {
+      const text = await missText(actor =>
+        classroom.updateSettings(X.classroomId, { syllabus_bot_instructions: INSTRUCTIONS }, actor)
+      );
+      expect(text).toContain('instructions_length');
+      expect(text).not.toContain(INSTRUCTIONS);
+      expect(text).not.toContain('lecture notes');
+      await classroom.updateSettings(X.classroomId, { syllabus_bot_instructions: null }, null);
+    });
+
+    it('carries no classroom name', async () => {
+      const name = `Miss line course ${randomUUID()}`;
+      const text = await missText(actor =>
+        classroom.updateClassroomSettings(X.classroomId, { classroom: { name } }, actor)
+      );
+      // The line names the field (`fields: ['name']`, escaped in the log text).
+      expect(text).toContain('\\"fields\\":[\\"name\\"]');
+      expect(text).not.toContain(name);
+    });
+
+    it('carries no mapping description, on a save or a replace', async () => {
+      const description = `Shown for ${randomUUID()} work`;
+      const saved = await missText(actor =>
+        emojiMapping.saveEmojiMapping(X.classroomId, { emoji: '🧭', grade: 66, description }, actor)
+      );
+      expect(saved).toContain('description');
+      expect(saved).not.toContain(description);
+      const replaced = await missText(actor =>
+        emojiMapping.replaceScale(
+          X.classroomId,
+          [{ emoji: '🧭', grade: 66, description: `${description} again` }],
+          actor
+        )
+      );
+      expect(replaced).not.toContain(description);
+    });
+  });
+
   // ─── two saves at once ─────────────────────────────────────────────────────
 
   describe('two overlapping saves each get their row', () => {
