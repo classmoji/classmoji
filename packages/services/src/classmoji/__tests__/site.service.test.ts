@@ -16,8 +16,11 @@ const pageFindFirst = vi.fn();
 const moduleFindMany = vi.fn();
 const quizFindMany = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+// The row locks a site change takes (`SELECT … FOR UPDATE`); the faked
+// transaction runs its callback on the same client.
+const queryRaw = vi.fn(async () => []);
+vi.mock('@classmoji/database', () => {
+  const client = {
     classroomSite: {
       findUnique: classroomSiteFindUnique,
       findMany: classroomSiteFindMany,
@@ -30,8 +33,11 @@ vi.mock('@classmoji/database', () => ({
     page: { findFirst: pageFindFirst },
     module: { findMany: moduleFindMany },
     quiz: { findMany: quizFindMany },
-  }),
-}));
+    $queryRaw: queryRaw,
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
+  };
+  return { default: () => client };
+});
 
 // How a classroom's tier is resolved is its own unit
 // (subscription.service.test.ts). Stubbed here so the custom-domain tests

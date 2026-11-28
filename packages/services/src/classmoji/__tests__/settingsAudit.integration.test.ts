@@ -28,6 +28,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
 import getPrisma from '@classmoji/database';
+import { Prisma } from '@classmoji/database/client';
 import type { AuditActor } from '../audit.service.ts';
 
 const github = vi.hoisted(() => ({
@@ -954,6 +955,126 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
       expect(await prisma.tag.findUnique({ where: { id: yTag.tag.id } })).not.toBeNull();
     });
   });
+  // ─── two saves at once ─────────────────────────────────────────────────────
+
+  describe('two overlapping saves each get their row', () => {
+    /**
+     * Hold `FOR UPDATE` on the rows `locks` names, from a connection of its
+     * own, until `release` is called: the state of a save that has read its
+     * row and not yet committed.
+     */
+    const holdLocks = async (locks: Prisma.Sql[]) => {
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let acquired!: () => void;
+      const ready = new Promise<void>(resolve => (acquired = resolve));
+      const done = prisma.$transaction(
+        async tx => {
+          for (const lock of locks) await tx.$queryRaw(lock);
+          acquired();
+          await released;
+        },
+        { timeout: 30_000 }
+      );
+      await ready;
+      return { release, done };
+    };
+    /** Wait until `n` sessions on this database are waiting for a row lock on `table`. */
+    const waitForWaiters = async (table: string, n: number) => {
+      for (let i = 0; i < 200; i++) {
+        const [{ waiting }] = await prisma.$queryRaw<{ waiting: number }[]>`
+          SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND query ILIKE ${`%${table}%`}`;
+        if (waiting >= n) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error(`fewer than ${n} sessions waited on ${table}`);
+    };
+
+    /**
+     * The interleaving that loses a row when the previous value is read apart
+     * from the write: A saves X over X (no change) and B saves Y, A's read
+     * before B's write and A's write after it. Here both start while the rows
+     * are held, B first, so each save's read must wait for the one before it:
+     * B records X → Y and A then records Y → X.
+     */
+    const overlap = async <T>(
+      locks: Prisma.Sql[],
+      table: string,
+      a: () => Promise<T>,
+      b: () => Promise<T>
+    ) => {
+      const held = await holdLocks(locks);
+      const saveB = b();
+      await waitForWaiters(table, 1);
+      const saveA = a();
+      await waitForWaiters(table, 2);
+      held.release();
+      await held.done;
+      return Promise.all([saveA, saveB]);
+    };
+
+    it('classroom settings: X → Y and Y → X, one row each', async () => {
+      await classroom.updateSettings(X.classroomId, { show_modules: true }, null);
+      const actor = webActor(X, 'web:settings.general.overlap');
+      const { rows } = await newRows(X, () =>
+        overlap(
+          [
+            Prisma.sql`SELECT id FROM classrooms WHERE id = ${X.classroomId} FOR UPDATE`,
+            Prisma.sql`SELECT classroom_id FROM classroom_settings WHERE classroom_id = ${X.classroomId} FOR UPDATE`,
+          ],
+          'classroom',
+          () => classroom.updateSettings(X.classroomId, { show_modules: true }, actor),
+          () => classroom.updateSettings(X.classroomId, { show_modules: false }, actor)
+        )
+      );
+      expect(rows.map(r => r.data)).toEqual([
+        expect.objectContaining({
+          fields: ['show_modules'],
+          values: { show_modules: false },
+          previous: { show_modules: true },
+        }),
+        expect.objectContaining({
+          fields: ['show_modules'],
+          values: { show_modules: true },
+          previous: { show_modules: false },
+        }),
+      ]);
+      expect((await settingsOf(X)).show_modules).toBe(true);
+    });
+
+    it('site settings: X → Y and Y → X, one row each', async () => {
+      if (!(await prisma.classroomSite.findUnique({ where: { classroom_id: X.classroomId } }))) {
+        await site.validateAndClaimSubdomain(X.classroomId, `sa-ov-${suite}`, null);
+      }
+      await site.upsertSiteSettings(X.classroomId, { show_schedule: true }, null);
+      const actor = webActor(X, 'web:settings.website.overlap');
+      const { rows } = await newRows(X, () =>
+        overlap(
+          [
+            Prisma.sql`SELECT id FROM classroom_sites WHERE classroom_id = ${X.classroomId} FOR UPDATE`,
+          ],
+          'classroom_sites',
+          () => site.upsertSiteSettings(X.classroomId, { show_schedule: true }, actor),
+          () => site.upsertSiteSettings(X.classroomId, { show_schedule: false }, actor)
+        )
+      );
+      expect(rows.map(r => r.data)).toEqual([
+        expect.objectContaining({
+          fields: ['show_schedule'],
+          values: { show_schedule: false },
+          previous: { show_schedule: true },
+        }),
+        expect.objectContaining({
+          fields: ['show_schedule'],
+          values: { show_schedule: true },
+          previous: { show_schedule: false },
+        }),
+      ]);
+    });
+  });
+
   // ─── every function: no row for actor: null, `missed` for a row it cannot write ───
 
   describe('each settings function with actor: null and with a row it cannot write', () => {

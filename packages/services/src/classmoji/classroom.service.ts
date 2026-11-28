@@ -1076,9 +1076,10 @@ export interface ClassroomSettingsAuditOptions {
  * changed: `fields` (the changed columns), `values` / `previous` (new and old
  * values of the columns `settingsAudit.ts` allows), `<key>_set` /
  * `<key>_cleared` for a key, and `instructions_length` for the Ask Moji
- * instructions. `actor: null` records nothing (a classroom import seeding its
- * time zone). The previous values come from one read before the write, made
- * only when there is an actor.
+ * instructions. `actor: null` records nothing. The previous values are read
+ * in the transaction that writes, under a lock on the classroom row, so two
+ * overlapping saves are recorded one after the other, each against what the
+ * other left. The row is written after the commit.
  */
 export const updateClassroomSettings = async (
   classroomId: string,
@@ -1143,35 +1144,45 @@ export const updateClassroomSettings = async (
     };
   }
 
-  const prisma = getPrisma();
   const name = save.classroom?.name;
-  // The values before the save, in one read, only when the save is recorded.
-  const before = actor
-    ? await prisma.classroom.findUnique({
-        where: { id: classroomId },
-        select: { name: true, settings: true },
-      })
-    : null;
-
-  const settings = updates
-    ? await prisma.classroomSettings.upsert({
-        where: { classroom_id: classroomId },
-        create: {
-          classroom_id: classroomId,
-          ...updates,
-        },
-        update: updates,
-      })
-    : null;
-
-  const classroom =
-    name !== undefined
-      ? await prisma.classroom.update({
+  const settingsUpdates = updates;
+  // The read of the values before the save and the writes are one
+  // transaction under a lock on the classroom row, so `previous` is exactly
+  // what this save replaced: a save that overlaps another waits for it, then
+  // reads what it wrote. FOR NO KEY UPDATE, not FOR UPDATE: it waits for
+  // another settings save (and for an update of the classroom row) but not for
+  // an insert of a row that references the classroom.
+  const { before, settings, classroom } = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR NO KEY UPDATE`;
+    // The values before the save, only when the save is recorded.
+    const before = actor
+      ? await tx.classroom.findUnique({
           where: { id: classroomId },
-          data: { name },
-          include: { git_organization: true, settings: true },
+          select: { name: true, settings: true },
         })
       : null;
+
+    const settings = settingsUpdates
+      ? await tx.classroomSettings.upsert({
+          where: { classroom_id: classroomId },
+          create: {
+            classroom_id: classroomId,
+            ...settingsUpdates,
+          },
+          update: settingsUpdates,
+        })
+      : null;
+
+    const classroom =
+      name !== undefined
+        ? await tx.classroom.update({
+            where: { id: classroomId },
+            data: { name },
+            include: { git_organization: true, settings: true },
+          })
+        : null;
+    return { before, settings, classroom };
+  });
 
   let audit: ServiceAudit = NO_SERVICE_AUDIT;
   if (actor) {

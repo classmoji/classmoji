@@ -18,14 +18,19 @@ const canUseQuizzesMock = vi.fn();
 
 const findUniqueMock = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+vi.mock('@classmoji/database', () => {
+  const client = {
     classroomSettings: {
       upsert: (...a: unknown[]) => upsertMock(...a),
       findUnique: (...a: unknown[]) => findUniqueMock(...a),
     },
-  }),
-}));
+    // The classroom row lock the save takes; the faked transaction runs its
+    // callback on the same client.
+    $queryRaw: async () => [],
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
+  };
+  return { default: () => client };
+});
 
 vi.mock('../entitlement.service.ts', () => ({
   canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a),
