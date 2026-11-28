@@ -45,6 +45,7 @@ import {
   type SlideContentTarget,
 } from '@classmoji/services/slides';
 
+import { COLLAB_AUDIT_RESOURCE } from '@classmoji/collab';
 import { resolveCollabEnv } from '@classmoji/collab/env';
 
 import { commitFilesToRemote } from '../helpers/gitCheckpoint.ts';
@@ -197,23 +198,25 @@ export function realCheckpointDeps(): CheckpointDeps {
       });
     },
     notifyCheckpointResult: postCheckpointResult,
-    audit: async ({ classroomId, userId, kind, docId, commit, version, runId }) => {
-      const membership = await getPrisma().classroomMembership.findFirst({
-        where: { classroom_id: classroomId, user_id: userId },
-        select: { role: true },
-      });
-      if (!membership) return;
+    audit: async ({ classroomId, userId, editors, kind, docId, commit, version, runId }) => {
+      // The editor's highest ACCEPTED role here, by the shared reader rule
+      // (a person can hold several memberships in one classroom). Collab
+      // lets an owner or teacher edit before accepting the invite; such an
+      // editor's row takes their highest role in any invite state.
+      const viewer = await ClassmojiService.pageSections.sectionViewer({ userId, classroomId });
+      const role = viewer.acceptedRole ?? viewer.role;
+      if (!role) return;
       // After the push: a failed write is reported (`audit_miss`); the
       // checkpoint neither fails nor retries for it.
       await ClassmojiService.audit.record({
         classroom_id: classroomId,
         user_id: userId,
-        role: membership.role,
+        role,
         action: 'COLLAB_CHECKPOINT',
-        // = COLLAB_AUDIT_RESOURCE in @classmoji/collab (what joins and the MCP tools write).
-        resource_type: kind === 'deck' ? 'SLIDES' : 'PAGES',
+        // What joins and the MCP tools write for the doc.
+        resource_type: COLLAB_AUDIT_RESOURCE[kind === 'deck' ? 'deck' : 'page'],
         resource_id: docId,
-        data: { tool: 'task:content_checkpoint', commit, version, runId },
+        data: { tool: 'task:content_checkpoint', commit, version, runId, editors },
       });
     },
     repoSizeKb: async classroom => {

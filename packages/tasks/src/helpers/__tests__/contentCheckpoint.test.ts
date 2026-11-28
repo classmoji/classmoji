@@ -1112,6 +1112,8 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     expect(audit).toHaveBeenCalledWith({
       classroomId: 'class-1',
       userId: 'u-ada',
+      // The checkpoint's other editor is on the row too; the payload's is not.
+      editors: ['u-nogh'],
       kind: 'page',
       docId: 'page-a',
       commit: head,

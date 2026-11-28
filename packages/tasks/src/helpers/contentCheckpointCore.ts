@@ -219,7 +219,10 @@ export interface CheckpointResultDoc {
 
 export interface CheckpointAuditEntry {
   classroomId: string;
+  /** The editor the row is written as. */
   userId: string;
+  /** The checkpoint's other editors (user ids), so co-editors are on the record. */
+  editors: string[];
   kind: string;
   docId: string;
   commit: string;
@@ -1062,15 +1065,24 @@ async function checkpointDocs(
     }
 
     if (result.pushed) {
-      const actor =
-        (coAuthorsByDoc.get(key) ?? [])[0]?.userId ??
-        (rowEditors.get(key) ?? [])[0]?.userId ??
-        payload.editors?.find(e => `${e.kind}:${e.docId}` === key)?.editors?.[0]?.userId;
+      // Who edited this checkpoint: the co-authors and the row's editors (the
+      // payload's only when neither has anyone). The first is the row's actor.
+      const editors = credited.length
+        ? credited
+        : [
+            ...new Set(
+              (payload.editors?.find(e => `${e.kind}:${e.docId}` === key)?.editors ?? []).map(
+                e => e.userId
+              )
+            ),
+          ];
+      const actor = editors[0];
       if (actor) {
         try {
           await deps.audit({
             classroomId,
             userId: actor,
+            editors: editors.slice(1),
             kind: c.row.kind,
             docId: c.row.doc_id,
             commit: result.commit,
