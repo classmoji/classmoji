@@ -485,16 +485,6 @@ export async function refreshRepo(
 // Manual contributor → user linking
 
 /**
- * Upsert a `GitRepoContributorLink` for the given `(git_repo_id, github_login)`.
- * Passing `userId: null` unlinks (records the mapping with no user). When a
- * `userId` is supplied, the user MUST be a member of the classroom that owns
- * the repo — otherwise this throws.
- *
- * Callers: the API route backing ContributorBreakdown's "Link to student"
- * modal. The stored link is consumed by `buildLoginToUserIdMap` on the next
- * refresh, so newly-linked contributors are attributed correctly.
- */
-/**
  * Map a commit author's GitHub login on one student repo to a member of its
  * classroom (`userId: null` unlinks). A link that changed is recorded for
  * `actor` after the write: REPOSITORY / UPDATE on the student repo, with
