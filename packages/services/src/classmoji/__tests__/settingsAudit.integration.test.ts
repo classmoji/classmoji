@@ -595,6 +595,38 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
       expect(same.rows).toEqual([]);
     });
 
+    it('replaceScale: a changed description is a change (one row, the text nowhere); the same scale none', async () => {
+      const actor = webActor(X, 'web:settings.grades.populate_emoji_scale');
+      const DESCRIPTION = `Strong work on the ${randomUUID()} project`;
+      const scale = [
+        { emoji: '⭐', grade: 100, description: 'Excellent' },
+        { emoji: '👍', grade: 80 },
+      ];
+      await emojiMapping.replaceScale(X.classroomId, scale, null);
+      const edited = [{ ...scale[0], description: DESCRIPTION }, scale[1]];
+      const changed = await newRows(X, () =>
+        emojiMapping.replaceScale(X.classroomId, edited, actor)
+      );
+      const same = await newRows(X, () => emojiMapping.replaceScale(X.classroomId, edited, actor));
+      expect(changed.rows).toEqual([
+        expect.objectContaining({
+          action: 'UPDATE',
+          data: { tool: 'web:settings.grades.populate_emoji_scale', count: 2, previous_count: 2 },
+        }),
+      ]);
+      expect(JSON.stringify(changed.rows)).not.toContain(DESCRIPTION);
+      expect(same.rows).toEqual([]);
+      // A left-out description is stored as ''; an explicit '' is the same scale.
+      const blank = await newRows(X, () =>
+        emojiMapping.replaceScale(
+          X.classroomId,
+          [edited[0], { ...scale[1], description: '' }],
+          actor
+        )
+      );
+      expect(blank.rows).toEqual([]);
+    });
+
     it('letter grades: save, change, delete and replace, one row each that changed', async () => {
       const save = webActor(X, 'web:settings.grades.letter_grade_mapping_upsert');
       const created = await newRows(X, () =>

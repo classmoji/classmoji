@@ -248,11 +248,25 @@ export const ensureDefaultScale = async (classroomId: string, client: ScaleClien
     return { seeded: true as const, count: SCORE_EMOJI_MAPPINGS.length };
   });
 
-/** A scale as comparable text: each emoji with its grade and bonus tokens, sorted. */
-const scaleKey = (rows: ReadonlyArray<{ emoji: string; grade: unknown; extra_tokens?: unknown }>) =>
+/**
+ * A scale as comparable text: each emoji with its grade, bonus tokens and
+ * description, sorted. Each column as the write stores it (a left-out bonus is
+ * 0, a left-out description ''), so a replace with the same scale compares
+ * equal and one that changes only a description does not.
+ */
+const scaleKey = (
+  rows: ReadonlyArray<{
+    emoji: string;
+    grade: unknown;
+    extra_tokens?: unknown;
+    description?: string | null;
+  }>
+) =>
   JSON.stringify(
     rows
-      .map(r => [r.emoji, Number(r.grade), Number(r.extra_tokens ?? 0)] as const)
+      .map(
+        r => [r.emoji, Number(r.grade), Number(r.extra_tokens ?? 0), r.description ?? ''] as const
+      )
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   );
 
@@ -264,8 +278,10 @@ const scaleKey = (rows: ReadonlyArray<{ emoji: string; grade: unknown; extra_tok
  * become orphaned (the settings page's remap banner).
  *
  * Recorded for `actor` after the commit, when the scale is not the one it
- * replaced: SETTINGS / UPDATE on the classroom, `count` (emojis now) and
- * `previous_count`. `actor: null` records nothing.
+ * replaced (an emoji, a grade, bonus tokens or a description differs):
+ * SETTINGS / UPDATE on the classroom, `count` (emojis now) and
+ * `previous_count`; descriptions are compared, never recorded. `actor: null`
+ * records nothing.
  */
 export const replaceScale = async (
   classroomId: string,
@@ -278,7 +294,7 @@ export const replaceScale = async (
       const previous = actor
         ? await tx.emojiMapping.findMany({
             where: { classroom_id: classroomId },
-            select: { emoji: true, grade: true, extra_tokens: true },
+            select: { emoji: true, grade: true, extra_tokens: true, description: true },
           })
         : null;
       await tx.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
