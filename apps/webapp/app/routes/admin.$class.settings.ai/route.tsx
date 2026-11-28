@@ -16,11 +16,8 @@ import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
-import {
-  addClassroomAuditLog,
-  assertClassroomAccess,
-  assertClassroomMutationAllowed,
-} from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import {
   AI_SETTINGS_AUDIT_TOOL,
   INSTRUCTIONS_ERROR_COPY,
@@ -543,13 +540,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify AI settings
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'QUIZ_SETTINGS',
     attemptedAction: 'modify',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -559,24 +557,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     classroom.id
   );
 
-  // Every save is audited once it has been written: the field names only
-  // (never a value: the key is a secret, the instructions are owner-only), and
-  // for the instructions their length. One row per save.
-  const audit = async (fields: string[], extra: Record<string, unknown> = {}) =>
-    addClassroomAuditLog({
-      request,
-      classroomId: classroom.id,
-      userId,
-      role: membership!.role,
-      action: 'UPDATE',
-      resourceType: 'SETTINGS',
-      resourceId: classroom.id,
-      metadata: {
-        tool: AI_SETTINGS_AUDIT_TOOL,
-        fields,
-        ...extra,
-      },
-    });
+  // Every save is recorded by the settings service once it has been written,
+  // one row per save that changed something: field names, values only for the
+  // safe ones (never the key; the instructions by length).
+  const actor = () => auditActor(request, gate, AI_SETTINGS_AUDIT_TOOL);
 
   // Create FormData with the action from the JSON
   const formData = new FormData();
@@ -590,9 +574,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       // updateSettings is the hard Pro gate (it refuses only turning quizzes
       // ON); catching here only turns the refusal into a readable message.
       try {
-        await ClassmojiService.classroom.updateSettings(classroom.id, {
-          quizzes_enabled: Boolean(data.quizzes_enabled),
-        });
+        await ClassmojiService.classroom.updateSettings(
+          classroom.id,
+          { quizzes_enabled: Boolean(data.quizzes_enabled) },
+          await actor()
+        );
       } catch (error: unknown) {
         if (error instanceof ClassroomSettingsEntitlementError) {
           return {
@@ -602,7 +588,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
         throw error;
       }
-      await audit(['quizzes_enabled']);
       return {
         success: 'Quiz settings updated',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -615,9 +600,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       // turning Ask Moji ON); catching here only turns the refusal into a
       // readable message instead of a 500.
       try {
-        await ClassmojiService.classroom.updateSettings(classroom.id, {
-          syllabus_bot_enabled: Boolean(data.syllabus_bot_enabled),
-        });
+        await ClassmojiService.classroom.updateSettings(
+          classroom.id,
+          { syllabus_bot_enabled: Boolean(data.syllabus_bot_enabled) },
+          await actor()
+        );
       } catch (error: unknown) {
         if (error instanceof ClassroomSettingsEntitlementError) {
           return {
@@ -627,7 +614,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
         throw error;
       }
-      await audit(['syllabus_bot_enabled']);
       return {
         success: 'Ask Moji settings updated',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -645,9 +631,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
       try {
-        await ClassmojiService.classroom.updateSettings(classroom.id, {
-          syllabus_bot_instructions: value,
-        });
+        await ClassmojiService.classroom.updateSettings(
+          classroom.id,
+          { syllabus_bot_instructions: value },
+          await actor()
+        );
       } catch (error: unknown) {
         if (
           error instanceof ClassroomSettingsValidationError &&
@@ -660,9 +648,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
         throw error;
       }
-      await audit(['syllabus_bot_instructions'], {
-        instructions_length: typeof value === 'string' ? value.trim().length : 0,
-      });
       return {
         success: 'Ask Moji instructions saved',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -733,8 +718,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
       // Nothing to change: no write and no audit row.
       if (Object.keys(updateData).length > 0) {
-        await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
-        await audit(Object.keys(updateData));
+        await ClassmojiService.classroom.updateSettings(classroom.id, updateData, await actor());
       }
       return {
         success: 'AI settings saved',
@@ -759,8 +743,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         syllabus_bot_model: null,
         syllabus_bot_effort: null,
       };
-      await ClassmojiService.classroom.updateSettings(classroom.id, cleared);
-      await audit(Object.keys(cleared));
+      await ClassmojiService.classroom.updateSettings(classroom.id, cleared, await actor());
       return {
         success: 'AI settings cleared. Using system defaults.',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,

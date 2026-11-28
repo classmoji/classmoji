@@ -9,6 +9,13 @@
  * handed to the service contains EXACTLY the expected keys, and that an extra
  * key riding along on the arguments is not forwarded. The same rule is checked
  * for classroom.update (name only) and the organization settings service call.
+ *
+ * The settings save goes to the service as ONE call (`updateClassroomSettings`:
+ * settings and name together, with the serviceActor), which writes the audit
+ * row; the stand-in below hands its two halves to `updateSettings` and
+ * `classroomUpdate`, so the payload assertions read what each half was given.
+ * The tools write no row of their own: the rows are pinned in
+ * packages/services settingsAudit.integration.test.ts.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   classroomUpdate: vi.fn(),
   setLifecycle: vi.fn(),
   updateSettings: vi.fn(),
+  updateClassroomSettings: vi.fn(),
   classroomFindById: vi.fn(),
   pageFindById: vi.fn(),
   updateOrgRepoSettings: vi.fn(),
@@ -77,6 +85,7 @@ vi.mock('@classmoji/services', () => ({
       },
       update: (...a: unknown[]) => mocks.classroomUpdate(...a),
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
+      updateClassroomSettings: (...a: unknown[]) => mocks.updateClassroomSettings(...a),
       findById: (...a: unknown[]) => mocks.classroomFindById(...a),
     },
     classroomLifecycle: {
@@ -124,10 +133,31 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
+/** The actor every settings tool hands its service (serviceActor). */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+});
+const WRITTEN = { written: 1, missed: 0 };
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.updateSettings.mockResolvedValue({});
+  mocks.updateClassroomSettings.mockImplementation(
+    async (
+      classroomId: string,
+      save: { settings?: Record<string, unknown>; classroom?: { name?: string } }
+    ) => {
+      if (save.settings) await mocks.updateSettings(classroomId, save.settings);
+      if (save.classroom) await mocks.classroomUpdate(classroomId, save.classroom);
+      return { settings: {}, classroom: null, audit: WRITTEN };
+    }
+  );
   mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
   mocks.setLifecycle.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
   mocks.getGitHubTokenForUser.mockResolvedValue({ token: 'ghu_owner', expiresAt: null });
@@ -141,6 +171,7 @@ beforeEach(() => {
       value: Object.entries(input)
         .map(([field, to]) => `${field}=${String(to)}`)
         .join(';'),
+      audit: WRITTEN,
     })
   );
 });
@@ -247,21 +278,34 @@ describe('classroom_settings_update', () => {
     expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('audits the changed field names with the ctx classroom id', async () => {
-    await classroomSettingsUpdateTool.handler(
+  it('saves settings and name as one call with its actor, and writes no row itself', async () => {
+    const result = await classroomSettingsUpdateTool.handler(
       { classroom: 'org/w26', name: 'Renamed', slides_enabled: true },
       CTX
     );
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      action: string;
-      classroom_id: string;
-      resource_type: string;
-      data: { fields: string[] };
-    };
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.resource_type).toBe('SETTINGS');
-    expect(audit.data.fields.sort()).toEqual(['name', 'slides_enabled']);
+    expect(mocks.updateClassroomSettings).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      { settings: { slides_enabled: true }, classroom: { name: 'Renamed' } },
+      actorFor('classroom_settings_update')
+    );
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    // The answer names what was submitted, as before.
+    expect(parse(result)).toEqual({
+      success: true,
+      updated_fields: ['slides_enabled', 'name'],
+      settings: { slides_enabled: true, name: 'Renamed' },
+    });
+  });
+
+  it('marks the call when the service could not write its row', async () => {
+    mocks.updateClassroomSettings.mockResolvedValue({
+      settings: {},
+      classroom: null,
+      audit: { written: 0, missed: 1 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+    await classroomSettingsUpdateTool.handler({ classroom: 'org/w26', show_pages: false }, ctx);
+    expect(ctx.auditIncomplete).toBe(true);
   });
 
   it('constrains theme to the known keys in the schema', () => {
@@ -311,7 +355,7 @@ describe('classroom_settings_update', () => {
     });
   });
 
-  it('persists final_grades_released, release and hide, and audits the field', async () => {
+  it('persists final_grades_released, release and hide, with its actor', async () => {
     const schema = z.object(classroomSettingsUpdateTool.inputSchema);
     const base = { classroom: 'org/w26' };
     expect(schema.safeParse({ ...base, final_grades_released: true }).success).toBe(true);
@@ -329,30 +373,23 @@ describe('classroom_settings_update', () => {
         updated_fields: ['final_grades_released'],
         settings: { final_grades_released: released },
       });
-      expect(mocks.auditCreate).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          classroom_id: 'class-1',
-          resource_type: 'SETTINGS',
-          action: 'UPDATE',
-          data: {
-            tool: 'classroom_settings_update',
-            via: 'mcp',
-            client_id: 'c',
-            fields: ['final_grades_released'],
-          },
-        })
+      expect(mocks.updateClassroomSettings).toHaveBeenLastCalledWith(
+        'class-1',
+        { settings: { final_grades_released: released } },
+        actorFor('classroom_settings_update')
       );
     }
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('writes every call as its own row (no dedup), so on then off keeps both', async () => {
+  it('hands every call to the service, so on then off are two saves', async () => {
     for (const enabled of [true, false]) {
       await classroomSettingsUpdateTool.handler(
         { classroom: 'org/w26', syllabus_bot_enabled: enabled },
         CTX
       );
     }
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.updateClassroomSettings).toHaveBeenCalledTimes(2);
   });
 
   it('is an owner-only, non-destructive write, as the web Settings page is', () => {
@@ -509,20 +546,15 @@ describe('classroom_settings_update — Ask Moji instructions', () => {
     expect(schema.safeParse({ ...base, syllabus_bot_instructions: 5 }).success).toBe(false);
   });
 
-  it('audits the field name only, never the instructions text', async () => {
+  it('leaves the row to the service, whose actor carries no instructions text', async () => {
     await classroomSettingsUpdateTool.handler(
       { classroom: 'org/w26', syllabus_bot_instructions: SECRET, syllabus_bot_enabled: true },
       CTX
     );
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    const row = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
-    expect(row.data).toEqual({
-      tool: 'classroom_settings_update',
-      via: 'mcp',
-      client_id: 'c',
-      fields: ['syllabus_bot_enabled', 'syllabus_bot_instructions'],
-    });
-    expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('lecture notes');
+    const [, , actor] = mocks.updateClassroomSettings.mock.calls[0];
+    expect(actor).toEqual(actorFor('classroom_settings_update'));
+    expect(JSON.stringify(actor)).not.toContain('lecture notes');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('is owner only, and still says model and effort are managed in the web app', () => {

@@ -234,8 +234,8 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
   });
 
   it('replacing the scale orphans the quiz adjustment; the AI grade counts and it is flagged', async () => {
-    await emojiMapping.replaceScale(classX, SCORE_EMOJI_MAPPINGS);
-    await emojiMapping.replaceScale(classY, SCORE_EMOJI_MAPPINGS);
+    await emojiMapping.replaceScale(classX, SCORE_EMOJI_MAPPINGS, null);
+    await emojiMapping.replaceScale(classY, SCORE_EMOJI_MAPPINGS, null);
     const scaleX = await emojiMapping.findScaleByClassroomId(classX);
     expect(Object.keys(scaleX).sort()).toEqual(SCORE_EMOJI_MAPPINGS.map(m => m.emoji).sort());
 
@@ -371,7 +371,7 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
     for (let i = 0; i < 15; i++) {
       await prisma.emojiMapping.deleteMany({ where: { classroom_id: classZ } });
       await Promise.all([
-        emojiMapping.replaceScale(classZ, DEFAULT_EMOJI_MAPPINGS),
+        emojiMapping.replaceScale(classZ, DEFAULT_EMOJI_MAPPINGS, null),
         emojiMapping.quizScaleForClassroom(classZ),
         emojiMapping.quizScaleForClassroom(classZ),
       ]);

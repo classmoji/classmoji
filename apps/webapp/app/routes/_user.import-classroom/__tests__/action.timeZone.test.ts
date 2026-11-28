@@ -74,7 +74,12 @@ describe('import-classroom initial time zone', () => {
   it("keeps an existing classroom's zone and seeds the browser zone on a new one", async () => {
     await importWith('america/new_york');
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
-    expect(mocks.updateSettings).toHaveBeenCalledWith('new', { timezone: 'America/New_York' });
+    // Part of the import, whose own row records it: no settings row (actor null).
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'new',
+      { timezone: 'America/New_York' },
+      null
+    );
   });
 
   it('seeds nothing when the browser sent no zone, or an invalid one', async () => {

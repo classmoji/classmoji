@@ -36,9 +36,11 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadPageInClassroom,
+  noteServiceAudit,
   ok,
   OWNER_ONLY,
   requireClassroomCtx,
+  serviceActor,
   viewingAs,
   writeAudit,
 } from './shared.ts';
@@ -256,35 +258,28 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       throw new ToolError('invalid_params', 'Provide at least one setting to update');
     }
 
-    // Settings BEFORE the classroom row: `updateSettings` refuses a Pro-only
-    // field on an unentitled classroom, and doing it first means that refusal
-    // cannot leave a committed `name` change behind with no audit entry.
-    if (Object.keys(settings).length > 0) {
-      try {
-        await ClassmojiService.classroom.updateSettings(classroom.classroomId, settings);
-      } catch (error: unknown) {
-        if (error instanceof ClassroomSettingsEntitlementError) {
-          throw new ToolError('forbidden', error.message, 'PRO_REQUIRED');
-        }
-        throw error;
+    // One save, recorded by the service as one row when something changed:
+    // settings BEFORE the classroom row (`updateSettings`' Pro refusal throws
+    // before `name` is written), and the Classroom row itself `name` ONLY,
+    // mirroring the web route's PROFILE_FIELDS whitelist (slug is the key in
+    // every URL and two HMAC credentials; git_org_id would move the classroom
+    // to another org).
+    try {
+      const { audit } = await ClassmojiService.classroom.updateClassroomSettings(
+        classroom.classroomId,
+        {
+          ...(Object.keys(settings).length > 0 ? { settings } : {}),
+          ...(args.name !== undefined ? { classroom: { name: args.name } } : {}),
+        },
+        serviceActor(ctx, 'classroom_settings_update')
+      );
+      noteServiceAudit(ctx, audit);
+    } catch (error: unknown) {
+      if (error instanceof ClassroomSettingsEntitlementError) {
+        throw new ToolError('forbidden', error.message, 'PRO_REQUIRED');
       }
+      throw error;
     }
-
-    // The Classroom row itself: `name` ONLY, mirroring the web route's
-    // PROFILE_FIELDS whitelist (slug is the key in every URL and two HMAC
-    // credentials; git_org_id would move the classroom to another org).
-    if (args.name !== undefined) {
-      await ClassmojiService.classroom.update(classroom.classroomId, { name: args.name });
-    }
-
-    // Every call is its own row: switching a setting on and off again records
-    // both changes.
-    await writeAudit(ctx, {
-      resource_type: 'SETTINGS',
-      resource_id: classroom.classroomId,
-      action: 'UPDATE',
-      data: { tool: 'classroom_settings_update', fields: changed },
-    });
 
     // Echo the validated values we just wrote — never the service return, which
     // carries the raw settings row (API keys included).

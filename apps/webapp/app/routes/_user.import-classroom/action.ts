@@ -57,9 +57,12 @@ export const action = checkAuth(async ({ request, user }) => {
       try {
         const current = await ClassmojiService.classroom.getTimeZone(r.classroomId);
         if (!current) {
-          await ClassmojiService.classroom.updateSettings(r.classroomId, {
-            timezone: initialTimeZone,
-          });
+          // Part of the import, which its own row below records.
+          await ClassmojiService.classroom.updateSettings(
+            r.classroomId,
+            { timezone: initialTimeZone },
+            null
+          );
         }
       } catch (error: unknown) {
         console.error('Initial time zone for imported classroom failed:', error);

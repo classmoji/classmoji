@@ -52,6 +52,11 @@ const mocks = vi.hoisted(() => ({
   submittedUserIdsByFormIds: vi.fn(),
   openForGradebook: vi.fn(),
   findTeamsByClassroomId: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -817,8 +822,16 @@ describe('grades action — releasing final grades', () => {
     mocks.requireClassroomAdmin.mockResolvedValue(owner);
   };
 
-  it('lets the owner release them, for the whole class, and audits it', async () => {
+  const releaseActor = (tool: string, impersonatedBy: string | null = null) => ({
+    userId: 'owner-1',
+    role: 'OWNER',
+    tool,
+    impersonatedBy,
+  });
+
+  it('lets the owner release them, for the whole class, recorded by the settings service', async () => {
     grantOwner();
+    mocks.requestImpersonator.mockResolvedValue(null);
 
     const result = await route.action(actionArgs(RELEASE));
 
@@ -828,37 +841,33 @@ describe('grades action — releasing final grades', () => {
       CLASS_SLUG,
       expect.objectContaining({ resourceType: 'GRADES', action: 'release_final_grades' })
     );
-    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith('class-1', {
-      final_grades_released: true,
-    });
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
-      request: sameObject(routeRequest),
-      classroomId: 'class-1',
-      userId: 'owner-1',
-      role: 'OWNER',
-      action: 'UPDATE',
-      resourceType: 'GRADES',
-      resourceId: 'class-1',
-      metadata: { tool: 'web:grades.release_final_grades', final_grades_released: true },
-    });
+    // The GRADES row this intent always wrote, now written by the service.
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      { final_grades_released: true },
+      releaseActor('web:grades.release_final_grades'),
+      { resourceType: 'GRADES', data: { final_grades_released: true } }
+    );
+    expect(mocks.requestImpersonator).toHaveBeenCalledWith(sameObject(routeRequest));
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
     // No letter grade is touched.
     expect(mocks.updateInClassroom).not.toHaveBeenCalled();
   });
 
-  it('lets the owner hide them again, and audits that too', async () => {
+  it('lets the owner hide them again, under View as too, recorded the same way', async () => {
     grantOwner();
+    mocks.requestImpersonator.mockResolvedValue('admin-1');
 
     const result = await route.action(actionArgs(HIDE));
 
     expect(result).toEqual({ success: true, final_grades_released: false });
-    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith('class-1', {
-      final_grades_released: false,
-    });
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: { tool: 'web:grades.hide_final_grades', final_grades_released: false },
-      })
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith(
+      'class-1',
+      { final_grades_released: false },
+      releaseActor('web:grades.hide_final_grades', 'admin-1'),
+      { resourceType: 'GRADES', data: { final_grades_released: false } }
     );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it.each([['TEACHER'], ['ASSISTANT']])('refuses a %s: nothing written or audited', async role => {

@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_MODELS } from '@classmoji/utils/ai-models';
 
 const mocks = vi.hoisted(() => ({
+  requestImpersonator: vi.fn(),
   assertClassroomAccess: vi.fn(),
   updateSettings: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
@@ -21,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   canUseQuizzes: vi.fn(),
   getAllModels: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -94,9 +99,19 @@ const load = () =>
     request: new Request('http://x/admin/cs52/settings/ai'),
   } as never);
 
+/** The actor the route hands the settings service. */
+const ACTOR = {
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool: 'web:settings.ai',
+  impersonatedBy: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requestImpersonator.mockResolvedValue(null);
   mocks.assertClassroomAccess.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
@@ -181,23 +196,31 @@ describe('saveLLMSettings: models', () => {
       mocks.updateSettings.mockClear();
       const result = await save({ [field]: model });
       expect(result.error).toBeUndefined();
-      expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { [field]: model });
+      expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { [field]: model }, ACTOR);
     }
   });
 
   it('stores a dated allow-listed model, trimmed', async () => {
     await save({ code_aware_model: ' claude-sonnet-5-5-20260901 ' });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      code_aware_model: 'claude-sonnet-5-5-20260901',
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        code_aware_model: 'claude-sonnet-5-5-20260901',
+      },
+      ACTOR
+    );
   });
 
   it('still puts a cleared model back to the default', async () => {
     await save({ llm_model: null, exploration_model: '', syllabus_bot_model: null });
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
-      llm_model: null,
-      exploration_model: null,
-      syllabus_bot_model: null,
-    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      'c1',
+      {
+        llm_model: null,
+        exploration_model: null,
+        syllabus_bot_model: null,
+      },
+      ACTOR
+    );
   });
 });

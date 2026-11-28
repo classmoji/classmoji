@@ -7,6 +7,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { quizAttemptGrade, quizStanding, type GradedItem } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
+import { auditActor } from '~/utils/auditActor.server';
 import {
   requireClassroomAdmin,
   requireClassroomStaff,
@@ -455,7 +456,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
  * own owner gate (a refused attempt is audited by the gate).
  */
 const setFinalGradesReleased = async (request: Request, classSlug: string, released: unknown) => {
-  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const gate = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'GRADES',
     action: 'release_final_grades',
   });
@@ -463,23 +464,18 @@ const setFinalGradesReleased = async (request: Request, classSlug: string, relea
     return { error: 'Invalid request.' };
   }
 
-  await ClassmojiService.classroom.updateSettings(classroom.id, {
-    final_grades_released: released,
-  });
-
-  await addClassroomAuditLog({
-    request,
-    classroomId: classroom.id,
-    userId,
-    role: membership!.role,
-    action: 'UPDATE',
-    resourceType: 'GRADES',
-    resourceId: classroom.id,
-    metadata: {
-      tool: released ? 'web:grades.release_final_grades' : 'web:grades.hide_final_grades',
-      final_grades_released: released,
-    },
-  });
+  // The settings service records the change on the GRADES row this intent
+  // always wrote (none when the setting already had that value).
+  await ClassmojiService.classroom.updateSettings(
+    gate.classroom.id,
+    { final_grades_released: released },
+    await auditActor(
+      request,
+      gate,
+      released ? 'web:grades.release_final_grades' : 'web:grades.hide_final_grades'
+    ),
+    { resourceType: 'GRADES', data: { final_grades_released: released } }
+  );
 
   return { success: true, final_grades_released: released };
 };
