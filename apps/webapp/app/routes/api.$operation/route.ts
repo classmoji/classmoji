@@ -7,6 +7,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
 import { mutationRefusal } from '~/utils/mutationRefusal.server';
 import { requestImpersonator } from '@classmoji/auth/request-impersonator';
+import { auditActor } from '~/utils/auditActor.server';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -219,12 +220,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       // classroom record would be re-resolved by the auth layer, so the refund
       // below could be issued against a row in a classroom the caller was never
       // authorized for.
-      const {
-        userId: _userId,
-        membership: _membership,
-        isResourceOwner,
-        accessGrantedVia: _accessGrantedVia,
-      } = await assertClassroomAccess({
+      const gate = await assertClassroomAccess({
         request,
         classroomId: storedTransaction.classroom_id,
         allowedRoles: ['OWNER'], // OWNER can cancel any transaction
@@ -236,6 +232,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         resourceOwnerId: storedTransaction.student_id,
         selfAccessRoles: ['STUDENT'], // Students can cancel their own
       });
+      const { isResourceOwner } = gate;
 
       // Only a purchase that is still standing can be cancelled, and only
       // once: the service flips it and writes the refund in one transaction,
@@ -243,8 +240,12 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       if (storedTransaction.type !== 'PURCHASE' || storedTransaction.is_cancelled) {
         return data({ error: 'This transaction cannot be cancelled.' }, { status: 400 });
       }
+      // The service records the cancel (TOKEN_TRANSACTION, UPDATE) for the
+      // person the gate admitted, once the refund has committed. Built before
+      // any token moves.
+      const actor = await auditActor(request, gate, 'web:tokens.cancel');
       try {
-        await ClassmojiService.token.cancelPurchase(storedTransaction.id);
+        await ClassmojiService.token.cancelPurchase(storedTransaction.id, { actor });
       } catch (error: unknown) {
         console.error('cancelTokenTransaction failed:', error);
         return data({ error: 'This transaction cannot be cancelled.' }, { status: 400 });

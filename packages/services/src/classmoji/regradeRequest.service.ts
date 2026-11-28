@@ -19,8 +19,9 @@
  * (`clearStaleGradesInScope` / `clearGradesForOpenRegradeRequest` in
  * helper/index.ts), which reads repo submissions only. Audited here:
  * `regrade_create` and `regrade_resolve` (resource REGRADE_REQUEST, with the
- * caller's `data.tool`), for repo resolutions too (`resolveRepo`); emails
- * stay with the caller (the tasks).
+ * caller's `data.tool`), for repo requests too (`create`, for the actor the
+ * `request_regrade` payload carries, and `resolveRepo`); emails stay with the
+ * caller (the tasks).
  *
  * LOCK ORDER: the attempt row before the request row, as deleting an attempt
  * (which cascades to its requests) takes them.
@@ -61,19 +62,32 @@ import {
   type QuizGradeActor,
 } from './quizGradeAdjust.service.ts';
 
+/**
+ * A student's regrade/resubmit request on a repo submission (the
+ * `request_regrade` run, from the web form and MCP `regrade_create`). Once the
+ * request is saved, one audit row is written for `actor` (REGRADE_REQUEST,
+ * CREATE, on the request: the submission); `actor: null` writes none. A failed
+ * write is logged and reported in `audit`, and the request stands. The
+ * assigned graders get the in-app notice.
+ *
+ * NOTE: callers check that the submission is the student's own.
+ */
 export const create = async ({
   classroom_id,
   git_repo_assignment_id,
   student_id,
   student_comment,
   previous_grade,
+  actor,
 }: {
   classroom_id: string;
   git_repo_assignment_id: string;
   student_id: string;
   student_comment?: string | null;
   previous_grade?: string[];
-}): Promise<RegradeRequest> => {
+  /** Who the request is recorded for; null writes no audit row. */
+  actor: audit.AuditActor | null;
+}): Promise<{ request: RegradeRequest; audit: audit.ServiceAudit }> => {
   const request = await getPrisma().regradeRequest.create({
     data: {
       classroom_id,
@@ -82,6 +96,15 @@ export const create = async ({
       student_comment,
       previous_grade,
     },
+  });
+
+  // After the save: a failed write is reported, never thrown.
+  const recorded = await audit.recordForActor(actor, {
+    classroomId: request.classroom_id,
+    resourceType: 'REGRADE_REQUEST',
+    resourceId: request.id,
+    action: 'CREATE',
+    data: { git_repo_assignment_id },
   });
 
   await notificationService.runSafely('regrade request notification', async () => {
@@ -109,7 +132,7 @@ export const create = async ({
     }
   });
 
-  return request;
+  return { request, audit: recorded };
 };
 
 export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {

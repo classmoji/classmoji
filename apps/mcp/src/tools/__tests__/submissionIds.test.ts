@@ -244,7 +244,10 @@ describe('extension_purchase with a numeric id', () => {
       id: NUMERIC_ID,
       git_repo: { classroom_id: 'class-1', student_id: 'stu-1' },
     });
-    mocks.purchaseExtensionHours.mockResolvedValue({ id: 'tx-1', amount: -4 });
+    mocks.purchaseExtensionHours.mockResolvedValue({
+      transaction: { id: 'tx-1', amount: -4 },
+      audit: { written: 1, missed: 0 },
+    });
 
     await extensionPurchaseTool.handler(
       { classroom: 'cs-org/w26', git_repo_assignment_id: NUMERIC_ID, hours: 2 },

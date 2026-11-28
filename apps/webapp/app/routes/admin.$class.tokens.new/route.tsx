@@ -10,6 +10,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher, useRouteDrawer } from '~/hooks';
 import Tasks from '@classmoji/tasks';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import type { Route } from './+types/route';
 
 const InlineRow = ({
@@ -269,14 +270,11 @@ const studentIdOf = (selection: unknown): string | null => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const {
-    classroom,
-    userId: _userId,
-    membership,
-  } = await requireClassroomAdmin(request, classSlug!, {
+  const gate = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TOKEN_GRANT',
     action: 'assign_tokens_bulk',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -309,6 +307,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         throw new Error('No students of this class were selected for token assignment');
       }
 
+      // Each run records its grant for the owner who sent the form (one
+      // TOKEN_GRANT row per student, written by token.grantTokens); built
+      // before any run is queued.
+      const actor = await auditActor(request, gate, 'web:tokens.grant');
       const payloads = recipients.map(student => ({
         payload: {
           student,
@@ -316,6 +318,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           amount: parseInt(num_tokens, 10),
           // Omit when blank; sending null breaks the non-nullable description column.
           description: description || undefined,
+          auditActor: actor,
         },
         options: {
           tags: [`session_${sessionId}`],

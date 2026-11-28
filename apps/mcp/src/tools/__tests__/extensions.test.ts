@@ -3,8 +3,9 @@
  * path (assignment_id), the uniform not_found for every quiz a student may not
  * see, the REPO pointer, who may buy on which submission (own repo or a team
  * they are on; anything else is the not-found an unknown id gets), the
- * mapping of the service's refusals, the audit row,
- * and the description's byte budget. `@classmoji/services` is mocked
+ * mapping of the service's refusals, the actor passed to the service (which
+ * writes the TOKEN_PURCHASE row; the tool writes none and reports a missed
+ * one as `audit_incomplete`), and the description's byte budget. `@classmoji/services` is mocked
  * factory-style; the messages fed to the error mapping are the ones
  * token.purchaseQuizExtensionHours / updateExtension actually throw.
  */
@@ -54,6 +55,17 @@ const QUIZ_ASSIGNMENT = '11111111-1111-4111-8111-111111111111';
 const REPO_ASSIGNMENT = '22222222-2222-4222-8222-222222222222';
 const SUBMISSION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const FUTURE = new Date(Date.now() + 24 * 3_600_000);
+
+/** The actor the tool hands the token service: the caller, as `serviceActor` builds it. */
+const ACTOR = {
+  userId: 'stu-1',
+  role: 'STUDENT',
+  tool: 'extension_purchase',
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+};
+const WRITTEN = { written: 1, missed: 0 };
 
 const CTX: ToolContext = {
   viewer: { userId: 'stu-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -111,10 +123,8 @@ beforeEach(() => {
   mocks.isTeamMember.mockResolvedValue(false);
   mocks.assignmentFindById.mockResolvedValue(quizAssignment());
   mocks.purchaseQuizExtensionHours.mockResolvedValue({
-    id: 'tx-1',
-    hours_purchased: 2,
-    amount: -4,
-    balance_after: 6,
+    transaction: { id: 'tx-1', hours_purchased: 2, amount: -4, balance_after: 6 },
+    audit: WRITTEN,
   });
 });
 
@@ -156,11 +166,13 @@ describe('extension_purchase on a quiz (assignment_id)', () => {
   it('buys hours for the caller, in the authorized classroom, and says what it bought', async () => {
     const result = parse(await buyQuiz());
 
+    expect(mocks.purchaseQuizExtensionHours).toHaveBeenCalledTimes(1);
     expect(mocks.purchaseQuizExtensionHours).toHaveBeenCalledWith({
       classroomId: 'class-1',
       studentId: 'stu-1',
       assignmentId: QUIZ_ASSIGNMENT,
       hours: 2,
+      actor: ACTOR,
     });
     expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -170,26 +182,49 @@ describe('extension_purchase on a quiz (assignment_id)', () => {
     });
   });
 
-  it('writes one TOKEN_PURCHASE audit row naming the assignment', async () => {
-    await buyQuiz();
+  it('writes no audit row of its own: the service records the purchase for its actor', async () => {
+    const ctx = { ...CTX, auditIncomplete: false } as ToolContext;
+    await extensionPurchaseTool.handler(
+      { classroom: 'org/w26', assignment_id: QUIZ_ASSIGNMENT, hours: 2 },
+      ctx
+    );
 
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toEqual({
-      user_id: 'stu-1',
-      classroom_id: 'class-1',
-      role: 'STUDENT',
-      resource_type: 'TOKEN_PURCHASE',
-      resource_id: 'tx-1',
-      action: 'CREATE',
-      data: {
-        tool: 'extension_purchase',
-        via: 'mcp',
-        client_id: 'c',
-        assignment_id: QUIZ_ASSIGNMENT,
-        hours: 2,
-        amount: -4,
-      },
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(ctx.auditIncomplete).toBe(false);
+  });
+
+  it('passes the viewing admin under View as', async () => {
+    const ctx = {
+      ...CTX,
+      viewer: { ...CTX.viewer, impersonatedBy: 'admin-1' },
+    } as unknown as ToolContext;
+    await extensionPurchaseTool.handler(
+      { classroom: 'org/w26', assignment_id: QUIZ_ASSIGNMENT, hours: 2 },
+      ctx
+    );
+
+    expect(mocks.purchaseQuizExtensionHours).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { ...ACTOR, impersonatedBy: 'admin-1' } })
+    );
+  });
+
+  it('marks the call audit_incomplete when the service could not write its row', async () => {
+    mocks.purchaseQuizExtensionHours.mockResolvedValue({
+      transaction: { id: 'tx-1', hours_purchased: 2, amount: -4, balance_after: 6 },
+      audit: { written: 0, missed: 1 },
     });
+    const ctx = { ...CTX } as ToolContext;
+    const result = parse(
+      await extensionPurchaseTool.handler(
+        { classroom: 'org/w26', assignment_id: QUIZ_ASSIGNMENT, hours: 2 },
+        ctx
+      )
+    );
+
+    // The normal answer; the registry adds `audit_incomplete` from the mark.
+    expect(result).toMatchObject({ success: true, transaction: { id: 'tx-1' } });
+    expect(ctx.auditIncomplete).toBe(true);
+    expect(mocks.purchaseQuizExtensionHours).toHaveBeenCalledTimes(1);
   });
 
   it('answers every quiz the student may not see with the same not_found as an unknown id', async () => {
@@ -319,35 +354,57 @@ describe('extension_purchase on a submission (git_repo_assignment_id)', () => {
       git_repo: { classroom_id: 'class-1', student_id: 'stu-1' },
     });
     mocks.purchaseExtensionHours.mockResolvedValue({
-      id: 'tx-2',
-      hours_purchased: 1,
-      amount: -2,
-      balance_after: 3,
+      transaction: { id: 'tx-2', hours_purchased: 1, amount: -2, balance_after: 3 },
+      audit: WRITTEN,
     });
+    const ctx = { ...CTX } as ToolContext;
 
     const result = parse(
       await extensionPurchaseTool.handler(
         { classroom: 'org/w26', git_repo_assignment_id: SUBMISSION, hours: 1 },
-        CTX
+        ctx
       )
     );
 
+    expect(mocks.purchaseExtensionHours).toHaveBeenCalledTimes(1);
     expect(mocks.purchaseExtensionHours).toHaveBeenCalledWith({
       classroomId: 'class-1',
       studentId: 'stu-1',
       gitRepoAssignmentId: SUBMISSION,
       hours: 1,
+      actor: ACTOR,
     });
     expect(mocks.purchaseQuizExtensionHours).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: true, git_repo_assignment_id: SUBMISSION });
-    expect(mocks.auditCreate.mock.calls[0][0].data).toEqual({
-      tool: 'extension_purchase',
-      via: 'mcp',
-      client_id: 'c',
+    expect(result).toEqual({
+      success: true,
       git_repo_assignment_id: SUBMISSION,
-      hours: 1,
-      amount: -2,
+      transaction: { id: 'tx-2', hours_purchased: 1, amount: -2, balance_after: 3 },
     });
+    // The service records the purchase; the tool writes no row of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(ctx.auditIncomplete).toBeFalsy();
+  });
+
+  it('marks a submission purchase audit_incomplete when the service missed its row', async () => {
+    mocks.graFindById.mockResolvedValue({
+      id: SUBMISSION,
+      git_repo: { classroom_id: 'class-1', student_id: 'stu-1' },
+    });
+    mocks.purchaseExtensionHours.mockResolvedValue({
+      transaction: { id: 'tx-2', hours_purchased: 1, amount: -2, balance_after: 3 },
+      audit: { written: 0, missed: 1 },
+    });
+    const ctx = { ...CTX } as ToolContext;
+
+    const result = parse(
+      await extensionPurchaseTool.handler(
+        { classroom: 'org/w26', git_repo_assignment_id: SUBMISSION, hours: 1 },
+        ctx
+      )
+    );
+    expect(result).toMatchObject({ success: true, transaction: { id: 'tx-2' } });
+    expect(ctx.auditIncomplete).toBe(true);
+    expect(mocks.purchaseExtensionHours).toHaveBeenCalledTimes(1);
   });
 
   it('a quiz refusal message on the submission path is not laundered into not_found', async () => {
@@ -390,10 +447,8 @@ describe('extension_purchase: whose submission (own repo or a team the caller is
 
   beforeEach(() => {
     mocks.purchaseExtensionHours.mockResolvedValue({
-      id: 'tx-3',
-      hours_purchased: 2,
-      amount: -6,
-      balance_after: 94,
+      transaction: { id: 'tx-3', hours_purchased: 2, amount: -6, balance_after: 94 },
+      audit: WRITTEN,
     });
   });
 
@@ -407,6 +462,7 @@ describe('extension_purchase: whose submission (own repo or a team the caller is
       studentId: 'stu-1',
       gitRepoAssignmentId: SUBMISSION,
       hours: 2,
+      actor: ACTOR,
     });
   });
 
