@@ -10,18 +10,21 @@
  *             `writeAuditOrFail`), directly or through a function of its own
  *             file that it calls.
  *   service — a shared service writes the row because the tool passes an actor
- *             (`fn` names it; its rows are pinned by its own tests in
- *             @classmoji/services). The handler calls `fn`; a grading tool
- *             (`actor: 'serviceActor'`) builds the actor with `serviceActor` and
- *             writes no row itself, while the services that wrote their own
- *             rows before (`actor: 'own'`) take the caller in their own shape.
- *   both    — one mode is `service`, another `tool`; both checks run.
+ *             (`fn` names it as the handler calls it, `<object>.<function>`;
+ *             its rows are pinned by its own tests in @classmoji/services). The
+ *             handler calls `fn` and writes no row itself (`writeAudit` /
+ *             `writeAuditOrFail`), so the change is not recorded twice. A
+ *             grading tool (`actor: 'serviceActor'`) builds the actor with
+ *             `serviceActor`; the services that wrote their own rows before
+ *             (`actor: 'own'`) take the caller in their own shape.
+ *   both    — one mode is `service` (`fn`, `actor` as above), another `tool`:
+ *             the handler calls `fn` and also writes a row itself.
  *   exempt  — writes no row, for the reason given.
  *
  * The `tool` and `service` checks read the handler's source (and the bodies of
- * the functions of its own file that it calls, two levels down): a check of
- * the text, not of a run, but enough that a write tool which never reaches a
- * writer fails here.
+ * the functions of its own file that it calls, two levels down), comments
+ * left out: a check of the text, not of a run, but enough that a write tool
+ * which never reaches a writer, or writes a second row, fails here.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -34,10 +37,11 @@ vi.mock('@classmoji/database', async () =>
   (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
 );
 
+type Actor = 'serviceActor' | 'own';
 type Entry =
   | { kind: 'tool' }
-  | { kind: 'service'; fn: string; actor: 'serviceActor' | 'own' }
-  | { kind: 'both'; fn: string }
+  | { kind: 'service'; fn: string; actor: Actor }
+  | { kind: 'both'; fn: string; actor: Actor }
   | { kind: 'exempt'; reason: string };
 
 const TOOL: Entry = { kind: 'tool' };
@@ -53,7 +57,11 @@ const WRITES: Record<string, Entry> = {
   grader_assign_bulk: grading('gitRepoAssignmentGrader.assignGradersToAssignment'),
   // Repo mode: gitRepoAssignment.setLateOverrideInClassroom; quiz mode writes
   // its QUIZ_LATE_WAIVER row itself.
-  submission_late_override: { kind: 'both', fn: 'setLateOverrideInClassroom' },
+  submission_late_override: {
+    kind: 'both',
+    fn: 'gitRepoAssignment.setLateOverrideInClassroom',
+    actor: 'serviceActor',
+  },
   // quizGradeAdjust writes the QUIZ_ATTEMPT row inside its change, for the
   // actor the tool hands quizAttempt.adjust / revert.
   quiz_attempt_adjust: { kind: 'service', fn: 'quizAttempt.adjust', actor: 'own' },
@@ -66,6 +74,10 @@ const WRITES: Record<string, Entry> = {
     fn: 'classroomLifecycle.setLifecycle',
     actor: 'own',
   },
+  // A quiz attempt: regradeRequest.createForQuizAttempt writes the
+  // REGRADE_REQUEST row for the caller; a submission: the tool writes it after
+  // the request_regrade run.
+  regrade_create: { kind: 'both', fn: 'regradeRequest.createForQuizAttempt', actor: 'own' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -121,7 +133,6 @@ const WRITES: Record<string, Entry> = {
   quiz_update: TOOL,
   quiz_publish: TOOL,
   quiz_delete: TOOL,
-  regrade_create: TOOL,
   repo_contributions_calculate: TOOL,
   repo_publish: TOOL,
   repo_sync: TOOL,
@@ -160,10 +171,136 @@ const WRITES: Record<string, Entry> = {
   deck_cursor_set: { kind: 'exempt', reason: 'a live cursor is presence only: nothing is stored' },
 };
 
+/** Words after which a `/` starts a regular expression, not a division. */
+const REGEX_AFTER = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'case',
+  'in',
+  'of',
+  'delete',
+  'void',
+  'throw',
+  'new',
+  'await',
+  'yield',
+  'else',
+  'do',
+]);
+
+/**
+ * `source` with its `//` and `/* *\/` comments removed. Strings, template
+ * literals (their `${}` parts read as code) and regular expressions are kept
+ * as written; line breaks are kept, so line-anchored searches still work.
+ */
+function stripComments(source: string): string {
+  let out = '';
+  let i = 0;
+  let depth = 0;
+  /** For each open `${`, the brace depth it started at. */
+  const templates: number[] = [];
+  /** The last character of code written, ignoring white space. */
+  let prev = '';
+  /** The last word written, when `prev` ends one. */
+  let word = '';
+  const wordAt = /[A-Za-z_$][\w$]*/y;
+  const n = source.length;
+
+  /** Copy a template chunk from `i` (just past a backtick or a `}`) to its end. */
+  const templateChunk = () => {
+    while (i < n && source[i] !== '`') {
+      if (source[i] === '\\') {
+        out += source.slice(i, i + 2);
+        i += 2;
+      } else if (source[i] === '$' && source[i + 1] === '{') {
+        out += '${';
+        i += 2;
+        templates.push(depth);
+        prev = '{';
+        word = '';
+        return;
+      } else {
+        out += source[i++];
+      }
+    }
+    out += source[i++] ?? '';
+    prev = '`';
+    word = '';
+  };
+
+  while (i < n) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < n && source[i] !== '\n') i++;
+    } else if (c === '/' && next === '*') {
+      const close = source.indexOf('*/', i + 2);
+      const end = close === -1 ? n : close + 2;
+      out += ` ${source.slice(i, end).replace(/[^\n]/g, '')}`;
+      i = end;
+    } else if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < n && source[j] !== c && source[j] !== '\n') j += source[j] === '\\' ? 2 : 1;
+      out += source.slice(i, j + 1);
+      i = j + 1;
+      prev = c;
+      word = '';
+    } else if (c === '`') {
+      out += c;
+      i++;
+      templateChunk();
+    } else if (c === '}' && templates.length > 0 && templates.at(-1) === depth) {
+      templates.pop();
+      out += c;
+      i++;
+      templateChunk();
+    } else if (
+      c === '/' &&
+      (prev === '' || /[(,=:[!&|?{};+\-*%<>~^]/.test(prev) || REGEX_AFTER.has(word))
+    ) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < n && source[j] !== '\n') {
+        if (source[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        else if (source[j] === '/' && !inClass) break;
+        j++;
+      }
+      j++;
+      while (j < n && /[a-z]/i.test(source[j])) j++;
+      out += source.slice(i, j);
+      i = j;
+      prev = 'a';
+      word = '';
+    } else if (/[A-Za-z_$]/.test(c)) {
+      wordAt.lastIndex = i;
+      word = wordAt.exec(source)?.[0] ?? c;
+      out += word;
+      i += word.length;
+      prev = 'a';
+    } else {
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      out += c;
+      i++;
+      if (!/\s/.test(c)) {
+        prev = c;
+        word = '';
+      }
+    }
+  }
+  return out;
+}
+
 const TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../tools');
 const SOURCES = readdirSync(TOOLS_DIR)
   .filter(file => file.endsWith('.ts'))
-  .map(file => readFileSync(path.join(TOOLS_DIR, file), 'utf8'));
+  .map(file => stripComments(readFileSync(path.join(TOOLS_DIR, file), 'utf8')));
 
 /** The source of the tools file that defines the tool named `tool`. */
 function sourceOf(tool: string): string {
@@ -186,11 +323,11 @@ function bodyOf(source: string, name: string): string | null {
 
 /**
  * The handler's source with the bodies of the functions of its own file that
- * it calls, two levels down.
+ * it calls, two levels down, comments left out.
  */
 function reachableSource(def: ToolDefinition<never>): string {
   const file = sourceOf(def.name);
-  let text = def.handler.toString();
+  let text = stripComments(def.handler.toString());
   const seen = new Set<string>();
   for (let depth = 0; depth < 2; depth++) {
     const called = [...text.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)].map(m => m[1]);
@@ -204,11 +341,17 @@ function reachableSource(def: ToolDefinition<never>): string {
   return text;
 }
 
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * A call of `name`, as written or as the test transform rewrites an imported
- * one (`(0, __import__.name)(…)`).
+ * A call of `name` as written: `object.fn(` for a member (preceded by nothing
+ * that would make it part of a longer name), or a bare `fn(`, also as the test
+ * transform rewrites an imported one (`(0, __import__.fn)(…)`).
  */
-const calls = (source: string, name: string) => new RegExp(`\\b${name}\\)?\\s*\\(`).test(source);
+const calls = (source: string, name: string) =>
+  name.includes('.')
+    ? new RegExp(`(?<![\\w$])${escape(name)}\\s*\\(`).test(source)
+    : new RegExp(`(?<![\\w$])${escape(name)}\\)?\\s*\\(`).test(source);
 const writesItsOwnRow = (source: string) =>
   calls(source, 'writeAudit') || calls(source, 'writeAuditOrFail');
 
@@ -221,6 +364,36 @@ beforeAll(async () => {
   writes = listToolDefinitions().filter(def => def.scope === 'write');
 }, 60_000);
 
+describe('the source check', () => {
+  it('leaves comments out and keeps strings, templates and regular expressions', () => {
+    const source = [
+      'const url = "https://example.test/a"; // writeAudit(ctx)',
+      '/* HelperService.addGradeToGitRepoAssignment(x) */ const re = /a\\/\\/b/g;',
+      'const t = `x ${y /* writeAudit( */} // not a comment`;',
+      'call(a / b); // writeAuditOrFail(',
+    ].join('\n');
+    const stripped = stripComments(source);
+    expect(stripped).toContain('"https://example.test/a"');
+    expect(stripped).toContain('/a\\/\\/b/g');
+    expect(stripped).toContain('// not a comment`');
+    expect(stripped).toContain('call(a / b);');
+    expect(stripped.split('\n')).toHaveLength(4);
+    expect(calls(stripped, 'writeAudit')).toBe(false);
+    expect(calls(stripped, 'writeAuditOrFail')).toBe(false);
+    expect(calls(stripped, 'HelperService.addGradeToGitRepoAssignment')).toBe(false);
+  });
+
+  it('matches the whole call: the object, the function and nothing longer', () => {
+    const source = 'await __vi_import_0__.ClassmojiService.quizAttempt.adjust({ id });';
+    expect(calls(source, 'quizAttempt.adjust')).toBe(true);
+    expect(calls(source, 'attempt.adjust')).toBe(false);
+    expect(calls(source, 'quizAttempt.adjus')).toBe(false);
+    expect(calls(source, 'regradeRequest.adjust')).toBe(false);
+    expect(calls('(0, __vi_import_1__.writeAudit)(ctx, row)', 'writeAudit')).toBe(true);
+    expect(calls('rewriteAudit(ctx)', 'writeAudit')).toBe(false);
+  });
+});
+
 describe('write audit manifest', () => {
   it('classifies every write tool, and nothing that is not registered', () => {
     const names = writes.map(def => def.name).sort();
@@ -232,7 +405,6 @@ describe('write audit manifest', () => {
     const check = (ok: boolean, problem: string) => {
       if (!ok) problems.push(problem);
     };
-    const method = (fn: string) => fn.split('.').at(-1)!;
     for (const def of writes) {
       const entry = WRITES[def.name];
       const source = reachableSource(def);
@@ -240,13 +412,13 @@ describe('write audit manifest', () => {
       if (entry.kind === 'tool') {
         check(writesItsOwnRow(source), `${name}: should call writeAudit`);
       } else if (entry.kind === 'service' || entry.kind === 'both') {
-        check(calls(source, method(entry.fn)), `${name}: should call ${entry.fn}`);
-        if (entry.kind === 'both' || entry.actor === 'serviceActor') {
+        check(calls(source, entry.fn), `${name}: should call ${entry.fn}`);
+        if (entry.actor === 'serviceActor') {
           check(calls(source, 'serviceActor'), `${name}: should pass serviceActor(...)`);
         }
         if (entry.kind === 'both') {
           check(writesItsOwnRow(source), `${name}: should write its other mode's row`);
-        } else if (entry.actor === 'serviceActor') {
+        } else {
           check(!writesItsOwnRow(source), `${name}: should write no row of its own`);
         }
       } else {
