@@ -265,6 +265,23 @@ describe('select-organization before a Github or Gitlab account is connected', (
     expect(data.memberships).toHaveLength(1);
   });
 
+  it('under View as, the claim names the admin viewing as them', async () => {
+    const { getAuthSession } = await import('@classmoji/auth/server');
+    const { ClassmojiService } = await import('@classmoji/services');
+    vi.mocked(getAuthSession).mockResolvedValueOnce({
+      userId: 'user-1',
+      token: 'ghu_token',
+      session: { session: { id: 'sess-1', impersonatedBy: 'admin-1' } },
+    } as never);
+
+    await runLoader();
+
+    expect(ClassmojiService.classroomInvite.claimPendingInvites).toHaveBeenCalledExactlyOnceWith(
+      'user-1',
+      { tool: 'web:roster.invite_email', impersonatedBy: 'admin-1' }
+    );
+  });
+
   it('asks them to connect when they belong to no classroom', async () => {
     findById.mockResolvedValue({ ...SERVICE_USER, memberships: [] });
 

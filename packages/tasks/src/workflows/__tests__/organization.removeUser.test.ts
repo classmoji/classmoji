@@ -315,6 +315,33 @@ describe('remove_user_from_organization — the removal row', () => {
     });
   });
 
+  it('a retried run hands the delete the same actor again', async () => {
+    // The first attempt deletes the row (and the service records it); the
+    // retry finds nothing to delete, so the service records nothing (pinned
+    // against the database in @classmoji/services' peopleAudit test).
+    mocks.removeMembership
+      .mockResolvedValueOnce({ count: 1, audit: { written: 1, missed: 0 } })
+      .mockResolvedValueOnce({ count: 0, audit: { written: 0, missed: 0 } });
+
+    await run({ role: 'STUDENT', auditActor: OWNER });
+    await run({ role: 'STUDENT', auditActor: OWNER });
+
+    expect(mocks.removeMembership.mock.calls).toEqual([
+      [
+        'class-1',
+        'user-1',
+        'STUDENT',
+        { actorUserId: undefined, audit: OWNER, hadAcceptedInvite: true },
+      ],
+      [
+        'class-1',
+        'user-1',
+        'STUDENT',
+        { actorUserId: undefined, audit: OWNER, hadAcceptedInvite: true },
+      ],
+    ]);
+  });
+
   it('a payload with no actor, or one that is not valid, records nothing', async () => {
     await run({ role: 'STUDENT' });
     await run({ role: 'STUDENT', auditActor: { ...OWNER, role: 'NOBODY' } });

@@ -845,6 +845,82 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
       expect(await rowsFor(old.gitRepoAssignmentId as string)).toHaveLength(0);
     });
 
+    it('a web actor: the queued run writes the same rows as the inline move', async () => {
+      const W = await makeClassroom('w');
+      const keeperId = await makeMember(W, 'w-keeper', 'TEACHER');
+      const actor = webActor(W, 'web:staff.remove');
+      const expected = (fromId: string, fromLabel: string) => [
+        {
+          user_id: W.ownerId,
+          classroom_id: W.classroomId,
+          role: 'OWNER',
+          resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
+          action: 'CREATE',
+          data: {
+            tool: 'web:staff.remove',
+            value: keeperId,
+            grader_id: keeperId,
+            grader_login: login('w-keeper'),
+          },
+        },
+        {
+          user_id: W.ownerId,
+          classroom_id: W.classroomId,
+          role: 'OWNER',
+          resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
+          action: 'DELETE',
+          data: {
+            tool: 'web:staff.remove',
+            value: fromId,
+            grader_id: fromId,
+            grader_login: login(fromLabel),
+          },
+        },
+      ];
+
+      // Inline: one slot, moved in the request.
+      const goneInline = await makeMember(W, 'w-gone-inline', 'ASSISTANT');
+      const inlineSlot = await makeSlot(W, goneInline);
+      await membershipService.remove(W.classroomId, goneInline, 'ASSISTANT', {});
+      const inline = await HelperService.settleUngradedSlots({
+        classroomId: W.classroomId,
+        graderId: goneInline,
+        choice: 'reassign',
+        departingName: 'Gone',
+        expectedCount: 1,
+        actor,
+      });
+      expect(inline).toMatchObject({ queued: false, audit: { written: 2, missed: 0 } });
+      expect(await graderRows(inlineSlot)).toEqual(expected(goneInline, 'w-gone-inline'));
+
+      // Queued: the run reads the actor back from its stored payload.
+      const goneQueued = await makeMember(W, 'w-gone-queued', 'ASSISTANT');
+      for (let i = 0; i < 11; i++) await makeSlot(W, goneQueued);
+      await membershipService.remove(W.classroomId, goneQueued, 'ASSISTANT', {});
+      const queued = await HelperService.settleUngradedSlots({
+        classroomId: W.classroomId,
+        graderId: goneQueued,
+        choice: 'reassign',
+        departingName: 'Gone',
+        expectedCount: 11,
+        actor,
+      });
+      expect(queued).toMatchObject({ queued: true, audit: { written: 0, missed: 0 } });
+      const [, items] = trigger.batchTrigger.mock.calls[0] as unknown as [
+        string,
+        Array<{ payload: Record<string, unknown> }>,
+      ];
+      const stored = JSON.parse(JSON.stringify(items[0].payload)) as Record<string, unknown>;
+      const ran = await HelperService.moveGraderSlot({
+        ...(stored as unknown as MoveGraderSlotPayload),
+        actor: parseAuditActor(stored.actor),
+      });
+      expect(ran).toMatchObject({ status: 'moved', audit: { written: 2, missed: 0 } });
+      expect(await graderRows(stored.gitRepoAssignmentId as string)).toEqual(
+        expected(goneQueued, 'w-gone-queued')
+      );
+    });
+
     it('actor null moves the slots and records nothing', async () => {
       await makeMember(X, 'keeper-2', 'TEACHER');
       const gone = await makeMember(X, 'gone-null', 'ASSISTANT');
@@ -928,6 +1004,51 @@ describe.skipIf(!RUN)('people services write their audit rows (integration)', ()
             impersonated_by: ADMIN,
           },
         }),
+      ]);
+    });
+
+    it('a retried run with the actor in its payload writes the completion row once', async () => {
+      const studentId = await makeMember(X, 'retried-student', 'STUDENT');
+      const stored = JSON.parse(
+        JSON.stringify(
+          buildRemoveUserPayload({
+            user: { id: studentId, login: login('retried-student'), has_accepted_invite: true },
+            classroom: { id: X.classroomId, slug: 'x' },
+            role: 'STUDENT',
+            auditActor: mcpActor(X, 'roster_remove_student'),
+          })
+        )
+      );
+      // Each attempt reads the actor back from the same stored payload, as the
+      // run does, and hands it to the delete.
+      const attempt = () =>
+        membershipService.remove(X.classroomId, studentId, 'STUDENT', {
+          audit: parseAuditActor(stored.auditActor),
+          hadAcceptedInvite: true,
+        });
+
+      expect(await attempt()).toEqual({ count: 1, audit: { written: 1, missed: 0 } });
+      // The retry finds nothing to delete and writes nothing.
+      expect(await attempt()).toEqual({ count: 0, audit: { written: 0, missed: 0 } });
+      expect(await rowsFor(studentId)).toEqual([
+        {
+          user_id: X.ownerId,
+          classroom_id: X.classroomId,
+          role: 'OWNER',
+          resource_type: 'STUDENT_ROSTER',
+          resource_id: studentId,
+          action: 'DELETE',
+          data: {
+            via: 'mcp',
+            tool: 'roster_remove_student',
+            user_id: studentId,
+            role: 'STUDENT',
+            had_accepted_invite: true,
+            removal: 'completed',
+            client_id: 'client-1',
+            impersonated_by: ADMIN,
+          },
+        },
       ]);
     });
 
