@@ -205,9 +205,9 @@ const ACTIONS: Record<string, Entry> = {
     'service:regradeRequest.createForQuizAttempt',
   'api.quiz#startQuiz': 'pending:quiz attempt start',
   'api.quiz#restartQuiz': 'pending:quiz attempt start',
-  'api.quiz#updateMetrics': 'exempt:own attempt timing',
-  'api.quiz#recordModalClose': 'exempt:own attempt timing',
-  'api.quiz#recordModalOpen': 'exempt:own attempt timing',
+  'api.quiz#updateMetrics': 'pending:quiz attempt timing',
+  'api.quiz#recordModalClose': 'pending:quiz attempt timing',
+  'api.quiz#recordModalOpen': 'pending:quiz attempt timing',
   'api.quiz-chat.session#*': 'route:web:quiz_chat.session',
   'api.quizLateWaiver.$class#*': 'route:web:quiz_late_waiver',
 
@@ -316,6 +316,9 @@ const PENDING = new Set([
   'api.pages.batch#batch-init',
   'api.quiz#startQuiz',
   'api.quiz#restartQuiz',
+  'api.quiz#updateMetrics',
+  'api.quiz#recordModalClose',
+  'api.quiz#recordModalOpen',
   'api.repos.$id.refresh#*',
 ]);
 
