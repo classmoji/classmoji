@@ -267,10 +267,12 @@ async function leaveGitLabClassAsStudent(
   });
   for (const team of teams) {
     try {
+      // Part of the student's removal, which its own completion row records.
       await ClassmojiService.teamAdmin.removeTeamMember({
         classroomId,
         slugOrId: team.id,
         login: user?.login ?? gitlabUsername,
+        actor: null,
       });
     } catch (error: unknown) {
       console.error(`[remove_user] could not remove the student from team ${team.id}`, error);

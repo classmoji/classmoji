@@ -26,6 +26,11 @@ import {
 } from '~/utils/helpers';
 import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
+import {
+  calendarCreateAudit,
+  calendarDeleteAudit,
+  calendarUpdateAudit,
+} from '~/utils/calendarAudit';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
@@ -243,15 +248,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         )
       : null;
 
-    await audit('CREATE', 'CALENDAR', newEvent.id, {
-      tool: 'web:calendar.create_event',
-      title: createData.title ?? null,
-      event_type: createData.event_type ?? null,
-      is_recurring: Boolean(createData.recurrence_rule),
-      // What the service saved, not what was asked for: ids it could not
-      // validate are dropped there without an error.
-      linked: saved?.linked ?? null,
-    });
+    await audit('CREATE', 'CALENDAR', newEvent.id, calendarCreateAudit(createData, saved));
 
     return data({ success: true });
   }
@@ -349,18 +346,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         )
       : null;
 
-    await audit('UPDATE', 'CALENDAR', eventId, {
-      tool: 'web:calendar.update_event',
-      // Which fields moved, not their contents — descriptions can be long.
-      fields: Object.keys(updateData),
-      // A recurring edit changes a different number of occurrences depending on
-      // scope, so the scope is part of what was done.
-      edit_scope: editScope ?? null,
-      occurrence_date: occurrenceDate ?? null,
-      links_updated: hasLinkUpdates,
-      // What the link write saved for that date, as on a create.
-      linked: saved?.linked ?? null,
-    });
+    await audit(
+      'UPDATE',
+      'CALENDAR',
+      eventId,
+      calendarUpdateAudit(
+        updateData,
+        { editScope, occurrenceDate, linksUpdated: hasLinkUpdates },
+        saved
+      )
+    );
 
     return data({ success: true });
   }
@@ -398,13 +393,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await ClassmojiService.calendar.deleteEvent(eventId as string);
       }
 
-      await audit('DELETE', 'CALENDAR', eventId, {
-        tool: 'web:calendar.delete_event',
-        title: event.title,
-        // Scope decides whether one occurrence or the whole series went away.
-        delete_scope: options?.editScope ?? null,
-        occurrence_date: options?.occurrenceDate ?? null,
-      });
+      await audit('DELETE', 'CALENDAR', eventId, calendarDeleteAudit(event, options));
 
       return data({ success: true });
     } catch (error: unknown) {

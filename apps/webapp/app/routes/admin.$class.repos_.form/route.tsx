@@ -4,6 +4,7 @@ import type { ShouldRevalidateFunctionArgs } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import { classroomForClient } from '~/utils/classroomForClient';
 import FormModule from './FormModule';
 import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
@@ -185,14 +186,11 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const {
-    classroom,
-    userId: _userId,
-    membership,
-  } = await requireClassroomAdmin(request, classSlug!, {
+  const gate = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'create_repository',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
@@ -340,14 +338,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     // Lets an instructor add a team tag from the group-assignment form without
-    // leaving for Settings → Team. Upsert, so re-typing an existing name hands
-    // back that tag instead of tripping the [classroom_id, name] unique index.
+    // leaving for Settings → Team. Re-typing an existing name hands back that
+    // tag instead of tripping the [classroom_id, name] unique index; the tag
+    // service records a new one.
     async createTag() {
       const name = typeof data.name === 'string' ? data.name.trim() : '';
       if (!name) return { error: 'Please enter a tag name.' };
 
       try {
-        const createdTag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
+        const { tag: createdTag } = await ClassmojiService.organizationTag.findOrCreate(
+          classroom.id,
+          name,
+          await auditActor(request, gate, 'web:repos.create_tag')
+        );
         return { tag: { id: createdTag.id, name: createdTag.name } };
       } catch (error: unknown) {
         console.error('Tag create error:', error);
@@ -364,15 +367,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       try {
         // Form-owned columns only; the classroom always comes from the route.
-        const createdModule = await ClassmojiService.repository.create(
-          ClassmojiService.repository.createFromFormData(moduleData, classroom.id, tag || null)
+        // The repository service records the create, the autograding service
+        // a set of tests.
+        const actor = await auditActor(request, gate, 'web:repos.create');
+        const { repository: createdModule } = await ClassmojiService.repository.create(
+          ClassmojiService.repository.createFromFormData(moduleData, classroom.id, tag || null),
+          actor
         );
 
         // Sync repository-level content links
         await syncModuleContentLinks(createdModule.id);
         await ClassmojiService.autogradingTest.replaceForRepository(
           createdModule.id,
-          autogradingTests || []
+          autogradingTests || [],
+          classroom.id,
+          actor
         );
 
         // Save content manifest to GitHub repo
@@ -418,16 +427,22 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       try {
+        // Each service records what changed (the repository's columns; the
+        // set of autograding tests).
+        const actor = await auditActor(request, gate, 'web:repos.update');
         await ClassmojiService.repository.updateFromForm(
           { ...moduleData, id: repository.id, tag },
-          classroom.id
+          classroom.id,
+          actor
         );
 
         // Sync repository-level content links
         await syncModuleContentLinks(repository.id);
         await ClassmojiService.autogradingTest.replaceForRepository(
           repository.id,
-          autogradingTests || []
+          autogradingTests || [],
+          classroom.id,
+          actor
         );
 
         // Save content manifest to GitHub repo

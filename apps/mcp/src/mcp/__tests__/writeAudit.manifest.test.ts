@@ -124,6 +124,40 @@ const WRITES: Record<string, Entry> = {
   },
   // A created tag only; one that already existed records nothing.
   tag_create: { kind: 'service', fn: 'organizationTag.findOrCreate', actor: 'serviceActor' },
+  // ── modules: the module service writes the row for the actor ──
+  module_create: { kind: 'service', fn: 'module.create', actor: 'serviceActor' },
+  // Only when the title or description changed.
+  module_update: { kind: 'service', fn: 'module.updateForClassroom', actor: 'serviceActor' },
+  // Only when the flag changed.
+  module_publish: { kind: 'service', fn: 'module.setPublished', actor: 'serviceActor' },
+  module_item_add: { kind: 'service', fn: 'module.addItem', actor: 'serviceActor' },
+  module_item_remove: { kind: 'service', fn: 'module.removeItem', actor: 'serviceActor' },
+  module_item_move: { kind: 'service', fn: 'module.moveItemToModuleEnd', actor: 'serviceActor' },
+  module_delete: { kind: 'service', fn: 'module.deleteById', actor: 'serviceActor' },
+  // ITEMS: module.reorderItems; MODULES: module.reorderModules; ASSIGNMENTS:
+  // assignment.reorderInModule. Each records the moved rows when the order changed.
+  module_reorder: { kind: 'service', fn: 'module.reorderItems', actor: 'serviceActor' },
+  // ── teams: the team service writes the row for the actor ──
+  team_create: { kind: 'service', fn: 'teamAdmin.createTeam', actor: 'serviceActor' },
+  team_delete: { kind: 'service', fn: 'teamAdmin.deleteTeam', actor: 'serviceActor' },
+  // Only when the name, the slug or a repository changed.
+  team_rename: { kind: 'service', fn: 'teamAdmin.renameTeam', actor: 'serviceActor' },
+  // Only when a membership was created (with the members' user ids).
+  team_members_add: { kind: 'service', fn: 'teamAdmin.addTeamMembers', actor: 'serviceActor' },
+  // When a membership row was removed or the provider removal ran.
+  team_member_remove: {
+    kind: 'service',
+    fn: 'teamAdmin.removeTeamMember',
+    actor: 'serviceActor',
+  },
+  // Only when a link was written.
+  team_tag_add: { kind: 'service', fn: 'teamAdmin.addTeamTags', actor: 'serviceActor' },
+  team_tag_remove: { kind: 'service', fn: 'teamAdmin.removeTeamTag', actor: 'serviceActor' },
+  // ── repositories: the repository service writes the row for the actor ──
+  repo_create: { kind: 'service', fn: 'repository.create', actor: 'serviceActor' },
+  // Only when a column changed (old and new values).
+  repo_update: { kind: 'service', fn: 'repository.update', actor: 'serviceActor' },
+  repo_delete: { kind: 'service', fn: 'repository.deleteIfUnprovisioned', actor: 'serviceActor' },
   // ── the tool writes its own row ──
   assignment_create: TOOL,
   // grades_released is one of its fields: still the tool's row (the web's
@@ -149,14 +183,6 @@ const WRITES: Record<string, Entry> = {
   file_upload_start: TOOL,
   file_upload_finish: TOOL,
   file_import_url: TOOL,
-  module_create: TOOL,
-  module_update: TOOL,
-  module_publish: TOOL,
-  module_item_add: TOOL,
-  module_item_remove: TOOL,
-  module_item_move: TOOL,
-  module_delete: TOOL,
-  module_reorder: TOOL,
   page_comment_create: TOOL,
   page_comment_update: TOOL,
   page_comment_delete: TOOL,
@@ -180,21 +206,11 @@ const WRITES: Record<string, Entry> = {
   repo_publish: TOOL,
   repo_sync: TOOL,
   repo_unpublish: TOOL,
-  repo_create: TOOL,
-  repo_update: TOOL,
-  repo_delete: TOOL,
   resource_link_add: TOOL,
   resource_link_remove: TOOL,
   slide_create: TOOL,
   slide_update: TOOL,
   slide_delete: TOOL,
-  team_create: TOOL,
-  team_delete: TOOL,
-  team_rename: TOOL,
-  team_members_add: TOOL,
-  team_member_remove: TOOL,
-  team_tag_add: TOOL,
-  team_tag_remove: TOOL,
   // ── no row ──
   feedback_write: {
     kind: 'exempt',

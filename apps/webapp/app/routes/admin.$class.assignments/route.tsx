@@ -12,6 +12,7 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { auditActor } from '~/utils/auditActor.server';
 import { addClassroomAuditLog } from '~/utils/helpers';
 import {
   useOrphanedRepositoryPrompt,
@@ -71,23 +72,28 @@ const findOrphanedRepository = async (repositoryId: string, classroomId: string)
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
+  const gate = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'ASSIGNMENT',
     action: 'manage_assignments',
   });
+  const { classroom, membership, userId } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   const data = await request.json();
 
   return namedAction(request, {
-    // Tags are made where they are needed. Upsert, so re-entering a name that
-    // exists simply hands back that tag instead of erroring.
+    // Tags are made where they are needed. A name that exists simply hands
+    // back that tag instead of erroring; the tag service records a new one.
     async createTag() {
       const name = typeof data.name === 'string' ? data.name.trim() : '';
       if (!name) return { error: 'Enter a tag name.' };
       try {
-        const tag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
+        const { tag } = await ClassmojiService.organizationTag.findOrCreate(
+          classroom.id,
+          name,
+          await auditActor(request, gate, 'web:assignments.create_tag')
+        );
         return { tag: { id: tag.id, name: tag.name } };
       } catch (error: unknown) {
         console.error('[admin.assignments] Tag create error:', error);
@@ -163,17 +169,22 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           if (isTeam && team_formation_mode === 'INSTRUCTOR' && !tag_id) {
             return { error: `Pick the team tag whose teams each get a ${terms.repo}.` };
           }
-          const repository = await ClassmojiService.repository.create({
-            title: repoTitle,
-            template: templateRef,
-            type: isTeam ? 'GROUP' : 'INDIVIDUAL',
-            classroom_id: classroom.id,
-            ...(isTeam && {
-              team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
-              max_team_size: max_team_size ?? null,
-              tag_id: tag_id ?? null,
-            }),
-          });
+          // The repository service records the repository it made; the
+          // assignment's own row below names it (repository_id).
+          const { repository } = await ClassmojiService.repository.create(
+            {
+              title: repoTitle,
+              template: templateRef,
+              type: isTeam ? 'GROUP' : 'INDIVIDUAL',
+              classroom_id: classroom.id,
+              ...(isTeam && {
+                team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
+                max_team_size: max_team_size ?? null,
+                tag_id: tag_id ?? null,
+              }),
+            },
+            await auditActor(request, gate, 'web:assignments.create')
+          );
           assignmentData.repository_id = repository.id;
         }
         const created = await ClassmojiService.assignment.createInClassroom(

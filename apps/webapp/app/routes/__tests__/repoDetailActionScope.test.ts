@@ -154,7 +154,7 @@ beforeEach(() => {
         : null
     )
   );
-  mocks.deleteRepository.mockResolvedValue({ id: 'gr-1' });
+  mocks.deleteRepository.mockResolvedValue({ audit: { written: 1, missed: 0 } });
   mocks.addGraderInClassroom.mockResolvedValue({ status: 'added', graderLogin: 'ta-bob' });
   mocks.removeGraderInClassroom.mockResolvedValue({ status: 'removed', graderLogin: 'ta-bob' });
   mocks.tasksTrigger.mockResolvedValue({ id: 'run-1' });
@@ -179,6 +179,14 @@ describe('repository page: deleteRepo', () => {
       gitOrganization: ORG,
       classroomId: 'class-1',
       deleteFromGithub: true,
+      repositoryId: 'repo-1',
+      // The service records the delete for the owner the gate resolved.
+      actor: {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:repos.delete_student_repo',
+        impersonatedBy: null,
+      },
     });
   });
 
@@ -194,6 +202,14 @@ describe('repository page: deleteRepo', () => {
       gitOrganization: ORG,
       classroomId: 'class-1',
       deleteFromGithub: true,
+      repositoryId: 'repo-1',
+      // The service records the delete for the owner the gate resolved.
+      actor: {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:repos.delete_student_repo',
+        impersonatedBy: null,
+      },
     });
   });
 

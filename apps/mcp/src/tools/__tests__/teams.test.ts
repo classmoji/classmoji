@@ -103,16 +103,18 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
-/** The audit row the handler wrote (first call). */
-function auditRow() {
-  return mocks.auditCreate.mock.calls[0][0] as {
-    action: string;
-    classroom_id: string;
-    resource_type: string;
-    resource_id?: string | null;
-    data: Record<string, unknown>;
-  };
-}
+/** What the team service answers about the row it wrote for the call. */
+const WRITTEN = { written: 1, missed: 0 };
+
+/** The actor `serviceActor` builds for CTX: the team service records each change for it. */
+const actorFor = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+});
 
 /**
  * A team row shaped like team.findByClassroomId returns it — memberships carry
@@ -167,8 +169,9 @@ beforeEach(() => {
 describe('team_create', () => {
   const ARGS = { classroom: 'org/w26', name: 'Team Rocket', tag_ids: ['tag-1'] };
 
-  it('creates via the service using ctx classroomId and audits the CREATE', async () => {
+  it('creates via the service using ctx classroomId; the service records it', async () => {
     mocks.createTeam.mockResolvedValue({
+      audit: WRITTEN,
       team: { id: 'team-1', name: 'Team Rocket', slug: 'team-rocket', isVisible: false },
       tagsAdded: ['tag-1'],
       tagsFailed: [{ tagId: 'tag-9', error: 'invalid' }],
@@ -185,23 +188,20 @@ describe('team_create', () => {
 
     // classroomId comes from ctx, never from args; is_visible defaults to false.
     expect(mocks.createTeam).toHaveBeenCalledWith({
+      actor: actorFor('team_create'),
       classroomId: 'class-1',
       name: 'Team Rocket',
       isVisible: false,
       tagIds: ['tag-1'],
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('CREATE');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.resource_type).toBe('TEAMS');
-    // resource_id names the team.
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_create', team_id: 'team-1' });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('passes is_visible through when set', async () => {
     mocks.createTeam.mockResolvedValue({
+      audit: WRITTEN,
       team: { id: 'team-1', name: 'Team Rocket', slug: 'team-rocket', isVisible: true },
       tagsAdded: ['tag-1'],
       tagsFailed: [],
@@ -309,8 +309,9 @@ describe('team_create', () => {
 describe('team_delete', () => {
   const ARGS = { classroom: 'org/w26', team: 'team-rocket', confirm: true as const };
 
-  it('deletes via the service and audits the DELETE', async () => {
+  it('deletes via the service, which records it for the caller', async () => {
     mocks.deleteTeam.mockResolvedValue({
+      audit: WRITTEN,
       id: 'team-1',
       name: 'Team Rocket',
       slug: 'team-rocket',
@@ -329,20 +330,19 @@ describe('team_delete', () => {
     });
 
     expect(mocks.deleteTeam).toHaveBeenCalledWith({
+      actor: actorFor('team_delete'),
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
       deleteOnProvider: false,
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('DELETE');
-    expect(audit.classroom_id).toBe('class-1');
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_delete', team_id: 'team-1' });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports removed_from_provider:false when the GitHub team was already gone', async () => {
     mocks.deleteTeam.mockResolvedValue({
+      audit: WRITTEN,
       id: 'team-1',
       name: 'Team Rocket',
       slug: 'team-rocket',
@@ -355,8 +355,9 @@ describe('team_delete', () => {
     expect(payload.removed_from_provider).toBe(false);
   });
 
-  it('carries the blast radius into the response, the message and the audit row', async () => {
+  it('carries the blast radius into the response and the message', async () => {
     mocks.deleteTeam.mockResolvedValue({
+      audit: WRITTEN,
       id: 'team-1',
       name: 'Team Rocket',
       slug: 'team-rocket',
@@ -373,13 +374,6 @@ describe('team_delete', () => {
       'hw3-team-rocket',
     ]);
     expect(payload.message).toContain('3 linked repository record(s)');
-
-    // The repo records are gone, so the audit trail is the only remaining
-    // record of what the delete took with it.
-    expect(auditRow().data).toMatchObject({
-      repos_deleted: 3,
-      deleted_repo_names: ['hw1-team-rocket', 'hw2-team-rocket', 'hw3-team-rocket'],
-    });
   });
 
   it('refuses an unknown / cross-classroom team and audits nothing', async () => {
@@ -407,8 +401,9 @@ describe('team_delete', () => {
 describe('team_rename', () => {
   const ARGS = { classroom: 'org/w26', team: 'team-rocket', new_name: 'Team Magma' };
 
-  it('renames via the service and audits the UPDATE', async () => {
+  it('renames via the service, which records it for the caller', async () => {
     mocks.renameTeam.mockResolvedValue({
+      audit: WRITTEN,
       teamId: 'team-1',
       newName: 'Team Magma',
       newSlug: 'team-magma',
@@ -429,19 +424,19 @@ describe('team_rename', () => {
     expect(payload.warning).toBeUndefined();
 
     expect(mocks.renameTeam).toHaveBeenCalledWith({
+      actor: actorFor('team_rename'),
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
       newName: 'Team Magma',
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_rename', new_slug: 'team-magma' });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('surfaces failed repository renames prominently (they cannot be retried)', async () => {
     mocks.renameTeam.mockResolvedValue({
+      audit: WRITTEN,
       teamId: 'team-1',
       newName: 'Team Magma',
       newSlug: 'team-magma',
@@ -464,8 +459,6 @@ describe('team_rename', () => {
     expect(payload.warning).toContain('hw2-team-rocket');
     expect(payload.warning).toContain('by hand');
     expect(payload.message).toContain('old name');
-    // The failure is on the audit row too.
-    expect(auditRow().data).toMatchObject({ failed_repos: ['hw2-team-rocket'] });
   });
 
   it('refuses an unknown / cross-classroom team and audits nothing', async () => {
@@ -498,8 +491,9 @@ describe('team_rename', () => {
 describe('team_members_add', () => {
   const ARGS = { classroom: 'org/w26', team: 'team-rocket', logins: ['ada', 'Grace'] };
 
-  it('adds classroom members via the service and audits the UPDATE', async () => {
+  it('adds classroom members via the service, which records it for the caller', async () => {
     mocks.addTeamMembers.mockResolvedValue({
+      audit: WRITTEN,
       succeeded: [{ login: 'ada' }],
       failed: [{ login: 'Grace', error: 'provider_error' }],
     });
@@ -517,18 +511,14 @@ describe('team_members_add', () => {
     expectNoServiceRowLeak(payload);
 
     expect(mocks.addTeamMembers).toHaveBeenCalledWith({
+      actor: actorFor('team_members_add'),
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
       logins: ['ada', 'Grace'],
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.classroom_id).toBe('class-1');
-    // addTeamMembers returns no team id, so the team is resolved first purely
-    // to keep the audit row team-specific.
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_members_add', succeeded: ['ada'] });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('rejects logins that are not classroom members BEFORE any service call', async () => {
@@ -545,7 +535,11 @@ describe('team_members_add', () => {
   });
 
   it('matches classroom membership case-insensitively and dedupes repeats', async () => {
-    mocks.addTeamMembers.mockResolvedValue({ succeeded: [{ login: 'ada' }], failed: [] });
+    mocks.addTeamMembers.mockResolvedValue({
+      audit: WRITTEN,
+      succeeded: [{ login: 'ada' }],
+      failed: [],
+    });
 
     // 'Ada', '@ada' and 'ada' are one person; 'grace' matches the stored 'Grace'.
     await teamMembersAddTool.handler({ ...ARGS, logins: ['Ada', '@ada', 'grace'] }, CTX);
@@ -577,8 +571,13 @@ describe('team_members_add', () => {
 describe('team_member_remove', () => {
   const ARGS = { classroom: 'org/w26', team: 'team-rocket', login: 'ada' };
 
-  it('removes via the service and audits the UPDATE', async () => {
-    mocks.removeTeamMember.mockResolvedValue({ teamId: 'team-1', login: 'ada', removed: true });
+  it('removes via the service, which records it for the caller', async () => {
+    mocks.removeTeamMember.mockResolvedValue({
+      audit: WRITTEN,
+      teamId: 'team-1',
+      login: 'ada',
+      removed: true,
+    });
 
     const payload = parse(await teamMemberRemoveTool.handler(ARGS, CTX));
     expect(payload).toMatchObject({
@@ -589,19 +588,23 @@ describe('team_member_remove', () => {
     });
 
     expect(mocks.removeTeamMember).toHaveBeenCalledWith({
+      actor: actorFor('team_member_remove'),
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
       login: 'ada',
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_member_remove', removed: true });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('is idempotent: a non-member still succeeds and reports removed:false', async () => {
-    mocks.removeTeamMember.mockResolvedValue({ teamId: 'team-1', login: 'ada', removed: false });
+    mocks.removeTeamMember.mockResolvedValue({
+      audit: WRITTEN,
+      teamId: 'team-1',
+      login: 'ada',
+      removed: false,
+    });
 
     const payload = parse(await teamMemberRemoveTool.handler(ARGS, CTX));
     expect(payload).toMatchObject({ success: true, removed: false });
@@ -654,7 +657,12 @@ describe('team_member_remove', () => {
   });
 
   it('matches classroom membership case-insensitively', async () => {
-    mocks.removeTeamMember.mockResolvedValue({ teamId: 'team-1', login: 'Grace', removed: true });
+    mocks.removeTeamMember.mockResolvedValue({
+      audit: WRITTEN,
+      teamId: 'team-1',
+      login: 'Grace',
+      removed: true,
+    });
 
     // The roster stores 'Grace'; '@grace' is the same person.
     await teamMemberRemoveTool.handler({ ...ARGS, login: '@grace' }, CTX);
@@ -679,8 +687,9 @@ describe('team_member_remove', () => {
 describe('team_tag_add', () => {
   const ARGS = { classroom: 'org/w26', team: 'team-rocket', tag_ids: ['tag-1', 'tag-9'] };
 
-  it('attaches tags via the service and audits the UPDATE', async () => {
+  it('attaches tags via the service, which records it for the caller', async () => {
     mocks.addTeamTags.mockResolvedValue({
+      audit: WRITTEN,
       added: ['tag-1'],
       failed: [{ tagId: 'tag-9', error: 'invalid' }],
     });
@@ -698,14 +707,14 @@ describe('team_tag_add', () => {
     expectNoServiceRowLeak(payload);
 
     expect(mocks.addTeamTags).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_add'),
       classroomId: 'class-1',
       slugOrId: 'team-rocket',
       tagIds: ['tag-1', 'tag-9'],
     });
 
-    const audit = auditRow();
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_tag_add', added: ['tag-1'] });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses an unknown / cross-classroom team with zero service calls', async () => {
@@ -718,7 +727,7 @@ describe('team_tag_add', () => {
 });
 
 describe('team_tag_remove', () => {
-  const REMOVED = { teamTagId: 'tt-1', teamId: 'team-1', tagId: 'tag-1' };
+  const REMOVED = { teamTagId: 'tt-1', teamId: 'team-1', tagId: 'tag-1', audit: WRITTEN };
 
   it('resolves the TeamTag row from a tag name and detaches it via the service', async () => {
     mocks.removeTeamTag.mockResolvedValue(REMOVED);
@@ -742,18 +751,21 @@ describe('team_tag_remove', () => {
     // The row id is resolved in-handler (list_teams exposes tag names only) and
     // the service stays the single mutation path.
     expect(mocks.removeTeamTag).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_remove'),
       classroomId: 'class-1',
       teamTagId: 'tt-1',
     });
 
-    const audit = auditRow();
-    expect(audit.action).toBe('UPDATE');
-    expect(audit.resource_id).toBe('team-1');
-    expect(audit.data).toMatchObject({ tool: 'team_tag_remove', tag_id: 'tag-1' });
+    // The service writes the row, for the actor above; the tool writes none.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('accepts a tag id as well', async () => {
-    mocks.removeTeamTag.mockResolvedValue({ ...REMOVED, teamTagId: 'tt-2', tagId: 'tag-2' });
+    mocks.removeTeamTag.mockResolvedValue({
+      ...REMOVED,
+      teamTagId: 'tt-2',
+      tagId: 'tag-2',
+    });
 
     const payload = parse(
       await teamTagRemoveTool.handler(
@@ -763,6 +775,7 @@ describe('team_tag_remove', () => {
     );
     expect(payload).toMatchObject({ tag_id: 'tag-2', team_tag_id: 'tt-2' });
     expect(mocks.removeTeamTag).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_remove'),
       classroomId: 'class-1',
       teamTagId: 'tt-2',
     });
@@ -775,7 +788,11 @@ describe('team_tag_remove', () => {
       { classroom: 'org/w26', team: 'team-rocket', tag_name: 'FrontEnd' },
       CTX
     );
-    expect(mocks.removeTeamTag).toHaveBeenCalledWith({ classroomId: 'class-1', teamTagId: 'tt-1' });
+    expect(mocks.removeTeamTag).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_remove'),
+      classroomId: 'class-1',
+      teamTagId: 'tt-1',
+    });
   });
 
   it('refuses an ambiguous case-insensitive name instead of guessing', async () => {
@@ -808,13 +825,21 @@ describe('team_tag_remove', () => {
         ],
       },
     ]);
-    mocks.removeTeamTag.mockResolvedValue({ ...REMOVED, teamTagId: 'tt-3', tagId: 'tag-3' });
+    mocks.removeTeamTag.mockResolvedValue({
+      ...REMOVED,
+      teamTagId: 'tt-3',
+      tagId: 'tag-3',
+    });
 
     await teamTagRemoveTool.handler(
       { classroom: 'org/w26', team: 'team-rocket', tag_name: 'Frontend' },
       CTX
     );
-    expect(mocks.removeTeamTag).toHaveBeenCalledWith({ classroomId: 'class-1', teamTagId: 'tt-3' });
+    expect(mocks.removeTeamTag).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_remove'),
+      classroomId: 'class-1',
+      teamTagId: 'tt-3',
+    });
   });
 
   it('refuses a tag that is not on this team (uniform scopedNotFound)', async () => {
@@ -855,7 +880,11 @@ describe('team_tag_remove', () => {
       message: TAG_REQUIRED_MESSAGES.remove,
     });
     expect((error as Error).message).not.toContain('[team]');
-    expect(mocks.removeTeamTag).toHaveBeenCalledWith({ classroomId: 'class-1', teamTagId: 'tt-1' });
+    expect(mocks.removeTeamTag).toHaveBeenCalledWith({
+      actor: actorFor('team_tag_remove'),
+      classroomId: 'class-1',
+      teamTagId: 'tt-1',
+    });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 

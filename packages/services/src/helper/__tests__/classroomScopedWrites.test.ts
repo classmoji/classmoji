@@ -259,6 +259,7 @@ describe('deleteRepository', () => {
       gitOrganization: ORG,
       classroomId: 'class-1',
       deleteFromGithub: true,
+      actor: null,
     });
 
     expect(mocks.deleteRepository).toHaveBeenCalledWith('acme', 'lab-1-alice');
@@ -272,6 +273,7 @@ describe('deleteRepository', () => {
       name: 'lab-1-alice',
       gitOrganization: ORG,
       deleteFromGithub: false,
+      actor: null,
     });
 
     expect(mocks.deleteRepository).not.toHaveBeenCalled();

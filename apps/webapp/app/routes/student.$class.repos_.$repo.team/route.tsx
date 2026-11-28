@@ -7,6 +7,7 @@ import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername, scopeGitlabId, teamsNamespace, titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
@@ -88,13 +89,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
   const moduleSlug = params.repo!;
 
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const gate = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
     resourceType: 'TEAMS',
     attemptedAction: 'modify_team',
   });
+  const { userId, classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
@@ -121,8 +123,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Team formation deadline has passed' };
   }
 
-  // Get or create tag for this repository
-  const tag = await ClassmojiService.organizationTag.upsert(classroom.id, repository.slug!);
+  // Get or create tag for this repository (the tag service records one it creates)
+  const { tag } = await ClassmojiService.organizationTag.findOrCreate(
+    classroom.id,
+    repository.slug!,
+    await auditActor(request, gate, 'web:team_formation.tag')
+  );
 
   // Get classroom with git organization for provider operations
   const classroomWithOrg = await ClassmojiService.classroom.findById(classroom.id);
@@ -216,21 +222,25 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'That team name is not available.' };
       }
 
-      // Create team in database with membership and tag
-      await ClassmojiService.team.createWithMembershipAndTag({
-        name: teamName.trim(),
-        slug: teamSlug,
-        classroomId: classroom.id,
-        providerId: isGitLab
-          ? scopeGitlabId(
-              classroomWithOrg!.git_organization.gitlab_instance_id ?? null,
-              githubTeam.id
-            )
-          : githubTeam.id,
-        provider: isGitLab ? 'GITLAB' : 'GITHUB',
-        userId,
-        tagId: tag.id,
-      });
+      // Create team in database with membership and tag; the team service
+      // records it (TEAMS / CREATE).
+      await ClassmojiService.team.createWithMembershipAndTag(
+        {
+          name: teamName.trim(),
+          slug: teamSlug,
+          classroomId: classroom.id,
+          providerId: isGitLab
+            ? scopeGitlabId(
+                classroomWithOrg!.git_organization.gitlab_instance_id ?? null,
+                githubTeam.id
+              )
+            : githubTeam.id,
+          provider: isGitLab ? 'GITLAB' : 'GITHUB',
+          userId,
+          tagId: tag.id,
+        },
+        await auditActor(request, gate, 'web:team_formation.create')
+      );
 
       // Add user to GitHub team
       try {
@@ -304,8 +314,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'This team is full' };
       }
 
-      // Add user to team — the RESOLVED row's id, not the raw body value.
-      await ClassmojiService.teamMembership.addMemberToTeam(team.id, userId);
+      // Add user to team — the RESOLVED row, not the raw body value. The
+      // membership service records the join (TEAMS / UPDATE).
+      await ClassmojiService.teamMembership.addMemberToTeam(
+        team,
+        userId,
+        await auditActor(request, gate, 'web:team_formation.join')
+      );
 
       // Add user to GitHub team
       try {
@@ -326,8 +341,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'You are not on a team' };
       }
 
-      // Remove user from team
-      await ClassmojiService.teamMembership.removeMemberFromTeam(userTeam.id, userId);
+      // Remove user from team; the membership service records the leave.
+      await ClassmojiService.teamMembership.removeMemberFromTeam(
+        userTeam,
+        userId,
+        await auditActor(request, gate, 'web:team_formation.leave')
+      );
 
       // Remove user from GitHub team
       try {

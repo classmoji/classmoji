@@ -9,7 +9,8 @@ import { useDragReorder, dragRowClass } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import type { ModuleItemType } from '@classmoji/database/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { addClassroomAuditLog, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
 import { itemLabel } from '~/components/features/modules/moduleItemMeta';
@@ -75,10 +76,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
+  const gate = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'manage_modules',
   });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = (await request.json()) as {
@@ -101,10 +103,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return namedAction(request, {
     async create() {
       try {
-        const module = await ClassmojiService.module.create(classroom.id, {
-          title: data.title!,
-          description: data.description,
-        });
+        const { module } = await ClassmojiService.module.create(
+          classroom.id,
+          { title: data.title!, description: data.description },
+          await auditActor(request, gate, 'web:modules.create')
+        );
         return { success: 'Module created', module };
       } catch (error: unknown) {
         console.error('Module create error:', error);
@@ -113,10 +116,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async update() {
       try {
-        await ClassmojiService.module.updateForClassroom(data.id!, classroom.id, {
-          title: data.title!,
-          description: data.description,
-        });
+        await ClassmojiService.module.updateForClassroom(
+          data.id!,
+          classroom.id,
+          { title: data.title!, description: data.description },
+          await auditActor(request, gate, 'web:modules.update')
+        );
         return { success: 'Module updated' };
       } catch (error: unknown) {
         console.error('Module update error:', error);
@@ -127,25 +132,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         // Where quizzes are hidden, a module whose only assignments are quiz
         // ones goes with them (the quizzes and attempts stay, in no module);
-        // the audit row records which.
-        const deleted = await ClassmojiService.module.deleteById(data.id!, classroom.id, {
-          quizzesHidden: await quizzesHiddenIn(classroom.id),
-        });
-        if (deleted.deleted_quiz_assignment_ids.length > 0) {
-          await addClassroomAuditLog({
-            request,
-            classroomId: classroom.id,
-            userId,
-            role: membership!.role,
-            action: 'DELETE',
-            resourceType: 'MODULES',
-            resourceId: data.id!,
-            metadata: {
-              tool: 'web:modules.delete',
-              quiz_assignment_ids: deleted.deleted_quiz_assignment_ids,
-            },
-          });
-        }
+        // the service's audit row records which.
+        await ClassmojiService.module.deleteById(
+          data.id!,
+          classroom.id,
+          { quizzesHidden: await quizzesHiddenIn(classroom.id) },
+          await auditActor(request, gate, 'web:modules.delete')
+        );
         return { success: 'Module deleted' };
       } catch (error: unknown) {
         console.error('Module delete error:', error);
@@ -169,7 +162,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async setPublished() {
       try {
-        await ClassmojiService.module.setPublished(data.id!, !!data.isPublished, classroom.id);
+        await ClassmojiService.module.setPublished(
+          data.id!,
+          !!data.isPublished,
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.set_published')
+        );
         return {
           success: data.isPublished
             ? 'Module published to students'
@@ -182,7 +180,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async setPublic() {
       try {
-        await ClassmojiService.module.setPublic(data.id!, !!data.isPublic, classroom.id);
+        await ClassmojiService.module.setPublic(
+          data.id!,
+          !!data.isPublic,
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.set_public')
+        );
         return {
           success: data.isPublic
             ? 'Module shown on the course website'
@@ -206,7 +209,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           // as an item; the service refuses REPOSITORY at runtime as well.
           data.itemType! as Exclude<ModuleItemType, 'REPOSITORY'>,
           data.targetId!,
-          classroom.id
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.add_item')
         );
         return { success: 'Item added to module' };
       } catch (error: unknown) {
@@ -216,7 +220,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async removeItem() {
       try {
-        await ClassmojiService.module.removeItem(data.moduleItemId!, classroom.id);
+        await ClassmojiService.module.removeItem(
+          data.moduleItemId!,
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.remove_item')
+        );
         return { success: 'Item removed from module' };
       } catch (error: unknown) {
         console.error('Module removeItem error:', error);
@@ -228,7 +236,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.module.reorderItems(
           data.moduleId!,
           await fullItemOrder(classroom.id, data.moduleId!, data.orderedItemIds ?? []),
-          classroom.id
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.reorder_items')
         );
         return { success: 'Module order updated' };
       } catch (error: unknown) {
@@ -241,7 +250,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.reorderInModule(
           data.moduleId!,
           await fullAssignmentOrder(classroom.id, data.moduleId!, data.orderedAssignmentIds ?? []),
-          classroom.id
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.reorder_assignments')
         );
         return { success: 'Module order updated' };
       } catch (error: unknown) {
@@ -255,7 +265,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           data.moduleItemId!,
           data.toModuleId!,
           await fullItemOrder(classroom.id, data.toModuleId!, data.orderedItemIds ?? []),
-          classroom.id
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.move_item')
         );
         return { success: 'Item moved' };
       } catch (error: unknown) {
@@ -278,7 +289,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
             data.toModuleId!,
             data.orderedAssignmentIds ?? []
           ),
-          classroom.id
+          classroom.id,
+          await auditActor(request, gate, 'web:modules.move_assignment')
         );
         return { success: 'Assignment moved' };
       } catch (error: unknown) {
@@ -288,7 +300,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async reorderModules() {
       try {
-        await ClassmojiService.module.reorderModules(classroom.id, data.orderedModuleIds ?? []);
+        await ClassmojiService.module.reorderModules(
+          classroom.id,
+          data.orderedModuleIds ?? [],
+          await auditActor(request, gate, 'web:modules.reorder_modules')
+        );
         return { success: 'Modules reordered' };
       } catch (error: unknown) {
         console.error('Module reorderModules error:', error);
