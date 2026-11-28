@@ -172,9 +172,11 @@ export const findFirst = async (query: Prisma.GitRepoAssignmentWhereInput) => {
 /**
  * Find all GitRepoAssignments for a classroom
  * @param {string} classroomId - UUID of the Classroom
+ * @param provider - the classroom's git provider, whose usernames become each
+ *   user's `login`; without it, Github first (the display username)
  * @returns {Promise<Object[]>}
  */
-export const findByClassroomId = async (classroomId: string) => {
+export const findByClassroomId = async (classroomId: string, provider?: string | null) => {
   return withLogins(
     await getPrisma().gitRepoAssignment.findMany({
       where: {
@@ -211,7 +213,8 @@ export const findByClassroomId = async (classroomId: string) => {
           },
         },
       },
-    })
+    }),
+    provider
   );
 };
 

@@ -104,9 +104,35 @@ describe('list_submissions (teaching team)', () => {
       assignment_id: fx.releasedAssignment.id,
     });
     expect(filtered.isError).toBe(false);
-    const rows = filtered.payload.submissions as Array<{ assignment: { id: string } | null }>;
+    const rows = filtered.payload.submissions as Array<{
+      assignment_id: string | null;
+      student_id: string | null;
+    }>;
     expect(rows.length).toBeGreaterThan(0);
-    for (const r of rows) expect(r.assignment?.id).toBe(fx.releasedAssignment.id);
+    for (const r of rows) expect(r.assignment_id).toBe(fx.releasedAssignment.id);
+    // The maps name exactly this page's assignment and students, no avatar.
+    expect(Object.keys(filtered.payload.assignments as object)).toEqual([fx.releasedAssignment.id]);
+    const students = filtered.payload.students as Record<string, Record<string, unknown>>;
+    const named = [...new Set(rows.map(r => r.student_id).filter(Boolean))].sort();
+    expect(Object.keys(students).sort()).toEqual(named);
+    for (const s of Object.values(students)) expect(s).not.toHaveProperty('avatar');
+  });
+
+  it('pages by offset without repeating or skipping a row', async () => {
+    const whole = await callTool(ta, 'list_submissions', { classroom: DEV_REF, limit: 200 });
+    // The comparison needs every row on one page.
+    expect(whole.payload.truncated).toBe(false);
+    const all = (whole.payload.submissions as Array<{ id: string }>).map(s => s.id);
+    expect(all.length).toBeGreaterThan(1);
+    const paged: string[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const page = await callTool(ta, 'list_submissions', { classroom: DEV_REF, limit: 1, offset });
+      expect(page.payload.total_matched).toBe(all.length);
+      paged.push(...(page.payload.submissions as Array<{ id: string }>).map(s => s.id));
+      offset = page.payload.next_offset as number | null;
+    }
+    expect(paged).toEqual(all);
   });
 });
 
@@ -236,11 +262,17 @@ describe('no-drift: tool payloads equal their resource payloads', () => {
   });
 
   it('list_submissions rows == grading-queue resource `all` rows (teaching team)', async () => {
-    const tool = await callTool(ta, 'list_submissions', { classroom: DEV_REF });
+    const tool = await callTool(ta, 'list_submissions', { classroom: DEV_REF, limit: 200 });
+    // Equal only when every row fits one page.
+    expect(tool.payload.truncated).toBe(false);
     const resource = await readResource(ta, `classmoji://${DEV_REF}/grading-queue`);
     expect(resource.error).toBeUndefined();
     // The per-submission shape (queueRow) and emoji_scale are shared code.
     expect(tool.payload.submissions).toEqual(resource.payload!.all);
     expect(tool.payload.emoji_scale).toEqual(resource.payload!.emoji_scale);
+    // Every row fits one page here, so the maps agree too (the resource's
+    // also cover assigned_to_me, which is a subset of `all`).
+    expect(tool.payload.assignments).toEqual(resource.payload!.assignments);
+    expect(tool.payload.students).toEqual(resource.payload!.students);
   });
 });

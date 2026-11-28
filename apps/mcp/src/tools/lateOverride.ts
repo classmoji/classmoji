@@ -92,7 +92,7 @@ import {
   writeAudit,
 } from './shared.ts';
 
-/** Largest id list one call accepts (list_submissions' own page cap). */
+/** Largest id list one call accepts (a few pages of list_submissions). */
 export const LATE_OVERRIDE_MAX_IDS = 500;
 /** Each id list in the response is cut to this many; the counts stay exact. */
 export const LATE_OVERRIDE_ID_LIST_CAP = 100;

@@ -54,6 +54,7 @@ import { rosterResource, teamsResource } from '../resources/roster.ts';
 import { reposResource, gradesMineResource, GRADES_MINE_DESCRIPTION } from '../resources/repos.ts';
 import {
   loadGradingQueueData,
+  queueRefs,
   queueRow,
   leaderboardResource,
   submissionResource,
@@ -374,8 +375,10 @@ export const myTokensTool = mirrorResourceTool({
 
 // ─── list_submissions (grading-queue data + server-side filters) ────────────
 
+// A page of rows plus their maps stays well under what a client accepts in
+// one tool result (a 500-row page of the old inline shape was ~480k chars).
 const LIST_SUBMISSIONS_LIMIT_DEFAULT = 100;
-const LIST_SUBMISSIONS_LIMIT_MAX = 500;
+const LIST_SUBMISSIONS_LIMIT_MAX = 200;
 
 interface ListSubmissionsArgs {
   classroom: string;
@@ -384,21 +387,24 @@ interface ListSubmissionsArgs {
   grader_id?: string;
   status?: IssueStatus;
   limit?: number;
+  offset?: number;
 }
 
 export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   name: 'list_submissions',
   title: 'List submissions',
   description:
-    'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
-    'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
-    'grading-queue. Each row has extension_hours (hours the student bought with tokens, net of ' +
-    'refunds) and is_late (past student_deadline plus extension_hours; false when ' +
-    'is_late_override). is_late includes unsubmitted rows past that time, unlike the dashboard ' +
-    'late count, which counts submitted work only. ' +
-    'Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
-    'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
-    'submission_late_override consume. Teaching team only.',
+    'Submissions (GitRepoAssignments) in the classroom with grade emojis, graders, team, and ' +
+    'the classroom emoji scale; the same rows as the grading-queue. Rows carry assignment_id ' +
+    'and student_id; `assignments` (title, deadline, submission mode, repository) and ' +
+    '`students` (name, login) map the ids on this page, once each. Each row has ' +
+    'extension_hours (hours bought with tokens, net of refunds) and is_late (past ' +
+    'student_deadline plus extension_hours; false when is_late_override; includes unsubmitted ' +
+    'rows, unlike the dashboard late count). ' +
+    'Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). Paged, ' +
+    'oldest first: when truncated, call again with offset = next_offset; total_matched counts ' +
+    'every match. The returned `id` is the submission id that grade_add, grade_remove, ' +
+    'grader_assign, and submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   auditRead: {
@@ -424,16 +430,25 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
       .positive()
       .max(LIST_SUBMISSIONS_LIMIT_MAX)
       .optional()
-      .describe(`Max submissions to return (default ${LIST_SUBMISSIONS_LIMIT_DEFAULT})`),
+      .describe(
+        `Max submissions to return (default ${LIST_SUBMISSIONS_LIMIT_DEFAULT}, at most ${LIST_SUBMISSIONS_LIMIT_MAX})`
+      ),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Matches to skip, from next_offset of the previous page (default 0)'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
     const git = orgGit(ctx);
+    const provider = orgProvider(ctx);
     // Shared with the grading-queue resource: one query + emoji-scale shaping.
-    const { emoji_scale, all } = await loadGradingQueueData(classroomId);
+    const { emoji_scale, all } = await loadGradingQueueData(classroomId, provider);
 
     // The service method has no filter params (gitRepoAssignment.findByClassroomId
-    // takes only classroomId), so the filters are applied in-memory over the raw
+    // takes only the classroom and provider), so the filters are applied in-memory over the raw
     // rows before shaping. Each is derived from DB columns, never request data.
     let filtered: SubmissionLike[] = all;
     if (args.repository_id) {
@@ -453,13 +468,22 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
       args.limit ?? LIST_SUBMISSIONS_LIMIT_DEFAULT,
       LIST_SUBMISSIONS_LIMIT_MAX
     );
-    const page = filtered.slice(0, limit);
+    // Rows come in one fixed order (loadGradingQueueData, `byCreation`), so
+    // pages by offset are exact while the matches stay the same.
+    const offset = args.offset ?? 0;
+    const page = filtered.slice(offset, offset + limit);
+    const end = offset + page.length;
+    const truncated = end < filtered.length;
 
     return ok({
       count: page.length,
       total_matched: filtered.length,
-      truncated: filtered.length > page.length,
+      offset,
+      truncated,
+      next_offset: truncated ? end : null,
       emoji_scale,
+      // Only what this page names: a page never lists anyone not on it.
+      ...queueRefs(page, provider),
       submissions: page.map(s => queueRow(s, git)),
     });
   },
