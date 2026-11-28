@@ -19,7 +19,7 @@
  */
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
-import { gitUsername, parseScoreEmoji } from '@classmoji/utils';
+import { gitUsername } from '@classmoji/utils';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -85,9 +85,10 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
     const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
     await assertEmojiInScale(classroom.classroomId, args.emoji);
 
-    const priorGrade = gra.grades.find(g => g.emoji === args.emoji);
-
-    await HelperService.addGradeToGitRepoAssignment({
+    // What THIS call changed, read inside the grade transaction: a call that
+    // found its grade already there (a repeat, or the second of two identical
+    // calls racing on the submission lock) changed nothing.
+    const outcome = await HelperService.addGradeToGitRepoAssignment({
       classroom: { id: classroom.classroomId },
       gitRepoAssignment: { id: gra.id },
       // Grade as the authenticated caller — never a client-supplied graderId.
@@ -97,57 +98,28 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       teamId: gra.git_repo.team_id ?? undefined,
     });
 
-    const audit = (replaced: string[] = []) =>
-      writeAudit(ctx, {
+    if (outcome.created || outcome.removed.length > 0) {
+      // The caller's own grades this call removed (their previous score on the
+      // numeric scale, their pre-regrade grades), so the change can be read
+      // back from the row.
+      const replaced = outcome.removed
+        .filter(g => g.grader_id === ctx.viewer.userId)
+        .map(g => g.emoji);
+      await writeAudit(ctx, {
         resource_type: 'GIT_REPO_ASSIGNMENT',
         resource_id: gra.id,
         action: 'CREATE',
         data: {
           tool: 'grade_add',
           emoji: args.emoji,
-          // The caller's own previous score this one replaced, so the change
-          // can be read back from the row (one per grader on the numeric scale).
-          ...(replaced.length === 1 ? { replaced: replaced[0] } : {}),
-          ...(replaced.length > 1 ? { replaced } : {}),
+          ...(replaced.length > 0 ? { replaced } : {}),
         },
       });
-    let grades: Awaited<ReturnType<typeof ClassmojiService.assignmentGrade.findByAssignmentId>>;
-    try {
-      grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
-    } catch (error) {
-      await audit(); // the grade may have changed: never leave it unrecorded
-      throw error;
     }
 
-    // A grade already given (the same rows before and after) changed nothing,
-    // so it records nothing. Any other outcome (a new row, a replaced score, a
-    // cleared regrade) is a change and gets its row.
-    const before = new Set(gra.grades.map(g => g.id));
-    const unchanged = grades.length === before.size && grades.every(g => before.has(g.id));
-    if (!unchanged) {
-      // On the numeric scale a grader's new score replaces their own previous
-      // one: the score rows of theirs that were there before and are gone now.
-      const after = new Set(grades.map(g => g.id));
-      const replaced =
-        parseScoreEmoji(args.emoji) === null
-          ? []
-          : gra.grades
-              .filter(
-                g =>
-                  g.grader_id === ctx.viewer.userId &&
-                  parseScoreEmoji(g.emoji) !== null &&
-                  !after.has(g.id)
-              )
-              .map(g => g.emoji);
-      await audit(replaced);
-    }
-
-    // The orchestrator dedups silently — but on the regrade-replace path it
-    // CLEARS the pre-request grade and mints a fresh row for the same emoji,
-    // which is a real mutation, not a no-op. Report deduplicated only when the
-    // pre-existing grade row itself survived (same id before and after).
-    const currentGrade = grades.find(g => g.emoji === args.emoji);
-    const deduplicated = Boolean(priorGrade && currentGrade && priorGrade.id === currentGrade.id);
+    const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    // No new row: the grade was already there and stays.
+    const deduplicated = outcome.created === null;
     return ok({
       success: true,
       git_repo_assignment_id: gra.id,

@@ -1,16 +1,14 @@
 /**
- * Unit tests for grade_add's `deduplicated` flag (finding U4).
+ * Unit tests for the grade tools.
  *
- * HelperService.addGradeToGitRepoAssignment returns void and silently either
- * (a) no-ops when the same emoji already exists (true dedup) or (b) on an
- * open regrade request CLEARS the stale grade and mints a FRESH row for the
- * same emoji (regrade-replace — a real mutation). The tool used to report
- * `deduplicated: true` for both, misreporting (b) as a no-op. It must compare
- * the grade-row id before/after: dedup only when the pre-existing row itself
- * survived.
+ * grade_add reads what it changed from HelperService.addGradeToGitRepoAssignment,
+ * which answers, from inside its transaction, the grade rows it removed and
+ * the one it created. The tool records a row only when the call created or
+ * removed something (a repeat, or the second of two identical calls racing on
+ * the submission lock, changed nothing), names the caller's own removed grades
+ * as `replaced`, and reports `deduplicated` when no new row was made.
  *
- * `@classmoji/services` is mocked (factory idiom); the orchestrator's effect
- * is simulated through the post-call findByAssignmentId snapshot.
+ * `@classmoji/services` is mocked (factory idiom).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -80,14 +78,17 @@ function parse(result: { content: Array<{ text: string }> }) {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.findByClassroomId.mockResolvedValue([{ emoji: '🟢' }, { emoji: '🔴' }]);
-  mocks.addGradeToGitRepoAssignment.mockResolvedValue(undefined);
+  mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+    removed: [],
+    created: { id: 'g-new', emoji: '🟢' },
+  });
   mocks.auditCreate.mockResolvedValue(undefined);
 });
 
-describe('grade_add deduplicated flag (U4)', () => {
-  it('reports deduplicated:true only when the pre-existing grade row survived (true no-op)', async () => {
+describe('grade_add', () => {
+  it('reports deduplicated:true and writes no row when the call changed nothing', async () => {
     mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🟢' }]));
-    // Orchestrator no-oped: the SAME row is still there afterwards.
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({ removed: [], created: null });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-old', emoji: '🟢', grader: { login: 'ta' } },
     ]);
@@ -95,14 +96,31 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(true);
-    // Nothing changed, so nothing is recorded.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('writes no row for the second of two racing identical calls, whatever it read before', async () => {
+    // Both calls read the submission before either committed; the second
+    // waited for the submission lock, found the grade already there and
+    // changed nothing.
+    mocks.findByClassroomId.mockResolvedValue(['score-70', 'score-80'].map(emoji => ({ emoji })));
+    mocks.findById.mockResolvedValue(gra([{ id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' }]));
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({ removed: [], created: null });
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g-first', emoji: 'score-80', grader_id: 'ta-1' },
+    ]);
+
+    const payload = parse(await gradeAddTool.handler({ ...ARGS, emoji: 'score-80' }, CTX));
+    expect(payload.deduplicated).toBe(true);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('reports deduplicated:false on the regrade-replace path (stale row cleared, fresh row minted)', async () => {
-    mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🟢' }]));
-    // Open regrade request: the orchestrator cleared g-old and minted g-new
-    // for the same emoji — a real mutation, not a dedup.
+    mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🟢', grader_id: 'ta-2' }]));
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [{ id: 'g-old', emoji: '🟢', grader_id: 'ta-2' }],
+      created: { id: 'g-new', emoji: '🟢' },
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-new', emoji: '🟢', grader: { login: 'ta' } },
     ]);
@@ -111,10 +129,18 @@ describe('grade_add deduplicated flag (U4)', () => {
     expect(payload.success).toBe(true);
     expect(payload.deduplicated).toBe(false);
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    // Another grader's cleared grade is not the caller's to have replaced.
+    const { data } = mocks.auditCreate.mock.calls[0][0];
+    expect(data).toMatchObject({ tool: 'grade_add', emoji: '🟢' });
+    expect(data).not.toHaveProperty('replaced');
   });
 
   it('reports deduplicated:false on a plain first-time grade', async () => {
     mocks.findById.mockResolvedValue(gra([]));
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [],
+      created: { id: 'g-new', emoji: '🟢' },
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-new', emoji: '🟢', grader: { login: 'ta' } },
     ]);
@@ -122,17 +148,22 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(false);
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0].data).not.toHaveProperty('replaced');
   });
 
-  it('records a change when another grade went although the emoji was already there', async () => {
-    // The caller's old score was replaced while another grader's equal score
-    // stayed: `deduplicated`, but the grades changed, so it is recorded.
+  it('records a change when a grade went although the emoji was already there', async () => {
+    // The caller's pre-regrade grade was cleared while another grader's equal
+    // grade stayed: `deduplicated`, but the grades changed, so it is recorded.
     mocks.findById.mockResolvedValue(
       gra([
-        { id: 'g-other', emoji: '🟢' },
-        { id: 'g-mine', emoji: '🔴' },
+        { id: 'g-other', emoji: '🟢', grader_id: 'ta-2' },
+        { id: 'g-mine', emoji: '🔴', grader_id: 'ta-1' },
       ])
     );
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [{ id: 'g-mine', emoji: '🔴', grader_id: 'ta-1' }],
+      created: null,
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-other', emoji: '🟢', grader: { login: 'ta2' } },
     ]);
@@ -140,9 +171,14 @@ describe('grade_add deduplicated flag (U4)', () => {
     const payload = parse(await gradeAddTool.handler(ARGS, CTX));
     expect(payload.deduplicated).toBe(true);
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
+      tool: 'grade_add',
+      emoji: '🟢',
+      replaced: ['🔴'],
+    });
   });
 
-  it('records the score a numeric re-grade replaced: the caller’s own, not another grader’s', async () => {
+  it('records the score a numeric re-grade replaced, as an array', async () => {
     const scale = ['score-70', 'score-80', 'score-90'].map(emoji => ({ emoji }));
     mocks.findByClassroomId.mockResolvedValue(scale);
     mocks.findById.mockResolvedValue(
@@ -151,7 +187,10 @@ describe('grade_add deduplicated flag (U4)', () => {
         { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
       ])
     );
-    // The orchestrator removed the caller's score-70 and added score-80.
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [{ id: 'g-mine', emoji: 'score-70', grader_id: 'ta-1' }],
+      created: { id: 'g-new', emoji: 'score-80' },
+    });
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g-other', emoji: 'score-90', grader_id: 'ta-2' },
       { id: 'g-new', emoji: 'score-80', grader_id: 'ta-1' },
@@ -164,32 +203,16 @@ describe('grade_add deduplicated flag (U4)', () => {
       resource_type: 'GIT_REPO_ASSIGNMENT',
       resource_id: 'gra-1',
       action: 'CREATE',
-      data: { tool: 'grade_add', emoji: 'score-80', replaced: 'score-70' },
+      data: { tool: 'grade_add', emoji: 'score-80', replaced: ['score-70'] },
     });
   });
 
-  it('names nothing replaced on a first numeric score, or on the emoji scale', async () => {
-    mocks.findByClassroomId.mockResolvedValue([{ emoji: 'score-80' }]);
+  it('records the grade before reading the grades back, so a failed read leaves it recorded', async () => {
     mocks.findById.mockResolvedValue(gra([]));
-    mocks.findByAssignmentId.mockResolvedValue([
-      { id: 'g-new', emoji: 'score-80', grader_id: 'ta-1' },
-    ]);
-    await gradeAddTool.handler({ ...ARGS, emoji: 'score-80' }, CTX);
-
-    // On the emoji scale nothing is replaced, even when a regrade cleared a row.
-    mocks.findByClassroomId.mockResolvedValue([{ emoji: '🟢' }, { emoji: '🔴' }]);
-    mocks.findById.mockResolvedValue(gra([{ id: 'g-old', emoji: '🔴', grader_id: 'ta-1' }]));
-    mocks.findByAssignmentId.mockResolvedValue([{ id: 'g-green', emoji: '🟢', grader_id: 'ta-1' }]);
-    await gradeAddTool.handler(ARGS, CTX);
-
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
-    for (const [row] of mocks.auditCreate.mock.calls) {
-      expect((row as { data: Record<string, unknown> }).data).not.toHaveProperty('replaced');
-    }
-  });
-
-  it('records the grade when reading the grades back fails', async () => {
-    mocks.findById.mockResolvedValue(gra([]));
+    mocks.addGradeToGitRepoAssignment.mockResolvedValue({
+      removed: [],
+      created: { id: 'g-new', emoji: '🟢' },
+    });
     mocks.findByAssignmentId.mockRejectedValue(new Error('db down'));
 
     await expect(gradeAddTool.handler(ARGS, CTX)).rejects.toThrow('db down');

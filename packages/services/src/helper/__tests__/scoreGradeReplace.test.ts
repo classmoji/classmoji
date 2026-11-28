@@ -2,7 +2,7 @@
  * Numeric grading: a `score-N` grade is one number per grader. Giving a new
  * score replaces the score that grader gave before (and reverses its tokens);
  * another grader's score is left alone. Any grade outside the classroom's
- * scale is refused.
+ * scale is refused. The call answers what it removed and created.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -81,12 +81,16 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
     mocks.findByClassroomId.mockResolvedValue(numericScale);
     mocks.findByAssignmentId.mockResolvedValue([]);
     mocks.doesGradeExist.mockResolvedValue(false);
-    mocks.addGrade.mockResolvedValue({ id: 'grade-new' });
+    mocks.addGrade.mockImplementation(async (_ra: string, _grader: string, emoji: string) => ({
+      id: 'grade-new',
+      emoji,
+    }));
     mocks.tx.gitRepoAssignment.findUnique.mockResolvedValue({
       git_repo: { student_id: 'student-1', team_id: null },
     });
     mocks.tx.assignmentGrade.findFirst.mockResolvedValue({
       emoji: 'score-85',
+      grader_id: 'ta-1',
       token_transaction: null,
     });
     mocks.tx.assignmentGrade.deleteMany.mockResolvedValue({ count: 1 });
@@ -103,10 +107,25 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
       { id: 'grade-old', emoji: 'score-85', grader_id: 'ta-1', token_transaction: null },
     ]);
 
-    await svc.addGradeToGitRepoAssignment(payload('score-90'));
+    const outcome = await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
     expect(removed()).toEqual(['grade-old']);
     expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'score-90', mocks.tx);
+    expect(outcome).toEqual({
+      removed: [{ id: 'grade-old', emoji: 'score-85', grader_id: 'ta-1' }],
+      created: { id: 'grade-new', emoji: 'score-90' },
+    });
+  });
+
+  it('answers nothing removed when a concurrent request already removed the score', async () => {
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'grade-old', emoji: 'score-85', grader_id: 'ta-1', token_transaction: null },
+    ]);
+    mocks.tx.assignmentGrade.deleteMany.mockResolvedValue({ count: 0 });
+
+    const outcome = await svc.addGradeToGitRepoAssignment(payload('score-90'));
+
+    expect(outcome).toEqual({ removed: [], created: { id: 'grade-new', emoji: 'score-90' } });
   });
 
   it("leaves another grader's score in place", async () => {
@@ -125,10 +144,21 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
       { id: 'grade-old', emoji: 'score-90', grader_id: 'ta-1', token_transaction: null },
     ]);
 
-    await svc.addGradeToGitRepoAssignment(payload('score-90'));
+    const outcome = await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
     expect(removed()).toEqual([]);
     expect(mocks.addGrade).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ removed: [], created: null });
+  });
+
+  it('answers nothing changed when the grade is already there', async () => {
+    mocks.findByClassroomId.mockResolvedValue([{ emoji: 'heart', grade: 100, extra_tokens: 0 }]);
+    mocks.doesGradeExist.mockResolvedValue(true);
+
+    const outcome = await svc.addGradeToGitRepoAssignment(payload('heart'));
+
+    expect(mocks.addGrade).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ removed: [], created: null });
   });
 
   it('reverses the tokens of the replaced score', async () => {

@@ -102,8 +102,13 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
       { id: 'old-grade', emoji: '❌', created_at: new Date('2026-05-30T00:00:00Z') },
       { id: 'fresh-grade', emoji: '✅', created_at: new Date('2026-06-02T00:00:00Z') },
     ]);
+    tx.assignmentGrade.findFirst.mockResolvedValue({
+      emoji: '❌',
+      grader_id: 'grader-2',
+      token_transaction: null,
+    });
 
-    await HelperService.addGradeToGitRepoAssignment({
+    const outcome = await HelperService.addGradeToGitRepoAssignment({
       classroom,
       gitRepoAssignment,
       graderId: 'grader-1',
@@ -121,6 +126,8 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
     expect(findOpenByAssignmentIdMock).toHaveBeenCalledWith('gra-1', tx);
     expect(findByAssignmentIdMock).toHaveBeenCalledWith('gra-1', tx);
     expect(addGradeMock).toHaveBeenCalledWith('gra-1', 'grader-1', '✅', tx);
+    // The call answers the grade it cleared.
+    expect(outcome.removed).toEqual([{ id: 'old-grade', emoji: '❌', grader_id: 'grader-2' }]);
   });
 
   it("reverses a cleared grade's tokens for the repo's student", async () => {
