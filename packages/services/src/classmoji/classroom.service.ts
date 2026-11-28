@@ -1088,6 +1088,10 @@ export interface ClassroomSettingsAuditOptions {
  * in the transaction that writes, under a lock on the classroom row, so two
  * overlapping saves are recorded one after the other, each against what the
  * other left. The row is written after the commit.
+ *
+ * Answers the saved settings row (API keys included: never hand it to a
+ * client), the classroom's `id` and `name` when the name was saved (nothing
+ * else of the classroom row), and the audit outcome.
  */
 export const updateClassroomSettings = async (
   classroomId: string,
@@ -1186,7 +1190,7 @@ export const updateClassroomSettings = async (
         ? await tx.classroom.update({
             where: { id: classroomId },
             data: { name },
-            include: { git_organization: true, settings: true },
+            select: { id: true, name: true },
           })
         : null;
     return { before, settings, classroom };

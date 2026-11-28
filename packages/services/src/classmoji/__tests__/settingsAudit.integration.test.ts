@@ -242,7 +242,9 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
         )
       );
       expect(value.audit).toEqual({ written: 1, missed: 0 });
-      expect(value.classroom?.name).toBe(`Renamed ${suite}`);
+      // The classroom's id and name only: nothing else of the row (its git
+      // organization carries credentials).
+      expect(value.classroom).toEqual({ id: X.classroomId, name: `Renamed ${suite}` });
       expect(rows).toEqual([
         {
           user_id: X.ownerId,
