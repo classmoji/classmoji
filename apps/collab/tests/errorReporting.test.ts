@@ -193,6 +193,7 @@ describe('recordAudit', () => {
       action: 'COLLAB_JOIN' as const,
       resourceType: 'PAGE',
       resourceId: 'page-1',
+      data: { tool: 'collab' },
     };
     recordAudit(sink, entry);
     await new Promise(resolve => setImmediate(resolve));
