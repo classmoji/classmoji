@@ -1244,7 +1244,7 @@ describe('page_preview_accept', () => {
     expect(audit.data).toMatchObject({ preview_kept: true, reason: expect.any(String) });
   });
 
-  it('conflict: structured per-unit report as a NON-error payload, with guidance + audit', async () => {
+  it('conflict: structured per-unit report as a NON-error payload, with guidance, no row', async () => {
     const units = [
       { id: 'h1', index: 0, ours: { id: 'h1' }, theirs: { id: 'h1' }, base: { id: 'h1' } },
     ];
@@ -1279,15 +1279,9 @@ describe('page_preview_accept', () => {
     expect(payload.message).toContain('5 change(s) auto-merge cleanly');
     expect(payload.message).toContain('1 conflict(s)');
 
-    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
-    expect(audit.data).toMatchObject({
-      tool: 'page_preview_accept',
-      outcome: 'conflict',
-      conflict_unit_ids: ['h1'],
-      auto_merged: 5,
-      ours_sha: 'ours-sha',
-      theirs_sha: 'theirs-sha',
-    });
+    // Nothing was merged, so nothing is recorded as changed.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('audit_incomplete');
   });
 
   it('a semantic auto-merge surfaces semantic + auto_merged in payload and audit', async () => {
@@ -1479,7 +1473,7 @@ describe('page_preview_discard', () => {
     expect(audit.data).toMatchObject({ tool: 'page_preview_discard', existed: true });
   });
 
-  it('is tolerant of an already-gone preview (still success, with a note)', async () => {
+  it('is tolerant of an already-gone preview (still success, with a note, no DELETE row)', async () => {
     mocks.discardPreview.mockResolvedValue({ discarded: true, existed: false });
 
     const payload = parse(
@@ -1491,6 +1485,8 @@ describe('page_preview_discard', () => {
       discarded: true,
       note: expect.stringMatching(/already gone/),
     });
+    // Nothing was deleted, so nothing is recorded as deleted.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 

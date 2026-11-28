@@ -1169,19 +1169,8 @@ async function acceptPreviewLive(
   }
 
   if (!outcome.applied) {
+    // A conflict applied nothing, so it writes no UPDATE row.
     const ids = outcome.conflicts.map(unit => String(unit.id));
-    await writeAudit(ctx, {
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'page_preview_accept',
-        outcome: 'conflict',
-        committed_to: 'live',
-        conflict_unit_ids: ids,
-        theirs_sha: theirs.sha,
-      },
-    });
     return ok({
       conflict: true,
       units: outcome.conflicts,
@@ -1404,20 +1393,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
       });
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'page_preview_accept',
-        outcome: 'conflict',
-        conflict_unit_ids: result.units.map(unit => unit.id),
-        auto_merged: result.auto_merged,
-        ours_sha: result.ours_sha,
-        theirs_sha: result.theirs_sha,
-      },
-    });
-
+    // A conflict merged nothing, so it writes no UPDATE row.
     return ok({
       conflict: true,
       units: result.units,
@@ -1457,15 +1433,18 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
     const result = await ClassmojiService.pageContent.discardPreview(page);
     await notifyPreviewChanged(page.classroom, 'page', page.id);
 
-    await writeAudit(ctx, {
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'DELETE',
-      data: {
-        tool: 'page_preview_discard',
-        existed: result.existed,
-      },
-    });
+    // A preview that was already gone deleted nothing: no DELETE row.
+    if (result.existed) {
+      await writeAudit(ctx, {
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'DELETE',
+        data: {
+          tool: 'page_preview_discard',
+          existed: result.existed,
+        },
+      });
+    }
 
     return ok({
       success: true,
