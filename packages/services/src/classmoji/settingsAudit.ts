@@ -6,13 +6,17 @@
  * Each column of the settings models has a rule:
  *
  *   value  — a known-safe scalar (a boolean, a number, an enum, a short id, a
- *            date, the time zone, a scale's emoji, letter or threshold): its
+ *            date, the time zone, a scale's grade or threshold): its
  *            new and old values go into the row (`values`, `previous`). A
  *            string is recorded only when it has the column's `shape`; any
  *            other string is recorded by name only.
  *   name   — recorded by name only (`fields`), with at most its length under
  *            `lengthKey`: text a person wrote, and anything not known to be
  *            safe.
+ *   label  — a short identifier picked for a scale (an emoji, a letter
+ *            grade): always recorded, as a value is, with control characters
+ *            removed and cut to `max` characters. Spaces are allowed, as the
+ *            web and the MCP allow them.
  *   secret — recorded by name only, plus `<field>_set: true` or
  *            `<field>_cleared: true`: keys, tokens and codes.
  *
@@ -26,6 +30,7 @@
 /** How one column of a settings model is recorded. */
 export type SettingsFieldRule =
   | { kind: 'value'; shape?: RegExp }
+  | { kind: 'label'; max: number }
   | { kind: 'name'; lengthKey?: string }
   | { kind: 'secret' };
 
@@ -44,6 +49,7 @@ const EFFORT = /^(low|medium|high|xhigh|max)$/;
 
 const value = (shape?: RegExp): SettingsFieldRule =>
   shape ? { kind: 'value', shape } : { kind: 'value' };
+const label = (max: number): SettingsFieldRule => ({ kind: 'label', max });
 const NAME: SettingsFieldRule = { kind: 'name' };
 const SECRET: SettingsFieldRule = { kind: 'secret' };
 
@@ -128,8 +134,8 @@ export const SETTINGS_AUDIT_FIELDS: Readonly<
   EmojiMapping: {
     id: value(UUID),
     classroom_id: value(UUID),
-    // An emoji or a shortcode such as `score-100`: no white space, short.
-    emoji: value(/^\S{1,100}$/u),
+    // An emoji or a shortcode such as `score-100`; the web takes at most 100.
+    emoji: label(100),
     grade: value(),
     extra_tokens: value(),
     description: NAME,
@@ -139,7 +145,8 @@ export const SETTINGS_AUDIT_FIELDS: Readonly<
   LetterGradeMapping: {
     id: value(UUID),
     classroom_id: value(UUID),
-    letter_grade: value(/^\S{1,8}$/u),
+    // The web and the MCP take at most 8.
+    letter_grade: label(8),
     min_grade: value(),
     created_at: value(),
     updated_at: value(),
@@ -176,8 +183,20 @@ function sameValue(a: unknown, b: unknown): boolean {
   }
 }
 
+/** Control characters (C0, DEL, C1): never part of a recorded label. */
+const CONTROL = /\p{Cc}/gu;
+
+/** `text` without control characters, at most `max` characters (code points). */
+function boundedLabel(text: string, max: number): string {
+  return Array.from(text.replace(CONTROL, '')).slice(0, max).join('');
+}
+
 /** `raw` as a row may carry it under `rule`, or undefined when only its name may go in. */
 function recordable(rule: SettingsFieldRule, raw: unknown): AuditScalar | undefined {
+  if (rule.kind === 'label') {
+    const scalar = scalarOf(raw);
+    return typeof scalar === 'string' ? boundedLabel(scalar, rule.max) : scalar;
+  }
   if (rule.kind !== 'value') return undefined;
   const scalar = scalarOf(raw);
   if (scalar === undefined) return undefined;

@@ -187,6 +187,49 @@ describe('describeSettingsChange', () => {
   });
 });
 
+describe('scale labels (an emoji, a letter grade)', () => {
+  it('are the two label columns', () => {
+    const labels = MODELS.flatMap(model =>
+      Object.entries(SETTINGS_AUDIT_FIELDS[model])
+        .filter(([, rule]) => rule.kind === 'label')
+        .map(([field]) => `${model}.${field}`)
+    );
+    expect(labels.sort()).toEqual(['EmojiMapping.emoji', 'LetterGradeMapping.letter_grade']);
+  });
+
+  it('are recorded whatever they hold, spaces included', () => {
+    expect(settingsValues('EmojiMapping', { emoji: 'a b' }, ['emoji'])).toEqual({ emoji: 'a b' });
+    expect(settingsValues('LetterGradeMapping', { letter_grade: 'A +' }, ['letter_grade'])).toEqual(
+      { letter_grade: 'A +' }
+    );
+    expect(
+      describeSettingsChange('LetterGradeMapping', null, { letter_grade: 'A +', min_grade: 90 }, [
+        'letter_grade',
+        'min_grade',
+      ])
+    ).toEqual({
+      fields: ['letter_grade', 'min_grade'],
+      values: { letter_grade: 'A +', min_grade: 90 },
+      previous: {},
+      markers: {},
+    });
+  });
+
+  it('lose control characters and are cut to their length', () => {
+    expect(settingsValues('EmojiMapping', { emoji: 'a\u0000b\n\u009fc' }, ['emoji'])).toEqual({
+      emoji: 'abc',
+    });
+    expect(settingsValues('EmojiMapping', { emoji: '⭐'.repeat(150) }, ['emoji'])).toEqual({
+      emoji: '⭐'.repeat(100),
+    });
+    expect(
+      settingsValues('LetterGradeMapping', { letter_grade: 'ABCDEFGHIJ' }, ['letter_grade'])
+    ).toEqual({ letter_grade: 'ABCDEFGH' });
+    // An emoji joined from several (a zero-width joiner) stays whole.
+    expect(settingsValues('EmojiMapping', { emoji: '👩‍💻' }, ['emoji'])).toEqual({ emoji: '👩‍💻' });
+  });
+});
+
 describe('settingsValues', () => {
   it('keeps the safe columns with a recordable value and leaves the rest out', () => {
     expect(

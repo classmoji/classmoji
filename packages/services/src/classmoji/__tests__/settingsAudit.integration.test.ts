@@ -536,6 +536,35 @@ describe.skipIf(!RUN)('settings services write their audit rows (integration)', 
       expect(JSON.stringify([created.rows, changed.rows])).not.toContain('Ada');
     });
 
+    it('a label with a space is recorded on its create row as on its delete row', async () => {
+      const actor = webActor(X, 'web:settings.grades.labels');
+      const emoji = await newRows(X, () =>
+        emojiMapping.saveEmojiMapping(X.classroomId, { emoji: 'a b', grade: 61 }, actor)
+      );
+      const letter = await newRows(X, () =>
+        letterGradeMapping.save(X.classroomId, { letter_grade: 'A +', min_grade: 97 }, actor)
+      );
+      const emojiGone = await newRows(X, () =>
+        emojiMapping.deleteEmojiMapping(X.classroomId, 'a b', actor)
+      );
+      const letterGone = await newRows(X, () =>
+        letterGradeMapping.delete(X.classroomId, 'A +', actor)
+      );
+      expect(emoji.rows.map(r => r.data)).toEqual([
+        expect.objectContaining({ emoji: 'a b', values: { emoji: 'a b', grade: 61 } }),
+      ]);
+      expect(letter.rows.map(r => r.data)).toEqual([
+        expect.objectContaining({
+          letter_grade: 'A +',
+          values: { letter_grade: 'A +', min_grade: 97 },
+        }),
+      ]);
+      expect(emojiGone.rows.map(r => r.data)).toEqual([expect.objectContaining({ emoji: 'a b' })]);
+      expect(letterGone.rows.map(r => r.data)).toEqual([
+        expect.objectContaining({ letter_grade: 'A +' }),
+      ]);
+    });
+
     it('deleteEmojiMapping: one DELETE row with what was there; none for nothing', async () => {
       const { value: saved } = await newRows(X, () =>
         emojiMapping.saveEmojiMapping(X.classroomId, { emoji: '🍕', grade: 50 }, null)
