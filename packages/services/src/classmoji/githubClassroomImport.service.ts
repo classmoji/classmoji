@@ -92,6 +92,8 @@ export interface ImportClassroomInput {
 export interface ImportSummary {
   classroomId: string;
   classroomSlug: string;
+  /** The import updated a classroom that already existed (a re-import), not a new one. */
+  reimported: boolean;
   classroomName: string;
   organizationLogin: string;
   appInstalled: boolean;
@@ -316,6 +318,8 @@ export async function resolveImportedClassroom(
      */
     mayCreateActive?: (tx: ImportTx) => Promise<boolean>;
     onCreatedLocked?: () => void;
+    /** Told when the course matched a classroom that already exists (steps 1 and 2). */
+    onReimported?: () => void;
   }
 ) {
   const {
@@ -327,6 +331,7 @@ export async function resolveImportedClassroom(
     ownerUserId,
     mayCreateActive = (db: ImportTx) => canCreateActive(db, ownerUserId),
     onCreatedLocked,
+    onReimported,
   } = args;
 
   if (githubClassroomId != null) {
@@ -335,6 +340,7 @@ export async function resolveImportedClassroom(
       select: { id: true },
     });
     if (byCourse) {
+      onReimported?.();
       return tx.classroom.update({
         where: { id: byCourse.id },
         data: { name },
@@ -352,6 +358,7 @@ export async function resolveImportedClassroom(
     select: { id: true },
   });
   if (legacy) {
+    onReimported?.();
     return tx.classroom.update({
       where: { id: legacy.id },
       data: {
@@ -420,6 +427,7 @@ async function importClassroomAttempt(args: {
   const summary: ImportSummary = {
     classroomId: '',
     classroomSlug: candidateSlug,
+    reimported: false,
     classroomName: gh.name,
     organizationLogin: gh.organization.login,
     appInstalled,
@@ -445,6 +453,9 @@ async function importClassroomAttempt(args: {
         candidateSlug,
         name: gh.name,
         ownerUserId,
+        onReimported: () => {
+          summary.reimported = true;
+        },
         onCreatedLocked: () =>
           warnings.push(
             `"${gh.name}" was imported locked: the Free plan includes one active class at a ` +
