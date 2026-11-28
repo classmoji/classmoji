@@ -166,7 +166,7 @@ export interface RenameAndReposResult {
 
 /**
  * Write a team's new name and slug and its repos' new names in one
- * transaction. The team row is locked first (`FOR NO KEY UPDATE`) and its
+ * transaction. The team row is locked first (`FOR UPDATE`) and its
  * name and slug read under that lock, as are the repos' names, so what this
  * answers is exactly what the writes replaced, whatever another rename did
  * before it.
@@ -180,7 +180,7 @@ export const renameAndRepos = async (payload: {
   const { teamId, newName, newSlug, repoRenames } = payload;
   return getPrisma().$transaction(async tx => {
     const [locked] = await tx.$queryRaw<Array<{ name: string; slug: string }>>`
-      SELECT name, slug FROM teams WHERE id = ${teamId} FOR NO KEY UPDATE`;
+      SELECT name, slug FROM teams WHERE id = ${teamId} FOR UPDATE`;
     const previous = repoRenames.length
       ? await tx.gitRepo.findMany({
           where: { id: { in: repoRenames.map(r => r.id) } },
