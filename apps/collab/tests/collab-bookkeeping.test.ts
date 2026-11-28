@@ -273,6 +273,7 @@ describe('audit', () => {
       // The same resource type the MCP page tools and checkpoints write.
       resourceType: 'PAGES',
       resourceId: PAGE,
+      data: { tool: 'collab' },
     });
     a.destroy();
     await waitFor(() => server.audit.entries.some(e => e.action === 'COLLAB_LEAVE'), 3000, 'leave');
@@ -290,10 +291,74 @@ describe('audit', () => {
         role: 'STUDENT',
         resourceType: 'collab_page',
         resourceId: PAGE,
-        data: { reason: 'forbidden' },
+        data: { tool: 'collab', reason: 'forbidden' },
       },
     ]);
     expect(server.audit.nonMemberRefusals).toEqual([]);
+  });
+
+  it('names the admin viewing as the user on JOIN and LEAVE, and only then', async () => {
+    server.sessions.viewedAs.set('teacher-1', 'admin-1');
+    const a = open();
+    await a.synced;
+    await waitFor(() => server.audit.entries.length > 0, 3000, 'join');
+    a.destroy();
+    await waitFor(() => server.audit.entries.some(e => e.action === 'COLLAB_LEAVE'), 3000, 'leave');
+    for (const action of ['COLLAB_JOIN', 'COLLAB_LEAVE']) {
+      expect(server.audit.entries.find(e => e.action === action)).toEqual({
+        action,
+        userId: 'teacher-1',
+        classroomId: CLASSROOM_ID,
+        role: 'TEACHER',
+        resourceType: 'PAGES',
+        resourceId: PAGE,
+        data: { tool: 'collab' },
+        impersonatedBy: 'admin-1',
+      });
+    }
+
+    server.audit.entries.length = 0;
+    server.sessions.viewedAs.clear();
+    const own = open();
+    await own.synced;
+    await waitFor(() => server.audit.entries.length > 0, 3000, 'own join');
+    expect(server.audit.entries[0]).toEqual({
+      action: 'COLLAB_JOIN',
+      userId: 'teacher-1',
+      classroomId: CLASSROOM_ID,
+      role: 'TEACHER',
+      resourceType: 'PAGES',
+      resourceId: PAGE,
+      data: { tool: 'collab' },
+    });
+    expect(server.audit.entries[0].impersonatedBy).toBeUndefined();
+    own.destroy();
+  });
+
+  it('names the admin viewing as a refused member, and hands a non-member refusal the admin', async () => {
+    server.sessions.viewedAs.set('student-1', 'admin-1');
+    server.sessions.viewedAs.set('stranger', 'admin-1');
+    const student = open(ROOM, { userId: 'student-1' });
+    await waitFor(() => server.audit.entries.length > 0, 3000, 'member refusal');
+    expect(server.audit.entries).toEqual([
+      {
+        action: 'ACCESS_DENIED',
+        userId: 'student-1',
+        classroomId: CLASSROOM_ID,
+        role: 'STUDENT',
+        resourceType: 'collab_page',
+        resourceId: PAGE,
+        data: { tool: 'collab', reason: 'forbidden' },
+        impersonatedBy: 'admin-1',
+      },
+    ]);
+    const stranger = open(ROOM, { userId: 'stranger' });
+    await waitFor(() => server.audit.nonMemberRefusals.length > 0, 3000, 'non-member refusal');
+    expect(server.audit.nonMemberRefusals).toEqual([
+      [{ userId: 'stranger', classroomId: CLASSROOM_ID, impersonatedBy: 'admin-1' }],
+    ]);
+    student.destroy();
+    stranger.destroy();
   });
 
   it("records a refused non-member as the classroom's non-member refusal, with only who and where", async () => {

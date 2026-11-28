@@ -82,8 +82,25 @@ vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => mocks.taskTrigger(...a) },
 }));
 
-vi.mock('~/utils/helpers', () => ({
+// The real audit funnel, over a faked session (who is viewing as the user).
+vi.mock('~/utils/helpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/helpers')>()),
   waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
+}));
+
+const session = vi.hoisted(() => ({ impersonatedBy: null as string | null }));
+vi.mock('@classmoji/auth/server', () => ({
+  getAuthSession: async () => ({
+    userId: 'owner-1',
+    session: { session: session.impersonatedBy ? { impersonatedBy: session.impersonatedBy } : {} },
+  }),
+  // Re-exported by ~/utils/helpers; unused here.
+  resolveHighestMembership: vi.fn(),
+  assertClassroomAccess: vi.fn(),
+  assertClassroomMutationAllowed: vi.fn(),
+  formMutationBlocked: vi.fn(),
+  requireStudentAccess: vi.fn(),
+  assertProTier: vi.fn(),
 }));
 
 // The REAL field-split helper, by its relative path — this file exists to pin
@@ -496,6 +513,27 @@ describe('students action — mutations stay owner-only', () => {
       resource_id: 'invite-1',
       data: { tool: 'web:roster.revoke_invite' },
     });
+  });
+
+  it('names the admin viewing as the owner on the revoke row, and only then', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+    session.impersonatedBy = 'admin-1';
+    try {
+      await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
+    } finally {
+      session.impersonatedBy = null;
+    }
+    await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
+
+    expect(mocks.auditCreate.mock.calls.map(([row]) => row.data)).toEqual([
+      { tool: 'web:roster.revoke_invite', impersonated_by: 'admin-1' },
+      { tool: 'web:roster.revoke_invite' },
+    ]);
+    expect(mocks.auditCreate.mock.calls[0][0].user_id).toBe('owner-1');
   });
 
   it('reports a revoke that happened even when its audit row cannot be written', async () => {

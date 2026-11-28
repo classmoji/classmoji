@@ -833,6 +833,7 @@ class HelperService {
     ungradedSubmissions,
     requireChoice = false,
     actorUserId = null,
+    impersonatedBy = null,
   }: {
     classroomId: string;
     login: string;
@@ -841,6 +842,8 @@ class HelperService {
     requireChoice?: boolean;
     /** The owner asking for the removal, for the audit of any plan-owner hand-off. */
     actorUserId?: string | null;
+    /** The platform admin viewing as that owner ("View as"), for the same row. */
+    impersonatedBy?: string | null;
   }): Promise<StaffRemovalStart> {
     const preview = await ClassmojiService.staff.previewRemoval({ classroomId, login, role });
 
@@ -857,6 +860,7 @@ class HelperService {
       login,
       role,
       actorUserId,
+      impersonatedBy,
     });
 
     return {

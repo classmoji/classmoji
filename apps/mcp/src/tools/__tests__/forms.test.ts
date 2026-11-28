@@ -717,6 +717,9 @@ describe('form_create', () => {
     // …and these two keys are what still distinguishes an agent from a browser.
     expect(audit.data.via).toBe('mcp');
     expect(audit.data.mcp_tool).toBe('form_create');
+    // The tool's own `via` and the funnel's are one key, and the client is named.
+    expect(Object.keys(audit.data).filter(key => key === 'via')).toEqual(['via']);
+    expect(audit.data).toMatchObject({ client_id: 'c' });
   });
 
   it('forwards a supplied field list to the contract untouched', async () => {
@@ -2330,6 +2333,24 @@ describe('form_response_create', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('names the admin viewing as the caller on the descriptor, under View as only', async () => {
+    await formResponseCreateTool.handler(
+      { classroom: 'org/w26', form_id: 'form-1', responses: BATCH } as never,
+      { ...CTX, viewer: { ...CTX.viewer, impersonatedBy: 'admin-1' } }
+    );
+
+    const input = mocks.responseCreate.mock.calls[0][0] as {
+      audit: { user_id: string; data: Record<string, unknown> };
+    };
+    expect(input.audit.user_id).toBe('owner-1');
+    expect(input.audit.data).toMatchObject({
+      tool: 'forms.responses.create',
+      via: 'mcp',
+      client_id: 'c',
+      impersonated_by: 'admin-1',
+    });
+  });
+
   it('hands the service a complete audit descriptor on a commit', async () => {
     await call();
 
@@ -2340,6 +2361,7 @@ describe('form_response_create', () => {
       role: 'OWNER',
       data: {
         tool: 'forms.responses.create',
+        client_id: 'c',
         via: 'mcp',
         mcp_tool: 'form_response_create',
         form_slug: 'cs52-waitlist-mcp-test',

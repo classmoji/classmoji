@@ -34,7 +34,14 @@ import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { loadPageInClassroom, ok, OWNER_ONLY, requireClassroomCtx, writeAudit } from './shared.ts';
+import {
+  loadPageInClassroom,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  viewingAs,
+  writeAudit,
+} from './shared.ts';
 
 /**
  * Classroom theme keys. Source of truth is the webapp's
@@ -352,6 +359,7 @@ export const classroomStatusUpdateTool: ToolDefinition<ClassroomStatusUpdateArgs
         isArchived: updates.is_archived,
         actorUserId: ctx.viewer.userId,
         tool: 'classroom_status_update',
+        ...viewingAs(ctx),
       });
     } catch (error) {
       if (ClassmojiService.classroomLifecycle.isActiveClassroomLimitError(error)) {

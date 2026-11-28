@@ -11,6 +11,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
 import { ASK_MOJI_INSIGHT_DEFAULT_WEEKS } from '@classmoji/utils/ask-moji/limits';
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
@@ -38,7 +43,6 @@ const mocks = vi.hoisted(() => ({
   currentUser: 'owner-x',
   assertClassroomAccess: vi.fn(),
   addClassroomAuditLog: vi.fn(),
-  impersonationAuditFields: vi.fn(),
   askMojiAvailable: vi.fn(),
   usage: vi.fn(),
   feedbackReview: vi.fn(),
@@ -48,9 +52,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
-}));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: (...a: unknown[]) => mocks.impersonationAuditFields(...a),
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -162,12 +163,12 @@ const EXCHANGE = {
 
 const pageArgs = (slug: string, search = '', prefix = 'admin') => ({
   params: { class: slug },
-  request: new Request(`http://x/${prefix}/${slug}/ask-moji${search}`),
+  request: (routeRequest = new Request(`http://x/${prefix}/${slug}/ask-moji${search}`)),
 });
 
 const exchangeArgs = (slug: string, feedbackId: string, prefix = 'admin') => ({
   params: { class: slug, feedbackId },
-  request: new Request(`http://x/${prefix}/${slug}/ask-moji/${feedbackId}`),
+  request: (routeRequest = new Request(`http://x/${prefix}/${slug}/ask-moji/${feedbackId}`)),
 });
 
 const loadPage = (slug: string, search = '', loader = adminPage.loader) =>
@@ -192,7 +193,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = 'owner-x';
   mocks.assertClassroomAccess.mockImplementation(fakeGate);
-  mocks.impersonationAuditFields.mockResolvedValue({});
   mocks.askMojiAvailable.mockResolvedValue({ available: true });
   mocks.usage.mockResolvedValue(USAGE);
   mocks.feedbackReview.mockResolvedValue([REVIEW_ROW]);
@@ -298,6 +298,7 @@ describe('the insights page', () => {
     await loadPage('class-x', '?rating=up');
     expect(auditRows()).toEqual([
       {
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -307,6 +308,7 @@ describe('the insights page', () => {
         metadata: { tool: 'web:ask_moji.insights', weeks: 12 },
       },
       {
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'teacher-x',
         role: 'TEACHER',
@@ -326,12 +328,11 @@ describe('the insights page', () => {
     expect(reviews.map(row => (row.metadata as { rating: string }).rating)).toEqual(['DOWN', 'UP']);
   });
 
-  it('records the admin behind a View As session on both rows', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
+  it("hands the audit funnel the loader's own request on both rows (it names any View As admin)", async () => {
     await loadPage('class-x');
-    expect(
-      auditRows().map(row => (row.metadata as Record<string, unknown>).impersonated_by)
-    ).toEqual(['admin-9', 'admin-9']);
+    const requests = auditRows().map(row => (row as { request?: unknown }).request);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) expect(request).toBe(routeRequest);
   });
 
   it('writes no row for a refused caller', async () => {
@@ -406,10 +407,10 @@ describe('the exchange view', () => {
   });
 
   it('writes a VIEW row on the feedback id', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
     await loadExchange('class-x', 'fb-1');
     expect(auditRows()).toEqual([
       {
+        request: sameObject(routeRequest),
         classroomId: 'X',
         userId: 'owner-x',
         role: 'OWNER',
@@ -419,7 +420,6 @@ describe('the exchange view', () => {
         metadata: {
           tool: 'web:ask_moji.exchange',
           asker_id: 'student-x',
-          impersonated_by: 'admin-9',
         },
       },
     ]);

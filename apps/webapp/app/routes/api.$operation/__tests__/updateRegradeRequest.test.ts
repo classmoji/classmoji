@@ -35,8 +35,9 @@ vi.mock('@classmoji/auth/server', async () => {
     getAuthSession: async () => ({ userId: 'ta-1', session: { session: {} } }),
   };
 });
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonatedBy: async () => null,
+vi.mock('@classmoji/auth/request-impersonator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/auth/request-impersonator')>()),
+  requestImpersonator: async () => null,
 }));
 vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => mocks.trigger(...a) },

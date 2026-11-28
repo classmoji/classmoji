@@ -3,6 +3,7 @@ import { redirect, useFetcher, useLoaderData } from 'react-router';
 import { IconX } from '@tabler/icons-react';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { formsListUrl } from './adminLinks.server.ts';
 import { FORM_PRESETS, presetByKey, type FormAccessMode } from '~/components/forms/presets.ts';
@@ -78,7 +79,7 @@ export const action = async ({
   url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(
+  const { classroom, userId, membership, impersonatedBy } = await assertFormAdmin(
     classroomSlug,
     { request, url },
     {
@@ -135,21 +136,24 @@ export const action = async ({
 
   // The form exists: a failed write is reported (`audit_miss`) and the drawer
   // still opens it.
-  await ClassmojiService.audit.record({
-    user_id: userId,
-    classroom_id: classroom.id,
-    role: membership.role,
-    resource_type: 'FORMS',
-    resource_id: form.id,
-    action: 'CREATE',
-    data: {
-      tool: 'forms.new.create',
-      title: form.title,
-      slug: form.slug,
-      access,
-      preset: preset.key,
+  await recordAudit(
+    {
+      user_id: userId,
+      classroom_id: classroom.id,
+      role: membership.role,
+      resource_type: 'FORMS',
+      resource_id: form.id,
+      action: 'CREATE',
+      data: {
+        tool: 'forms.new.create',
+        title: form.title,
+        slug: form.slug,
+        access,
+        preset: preset.key,
+      },
     },
-  });
+    { impersonatedBy }
+  );
 
   return redirect(`/${classroomSlug}/forms/${form.slug}/edit`);
 };

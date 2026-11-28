@@ -74,7 +74,6 @@ import type { SnapshotResponse } from '@classmoji/collab';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { appFrameHosts } from '@classmoji/services/slides/frame-refs';
 import { ClassmojiService, ContentService } from '@classmoji/services';
-import type { Prisma } from '@classmoji/database/client';
 import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import {
@@ -746,7 +745,7 @@ async function applyDeckLive(
       value: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_slide_count: countSlides(snapshot.content.slides) } : {}),
-    } as Prisma.InputJsonValue,
+    },
   });
 
   return ok({
@@ -1055,7 +1054,7 @@ async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<To
       commit_sha: saved.commit,
       committed_to: committedTo,
       ...(hasDestructiveOps ? { prior_slide_count: priorSlideCount } : {}),
-    } as Prisma.InputJsonValue,
+    },
   });
 
   // Open live editors refresh their pending-preview banner.
@@ -1167,7 +1166,7 @@ async function acceptDeckPreviewLive(
         conflict_unit_ids: units.map(unit => unit.id),
         ...(orderConflict ? { order_conflict: true } : {}),
         theirs_sha: theirs.sha,
-      } as Prisma.InputJsonValue,
+      },
     });
     const conflictCount = units.length + (orderConflict ? 1 : 0);
     return ok({
@@ -1225,7 +1224,7 @@ async function acceptDeckPreviewLive(
         ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
         : {}),
       ...(previewKept ? { preview_kept: true } : {}),
-    } as unknown as Prisma.InputJsonValue,
+    },
   });
   return ok({
     success: true,
@@ -1342,7 +1341,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
           new_sha: result.sha,
           html_regenerated: result.html_regenerated,
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
-        } as unknown as Prisma.InputJsonValue,
+        },
       });
       return ok({
         success: true,
@@ -1379,7 +1378,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
           html_regenerated: result.html_regenerated,
           ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
-        } as Prisma.InputJsonValue,
+        },
       });
       return ok({
         success: true,
@@ -1411,7 +1410,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
         auto_merged: result.auto_merged,
         ours_sha: result.ours_sha,
         theirs_sha: result.theirs_sha,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     const conflictCount = result.units.length + (result.order_conflict ? 1 : 0);
@@ -1463,7 +1462,7 @@ export const deckPreviewDiscardTool: ToolDefinition<DeckPreviewArgs> = {
       data: {
         tool: 'deck_preview_discard',
         existed: result.existed,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     return ok({

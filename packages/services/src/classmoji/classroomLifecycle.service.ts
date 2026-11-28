@@ -172,7 +172,8 @@ const auditLifecycle = async (
   actorUserId: string,
   tool: string,
   from: Lifecycle,
-  to: Lifecycle
+  to: Lifecycle,
+  impersonatedBy: string | null | undefined
 ): Promise<void> => {
   if (from.status === to.status && from.is_archived === to.is_archived) return;
   await auditService.record({
@@ -182,13 +183,21 @@ const auditLifecycle = async (
     resource_type: 'CLASSROOM',
     resource_id: classroomId,
     action: 'UPDATE',
-    data: { tool, from: { ...from }, to: { ...to } },
+    data: auditService.withImpersonator({ tool, from: { ...from }, to: { ...to } }, impersonatedBy),
   });
 };
 
-const auditRepair = async (repair: PlanOwnerChange | null, actorUserId: string) => {
+const auditRepair = async (
+  repair: PlanOwnerChange | null,
+  actorUserId: string,
+  impersonatedBy: string | null | undefined
+) => {
   if (repair) {
-    await planOwnerService.auditPlanOwnerChange(repair, { actorUserId, reason: 'owner_left' });
+    await planOwnerService.auditPlanOwnerChange(repair, {
+      actorUserId,
+      impersonatedBy,
+      reason: 'owner_left',
+    });
   }
 };
 
@@ -205,6 +214,7 @@ export const setLifecycle = async ({
   isArchived,
   actorUserId,
   tool,
+  impersonatedBy,
 }: {
   classroomId: string;
   status?: Status;
@@ -212,6 +222,8 @@ export const setLifecycle = async ({
   actorUserId: string;
   /** The surface, for the audit row (`web:classroom.status`, `classroom_status_update`, ...). */
   tool: string;
+  /** The platform admin viewing as the actor ("View as"), for the audit rows. */
+  impersonatedBy?: string | null;
 }): Promise<Lifecycle> => {
   const { before, after, repair } = await getPrisma().$transaction(async tx => {
     const row = (await lockClassrooms(tx, [classroomId])).get(classroomId);
@@ -234,18 +246,26 @@ export const setLifecycle = async ({
     return { before: { status: row.status, is_archived: row.is_archived }, after, repair };
   });
 
-  await auditRepair(repair, actorUserId);
-  await auditLifecycle(classroomId, actorUserId, tool, before, after);
+  await auditRepair(repair, actorUserId, impersonatedBy);
+  await auditLifecycle(classroomId, actorUserId, tool, before, after, impersonatedBy);
   return after;
 };
 
 /** Archive: read-only for everyone but owners, off the landing list and the public site. */
-export const archive = (args: { classroomId: string; actorUserId: string; tool: string }) =>
-  setLifecycle({ ...args, status: 'LOCKED', isArchived: true });
+export const archive = (args: {
+  classroomId: string;
+  actorUserId: string;
+  tool: string;
+  impersonatedBy?: string | null;
+}) => setLifecycle({ ...args, status: 'LOCKED', isArchived: true });
 
 /** Unarchive: back to ACTIVE, which the one-active-class rule may refuse. */
-export const unarchive = (args: { classroomId: string; actorUserId: string; tool: string }) =>
-  setLifecycle({ ...args, status: 'ACTIVE', isArchived: false });
+export const unarchive = (args: {
+  classroomId: string;
+  actorUserId: string;
+  tool: string;
+  impersonatedBy?: string | null;
+}) => setLifecycle({ ...args, status: 'ACTIVE', isArchived: false });
 
 /**
  * Archive one classroom and activate another in ONE transaction: the
@@ -261,11 +281,14 @@ export const swapActive = async ({
   archiveClassroomId,
   actorUserId,
   tool,
+  impersonatedBy,
 }: {
   activateClassroomId: string;
   archiveClassroomId: string;
   actorUserId: string;
   tool: string;
+  /** The platform admin viewing as the actor ("View as"), for the audit rows. */
+  impersonatedBy?: string | null;
 }): Promise<void> => {
   const result = await getPrisma().$transaction(async tx => {
     const rows = await lockClassrooms(tx, [activateClassroomId, archiveClassroomId]);
@@ -301,20 +324,22 @@ export const swapActive = async ({
     return { toActivate, toArchive, repair };
   });
 
-  await auditRepair(result.repair, actorUserId);
+  await auditRepair(result.repair, actorUserId, impersonatedBy);
   await auditLifecycle(
     archiveClassroomId,
     actorUserId,
     tool,
     { status: result.toArchive.status, is_archived: result.toArchive.is_archived },
-    { status: 'LOCKED', is_archived: true }
+    { status: 'LOCKED', is_archived: true },
+    impersonatedBy
   );
   await auditLifecycle(
     activateClassroomId,
     actorUserId,
     tool,
     { status: result.toActivate.status, is_archived: result.toActivate.is_archived },
-    { status: 'ACTIVE', is_archived: false }
+    { status: 'ACTIVE', is_archived: false },
+    impersonatedBy
   );
 };
 

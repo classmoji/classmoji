@@ -334,7 +334,12 @@ describe('classroom_settings_update', () => {
           classroom_id: 'class-1',
           resource_type: 'SETTINGS',
           action: 'UPDATE',
-          data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
+          data: {
+            tool: 'classroom_settings_update',
+            via: 'mcp',
+            client_id: 'c',
+            fields: ['final_grades_released'],
+          },
         })
       );
     }
@@ -513,6 +518,8 @@ describe('classroom_settings_update — Ask Moji instructions', () => {
     const row = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
     expect(row.data).toEqual({
       tool: 'classroom_settings_update',
+      via: 'mcp',
+      client_id: 'c',
       fields: ['syllabus_bot_enabled', 'syllabus_bot_instructions'],
     });
     expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('lecture notes');
@@ -572,6 +579,18 @@ describe('classroom_status_update', () => {
       tool: 'classroom_status_update',
     });
     expect(mocks.classroomUpdate).not.toHaveBeenCalled();
+  });
+
+  it('hands the lifecycle service the admin viewing as the caller', async () => {
+    mocks.setLifecycle.mockResolvedValue({ status: 'LOCKED', is_archived: true });
+
+    await classroomStatusUpdateTool.handler(
+      { classroom: 'org/w26', status: 'LOCKED', is_archived: true },
+      { ...CTX, viewer: { ...CTX.viewer, impersonatedBy: 'admin-1' } }
+    );
+    expect(mocks.setLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: CTX.viewer.userId, impersonatedBy: 'admin-1' })
+    );
   });
 
   it('sets only the column provided', async () => {
@@ -828,6 +847,8 @@ describe('org_repo_settings_update', () => {
     expect(audit.action).toBe('UPDATE');
     expect(audit.data).toEqual({
       tool: 'org_repo_settings_update',
+      via: 'mcp',
+      client_id: 'c',
       org: 'myorg',
       changes: { default_repository_permission: { from: 'read', to: 'none' } },
       value: 'default_repository_permission=none',

@@ -18,8 +18,10 @@ vi.mock('../subscription.service.ts', () => ({
     !!sub && (sub.ends_at === null || sub.ends_at.getTime() > Date.now()),
 }));
 vi.mock('../audit.service.ts', async importOriginal => {
-  const { recordWith } = await importOriginal<typeof import('../audit.service.ts')>();
+  const { recordWith, withImpersonator } =
+    await importOriginal<typeof import('../audit.service.ts')>();
   return {
+    withImpersonator,
     create: (...a: unknown[]) => auditCreateMock(...a),
     record: (row: unknown) => recordWith(r => auditCreateMock(r), row),
   };
@@ -318,6 +320,27 @@ describe('auditPlanOwnerChange', () => {
     );
   });
 
+  it('names the admin viewing as the actor, and only then', async () => {
+    await planOwner.auditPlanOwnerChange(change, {
+      actorUserId: 'alice',
+      impersonatedBy: 'admin-1',
+      reason: 'owner_left',
+    });
+
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: 'alice',
+        data: {
+          tool: 'plan_owner.change',
+          reason: 'owner_left',
+          from: 'alice',
+          to: 'bob',
+          impersonated_by: 'admin-1',
+        },
+      })
+    );
+  });
+
   it('writes no row without an actor', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     await planOwner.auditPlanOwnerChange(change, { reason: 'owner_left' });
@@ -328,6 +351,37 @@ describe('auditPlanOwnerChange', () => {
 });
 
 describe('onOwnerAccepted', () => {
+  it('audits each claim as the accepted owner, naming the admin viewing as them', async () => {
+    classrooms = [room('vacant', null)];
+    memberships = [owner('vacant', 'bob')];
+
+    await planOwner.onOwnerAccepted('bob', { impersonatedBy: 'admin-1' });
+
+    expect(auditCreateMock).toHaveBeenCalledTimes(1);
+    expect(auditCreateMock.mock.calls[0][0]).toMatchObject({ user_id: 'bob' });
+    expect(auditCreateMock.mock.calls[0][0].data).toEqual({
+      tool: 'plan_owner.change',
+      reason: 'owner_accepted',
+      from: null,
+      to: 'bob',
+      impersonated_by: 'admin-1',
+    });
+  });
+
+  it('names no admin on an acceptance of their own', async () => {
+    classrooms = [room('vacant', null)];
+    memberships = [owner('vacant', 'bob')];
+
+    await planOwner.onOwnerAccepted('bob');
+
+    expect(auditCreateMock.mock.calls[0][0].data).toEqual({
+      tool: 'plan_owner.change',
+      reason: 'owner_accepted',
+      from: null,
+      to: 'bob',
+    });
+  });
+
   it('keeps the claim and resolves when its audit row cannot be written', async () => {
     classrooms = [room('vacant', null)];
     memberships = [owner('vacant', 'bob')];

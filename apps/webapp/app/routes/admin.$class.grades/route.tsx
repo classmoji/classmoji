@@ -267,6 +267,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     params,
     action: 'VIEW',
     resourceType: 'CLASS_GRADES_SCREEN',
+    metadata: { tool: 'web:grades.view' },
   });
 
   return {
@@ -421,6 +422,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // mutations follow. The loader logs a VIEW; this is the surface's only write,
   // and it now has a second role that can reach it.
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership!.role,
@@ -458,6 +460,7 @@ const setFinalGradesReleased = async (request: Request, classSlug: string, relea
   });
 
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership!.role,

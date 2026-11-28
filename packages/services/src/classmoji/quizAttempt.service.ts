@@ -1099,7 +1099,9 @@ export const TRIGGER_CHAT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const createNew = async (
   quizId: string,
   userId: string,
-  membership: QuizAttemptMembership
+  membership: QuizAttemptMembership,
+  /** The platform admin viewing as the user ("View as"), for an expired close's audit row. */
+  { impersonatedBy = null }: { impersonatedBy?: string | null } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to create quiz attempt');
@@ -1186,6 +1188,7 @@ export const createNew = async (
           userId: userId.toString(),
           role: membership.role as Role,
           surface: 'create_new',
+          impersonatedBy,
         });
       }
     }

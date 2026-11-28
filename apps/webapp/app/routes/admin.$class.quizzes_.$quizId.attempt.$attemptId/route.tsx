@@ -24,7 +24,7 @@ import {
   quizDrawerView,
   staffAttemptGradePanel,
 } from '~/utils/quizPayloads';
-import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { requestImpersonator } from '@classmoji/auth/request-impersonator';
 import { resolveQuizRequest } from '~/routes/assistant.$class_.regrade-requests/resolveQuizRegrade.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
 import { attemptAnswerRules } from '@classmoji/utils/quiz-agent';
@@ -82,6 +82,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (
     membership &&
     (await closeIfExpired(attemptData.attempt, {
+      request,
       userId: String(userId),
       role: membership.role,
       surface:
@@ -134,6 +135,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // logged. Repeated loads within seconds are counted on one row.
   if (!viewerOwnsAttempt) {
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId: String(userId),
       role: membership?.role,
@@ -376,7 +378,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       userId,
       body,
       tool: RESOLVE_IN_DRAWER_TOOL,
-      impersonatedBy: await impersonatedBy(request),
+      impersonatedBy: await requestImpersonator(request),
       attemptId: attempt.id,
     });
   }
@@ -391,7 +393,7 @@ export async function action({ params, request }: Route.ActionArgs) {
           : {}),
         actorUserId: userId,
         tool: 'web:quiz_attempt.adjust',
-        impersonatedBy: await impersonatedBy(request),
+        impersonatedBy: await requestImpersonator(request),
       });
       return { ok: true, success: result.changed ? 'Saved' : 'No changes to save' };
     } else if (body?._action === 'revert') {
@@ -399,7 +401,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         attemptId: attempt.id,
         actorUserId: userId,
         tool: 'web:quiz_attempt.revert',
-        impersonatedBy: await impersonatedBy(request),
+        impersonatedBy: await requestImpersonator(request),
       });
       return { ok: true, success: 'Adjustment reverted' };
     }

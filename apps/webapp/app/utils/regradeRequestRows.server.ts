@@ -96,6 +96,8 @@ export const loadStudentRegradeRows = async ({
 
 /** The staff member viewing the queue, as their gate resolved them. */
 export interface RegradeQueueViewer {
+  /** The loader's request, for the audit row. */
+  request: Request;
   userId: string;
   role: string | undefined;
   /** The surface, for the audit row's `data.tool`. */
@@ -119,6 +121,7 @@ export const loadStaffRegradeRows = async ({
 }): Promise<RegradeRequestRow[]> => {
   const rows = await ClassmojiService.regradeRequest.findManyForDisplay(classroomId, {});
   await addClassroomAuditLog({
+    request: viewer.request,
     classroomId,
     userId: viewer.userId,
     role: viewer.role,

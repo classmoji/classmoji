@@ -619,6 +619,7 @@ export class CollabRuntime {
       resourceType: 'SLIDES',
       resourceId: doc.room.id,
       data: { tool: 'live_editor', ops, value: summarizeStructure(ops) },
+      impersonatedBy: context.impersonatedBy,
     });
   }
 
@@ -633,6 +634,8 @@ export class CollabRuntime {
       action,
       resourceType: COLLAB_AUDIT_RESOURCE[ctx.kind],
       resourceId: ctx.docId,
+      data: { tool: 'collab' },
+      impersonatedBy: ctx.impersonatedBy,
     });
   }
 

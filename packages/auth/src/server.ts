@@ -19,6 +19,7 @@ import * as subscriptionService from '@classmoji/services/subscription';
 import { clientIpHeader } from '@classmoji/utils';
 import { noteSeen } from './lastSeen.ts';
 import { onAuthApiError } from './apiErrorHook.ts';
+import { rememberSessionImpersonator, sessionImpersonator } from './requestImpersonator.ts';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
 // which only need to sign something (./siteReturnToken.ts) can share them
@@ -672,6 +673,8 @@ interface SlideAccessResult {
   canEdit: boolean;
   canPresent: boolean;
   canViewSpeakerNotes: boolean;
+  /** The platform admin viewing as `userId` ("View as"), else null: for audit rows. */
+  impersonatedBy: string | null;
 }
 
 type ClassroomRecord = NonNullable<Awaited<ReturnType<typeof classroomService.findBySlug>>>;
@@ -688,6 +691,11 @@ interface ClassroomAccessResult {
   membership: ClassroomMembershipRecord;
   isResourceOwner: boolean;
   accessGrantedVia: 'role' | 'ownership' | null;
+  /**
+   * The platform admin viewing as `userId` ("View as"), else null: for the
+   * `impersonated_by` of the audit rows the caller writes.
+   */
+  impersonatedBy: string | null;
 }
 
 /** Privilege order for deterministic multi-role resolution (highest first). */
@@ -1927,7 +1935,19 @@ async function githubUsernameFor(userId: string): Promise<string> {
   return username;
 }
 
+/**
+ * The signed-in session behind `request`, or null. Each result is remembered
+ * for this `Request` as who is viewing as the user, if anyone
+ * (`requestImpersonator`, ./requestImpersonator.ts), so the audit rows written
+ * for the request after a gate need no second read.
+ */
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
+  const authData = await readAuthSession(request);
+  rememberSessionImpersonator(request, authData);
+  return authData;
+}
+
+async function readAuthSession(request: Request): Promise<AuthSessionResult | null> {
   // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
   // ./secret.ts for why this must never be a hardcoded `classmoji.`.
   const tokenFromCookie = sessionTokenFromCookieHeader(request.headers.get('cookie') || '');
@@ -2180,6 +2200,7 @@ export const assertClassroomAccess = async ({
       headers: { 'Content-Type': 'text/plain' },
     });
   }
+  const impersonatedBy = sessionImpersonator(authData);
 
   // Resolving by id is what makes the authorization bind to the record the
   // caller is acting on. The 404 body is identical either way, so an id probe
@@ -2283,23 +2304,30 @@ export const assertClassroomAccess = async ({
         resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
         resource_type: resourceType,
         action: 'ACCESS_DENIED',
-        data: {
-          attempted_action: attemptedAction,
-          required_roles: rolesArray,
-          has_membership: Boolean(actualMembership),
-          denial_reasons: denialReasons,
-          is_resource_owner: isResourceOwner,
-          self_access_attempted: Boolean(resourceOwnerId),
-          ...metadata,
-        },
+        data: auditService.withImpersonator(
+          {
+            // A caller's own `metadata.tool` names the surface more closely.
+            tool: 'gate',
+            attempted_action: attemptedAction,
+            required_roles: rolesArray,
+            has_membership: Boolean(actualMembership),
+            denial_reasons: denialReasons,
+            is_resource_owner: isResourceOwner,
+            self_access_attempted: Boolean(resourceOwnerId),
+            ...metadata,
+          },
+          impersonatedBy
+        ),
       });
     } else {
       // Someone who holds no role here: one fixed-shape row per person,
-      // classroom and UTC day, counted (nothing from the request).
+      // classroom and UTC day, counted (nothing from the request); under
+      // View as, one per person, classroom, day and admin.
       try {
         await auditService.recordNonMemberRefusal({
           userId: authData.userId,
           classroomId: classroom.id,
+          ...(impersonatedBy ? { impersonatedBy } : {}),
         });
       } catch (error: unknown) {
         console.error('[assertClassroomAccess] Failed to write audit log', error);
@@ -2339,6 +2367,7 @@ export const assertClassroomAccess = async ({
     membership,
     isResourceOwner,
     accessGrantedVia,
+    impersonatedBy,
   };
 };
 
@@ -2798,17 +2827,26 @@ export async function assertSlideAccess({
         resource_id: slideId,
         resource_type: 'SLIDE',
         action: 'ACCESS_DENIED',
-        data: {
-          attempted_action: accessType,
-          is_draft: slide.is_draft,
-          is_public: slide.is_public,
-          is_creator: isCreator,
-          allow_team_edit: slide.allow_team_edit,
-        },
+        data: auditService.withImpersonator(
+          {
+            tool: 'gate',
+            attempted_action: accessType,
+            is_draft: slide.is_draft,
+            is_public: slide.is_public,
+            is_creator: isCreator,
+            allow_team_edit: slide.allow_team_edit,
+          },
+          sessionImpersonator(authData)
+        ),
       });
     } else if (userId && recordNonMemberRefusal) {
+      const impersonatedBy = sessionImpersonator(authData);
       try {
-        await auditService.recordNonMemberRefusal({ userId, classroomId: slide.classroom_id });
+        await auditService.recordNonMemberRefusal({
+          userId,
+          classroomId: slide.classroom_id,
+          ...(impersonatedBy ? { impersonatedBy } : {}),
+        });
       } catch (error: unknown) {
         console.error('[assertSlideAccess] Failed to write audit log', error);
       }
@@ -2853,5 +2891,6 @@ export async function assertSlideAccess({
     canEdit,
     canPresent,
     canViewSpeakerNotes,
+    impersonatedBy: sessionImpersonator(authData),
   };
 }

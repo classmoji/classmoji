@@ -4,6 +4,7 @@ import { withoutAnswers, type FormField } from '@classmoji/services/form-contrac
 import { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername } from '@classmoji/utils';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { createAudit, recordAudit } from '~/utils/audit.server.ts';
 import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.ts';
 
 /**
@@ -363,7 +364,7 @@ interface ResponsesAuditEntry {
  * fails the read, so no one's answers leave unrecorded.
  */
 export async function auditResponses(entry: ResponsesAuditEntry & { action: 'VIEW' }) {
-  return ClassmojiService.audit.create(responsesRow(entry));
+  return createAudit(responsesRow(entry), entry.context);
 }
 
 /**
@@ -375,7 +376,7 @@ export async function auditResponses(entry: ResponsesAuditEntry & { action: 'VIE
 export async function auditResponsesChange(
   entry: ResponsesAuditEntry & { action: 'UPDATE' | 'DELETE' }
 ) {
-  return ClassmojiService.audit.record(responsesRow(entry));
+  return recordAudit(responsesRow(entry), entry.context);
 }
 
 function responsesRow({

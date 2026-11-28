@@ -2,6 +2,7 @@ import type { Role } from '@classmoji/database/client';
 
 import { reportError } from '@classmoji/utils/error-report';
 import { ClassmojiService } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { readerPayloadDeps } from '~/utils/readerDeps.server.ts';
 import {
@@ -362,20 +363,18 @@ async function auditViewAsLoad(
   const { viewer } = context;
   if (!viewer.impersonated || !viewer.userId || viewer.role === null) return;
   if (!payload.readerSections.member || request.method === 'HEAD') return;
-  await ClassmojiService.audit.record({
-    user_id: viewer.userId,
-    classroom_id: context.site.classroom_id,
-    role: viewer.role,
-    resource_type: 'PAGES',
-    resource_id: page.id,
-    action: 'VIEW',
-    data: {
-      tool: 'page_reader',
-      via: 'site',
-      page_id: page.id,
-      ...(viewer.impersonatedBy ? { impersonated_by: viewer.impersonatedBy } : {}),
+  await recordAudit(
+    {
+      user_id: viewer.userId,
+      classroom_id: context.site.classroom_id,
+      role: viewer.role,
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'VIEW',
+      data: { tool: 'page_reader', via: 'site', page_id: page.id },
     },
-  });
+    { impersonatedBy: viewer.impersonatedBy }
+  );
 }
 
 /**

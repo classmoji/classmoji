@@ -203,3 +203,26 @@ describe('audit.record: report a failed write and continue', () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('withImpersonator: who was viewing as the user', () => {
+  it('adds the admin under View as and leaves data alone otherwise', () => {
+    expect(audit.withImpersonator({ tool: 't', a: 1 }, 'admin-1')).toEqual({
+      tool: 't',
+      a: 1,
+      impersonated_by: 'admin-1',
+    });
+    const data = { tool: 't' };
+    expect(audit.withImpersonator(data, null)).toBe(data);
+    expect(audit.withImpersonator(data, undefined)).toBe(data);
+    expect(audit.withImpersonator(data, '')).toBe(data);
+  });
+
+  it('keeps the admin when there is no data, or data is not an object', () => {
+    expect(audit.withImpersonator(undefined, 'admin-1')).toEqual({ impersonated_by: 'admin-1' });
+    expect(audit.withImpersonator(null, 'admin-1')).toEqual({ impersonated_by: 'admin-1' });
+    expect(audit.withImpersonator([1, 2], 'admin-1')).toEqual({
+      value: [1, 2],
+      impersonated_by: 'admin-1',
+    });
+  });
+});

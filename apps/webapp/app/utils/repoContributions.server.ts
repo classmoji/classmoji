@@ -14,6 +14,8 @@ import { addClassroomAuditLog } from '~/utils/helpers';
  * queue re-checks it there anyway.
  */
 export async function startContributionsCalculation(args: {
+  /** The action's request, for the audit row. */
+  request: Request;
   classroom: { id: string };
   repositoryId: string;
   userId: string;
@@ -35,6 +37,7 @@ export async function startContributionsCalculation(args: {
   }
 
   await addClassroomAuditLog({
+    request: args.request,
     classroomId: args.classroom.id,
     userId: args.userId,
     role: args.role,
@@ -67,6 +70,8 @@ type WithContributionColumns = { contributions?: unknown; contribution_stats?: u
  * longer a member there shows as its git name.
  */
 export async function withContributions<R extends WithContributionColumns>(args: {
+  /** The loader's request, for the audit row. */
+  request: Request;
   classroom: { id: string };
   userId: string;
   role: string | undefined;
@@ -98,6 +103,7 @@ export async function withContributions<R extends WithContributionColumns>(args:
   // Staff reading who did what in students' repos (CLAUDE.md rule 2).
   if (repos.some(r => r.contribution_stats)) {
     await addClassroomAuditLog({
+      request: args.request,
       classroomId: args.classroom.id,
       userId: args.userId,
       role: args.role,

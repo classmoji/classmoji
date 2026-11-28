@@ -14,6 +14,7 @@ import {
 } from '@tabler/icons-react';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
@@ -142,7 +143,7 @@ export const action = async ({
   url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(
+  const { classroom, userId, membership, impersonatedBy } = await assertFormAdmin(
     classroomSlug,
     { request, url },
     {
@@ -195,15 +196,18 @@ export const action = async ({
     }
     // The status is changed: a failed write is reported (`audit_miss`), not
     // answered as a failed change.
-    await ClassmojiService.audit.record({
-      user_id: userId,
-      classroom_id: classroom.id,
-      role: membership.role,
-      resource_type: 'FORMS',
-      resource_id: formId,
-      action: 'UPDATE',
-      data: { tool: 'forms.list.update-status', status },
-    });
+    await recordAudit(
+      {
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership.role,
+        resource_type: 'FORMS',
+        resource_id: formId,
+        action: 'UPDATE',
+        data: { tool: 'forms.list.update-status', status },
+      },
+      { impersonatedBy }
+    );
     return { ok: true };
   }
 
@@ -219,15 +223,18 @@ export const action = async ({
     // Deleting a form cascades to its responses, which is the point and also
     // why it is audited: this is the one action here that destroys collected
     // PII, and the row is the only record it happened.
-    await ClassmojiService.audit.record({
-      user_id: userId,
-      classroom_id: classroom.id,
-      role: membership.role,
-      resource_type: 'FORMS',
-      resource_id: formId,
-      action: 'DELETE',
-      data: { tool: 'forms.list.delete', title: form.title, slug: form.slug },
-    });
+    await recordAudit(
+      {
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership.role,
+        resource_type: 'FORMS',
+        resource_id: formId,
+        action: 'DELETE',
+        data: { tool: 'forms.list.delete', title: form.title, slug: form.slug },
+      },
+      { impersonatedBy }
+    );
     return { ok: true };
   }
 

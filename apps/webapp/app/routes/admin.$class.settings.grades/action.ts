@@ -8,8 +8,7 @@ import {
 } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { pickSettings } from '~/utils/pickSettings';
-import { addClassroomAuditLog } from '~/utils/helpers';
-import { impersonationAuditFields } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { addClassroomAuditLog, type AuditMetadata } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 /** The remap body's `mappings` (client JSON): a non-empty list of emoji pairs, else null. */
@@ -79,16 +78,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const auditScale = async (
     action: 'UPDATE' | 'DELETE',
     resourceId: string | null,
-    metadata: Record<string, unknown>
+    metadata: AuditMetadata
   ) =>
     addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
       action,
       resourceType: 'SETTINGS',
       ...(resourceId ? { resourceId } : {}),
-      metadata: { ...metadata, ...(await impersonationAuditFields(request)) },
+      metadata,
     });
 
   return namedAction(request, {
@@ -220,6 +220,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         throw error;
       }
       await addClassroomAuditLog({
+        request,
         classroomId: classroom.id,
         userId,
         role: membership!.role,
@@ -232,7 +233,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           quiz_adjustments: result.quizAdjustments,
           regrade_snapshots: result.regradeSnapshots,
           regrade_previous_grades: result.regradePreviousGrades,
-          ...(await impersonationAuditFields(request)),
         },
       });
       return {

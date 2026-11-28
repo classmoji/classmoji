@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   addClassroomAuditLog: vi.fn(),
-  impersonationAuditFields: vi.fn(),
   updateSettings: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
   canUseSyllabusBot: vi.fn(),
@@ -44,9 +43,6 @@ vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
-}));
-vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
-  impersonationAuditFields: (...a: unknown[]) => mocks.impersonationAuditFields(...a),
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -114,7 +110,6 @@ beforeEach(() => {
     classroom: { id: 'c1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
-  mocks.impersonationAuditFields.mockResolvedValue({});
   mocks.updateSettings.mockResolvedValue({});
   mocks.getClassroomSettingsForServer.mockResolvedValue({ anthropic_api_key: 'sk-ant-classroom' });
   mocks.canUseSyllabusBot.mockResolvedValue({ allowed: true });
@@ -211,10 +206,10 @@ describe('saveAskMojiInstructions', () => {
     expect(auditRow().metadata.instructions_length).toBe(0);
   });
 
-  it('records the admin behind a View As session', async () => {
-    mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
+  it('hands the audit funnel the request, whose session names any View As admin', async () => {
     await saveInstructions('Be brief.');
-    expect(auditRow().metadata).toMatchObject({ impersonated_by: 'admin-9' });
+    expect((auditRow() as { request?: unknown }).request).toBeInstanceOf(Request);
+    expect(auditRow().metadata).not.toHaveProperty('impersonated_by');
   });
 });
 

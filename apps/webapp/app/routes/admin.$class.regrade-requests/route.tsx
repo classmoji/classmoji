@@ -18,7 +18,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const requests = await loadStaffRegradeRows({
     classroomId: classroom.id,
     scale: emojiMappings,
-    viewer: { userId, role: membership?.role, tool: 'web:regrade_requests.view' },
+    viewer: { request, userId, role: membership?.role, tool: 'web:regrade_requests.view' },
   });
   return {
     requests,

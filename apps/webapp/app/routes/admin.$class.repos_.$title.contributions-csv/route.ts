@@ -31,6 +31,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership!.role,

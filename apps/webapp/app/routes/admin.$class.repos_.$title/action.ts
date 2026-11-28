@@ -43,6 +43,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!repository) return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: REPO_NOT_FOUND };
 
       return startContributionsCalculation({
+        request,
         classroom,
         repositoryId: repository.id,
         userId,

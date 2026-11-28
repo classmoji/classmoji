@@ -65,6 +65,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { withoutAnswers } from '@classmoji/services/form-contract';
+import { withImpersonator } from '@classmoji/services/audit';
 import { z } from 'zod';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
@@ -1370,12 +1371,18 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
           user_id: ctx.viewer.userId,
           classroom_id: classroom.classroomId,
           role: classroom.role,
-          data: {
-            tool: 'forms.responses.create',
-            via: VIA_MCP,
-            mcp_tool: 'form_response_create',
-            form_slug: form.slug,
-          },
+          // The service writes this row inside its own transaction, not
+          // through writeAudit: the client and View as are named here.
+          data: withImpersonator(
+            {
+              tool: 'forms.responses.create',
+              via: VIA_MCP,
+              client_id: ctx.viewer.clientId,
+              mcp_tool: 'form_response_create',
+              form_slug: form.slug,
+            },
+            ctx.viewer.impersonatedBy
+          ),
         },
       })
     )) as CreateResponsesReport;

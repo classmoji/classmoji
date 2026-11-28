@@ -219,6 +219,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       throw error;
     }
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -243,6 +244,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     // why it is audited: this is the one action here that destroys collected
     // PII, and the row is the only record it happened.
     await addClassroomAuditLog({
+      request,
       classroomId: classroom.id,
       userId,
       role: membership!.role,

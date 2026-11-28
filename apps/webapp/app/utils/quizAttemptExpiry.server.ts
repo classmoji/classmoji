@@ -27,6 +27,12 @@ export type ExpiredCloseActor = {
   userId: string;
   role: Role;
   surface: 'session' | 'own_attempt_view' | 'staff_attempt_view' | 'preview_attempt_view';
+  /**
+   * The request that met the attempt (the one the caller's gate was given):
+   * its session names the platform admin viewing as the caller ("View as"),
+   * for the close's audit row. Asked only when there is something to close.
+   */
+  request: Request;
 };
 
 /**
@@ -56,6 +62,11 @@ export const closeIfExpired = async (
 ): Promise<boolean> => {
   if (!isExpiredOpenChatAttempt(attempt)) return false;
   const { ClassmojiService } = await import('@classmoji/services');
-  await ClassmojiService.quizGrading.closeExpiredAttempt(String(attempt.id), actor);
+  const { requestImpersonator } = await import('@classmoji/auth/request-impersonator');
+  const { request, ...who } = actor;
+  await ClassmojiService.quizGrading.closeExpiredAttempt(String(attempt.id), {
+    ...who,
+    impersonatedBy: await requestImpersonator(request),
+  });
   return true;
 };

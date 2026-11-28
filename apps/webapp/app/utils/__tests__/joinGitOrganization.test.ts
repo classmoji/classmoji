@@ -118,9 +118,30 @@ describe('joinGitOrganization', () => {
     expect(result).toMatchObject({ ok: true, outcome: 'added_to_team' });
     expect(result.ok && result.invitationUrl).toBeUndefined();
     // Accepted in the request, so the picker shows their role at once.
-    expect(mocks.membershipUpdateById).toHaveBeenCalledWith('mem-a', {
-      has_accepted_invite: true,
+    expect(mocks.membershipUpdateById).toHaveBeenCalledWith(
+      'mem-a',
+      { has_accepted_invite: true },
+      { actorUserId: 'user-a', impersonatedBy: null }
+    );
+  });
+
+  it("hands the acceptance the admin viewing as the user, for an owner's plan-owner claim", async () => {
+    mocks.userFindUnique.mockResolvedValue(githubIdentity);
+    mocks.membershipState.mockResolvedValue('active');
+
+    await joinGitOrganization({
+      userId: 'user-a',
+      membership: { id: 'mem-a', role: 'OWNER' },
+      classroom: classroom('GITHUB'),
+      tool: 'select-organization',
+      impersonatedBy: 'admin-1',
     });
+
+    expect(mocks.membershipUpdateById).toHaveBeenCalledExactlyOnceWith(
+      'mem-a',
+      { has_accepted_invite: true },
+      { actorUserId: 'user-a', impersonatedBy: 'admin-1' }
+    );
   });
 
   it('leaves the membership pending when the activation cannot be queued', async () => {

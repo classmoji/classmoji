@@ -32,7 +32,7 @@
  * The attempt's own runtime stamp decides: an attempt from the retired
  * ai-agent runtime (`ai_agent`) is read-only and never gets a session.
  */
-import { assertClassroomAccess } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
@@ -160,38 +160,37 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     const { userId } = access;
+    // The web session, for the grant's session id and expiry. The audit rows
+    // below take the View as admin from the gate's read of this request.
     const { getAuthSession } = await import('@classmoji/auth/server');
+    const { sessionImpersonator } = await import('@classmoji/auth/request-impersonator');
     const authData = await getAuthSession(request);
     const webSession = (
       authData as {
-        session?: {
-          session?: { id?: unknown; impersonatedBy?: unknown; expiresAt?: unknown };
-        };
+        session?: { session?: { id?: unknown; expiresAt?: unknown } };
       } | null
     )?.session?.session;
-    const impersonatedBy =
-      typeof webSession?.impersonatedBy === 'string' && webSession.impersonatedBy
-        ? webSession.impersonatedBy
-        : null;
+    const impersonatedBy = sessionImpersonator(authData);
     const webSessionId = typeof webSession?.id === 'string' ? webSession.id : null;
 
     // 5. Strict ownership.
     if (String(attempt.user_id) !== String(userId)) {
       // The refusal stands whether or not its row is written.
-      await ClassmojiService.audit.record({
-        classroom_id: classroomId,
-        user_id: String(userId),
+      await addClassroomAuditLog({
+        request,
+        classroomId: String(classroomId),
+        userId: String(userId),
         role: access.membership!.role,
-        resource_id: attemptId,
-        resource_type: 'QUIZ_CHAT_SESSION_UNAUTHORIZED',
+        resourceId: attemptId,
+        resourceType: 'QUIZ_CHAT_SESSION_UNAUTHORIZED',
         action: 'ACCESS_DENIED',
-        data: {
+        metadata: {
+          tool: 'web:quiz_chat.session',
           unauthorized_access: true,
           attempted_attempt_id: attemptId,
           owner_user_id: String(attempt.user_id),
           attempted_action: 'start_session',
           caller_role: access.membership!.role,
-          ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
         },
       });
       return refuse(SESSION_REFUSALS.notOwner);
@@ -207,6 +206,7 @@ export async function action({ request }: Route.ActionArgs) {
         userId: String(userId),
         role: access.membership!.role,
         surface: 'session',
+        request,
       });
       return refuse(SESSION_REFUSALS.expired);
     }

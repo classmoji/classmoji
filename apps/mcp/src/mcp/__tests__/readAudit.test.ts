@@ -127,7 +127,12 @@ beforeAll(() => {
         action: 'UPDATE',
         data: { tool: 't_staff_write' },
       });
-      await writeAudit(ctx, { resource_type: 'GIT_REPO_ASSIGNMENT', action: 'UPDATE' });
+      await writeAudit(ctx, {
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        action: 'UPDATE',
+        // A tool's own `via` stands; its own `client_id` does not.
+        data: { tool: 't_staff_write.second', via: 'web', client_id: 'from-the-tool' },
+      });
       return text({ ok: true });
     },
   });
@@ -603,8 +608,18 @@ describe('impersonated_by', () => {
   it("is on every row a tool's own writeAudit calls write", async () => {
     await call(askMoji({ impersonatedBy: 'admin-1' }), 't_staff_write', { classroom: 'org/x' });
     expect(rows().map(r => r.data)).toEqual([
-      { tool: 't_staff_write', impersonated_by: 'admin-1' },
-      { impersonated_by: 'admin-1' },
+      {
+        tool: 't_staff_write',
+        via: 'mcp',
+        client_id: ASK_MOJI_CLIENT_ID,
+        impersonated_by: 'admin-1',
+      },
+      {
+        tool: 't_staff_write.second',
+        via: 'web',
+        client_id: ASK_MOJI_CLIENT_ID,
+        impersonated_by: 'admin-1',
+      },
     ]);
   });
 
@@ -613,7 +628,18 @@ describe('impersonated_by', () => {
     await call(askMoji({ impersonatedBy: null }), 't_staff_write', { classroom: 'org/x' });
     expect(rows()).toHaveLength(3);
     for (const row of rows()) expect(JSON.stringify(row)).not.toContain('impersonated_by');
-    expect(rows()[2]).not.toHaveProperty('data');
+  });
+
+  it('names the client and the MCP on a write row; a tool keeps its own via, never its own client_id', async () => {
+    await call(
+      viewer('ta-a', { clientId: 'personal-client', scopes: new Set(['read', 'write']) }),
+      't_staff_write',
+      { classroom: 'org/x' }
+    );
+    expect(rows().map(r => r.data)).toEqual([
+      { tool: 't_staff_write', via: 'mcp', client_id: 'personal-client' },
+      { tool: 't_staff_write.second', via: 'web', client_id: 'personal-client' },
+    ]);
   });
 });
 

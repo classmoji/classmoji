@@ -60,6 +60,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // one org is the trail that explains why an instructor filed a ticket. This
   // never fails the request — `addClassroomAuditLog` contains its write errors.
   await addClassroomAuditLog({
+    request,
     classroomId: classroom.id,
     userId,
     role: membership?.role,

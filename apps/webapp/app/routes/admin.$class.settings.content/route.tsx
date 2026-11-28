@@ -319,7 +319,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               select: { id: true },
             }),
           notifyCollab: (classroomId, enabled) => notifyCollabFlag(classroomId, enabled),
-          audit: entry => addClassroomAuditLog(entry),
+          audit: entry => addClassroomAuditLog({ request, ...entry }),
         }
       );
     },

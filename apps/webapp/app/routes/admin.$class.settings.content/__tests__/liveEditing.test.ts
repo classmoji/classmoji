@@ -16,6 +16,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { sameObject } from '../../../__tests__/support/sameObject.ts';
+
+/** The request the route under test was last called with. */
+let routeRequest: Request;
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
@@ -88,11 +93,11 @@ const gate = (classroom: Record<string, unknown>) =>
 const actionArgs = (body: Record<string, unknown>) =>
   ({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/settings/content`, {
+    request: (routeRequest = new Request(`http://localhost/admin/${CLASS_SLUG}/settings/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-    }),
+    })),
   }) as unknown as Parameters<typeof route.action>[0];
 
 const toggle = (enabled: unknown) =>
@@ -155,6 +160,7 @@ describe('live editing switch — turning it on and off', () => {
       mocks.notifyCollabFlag.mock.invocationCallOrder[0]
     );
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      request: sameObject(routeRequest),
       classroomId: 'class-1',
       userId: 'owner-1',
       role: 'OWNER',
