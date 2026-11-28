@@ -300,7 +300,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   );
   if (!enrollment) throw new Response('Student not found', { status: 404 });
 
-  const audit = (resourceType: string, metadata: AuditMetadata) =>
+  // A row about a student names them by user id; the membership the change
+  // was written to is kept beside it.
+  const audit = (resourceType: 'GRADES', metadata: AuditMetadata) =>
     addClassroomAuditLog({
       request,
       classroomId: classroom.id,
@@ -308,8 +310,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       role: membership!.role,
       action: 'UPDATE',
       resourceType,
-      resourceId: enrollment.id,
-      metadata,
+      resourceId: enrollment.user.id,
+      metadata: { ...metadata, membership_id: enrollment.id },
     });
 
   switch (body.intent) {
