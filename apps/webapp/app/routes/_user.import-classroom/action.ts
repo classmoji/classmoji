@@ -1,6 +1,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { addClassroomAuditLog, checkAuth } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { ActionTypes } from '~/constants';
 
 type ImportInputs = Parameters<
@@ -57,11 +58,16 @@ export const action = checkAuth(async ({ request, user }) => {
       try {
         const current = await ClassmojiService.classroom.getTimeZone(r.classroomId);
         if (!current) {
-          // Part of the import, which its own row below records.
+          // Recorded by the settings service for the importer, as the OWNER
+          // the import's own row below names (that row does not carry the zone).
           await ClassmojiService.classroom.updateSettings(
             r.classroomId,
             { timezone: initialTimeZone },
-            null
+            await auditActor(
+              request,
+              { userId: user.id, membership: { role: 'OWNER' } },
+              'web:github_classroom.import.time_zone'
+            )
           );
         }
       } catch (error: unknown) {

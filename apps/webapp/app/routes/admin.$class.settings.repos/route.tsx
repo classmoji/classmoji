@@ -350,6 +350,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     return { error: ORG_SETTINGS_IMPERSONATION_MESSAGE, action: UPDATE_ACTION };
   }
 
+  const actor = await auditActor(request, gate, 'web:settings.repos');
   try {
     // Applies only the settings this page edits, to the classroom's own
     // organization (never one named in the request), and records the change.
@@ -358,30 +359,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       userToken: authData?.token ?? null,
       input,
       classroomId: classroom.id,
-      actor: await auditActor(request, gate, 'web:settings.repos'),
+      actor,
     });
   } catch (error: unknown) {
-    if (error instanceof OrgRepoSettingsError) {
-      // GitHub no longer accepts the token: drop the cached copy (memory, and
-      // the database if it still holds that same token) so the next request
-      // refreshes or asks for a new sign-in, as the classroom creation and
-      // organization pages do. A failure here is logged; the sign-in message
-      // still goes back.
-      const refusedToken = authData?.token;
-      if (error.code === 'NO_GITHUB_TOKEN' && error.status === 401 && refusedToken) {
-        try {
-          await clearRevokedToken(userId, refusedToken);
-        } catch (clearError: unknown) {
-          console.error('Failed to clear a GitHub token GitHub no longer accepts:', clearError);
-        }
+    // Every refusal of the input and every failure of the GitHub read or
+    // update arrives as an OrgRepoSettingsError, with the message to show.
+    // Anything else (the audit row's own check of its input, outside
+    // production) is not a failed GitHub update and is not reported as one.
+    if (!(error instanceof OrgRepoSettingsError)) throw error;
+    // GitHub no longer accepts the token: drop the cached copy (memory, and
+    // the database if it still holds that same token) so the next request
+    // refreshes or asks for a new sign-in, as the classroom creation and
+    // organization pages do. A failure here is logged; the sign-in message
+    // still goes back.
+    const refusedToken = authData?.token;
+    if (error.code === 'NO_GITHUB_TOKEN' && error.status === 401 && refusedToken) {
+      try {
+        await clearRevokedToken(userId, refusedToken);
+      } catch (clearError: unknown) {
+        console.error('Failed to clear a GitHub token GitHub no longer accepts:', clearError);
       }
-      return { error: error.message, action: UPDATE_ACTION };
     }
-    console.error('Failed to update GitHub organization repository settings:', error);
-    return {
-      error: "Couldn't update the GitHub organization settings. Try again.",
-      action: UPDATE_ACTION,
-    };
+    return { error: error.message, action: UPDATE_ACTION };
   }
 
   return {

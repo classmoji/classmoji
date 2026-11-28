@@ -22,6 +22,10 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('~/constants', () => ({ ActionTypes: { IMPORT_CLASSROOM: 'import' } }));
 
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: async () => 'admin-1',
+}));
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     githubClassroomImport: {
@@ -74,11 +78,16 @@ describe('import-classroom initial time zone', () => {
   it("keeps an existing classroom's zone and seeds the browser zone on a new one", async () => {
     await importWith('america/new_york');
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
-    // Part of the import, whose own row records it: no settings row (actor null).
+    // Recorded by the settings service for the importer, as the import's OWNER.
     expect(mocks.updateSettings).toHaveBeenCalledWith(
       'new',
       { timezone: 'America/New_York' },
-      null
+      {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:github_classroom.import.time_zone',
+        impersonatedBy: 'admin-1',
+      }
     );
   });
 

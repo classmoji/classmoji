@@ -208,6 +208,16 @@ describe('repository settings action', () => {
     });
   });
 
+  it('does not report a throw from the audit row as a failed GitHub update', async () => {
+    // Outside production the row's own input check throws; GitHub applied the change.
+    mocks.recordForActor.mockRejectedValue(new Error('audit row: invalid input'));
+
+    await expect(post({ members_can_create_repositories: true })).rejects.toThrow(
+      'audit row: invalid input'
+    );
+    expect(patchCalls()).toHaveLength(1);
+  });
+
   it('records nothing when GitHub already had those values', async () => {
     expect(await post({ default_repository_permission: 'none' })).toEqual({
       success: 'Permissions updated',
