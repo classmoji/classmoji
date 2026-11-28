@@ -23,6 +23,7 @@ import {
 } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { recordAudit } from '~/utils/audit.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import FormPreview from '~/components/forms/FormPreview.tsx';
 import { FormHeader } from '~/components/forms/FormCanvas.tsx';
@@ -223,7 +224,7 @@ export const action = async ({
   url: URL;
 }) => {
   const classroomSlug = params.classroomSlug!;
-  const { classroom, userId, membership } = await assertFormAdmin(
+  const { classroom, userId, membership, impersonatedBy } = await assertFormAdmin(
     classroomSlug,
     { request, url },
     {
@@ -255,15 +256,18 @@ export const action = async ({
   // Written after each saved change: a failed write is reported (`audit_miss`)
   // and the save is answered as saved.
   const audit = (action: 'UPDATE', tool: string, data: Record<string, unknown> = {}) =>
-    ClassmojiService.audit.record({
-      user_id: userId,
-      classroom_id: classroom.id,
-      role: membership.role,
-      resource_type: 'FORMS',
-      resource_id: form.id,
-      action,
-      data: { tool, slug: form.slug, ...data },
-    });
+    recordAudit(
+      {
+        user_id: userId,
+        classroom_id: classroom.id,
+        role: membership.role,
+        resource_type: 'FORMS',
+        resource_id: form.id,
+        action,
+        data: { tool, slug: form.slug, ...data },
+      },
+      { impersonatedBy }
+    );
 
   try {
     switch (body.intent) {

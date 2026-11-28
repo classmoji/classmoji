@@ -56,6 +56,8 @@ export interface FormAdminContext {
   userId: string;
   classroom: { id: string; slug: string; name?: string | null; status?: string };
   membership: { role: string };
+  /** The platform admin viewing as `userId` ("View as"), else null: for audit rows. */
+  impersonatedBy: string | null;
 }
 
 /**
