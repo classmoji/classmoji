@@ -1,25 +1,26 @@
 /**
- * The "Add Students" action: one audit row per add (CLAUDE.md rule 2), bound
- * to the classroom the caller was authorized for, written before the emails
- * go out; and a message that counts students already in the class apart from
- * the ones just added (#372). The roster service is mocked: its own tests pin
- * the transaction and the already-enrolled lookup.
+ * The "Add Students" action: the roster service records each add (CLAUDE.md
+ * rule 2) for the owner the gate resolved (with the admin viewing as them),
+ * bound to the classroom the caller was authorized for, before the route sends
+ * the emails; the route writes no row of its own. And a message that counts
+ * students already in the class apart from the ones just added (#372). The
+ * roster service is mocked: its own tests pin the transaction, the
+ * already-enrolled lookup and the row.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { sameObject } from '../../../__tests__/support/sameObject.ts';
-
-/** The request the route under test was last called with. */
-let routeRequest: Request;
 
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   addStudents: vi.fn(),
-  addClassroomAuditLog: vi.fn(),
   batchTrigger: vi.fn(),
   taskTrigger: vi.fn(),
+  requestImpersonator: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -43,20 +44,16 @@ vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => mocks.taskTrigger(...a) },
 }));
 
-vi.mock('~/utils/helpers', () => ({
-  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
-}));
-
 const { action } = await import('../action.ts');
 
 const run = (students: Array<{ email: string; name?: string }>) =>
   (action as unknown as (args: { params: object; request: Request }) => Promise<unknown>)({
     params: { class: 'cs-1' },
-    request: (routeRequest = new Request('http://localhost/admin/cs-1/students/add', {
+    request: new Request('http://localhost/admin/cs-1/students/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ students }),
-    })),
+    }),
   });
 
 const result = (over: Record<string, unknown> = {}) => ({
@@ -66,6 +63,7 @@ const result = (over: Record<string, unknown> = {}) => ({
   invalid: [],
   emails: [],
   activations: [],
+  audit: { written: 1, missed: 0 },
   ...over,
 });
 
@@ -76,50 +74,59 @@ beforeEach(() => {
     classroom: { id: 'class-1', slug: 'cs-1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
+  mocks.requestImpersonator.mockResolvedValue(null);
 });
 
 describe('add students action', () => {
-  it('writes one audit row for the authorized classroom, before the emails', async () => {
+  it('hands the service the owner for the row of the authorized classroom, before the emails', async () => {
     const order: string[] = [];
-    mocks.addClassroomAuditLog.mockImplementation(async () => order.push('audit'));
-    mocks.batchTrigger.mockImplementation(async () => order.push('emails'));
-    mocks.addStudents.mockResolvedValue(
-      result({
+    mocks.addStudents.mockImplementation(async () => {
+      order.push('add (and its row)');
+      return result({
         addedExistingUsers: 1,
         invitedNewUsers: 1,
         alreadyEnrolled: ['in@x.edu'],
         emails: [{ payload: { to: 'a@x.edu' } }, { payload: { to: 'b@x.edu' } }],
-      })
-    );
+      });
+    });
+    mocks.batchTrigger.mockImplementation(async () => order.push('emails'));
 
     await run([{ email: 'a@x.edu' }, { email: 'b@x.edu' }, { email: 'in@x.edu' }]);
 
     expect(mocks.addStudents).toHaveBeenCalledWith(
-      expect.objectContaining({ classroomId: 'class-1' })
+      expect.objectContaining({
+        classroomId: 'class-1',
+        actor: { userId: 'owner-1', role: 'OWNER', tool: 'web:students.add', impersonatedBy: null },
+      })
     );
-    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
-    expect(mocks.addClassroomAuditLog.mock.calls[0][0]).toEqual({
-      request: sameObject(routeRequest),
-      classroomId: 'class-1',
-      userId: 'owner-1',
-      role: 'OWNER',
-      action: 'CREATE',
-      resourceType: 'STUDENT_ROSTER',
-      metadata: {
-        tool: 'web:students.add',
-        added: 1,
-        invited: 1,
-        already_enrolled: 1,
-        invalid: 0,
-      },
-    });
-    expect(order).toEqual(['audit', 'emails']);
+    expect(order).toEqual(['add (and its row)', 'emails']);
   });
 
-  it('writes no audit row and sends nothing when the roster write fails', async () => {
+  it('under View as, the actor names the admin', async () => {
+    mocks.requestImpersonator.mockResolvedValue('admin-1');
+    mocks.addStudents.mockResolvedValue(result({ addedExistingUsers: 1 }));
+    await run([{ email: 'a@x.edu' }]);
+    expect(mocks.addStudents.mock.calls[0][0].actor).toEqual({
+      userId: 'owner-1',
+      role: 'OWNER',
+      tool: 'web:students.add',
+      impersonatedBy: 'admin-1',
+    });
+  });
+
+  it('a row the service could not write changes nothing the owner is told', async () => {
+    mocks.addStudents.mockResolvedValue(
+      result({ addedExistingUsers: 1, audit: { written: 0, missed: 1 } })
+    );
+    expect(await run([{ email: 'a@x.edu' }])).toEqual({
+      action: 'ADD_STUDENTS',
+      success: '1 student invited to the class.',
+    });
+  });
+
+  it('sends nothing when the roster write fails', async () => {
     mocks.addStudents.mockRejectedValue(new Error('invite write failed'));
     await expect(run([{ email: 'a@x.edu' }])).rejects.toThrow('invite write failed');
-    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });
 

@@ -4,12 +4,15 @@ import {
   ClassmojiService,
   HelperService,
   StaffServiceError,
+  ungradedCountsBeforeSettling,
+  ungradedOutcomeCounts,
   type StaffRemovalStart,
   type UngradedChoice,
   type UngradedSlotsOutcome,
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
+import { auditActor } from '~/utils/auditActor.server';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -173,14 +176,11 @@ const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { userId, classroom, membership, impersonatedBy } = await requireClassroomAdmin(
-    request,
-    classSlug,
-    {
-      resourceType: 'STAFF',
-      action: 'manage_staff',
-    }
-  );
+  const gate = await requireClassroomAdmin(request, classSlug, {
+    resourceType: 'STAFF',
+    action: 'manage_staff',
+  });
+  const { classroom, membership } = gate;
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
   const isGitLab = classroom.git_organization?.provider === 'GITLAB';
 
@@ -236,6 +236,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           role,
           name: parseOverride(data.name),
           email: parseOverride(data.email),
+          // The service records the new membership for this owner.
+          actor: await auditActor(request, gate, 'web:staff.create'),
         });
 
         if (result.alreadyExists) {
@@ -293,6 +295,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           login,
           role,
           isGrader,
+          // The service records a change of the flag for this owner.
+          actor: await auditActor(request, gate, 'web:staff.update'),
         });
         return {
           success: 'Staff member updated',
@@ -334,6 +338,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         };
       }
 
+      // The removal's row, the plan-owner hand-off it may cause and the
+      // grader moves of their ungraded submissions are recorded for this owner.
+      const actor = await auditActor(request, gate, 'web:staff.remove');
+
       let started: StaffRemovalStart;
       let finalStatus: string | undefined;
       try {
@@ -350,8 +358,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           login,
           role,
           ungradedSubmissions,
-          actorUserId: userId,
-          impersonatedBy,
+          actor,
         });
 
         finalStatus = (await waitForRunCompletion(started.runId))?.status as string | undefined;
@@ -375,6 +382,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // reply is what it always was.)
       const completed = finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_SUCCESSFULLY';
       if (started.choice && !completed) {
+        // Still running: recorded as such, with nothing moved (the same counts
+        // as a completed removal's row, all zero). The web offers no follow-up
+        // for it, so the row carries no follow-up marker.
+        await ClassmojiService.staff.recordStaffRemoval(actor, {
+          classroomId: classroom.id,
+          userId: started.userId,
+          role: started.role,
+          choice: started.choice,
+          removal: 'in_progress',
+          ungraded: ungradedCountsBeforeSettling(started.choice, started.ungradedCount),
+        });
         return {
           action: ActionTypes.REMOVE_USER,
           error:
@@ -391,10 +409,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             choice: started.choice,
             departingName: started.name || started.login,
             expectedCount: started.ungradedCount,
-            // The slot moves write no grader audit rows.
-            actor: null,
+            // Each move is recorded as its grader rows, for this owner.
+            actor,
           })
         : null;
+
+      // One row for the removal: the role, and what became of their ungraded
+      // submissions (counts only).
+      await ClassmojiService.staff.recordStaffRemoval(actor, {
+        classroomId: classroom.id,
+        userId: started.userId,
+        role: started.role,
+        choice: started.choice,
+        removal: completed ? 'completed' : 'in_progress',
+        ungraded: ungraded ? ungradedOutcomeCounts(ungraded) : null,
+      });
 
       return {
         success: removalMessage(ungraded),

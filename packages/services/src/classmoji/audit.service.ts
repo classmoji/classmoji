@@ -460,6 +460,34 @@ export interface AuditActor {
 }
 
 /**
+ * An `AuditActor` read back from stored data (a background run's payload), or
+ * null when `value` is not one: a user id, a classroom role and a tool, as
+ * non-empty strings, and the optional fields as strings when present. Only
+ * the actor's own fields are kept. A run that recorded nothing before keeps
+ * recording nothing (no actor in its payload), and a payload that does not
+ * hold a valid actor writes no row rather than fail the run after its change.
+ */
+export function parseAuditActor(value: unknown): AuditActor | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const actor = value as Record<string, unknown>;
+  const text = (key: string) => typeof actor[key] === 'string' && (actor[key] as string).length > 0;
+  const optional = (key: string) =>
+    actor[key] === undefined || actor[key] === null || typeof actor[key] === 'string';
+  if (!text('userId') || !text('tool') || !VALID_ROLES.includes(actor.role as string)) return null;
+  if (!optional('impersonatedBy') || !optional('clientId') || !optional('via')) return null;
+  return {
+    userId: actor.userId as string,
+    role: actor.role as Role,
+    tool: actor.tool as string,
+    ...(typeof actor.impersonatedBy === 'string' && actor.impersonatedBy
+      ? { impersonatedBy: actor.impersonatedBy }
+      : {}),
+    ...(actor.clientId !== undefined ? { clientId: actor.clientId as string | null } : {}),
+    ...(typeof actor.via === 'string' && actor.via ? { via: actor.via } : {}),
+  };
+}
+
+/**
  * What a service did about the audit rows of one call: how many it wrote and
  * how many it owed but could not write (each left an `audit_miss` line). Both
  * are 0 when no row was owed: the call changed nothing, or its caller passed

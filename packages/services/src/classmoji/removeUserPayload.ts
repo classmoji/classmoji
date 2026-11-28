@@ -8,9 +8,11 @@
  * field by field from those — handing over a whole classroom or organization
  * record would ship every column on it, including the ones no task reads.
  *
- * Shared by staff.service.removeStaff and the MCP roster_remove_student tool so
- * both produce the identical shape from the same list of fields.
+ * Shared by staff.service.removeStaff, the web Students action and the MCP
+ * roster_remove_student tool so all produce the identical shape from the same
+ * list of fields.
  */
+import type { AuditActor } from './audit.service.ts';
 
 /** The classroom fields the removal task reads. */
 export interface RemoveUserClassroom {
@@ -40,6 +42,13 @@ export interface RemoveUserPayload {
   actorUserId: string | null;
   /** The platform admin viewing as that person ("View as"), only when there is one. */
   impersonatedBy?: string;
+  /**
+   * Who the run records the membership removal for once it has deleted the
+   * row (`classroomMembership.remove`), copied field by field from the
+   * caller's actor. A student removal names one; a staff removal does not,
+   * because its row is written by the staff flow once it knows the outcome.
+   */
+  auditActor?: AuditActor;
 }
 
 /**
@@ -56,6 +65,7 @@ export const buildRemoveUserPayload = ({
   role,
   actorUserId = null,
   impersonatedBy = null,
+  auditActor = null,
 }: {
   user: { id: string; login: string | null; has_accepted_invite: boolean };
   classroom: {
@@ -75,6 +85,7 @@ export const buildRemoveUserPayload = ({
   role: string;
   actorUserId?: string | null;
   impersonatedBy?: string | null;
+  auditActor?: AuditActor | null;
 }): RemoveUserPayload => {
   const gitOrganization = classroom.git_organization;
 
@@ -101,5 +112,17 @@ export const buildRemoveUserPayload = ({
     role,
     actorUserId,
     ...(impersonatedBy ? { impersonatedBy } : {}),
+    ...(auditActor
+      ? {
+          auditActor: {
+            userId: auditActor.userId,
+            role: auditActor.role,
+            tool: auditActor.tool,
+            ...(auditActor.impersonatedBy ? { impersonatedBy: auditActor.impersonatedBy } : {}),
+            ...(auditActor.clientId !== undefined ? { clientId: auditActor.clientId } : {}),
+            ...(auditActor.via ? { via: auditActor.via } : {}),
+          },
+        }
+      : {}),
   };
 };

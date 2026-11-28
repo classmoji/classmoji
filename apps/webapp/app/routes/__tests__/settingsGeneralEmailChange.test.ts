@@ -36,6 +36,7 @@ vi.mock('~/utils/emailVerification.server', () => ({
   consumeEmailVerificationCode: (...a: unknown[]) => mocks.consumeCode(...a),
 }));
 vi.mock('~/store', () => ({ default: () => ({ user: null }) }));
+vi.mock('@classmoji/auth/request-impersonator', () => ({ requestImpersonator: async () => null }));
 
 const { action } = await import('../_user.settings.general/route');
 const { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } = await import('~/utils/impersonationSession');
@@ -125,10 +126,14 @@ describe('settings.general action: change email', () => {
     expect(result).toEqual({ changed: true });
     expect(mocks.consumeCode).toHaveBeenCalledWith('new@school.edu', '123456');
     expect(mocks.userUpdate).toHaveBeenCalledTimes(1);
-    const [userId, data] = mocks.userUpdate.mock.calls[0];
+    const [userId, data, options] = mocks.userUpdate.mock.calls[0];
     expect(userId).toBe('me');
     expect(data).toEqual({ email: 'new@school.edu', emailVerified: true });
     expect(data).not.toHaveProperty('provider_email');
+    // A membership an invite for the new address creates is recorded for them.
+    expect(options).toEqual({
+      inviteClaim: { tool: 'web:roster.invite_email', impersonatedBy: null },
+    });
   });
 
   it('saves a trimmed School ID on the signed-in user, and clears it when emptied', async () => {

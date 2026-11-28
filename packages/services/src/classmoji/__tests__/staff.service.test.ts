@@ -111,6 +111,11 @@ beforeEach(() => {
   userCreate.mockResolvedValue({ id: 'u-1', name: 'Ada L' });
   classroomFindUnique.mockResolvedValue({ git_organization: CLASSROOM.git_organization });
   triggerTask.mockResolvedValue({ id: 'run-1' });
+  updateById.mockImplementation(async (id: string, data: object) => ({
+    id,
+    user_id: 'u-1',
+    ...data,
+  }));
   membershipCount.mockResolvedValue(2);
   // The owner row being removed, for the last-owner rule.
   membershipFindFirst.mockResolvedValue({ id: 'm-owner', has_accepted_invite: true });
@@ -119,6 +124,7 @@ beforeEach(() => {
 describe('staff.addStaff', () => {
   it('resolves the git profile server-side, invites, and creates the membership', async () => {
     const result = await staff.addStaff({
+      actor: null,
       classroomId: 'class-1',
       login: '@ada',
       role: 'ASSISTANT',
@@ -161,7 +167,12 @@ describe('staff.addStaff', () => {
   it.each(['ASSISTANT', 'TEACHER', 'OWNER'] as const)(
     'creates the membership at the requested role (%s) in the shared staff team',
     async role => {
-      const result = await staff.addStaff({ classroomId: 'class-1', login: 'ada', role });
+      const result = await staff.addStaff({
+        actor: null,
+        classroomId: 'class-1',
+        login: 'ada',
+        role,
+      });
 
       expect(membershipCreate).toHaveBeenCalledWith({
         data: { classroom_id: 'class-1', user_id: 'u-1', role },
@@ -187,7 +198,12 @@ describe('staff.addStaff', () => {
     accountFindUnique.mockResolvedValue(storedAccount());
     findByClassroomAndUser.mockResolvedValue(null);
 
-    const result = await staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'TEACHER' });
+    const result = await staff.addStaff({
+      actor: null,
+      classroomId: 'class-1',
+      login: 'ada',
+      role: 'TEACHER',
+    });
 
     // Only TEACHER was ever looked up — the existing ASSISTANT row is never
     // read, updated or deleted; a NEW row is created beside it.
@@ -208,6 +224,7 @@ describe('staff.addStaff', () => {
     isUserMemberOfOrganization.mockResolvedValue(true);
 
     const result = await staff.addStaff({
+      actor: null,
       classroomId: 'class-1',
       login: 'ada',
       role: 'ASSISTANT',
@@ -229,7 +246,12 @@ describe('staff.addStaff', () => {
       userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role });
 
-      const result = await staff.addStaff({ classroomId: 'class-1', login: 'ada', role });
+      const result = await staff.addStaff({
+        actor: null,
+        classroomId: 'class-1',
+        login: 'ada',
+        role,
+      });
 
       expect(findByClassroomAndUser).toHaveBeenCalledWith('class-1', 'u-1', role);
       expect(result).toMatchObject({ created: false, alreadyExists: true, userId: 'u-1', role });
@@ -244,7 +266,7 @@ describe('staff.addStaff', () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
 
-    await staff.addStaff({ classroomId: 'class-1', login: 'Ada', role: 'ASSISTANT' });
+    await staff.addStaff({ actor: null, classroomId: 'class-1', login: 'Ada', role: 'ASSISTANT' });
 
     expect(userFindFirst.mock.calls[0][0].where).toEqual(usernameWhere('Ada'));
   });
@@ -254,6 +276,7 @@ describe('staff.addStaff', () => {
     findByClassroomAndUser.mockResolvedValue(null);
 
     const result = await staff.addStaff({
+      actor: null,
       classroomId: 'class-1',
       login: 'ada',
       role: 'ASSISTANT',
@@ -275,6 +298,7 @@ describe('staff.addStaff', () => {
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
 
     const result = await staff.addStaff({
+      actor: null,
       classroomId: 'class-1',
       login: 'Ada',
       role: 'ASSISTANT',
@@ -295,7 +319,7 @@ describe('staff.addStaff', () => {
     accountFindFirst.mockResolvedValue(storedAccount('111'));
 
     await expect(
-      staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
+      staff.addStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
     ).rejects.toMatchObject({ code: 'login_conflict' });
     expect(ensureClassroomTeam).not.toHaveBeenCalled();
     expect(userCreate).not.toHaveBeenCalled();
@@ -307,13 +331,13 @@ describe('staff.addStaff', () => {
     getUserByLogin.mockRejectedValue(rateLimited);
 
     await expect(
-      staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
+      staff.addStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
     ).rejects.toThrow('API rate limit exceeded');
     expect(ensureClassroomTeam).not.toHaveBeenCalled();
 
     getUserByLogin.mockRejectedValue(Object.assign(new Error('Not Found'), { status: 404 }));
     await expect(
-      staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
+      staff.addStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
     ).rejects.toMatchObject({ code: 'git_user_not_found' });
   });
 
@@ -321,6 +345,7 @@ describe('staff.addStaff', () => {
     membershipCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 
     const result = await staff.addStaff({
+      actor: null,
       classroomId: 'class-1',
       login: 'ada',
       role: 'ASSISTANT',
@@ -337,7 +362,13 @@ describe('staff.updateStaff', () => {
       userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role });
 
-      await staff.updateStaff({ classroomId: 'class-1', login: 'ada', role, isGrader: true });
+      await staff.updateStaff({
+        actor: null,
+        classroomId: 'class-1',
+        login: 'ada',
+        role,
+        isGrader: true,
+      });
 
       // Role-scoped lookup — a multi-role user must not have another row updated.
       expect(findByClassroomAndUser).toHaveBeenCalledWith('class-1', 'u-1', role);
@@ -345,11 +376,28 @@ describe('staff.updateStaff', () => {
     }
   );
 
+  it('leaves a flag already at that value as it is, and reports no change', async () => {
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT', is_grader: true });
+
+    const result = await staff.updateStaff({
+      actor: null,
+      classroomId: 'class-1',
+      login: 'ada',
+      role: 'ASSISTANT',
+      isGrader: true,
+    });
+
+    expect(updateById).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ changed: false, audit: { written: 0, missed: 0 } });
+  });
+
   it('refuses is_grader on an OWNER membership before touching anything', async () => {
     // is_grader is a grading-pool flag; the RANDOM pool draws from ASSISTANT +
     // TEACHER only, so setting it on an OWNER row would set a flag nothing reads.
     await expect(
       staff.updateStaff({
+        actor: null,
         classroomId: 'class-1',
         login: 'ada',
         role: 'OWNER',
@@ -366,6 +414,7 @@ describe('staff.updateStaff', () => {
 
     await expect(
       staff.updateStaff({
+        actor: null,
         classroomId: 'class-1',
         login: 'ada',
         role: 'ASSISTANT',
@@ -382,6 +431,7 @@ describe('staff.updateStaff', () => {
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
 
     await staff.updateStaff({
+      actor: null,
       classroomId: 'class-1',
       login: '@ada',
       role: 'ASSISTANT',
@@ -400,7 +450,12 @@ describe('staff.removeStaff', () => {
       userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
-      const result = await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role });
+      const result = await staff.removeStaff({
+        actor: null,
+        classroomId: 'class-1',
+        login: 'ada',
+        role,
+      });
 
       expect(triggerTask).toHaveBeenCalledWith('remove_user_from_organization', {
         payload: {
@@ -436,7 +491,12 @@ describe('staff.removeStaff', () => {
       userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
-      const result = await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role });
+      const result = await staff.removeStaff({
+        actor: null,
+        classroomId: 'class-1',
+        login: 'ada',
+        role,
+      });
 
       // Role-scoped: the other roles this user holds here are never the target.
       expect(findByClassroomAndUser).toHaveBeenCalledWith('class-1', 'u-1', role);
@@ -452,7 +512,7 @@ describe('staff.removeStaff', () => {
     findByClassroomAndUser.mockResolvedValue(null);
 
     await expect(
-      staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
+      staff.removeStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
     ).rejects.toMatchObject({ code: 'staff_not_found' });
     expect(triggerTask).not.toHaveBeenCalled();
   });
@@ -461,7 +521,12 @@ describe('staff.removeStaff', () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'Ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
-    await staff.removeStaff({ classroomId: 'class-1', login: '@ada', role: 'ASSISTANT' });
+    await staff.removeStaff({
+      actor: null,
+      classroomId: 'class-1',
+      login: '@ada',
+      role: 'ASSISTANT',
+    });
 
     expect(userFindFirst.mock.calls[0][0].where).toEqual(usernameWhere('ada'));
   });
@@ -473,7 +538,7 @@ describe('staff.removeStaff', () => {
     membershipCount.mockResolvedValue(0);
 
     await expect(
-      staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'OWNER' })
+      staff.removeStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: 'OWNER' })
     ).rejects.toMatchObject({ code: 'last_owner' });
 
     expect(membershipCount).toHaveBeenCalledWith({
@@ -508,7 +573,12 @@ describe('staff.removeStaff', () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
-    await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' });
+    await staff.removeStaff({
+      actor: null,
+      classroomId: 'class-1',
+      login: 'ada',
+      role: 'ASSISTANT',
+    });
 
     const { payload } = triggerTask.mock.calls[0][1] as { payload: Record<string, unknown> };
     expect(Object.keys(payload).sort()).toEqual([
@@ -538,6 +608,7 @@ describe('staff.removeStaff', () => {
     membershipCount.mockResolvedValue(2);
 
     const result = await staff.removeStaff({
+      actor: null,
       classroomId: 'class-1',
       login: 'ada',
       role: 'OWNER',
@@ -560,7 +631,7 @@ describe('the staff role is checked at runtime', () => {
 
   it.each(notStaff)('addStaff refuses %s before doing anything', async role => {
     await expect(
-      staff.addStaff({ classroomId: 'class-1', login: 'ada', role: role as never })
+      staff.addStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: role as never })
     ).rejects.toMatchObject({ code: 'invalid_role' });
     expect(classroomFindById).not.toHaveBeenCalled();
     expect(membershipCreate).not.toHaveBeenCalled();
@@ -569,6 +640,7 @@ describe('the staff role is checked at runtime', () => {
   it.each(notStaff)('updateStaff refuses %s before doing anything', async role => {
     await expect(
       staff.updateStaff({
+        actor: null,
         classroomId: 'class-1',
         login: 'ada',
         role: role as never,
@@ -580,7 +652,7 @@ describe('the staff role is checked at runtime', () => {
 
   it.each(notStaff)('removeStaff refuses %s before anything is queued', async role => {
     await expect(
-      staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: role as never })
+      staff.removeStaff({ actor: null, classroomId: 'class-1', login: 'ada', role: role as never })
     ).rejects.toMatchObject({ code: 'invalid_role' });
     expect(triggerTask).not.toHaveBeenCalled();
   });

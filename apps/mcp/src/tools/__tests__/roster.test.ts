@@ -5,6 +5,10 @@
  * resolves the target from the DB and builds the removal-task payload ENTIRELY
  * server-side (closing the web route's client-supplied `data.user` hole), and
  * refuses unknown / cross-classroom / non-student targets with scopedNotFound.
+ * Add hands the roster service its actor, which writes the row; remove writes
+ * the request row itself and carries its actor in the run payload, for the
+ * completion row the run writes (both pinned in @classmoji/services'
+ * peopleAudit integration test).
  * @classmoji/tasks and @trigger.dev/sdk are mocked — no real emails or GitHub.
  */
 
@@ -75,6 +79,17 @@ const CTX: ToolContext = {
   },
 } as unknown as ToolContext;
 
+/** The actor the tools hand the services: the caller, as `serviceActor` builds it. */
+const ACTOR = (tool: string) => ({
+  userId: 'owner-1',
+  role: 'OWNER',
+  tool,
+  impersonatedBy: null,
+  clientId: 'c',
+  via: 'mcp',
+});
+const WRITTEN = { written: 1, missed: 0 };
+
 function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
@@ -100,6 +115,7 @@ describe('roster_add_student', () => {
       invalid: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
+      audit: WRITTEN,
     });
 
     const payload = parse(await rosterAddStudentTool.handler(ARGS, CTX));
@@ -110,13 +126,16 @@ describe('roster_add_student', () => {
       classroomId: 'class-1',
       students: ARGS.students,
       signInvite: expect.any(Function),
+      // The service records the add for the caller.
+      actor: ACTOR('roster_add_student'),
     });
     // One batched request for the whole roster, not one per recipient.
     expect(mocks.batchTrigger).toHaveBeenCalledTimes(1);
     expect(mocks.batchTrigger).toHaveBeenCalledWith({
       emails: [{ to: 'a@x.edu', template: { id: 'roster-added', variables: {} } }],
     });
-    expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+    // The tool writes no row of its own.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('does not batch-trigger when the service returns no emails', async () => {
@@ -127,6 +146,7 @@ describe('roster_add_student', () => {
       invalid: [],
       emails: [],
       activations: [],
+      audit: WRITTEN,
     });
     await rosterAddStudentTool.handler(ARGS, CTX);
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
@@ -140,12 +160,16 @@ describe('roster_add_student', () => {
       invalid: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
+      audit: WRITTEN,
     });
     mocks.batchTrigger.mockRejectedValue(new Error('trigger down'));
 
     await expect(rosterAddStudentTool.handler(ARGS, CTX)).rejects.toThrow('trigger down');
-    // The audit was written BEFORE the failing email send — mutation not stranded.
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    // The service wrote its row before it returned, so BEFORE the failing
+    // email send — the mutation is not stranded.
+    expect(mocks.addStudents.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.batchTrigger.mock.invocationCallOrder[0]
+    );
   });
 
   it('reports students already in the class separately from added and invited', async () => {
@@ -156,6 +180,7 @@ describe('roster_add_student', () => {
       invalid: [],
       emails: [{ payload: { to: 'b@x.edu', template: { id: 'roster-invited', variables: {} } } }],
       activations: [],
+      audit: WRITTEN,
     });
 
     const payload = parse(await rosterAddStudentTool.handler(ARGS, CTX));
@@ -167,16 +192,9 @@ describe('roster_add_student', () => {
       invalid: [],
       total: 2,
     });
-    // Only the invitee is emailed; the audit row carries the count, not addresses.
+    // Only the invitee is emailed.
     expect(mocks.batchTrigger).toHaveBeenCalledWith({
       emails: [{ to: 'b@x.edu', template: { id: 'roster-invited', variables: {} } }],
-    });
-    const row = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
-    expect(row.data).toMatchObject({
-      tool: 'roster_add_student',
-      added: 0,
-      invited: 1,
-      already_enrolled: 1,
     });
   });
 
@@ -239,6 +257,15 @@ describe('roster_remove_student', () => {
     });
     // The classroom id/slug and the git-org fields the provider factory needs.
     expect(arg[1].payload.classroom).toEqual({ id: 'class-1', slug: 'w26' });
+    // Who the run records the completed removal for: the caller (no admin
+    // outside View as).
+    expect(arg[1].payload.auditActor).toEqual({
+      userId: 'owner-1',
+      role: 'OWNER',
+      tool: 'roster_remove_student',
+      clientId: 'c',
+      via: 'mcp',
+    });
 
     const audit = mocks.auditCreate.mock.calls[0][0] as { action: string; data: { login: string } };
     expect(audit.action).toBe('DELETE');
@@ -302,6 +329,7 @@ describe('roster_remove_student', () => {
     ];
     expect(Object.keys(payload).sort()).toEqual([
       'actorUserId',
+      'auditActor',
       'classroom',
       'gitOrganization',
       'role',

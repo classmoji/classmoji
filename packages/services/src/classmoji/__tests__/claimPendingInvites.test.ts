@@ -3,7 +3,9 @@
  * on login, on an email change, and at registration. Prisma is mocked; the test
  * pins the two addresses that are matched, the exact membership payload, the
  * transactional pairing of "create membership" with "delete invite", and the
- * idempotency the repeated callers depend on.
+ * idempotency the repeated callers depend on. With `audit: null` it records
+ * nothing (the rows it writes for a person are pinned by
+ * peopleAudit.integration.test.ts).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -14,6 +16,28 @@ const inviteFindMany = vi.fn();
 const membershipCreateMany = vi.fn();
 const inviteDeleteMany = vi.fn();
 const transaction = vi.fn();
+/** The writes made inside the transaction, in order. */
+let inTx: string[] = [];
+const tx = {
+  user: {
+    update: (...a: unknown[]) => {
+      inTx.push('userUpdate-op');
+      return userUpdate(...a);
+    },
+  },
+  classroomInvite: {
+    deleteMany: (...a: unknown[]) => {
+      inTx.push('deleteMany-op');
+      return inviteDeleteMany(...a);
+    },
+  },
+  classroomMembership: {
+    createManyAndReturn: (...a: unknown[]) => {
+      inTx.push('createMany-op');
+      return membershipCreateMany(...a);
+    },
+  },
+};
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -29,7 +53,6 @@ vi.mock('@classmoji/database', async () => ({
       findMany: (...a: unknown[]) => inviteFindMany(...a),
       deleteMany: (...a: unknown[]) => inviteDeleteMany(...a),
     },
-    classroomMembership: { createMany: (...a: unknown[]) => membershipCreateMany(...a) },
     $transaction: (...a: unknown[]) => transaction(...a),
   }),
 }));
@@ -44,9 +67,10 @@ beforeEach(() => {
   membershipCreateMany.mockReset();
   inviteDeleteMany.mockReset();
   transaction.mockReset();
-  transaction.mockResolvedValue([{ count: 1 }, { count: 1 }]);
-  membershipCreateMany.mockReturnValue('createMany-op');
-  inviteDeleteMany.mockReturnValue('deleteMany-op');
+  inTx = [];
+  transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+  membershipCreateMany.mockResolvedValue([]);
+  inviteDeleteMany.mockResolvedValue({ count: 1 });
 });
 
 describe('claimPendingInvites', () => {
@@ -58,7 +82,7 @@ describe('claimPendingInvites', () => {
     });
     inviteFindMany.mockResolvedValue([]);
 
-    await invites.claimPendingInvites('user-1');
+    await invites.claimPendingInvites('user-1', null);
 
     const where = inviteFindMany.mock.calls[0][0].where;
     expect(where.OR).toEqual([
@@ -74,7 +98,7 @@ describe('claimPendingInvites', () => {
       { id: 'invite-2', classroom_id: 'class-2', student_name: '' },
     ]);
 
-    const result = await invites.claimPendingInvites('user-1');
+    const result = await invites.claimPendingInvites('user-1', null);
 
     expect(membershipCreateMany).toHaveBeenCalledWith({
       data: [
@@ -92,12 +116,18 @@ describe('claimPendingInvites', () => {
         },
       ],
       skipDuplicates: true,
+      select: { id: true, classroom_id: true },
     });
     expect(inviteDeleteMany).toHaveBeenCalledWith({
       where: { id: { in: ['invite-1', 'invite-2'] } },
     });
-    expect(transaction).toHaveBeenCalledWith(['createMany-op', 'deleteMany-op']);
-    expect(result).toEqual({ claimed: 2, classroomIds: ['class-1', 'class-2'] });
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(inTx).toEqual(['createMany-op', 'deleteMany-op']);
+    expect(result).toEqual({
+      claimed: 2,
+      classroomIds: ['class-1', 'class-2'],
+      audit: { written: 0, missed: 0 },
+    });
   });
 
   it('relies on skipDuplicates so a repeated claim cannot throw P2002', async () => {
@@ -108,7 +138,7 @@ describe('claimPendingInvites', () => {
       { id: 'invite-1', classroom_id: 'class-1', student_name: '' },
     ]);
 
-    await invites.claimPendingInvites('user-1');
+    await invites.claimPendingInvites('user-1', null);
 
     expect(membershipCreateMany.mock.calls[0][0].skipDuplicates).toBe(true);
   });
@@ -126,7 +156,7 @@ describe('claimPendingInvites', () => {
       { id: 'invite-2', classroom_id: 'class-1', student_name: '' },
     ]);
 
-    const result = await invites.claimPendingInvites('user-1');
+    const result = await invites.claimPendingInvites('user-1', null);
 
     expect(membershipCreateMany.mock.calls[0][0].data).toHaveLength(1);
     expect(inviteDeleteMany).toHaveBeenCalledWith({
@@ -146,7 +176,7 @@ describe('claimPendingInvites', () => {
       inviteFindMany.mockResolvedValue([
         { id: 'invite-1', classroom_id: 'class-1', student_name: studentName },
       ]);
-      await invites.claimPendingInvites('user-1');
+      await invites.claimPendingInvites('user-1', null);
     };
 
     it('names an account that only has its Github login', async () => {
@@ -156,7 +186,7 @@ describe('claimPendingInvites', () => {
         where: { id: 'user-1' },
         data: { name: 'Grace Hopper' },
       });
-      expect(transaction).toHaveBeenCalledWith(['userUpdate-op', 'createMany-op', 'deleteMany-op']);
+      expect(inTx).toEqual(['userUpdate-op', 'createMany-op', 'deleteMany-op']);
     });
 
     it('names an account with no name at all', async () => {
@@ -172,7 +202,7 @@ describe('claimPendingInvites', () => {
       await claim({ name: 'Grace M. Hopper' }, 'Grace Hopper');
 
       expect(userUpdate).not.toHaveBeenCalled();
-      expect(transaction).toHaveBeenCalledWith(['createMany-op', 'deleteMany-op']);
+      expect(inTx).toEqual(['createMany-op', 'deleteMany-op']);
     });
 
     it('does not name anyone from an invite that has no name', async () => {
@@ -186,19 +216,19 @@ describe('claimPendingInvites', () => {
     userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
     inviteFindMany.mockResolvedValue([]);
 
-    const result = await invites.claimPendingInvites('user-1');
+    const result = await invites.claimPendingInvites('user-1', null);
 
     expect(transaction).not.toHaveBeenCalled();
-    expect(result).toEqual({ claimed: 0, classroomIds: [] });
+    expect(result).toEqual({ claimed: 0, classroomIds: [], audit: { written: 0, missed: 0 } });
   });
 
   it('writes nothing when the user does not exist', async () => {
     userFindUnique.mockResolvedValue(null);
 
-    const result = await invites.claimPendingInvites('ghost');
+    const result = await invites.claimPendingInvites('ghost', null);
 
     expect(inviteFindMany).not.toHaveBeenCalled();
     expect(transaction).not.toHaveBeenCalled();
-    expect(result).toEqual({ claimed: 0, classroomIds: [] });
+    expect(result).toEqual({ claimed: 0, classroomIds: [], audit: { written: 0, missed: 0 } });
   });
 });

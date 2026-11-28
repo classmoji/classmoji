@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userUpdate: vi.fn(),
   subscriptionCount: vi.fn(),
+  claimPendingInvites: vi.fn(),
+  requestImpersonator: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -40,7 +42,14 @@ vi.mock('@classmoji/utils', () => ({
   gitUsername: vi.fn(() => null),
 }));
 vi.mock('@classmoji/services', () => ({
-  ClassmojiService: { classroomInvite: { claimPendingInvites: vi.fn() } },
+  ClassmojiService: {
+    classroomInvite: {
+      claimPendingInvites: (...a: unknown[]) => mocks.claimPendingInvites(...a),
+    },
+  },
+}));
+vi.mock('@classmoji/auth/request-impersonator', () => ({
+  requestImpersonator: (...a: unknown[]) => mocks.requestImpersonator(...a),
 }));
 vi.mock('@classmoji/auth/invite-token', () => ({
   verifyInviteToken: vi.fn(() => null),
@@ -78,6 +87,12 @@ beforeEach(() => {
   mocks.userUpdate.mockResolvedValue({ id: 'me' });
   mocks.subscriptionCount.mockResolvedValue(1);
   mocks.sendCode.mockResolvedValue({ sent: true });
+  mocks.claimPendingInvites.mockResolvedValue({
+    claimed: 0,
+    classroomIds: [],
+    audit: { written: 0, missed: 0 },
+  });
+  mocks.requestImpersonator.mockResolvedValue(null);
 });
 
 describe('registration action: send-code', () => {
@@ -175,6 +190,16 @@ describe('registration action: verify-code and register use the same normalized 
     expect(res).toBeInstanceOf(Response);
     expect(mocks.consumeCode).toHaveBeenCalledWith('student@school.edu', '123456');
     expect(mocks.userUpdate.mock.calls[0][0].data.email).toBe('student@school.edu');
+  });
+
+  it('register claims their invites, each membership recorded for them under the invite tool', async () => {
+    await post({ intent: 'register', email: 'student@school.edu', code: '123456', name: 'S' });
+    // The admin comes from this request's session (none: View as is refused above).
+    expect(mocks.requestImpersonator).toHaveBeenCalledExactlyOnceWith(expect.any(Request));
+    expect(mocks.claimPendingInvites).toHaveBeenCalledExactlyOnceWith('me', {
+      tool: 'web:roster.invite_email',
+      impersonatedBy: null,
+    });
   });
 
   it('register refuses an invalid address before consuming anything', async () => {

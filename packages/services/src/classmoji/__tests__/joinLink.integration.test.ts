@@ -92,7 +92,7 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
     await joinLink.updateJoinLink(classY, { enabled: true });
     const a = await makeUser('a');
 
-    const result = await joinLink.joinByCode({ userId: a, code: codeX! });
+    const result = await joinLink.joinByCode({ userId: a, code: codeX!, inviteClaim: null });
     expect(result.status).toBe('joined');
     expect(result.status === 'joined' && result.classroom.id).toBe(classX);
     expect(await rolesIn(classX, a)).toEqual(['STUDENT:false']);
@@ -102,8 +102,10 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
   it("does not let user B's join touch user A, and a second join writes nothing", async () => {
     const { code } = await joinLink.getJoinLink(classX);
     const b = await makeUser('b');
-    expect((await joinLink.joinByCode({ userId: b, code: code! })).status).toBe('joined');
-    const again = await joinLink.joinByCode({ userId: b, code: code! });
+    expect((await joinLink.joinByCode({ userId: b, code: code!, inviteClaim: null })).status).toBe(
+      'joined'
+    );
+    const again = await joinLink.joinByCode({ userId: b, code: code!, inviteClaim: null });
     expect(again.status).toBe('already_member');
     expect(await rolesIn(classX, b)).toEqual(['STUDENT:false']);
     const members = await prisma.classroomMembership.count({ where: { classroom_id: classX } });
@@ -116,7 +118,7 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
     await prisma.classroomMembership.create({
       data: { classroom_id: classX, user_id: teacher, role: 'TEACHER', has_accepted_invite: true },
     });
-    const result = await joinLink.joinByCode({ userId: teacher, code: code! });
+    const result = await joinLink.joinByCode({ userId: teacher, code: code!, inviteClaim: null });
     expect(result.status).toBe('already_member');
     expect(await rolesIn(classX, teacher)).toEqual(['TEACHER:true']);
   });
@@ -124,9 +126,9 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
   it('sends an account without a verified email to registration', async () => {
     const { code } = await joinLink.getJoinLink(classX);
     const unverified = await makeUser('unverified', { verified: false });
-    expect((await joinLink.joinByCode({ userId: unverified, code: code! })).status).toBe(
-      'needs_email'
-    );
+    expect(
+      (await joinLink.joinByCode({ userId: unverified, code: code!, inviteClaim: null })).status
+    ).toBe('needs_email');
     expect(await rolesIn(classX, unverified)).toEqual([]);
   });
 
@@ -140,7 +142,7 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
         student_name: 'Rostered',
       },
     });
-    const result = await joinLink.joinByCode({ userId: rostered, code: code! });
+    const result = await joinLink.joinByCode({ userId: rostered, code: code!, inviteClaim: null });
     expect(result.status === 'joined' && result.matchedRosterInvite).toBe(true);
     expect(await rolesIn(classY, rostered)).toEqual(['STUDENT:false']);
     expect(await prisma.classroomInvite.count({ where: { classroom_id: classY } })).toBe(0);
@@ -151,14 +153,20 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
     const reset = await joinLink.updateJoinLink(classX, { reset: true });
     expect(reset.code).not.toBe(oldCode);
     const c = await makeUser('c');
-    expect((await joinLink.joinByCode({ userId: c, code: oldCode! })).status).toBe('inactive');
+    expect(
+      (await joinLink.joinByCode({ userId: c, code: oldCode!, inviteClaim: null })).status
+    ).toBe('inactive');
 
     await joinLink.updateJoinLink(classX, { enabled: false });
-    expect((await joinLink.joinByCode({ userId: c, code: reset.code! })).status).toBe('inactive');
+    expect(
+      (await joinLink.joinByCode({ userId: c, code: reset.code!, inviteClaim: null })).status
+    ).toBe('inactive');
     // Off keeps the code: back on, the same link works again.
     const back = await joinLink.updateJoinLink(classX, { enabled: true });
     expect(back.code).toBe(reset.code);
-    expect((await joinLink.joinByCode({ userId: c, code: reset.code! })).status).toBe('joined');
+    expect(
+      (await joinLink.joinByCode({ userId: c, code: reset.code!, inviteClaim: null })).status
+    ).toBe('joined');
   });
 
   it.each([
@@ -170,7 +178,9 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
     const { code } = await joinLink.updateJoinLink(classroomId, { enabled: true });
     await prisma.classroom.update({ where: { id: classroomId }, data: change });
     const d = await makeUser(`closed-${randomUUID().slice(0, 4)}`);
-    expect((await joinLink.joinByCode({ userId: d, code: code! })).status).toBe('inactive');
+    expect((await joinLink.joinByCode({ userId: d, code: code!, inviteClaim: null })).status).toBe(
+      'inactive'
+    );
     expect(await rolesIn(classroomId, d)).toEqual([]);
   });
 
@@ -178,7 +188,9 @@ describe.skipIf(!RUN)('class invite link (integration)', () => {
     const e = await makeUser('e');
     for (const code of ['', 'short', '../../etc', 'A'.repeat(65), 'ZZZZZZZZZZZZZZZZ']) {
       expect((await joinLink.findJoinableClassroom(code)).ok).toBe(false);
-      expect((await joinLink.joinByCode({ userId: e, code })).status).toBe('inactive');
+      expect((await joinLink.joinByCode({ userId: e, code, inviteClaim: null })).status).toBe(
+        'inactive'
+      );
     }
   });
 });

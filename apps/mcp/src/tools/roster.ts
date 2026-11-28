@@ -34,7 +34,15 @@ import { uuidString } from '@classmoji/utils/zod-formats';
 import { isValidEmail } from '@classmoji/utils/email';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  noteServiceAudit,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  serviceActor,
+  writeAudit,
+} from './shared.ts';
 
 interface RosterAddStudentArgs {
   classroom: string;
@@ -83,23 +91,12 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
       classroomId: classroom.classroomId,
       students: args.students,
       signInvite: email => signInviteToken({ email, classroomId: classroom.classroomId }),
+      // The service records the add (STUDENT_ROSTER, CREATE) for this caller
+      // once the memberships and invites are committed, before any email is
+      // sent here; a call that enrolled and invited nobody records nothing.
+      actor: serviceActor(ctx, 'roster_add_student'),
     });
-
-    // Audit BEFORE sending emails: addStudents has already committed the
-    // memberships/invites (together, in one transaction), so a transient
-    // email-service failure must not leave that mutation un-audited (plan §5.1
-    // — every mutation writes an audit row).
-    await writeAudit(ctx, {
-      resource_type: 'STUDENT_ROSTER',
-      action: 'CREATE',
-      data: {
-        tool: 'roster_add_student',
-        added: result.addedExistingUsers,
-        invited: result.invitedNewUsers,
-        already_enrolled: result.alreadyEnrolled.length,
-        invalid: result.invalid.length,
-      },
-    });
+    noteServiceAudit(ctx, result.audit);
 
     if (result.emails.length > 0) {
       await Tasks.sendBatchEmailTask.trigger({ emails: result.emails.map(e => e.payload) });
@@ -224,6 +221,10 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
           },
           classroom: classroomRecord,
           role: 'STUDENT',
+          // The run records the completed removal (STUDENT_ROSTER, DELETE)
+          // for this caller once it has deleted the membership; the row above
+          // records the request.
+          auditActor: serviceActor(ctx, 'roster_remove_student'),
         }),
       })
       .catch((error: unknown) => {

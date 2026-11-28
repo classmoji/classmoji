@@ -41,10 +41,27 @@ import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import { auditResourceTypeNames } from './auditResourceTypes.ts';
+import {
+  NO_SERVICE_AUDIT,
+  recordForActor,
+  type AuditActor,
+  type ServiceAudit,
+} from './audit.service.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 import * as planOwnerService from './planOwner.service.ts';
+import { STAFF_REMOVE_FOLLOWUP_TOOL } from './staffAudit.ts';
+
+// The rows of a staff removal, written by its callers once they know the
+// outcome (the web Teaching Staff action and the MCP staff_remove).
+export {
+  STAFF_REMOVE_FOLLOWUP_TOOL,
+  recordLeftoverSettled,
+  recordStaffRemoval,
+  type StaffRemovalAudit,
+  type StaffRemovalState,
+} from './staffAudit.ts';
 
 /** The roles this service manages. STUDENT is the roster service's business. */
 export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
@@ -197,6 +214,39 @@ const loadClassroom = async (classroomId: string) => {
  * profile's name and email are used.
  */
 export const addStaff = async ({
+  actor,
+  ...input
+}: {
+  classroomId: string;
+  login: string;
+  role: StaffRole;
+  name?: string | null;
+  email?: string | null;
+  /**
+   * Who the new membership is recorded for (STAFF, CREATE, on the person);
+   * null records nothing. A call that finds the role already held writes no
+   * row.
+   */
+  actor: AuditActor | null;
+}): Promise<AddStaffResult & { audit: ServiceAudit }> => {
+  const result = await addStaffMembership(input);
+  if (!result.created) return { ...result, audit: NO_SERVICE_AUDIT };
+  const audit = await recordForActor(actor, {
+    classroomId: input.classroomId,
+    resourceType: 'STAFF',
+    resourceId: result.userId,
+    action: 'CREATE',
+    data: {
+      user_id: result.userId,
+      login: result.login,
+      role: result.role,
+      already_org_member: result.alreadyOrgMember,
+    },
+  });
+  return { ...result, audit };
+};
+
+const addStaffMembership = async ({
   classroomId,
   login,
   role,
@@ -573,17 +623,23 @@ const addGitLabStaff = async ({
  * `is_grader` is only meaningful for people who grade, and the RANDOM
  * bulk-assignment pool draws from ASSISTANT + TEACHER rows only — so flagging
  * an OWNER row would set a flag nothing reads. Refused with `grader_flag_invalid`.
+ *
+ * A flag already at `isGrader` is left as it is and records nothing; a change
+ * is recorded for `actor` (STAFF, UPDATE, on the person) after it is saved.
  */
 export const updateStaff = async ({
   classroomId,
   login,
   role,
   isGrader,
+  actor,
 }: {
   classroomId: string;
   login: string;
   role: StaffRole;
   isGrader: boolean;
+  /** Who the change is recorded for; null records nothing. */
+  actor: AuditActor | null;
 }) => {
   assertStaffRole(role);
 
@@ -611,7 +667,21 @@ export const updateStaff = async ({
     );
   }
 
-  return classroomMembershipService.updateById(membership.id, { is_grader: isGrader });
+  if (membership.is_grader === isGrader) {
+    return { membership, changed: false, audit: NO_SERVICE_AUDIT };
+  }
+
+  const updated = await classroomMembershipService.updateById(membership.id, {
+    is_grader: isGrader,
+  });
+  const audit = await recordForActor(actor, {
+    classroomId,
+    resourceType: 'STAFF',
+    resourceId: updated.user_id,
+    action: 'UPDATE',
+    data: { user_id: updated.user_id, login, role, is_grader: isGrader },
+  });
+  return { membership: updated, changed: true, audit };
 };
 
 /**
@@ -770,7 +840,7 @@ export const previewLeftoverSlots = async ({
       action: 'DELETE',
       timestamp: { gte: new Date(Date.now() - LEFTOVER_WINDOW_MS) },
       AND: [
-        { data: { path: ['tool'], equals: 'staff_remove' } },
+        { data: { path: ['tool'], equals: STAFF_REMOVE_FOLLOWUP_TOOL } },
         { data: { path: ['role'], equals: role } },
         { OR: FOLLOWUP_MARKERS },
       ],
@@ -829,16 +899,17 @@ export const removeStaff = async ({
   classroomId,
   login,
   role,
-  actorUserId = null,
-  impersonatedBy = null,
+  actor,
 }: {
   classroomId: string;
   login: string;
   role: StaffRole;
-  /** The owner asking; audits a plan-owner hand-off the removal causes. */
-  actorUserId?: string | null;
-  /** The platform admin viewing as that owner ("View as"), for the same row. */
-  impersonatedBy?: string | null;
+  /**
+   * The owner asking. The run audits a plan-owner hand-off the removal causes
+   * as them (and the admin viewing as them); the removal's own row is written
+   * by the caller once it knows the outcome (`recordStaffRemoval`).
+   */
+  actor: AuditActor | null;
 }): Promise<RemoveStaffResult> => {
   assertStaffRole(role);
 
@@ -875,8 +946,8 @@ export const removeStaff = async ({
       },
       classroom,
       role,
-      actorUserId,
-      impersonatedBy,
+      actorUserId: actor?.userId ?? null,
+      impersonatedBy: actor?.impersonatedBy ?? null,
     }),
   });
 

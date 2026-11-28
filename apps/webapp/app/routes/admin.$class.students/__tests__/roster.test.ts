@@ -182,7 +182,7 @@ beforeEach(() => {
   mocks.findInvitesByClassroomId.mockResolvedValue([INVITE_ROW]);
   mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
   mocks.waitForRunCompletion.mockResolvedValue(undefined);
-  mocks.deleteInvite.mockResolvedValue(true);
+  mocks.deleteInvite.mockResolvedValue({ deleted: true, audit: { written: 1, missed: 0 } });
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.findRegisteredEmails.mockResolvedValue(new Set<string>());
 });
@@ -502,17 +502,17 @@ describe('students action — mutations stay owner-only', () => {
 
     const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
 
-    // The classroom is the gate's, never the body's.
-    expect(mocks.deleteInvite).toHaveBeenCalledWith(CLASSROOM.id, 'invite-1');
-    expect(result).toMatchObject({ action: 'REVOKE_INVITE', success: 'Invite revoked' });
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
-    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
-      user_id: 'owner-1',
-      classroom_id: CLASSROOM.id,
-      action: 'DELETE',
-      resource_id: 'invite-1',
-      data: { tool: 'web:roster.revoke_invite' },
+    // The classroom is the gate's, never the body's; the service records the
+    // revoke for the owner (its row is pinned in @classmoji/services'
+    // peopleAudit integration test), and the route writes none.
+    expect(mocks.deleteInvite).toHaveBeenCalledWith(CLASSROOM.id, 'invite-1', {
+      userId: 'owner-1',
+      role: 'OWNER',
+      tool: 'web:roster.revoke_invite',
+      impersonatedBy: null,
     });
+    expect(result).toMatchObject({ action: 'REVOKE_INVITE', success: 'Invite revoked' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('names the admin viewing as the owner on the revoke row, and only then', async () => {
@@ -529,11 +529,15 @@ describe('students action — mutations stay owner-only', () => {
     }
     await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
 
-    expect(mocks.auditCreate.mock.calls.map(([row]) => row.data)).toEqual([
-      { tool: 'web:roster.revoke_invite', impersonated_by: 'admin-1' },
-      { tool: 'web:roster.revoke_invite' },
+    expect(mocks.deleteInvite.mock.calls.map(([, , actor]) => actor)).toEqual([
+      {
+        userId: 'owner-1',
+        role: 'OWNER',
+        tool: 'web:roster.revoke_invite',
+        impersonatedBy: 'admin-1',
+      },
+      { userId: 'owner-1', role: 'OWNER', tool: 'web:roster.revoke_invite', impersonatedBy: null },
     ]);
-    expect(mocks.auditCreate.mock.calls[0][0].user_id).toBe('owner-1');
   });
 
   it('reports a revoke that happened even when its audit row cannot be written', async () => {
@@ -542,8 +546,7 @@ describe('students action — mutations stay owner-only', () => {
       classroom: CLASSROOM,
       membership: { id: 'm-1', role: 'OWNER' },
     });
-    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.deleteInvite.mockResolvedValue({ deleted: true, audit: { written: 0, missed: 1 } });
 
     const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
 
@@ -592,11 +595,15 @@ describe('students action — mutations stay owner-only', () => {
     });
     // The service deletes only where the invite's classroom matches; an id of
     // another classroom matches nothing.
-    mocks.deleteInvite.mockResolvedValue(false);
+    mocks.deleteInvite.mockResolvedValue({ deleted: false, audit: { written: 0, missed: 0 } });
 
     const result = await action(actionArgs({ inviteId: 'invite-of-class-2' }, 'revokeInvite'));
 
-    expect(mocks.deleteInvite).toHaveBeenCalledWith(CLASSROOM.id, 'invite-of-class-2');
+    expect(mocks.deleteInvite).toHaveBeenCalledWith(
+      CLASSROOM.id,
+      'invite-of-class-2',
+      expect.objectContaining({ userId: 'owner-1' })
+    );
     expect(result).toMatchObject({ action: 'REVOKE_INVITE', error: expect.any(String) });
     expect(result).not.toHaveProperty('success');
     expect(mocks.auditCreate).not.toHaveBeenCalled();
@@ -638,9 +645,47 @@ describe('students action — removal payload', () => {
       gitOrganization: expect.objectContaining({ id: 'org-1', login: 'dev-org' }),
       role: 'STUDENT',
       actorUserId: null,
+      // Who the run records the completed removal for: the owner, as the gate
+      // resolved them. The route writes no row of its own.
+      auditActor: { userId: 'owner-1', role: 'OWNER', tool: 'web:students.remove' },
     });
     expect(JSON.stringify(payload)).not.toContain('sk-test');
     expect(JSON.stringify(payload)).not.toContain('ada@school.test');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('under View as, the run’s actor names the admin', async () => {
+    ownerWithSecrets();
+    session.impersonatedBy = 'admin-1';
+    try {
+      await action(actionArgs({ user: { id: 'student-1' } }, 'removeStudent'));
+    } finally {
+      session.impersonatedBy = null;
+    }
+    const [, { payload }] = mocks.taskTrigger.mock.calls[0] as [
+      string,
+      { payload: Record<string, unknown> },
+    ];
+    expect(payload.auditActor).toEqual({
+      userId: 'owner-1',
+      role: 'OWNER',
+      tool: 'web:students.remove',
+      impersonatedBy: 'admin-1',
+    });
+  });
+
+  it('a failed removal run answers as before (the run, not the route, writes the row)', async () => {
+    ownerWithSecrets();
+    mocks.waitForRunCompletion.mockRejectedValue(new Error('Task failed'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await action(actionArgs({ user: { id: 'student-1' } }, 'removeStudent'));
+
+    expect(result).toEqual({
+      action: 'remove-user',
+      error: 'Failed to remove student. Please try again.',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a user who is not a student in this classroom', async () => {
