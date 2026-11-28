@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { auditView } from '~/utils/audit.server';
+import { auditTool, personHistoryText } from '~/utils/auditRows';
 import { adminReason, describeAdminAction } from '~/utils/metrics.server';
 import { distinctClassrooms, emailDomain, highestRole } from '~/utils/people';
 import { safeReturn } from '~/utils/url';
@@ -149,12 +150,9 @@ export async function loadPerson({ request, params }: LoaderFunctionArgs) {
     ...auditRows.map(r => ({
       at: r.timestamp.toISOString(),
       kind: 'classroom' as const,
-      text: `${r.action === 'CREATE' ? 'Created' : r.action === 'DELETE' ? 'Deleted' : 'Changed'} ${r.resource_type.replace(/_/g, ' ').toLowerCase()}`,
+      text: personHistoryText(r),
       classroom: r.classroom ? { name: r.classroom.name, slug: r.classroom.slug } : null,
-      tool:
-        r.data && typeof r.data === 'object' && 'tool' in r.data
-          ? String((r.data as { tool?: unknown }).tool)
-          : null,
+      tool: auditTool(r.data),
     })),
     ...adminRows.map(r => {
       const reason = adminReason(r.action, r.data);
