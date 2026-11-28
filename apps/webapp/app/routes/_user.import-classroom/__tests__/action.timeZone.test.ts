@@ -22,6 +22,9 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('~/constants', () => ({ ActionTypes: { IMPORT_CLASSROOM: 'import' } }));
 
+// The organization check has its own tests (action.organizations.test.ts).
+vi.mock('../organizations.server', () => ({ verifyImportOrganizations: async () => new Map() }));
+
 vi.mock('@classmoji/auth/request-impersonator', () => ({
   requestImpersonator: async () => 'admin-1',
 }));

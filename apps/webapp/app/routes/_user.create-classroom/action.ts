@@ -12,6 +12,7 @@ import {
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
 import { canonicalTimeZone, defaultContentRepoName, sanitizeRepoName } from '@classmoji/utils';
+import { readOrganizationAdmin } from '~/utils/githubOrgAdmin.server';
 import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
 import { createGitLabClassroom } from './createGitLabClassroom.server';
@@ -74,21 +75,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'GitHub organization not found' };
   }
 
-  // Verify user is admin in the selected organization using GraphQL
+  // Verify user is admin in the selected organization (githubOrgAdmin.server.ts)
   try {
-    const { organization } = await octokit.graphql<any>(
-      `
-      query($login: String!) {
-        organization(login: $login) {
-          login
-          viewerCanAdminister
-        }
-      }
-    `,
-      {
-        login: gitOrg.login,
-      }
-    );
+    const organization = await readOrganizationAdmin(octokit, gitOrg.login);
 
     if (!organization?.viewerCanAdminister) {
       return {

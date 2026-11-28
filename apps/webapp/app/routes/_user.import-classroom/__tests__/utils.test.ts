@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
-import { parseExportBundle, slugify } from '../utils.ts';
+import { importDestination, importNeedsReading, parseExportBundle, slugify } from '../utils.ts';
 
 /** Build an in-memory zip from a path→content map (content stringified if not a string). */
 async function buildZip(files: Record<string, unknown>): Promise<Blob> {
@@ -158,5 +158,86 @@ describe('slugify', () => {
   it('matches the create-classroom slug rules', () => {
     expect(slugify('Rendering Algorithms Fall 2024')).toBe('rendering-algorithms-fall-2024');
     expect(slugify('  CS87 -- Dartmouth!  ')).toBe('cs87-dartmouth');
+  });
+});
+
+describe('importDestination: where the wizard goes once the import answers', () => {
+  const imported = (slug: string, existingAccountsNotEnrolled = 0, warnings: string[] = []) => ({
+    classroomSlug: slug,
+    classroomName: slug,
+    warnings,
+    existingAccountsNotEnrolled,
+  });
+
+  it('one classroom imported: its dashboard', () => {
+    expect(
+      importDestination({ classroomSlug: 'cs1', results: [imported('cs1')], errors: [] })
+    ).toBe('/admin/cs1/dashboard');
+  });
+
+  it('one classroom imported with warnings that need no action: still its dashboard', () => {
+    const data = {
+      classroomSlug: 'cs1',
+      results: [
+        imported('cs1', 0, [
+          '"cs1" was imported locked: the Free plan includes one active class at a time.',
+          'Reused existing account for @alice (GitHub login already in use).',
+          'Grades for "bob" were skipped (not enrolled in this classroom).',
+        ]),
+      ],
+      errors: [],
+    };
+    expect(importNeedsReading(data)).toBe(false);
+    expect(importDestination(data)).toBe('/admin/cs1/dashboard');
+  });
+
+  it('several classrooms imported: the landing page', () => {
+    expect(importDestination({ results: [imported('cs1'), imported('cs2')], errors: [] })).toBe(
+      '/'
+    );
+  });
+
+  it('people left out because they are already on Classmoji: stays on the page', () => {
+    const data = {
+      classroomSlug: 'cs1',
+      results: [imported('cs1', 2, ['@alice is already on Classmoji; …'])],
+      errors: [],
+    };
+    expect(importNeedsReading(data)).toBe(true);
+    expect(importDestination(data)).toBeNull();
+  });
+
+  it('decided by the count, not by the wording of a warning', () => {
+    const data = {
+      classroomSlug: 'cs1',
+      results: [imported('cs1', 0, ['@alice is already on Classmoji; …'])],
+      errors: [],
+    };
+    expect(importDestination(data)).toBe('/admin/cs1/dashboard');
+    expect(importDestination({ ...data, results: [imported('cs1', 1)] })).toBeNull();
+  });
+
+  it('one of several classrooms with such people: stays on the page', () => {
+    expect(
+      importDestination({ results: [imported('cs1'), imported('cs2', 1)], errors: [] })
+    ).toBeNull();
+  });
+
+  it('a classroom refused beside one imported: stays on the page', () => {
+    const data = {
+      classroomSlug: 'cs1',
+      results: [imported('cs1')],
+      errors: [{ classroomName: 'CS2', message: 'Not imported.' }],
+    };
+    expect(importNeedsReading(data)).toBe(true);
+    expect(importDestination(data)).toBeNull();
+  });
+
+  it('nothing imported, or no answer yet: stays on the page', () => {
+    expect(importDestination(undefined)).toBeNull();
+    expect(importDestination({ results: [], errors: [] })).toBeNull();
+    expect(
+      importDestination({ errors: [{ classroomName: 'CS1', message: 'Not imported.' }] })
+    ).toBeNull();
   });
 });

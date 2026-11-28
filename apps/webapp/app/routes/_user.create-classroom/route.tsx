@@ -23,6 +23,10 @@ import type { ActiveClassLimitData } from '~/components/features/plan/ActiveClas
 import type { GitOrganizationOption, ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
 import { loadImportableClassrooms } from './importSources.server';
+import {
+  readViewerOrganizations,
+  type GithubViewerOrganization,
+} from '~/utils/githubOrgAdmin.server';
 import GitLabClassroomForm from './GitLabClassroomForm';
 import type { Route } from './+types/route';
 
@@ -156,39 +160,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     providerIds = syncedInstallations.map(i => i.provider_id);
     avatarByProviderId = new Map(syncedInstallations.map(i => [i.provider_id, i.avatar_url]));
   } else {
-    interface GitHubOrgNode {
-      id: string;
-      databaseId: number;
-      login: string;
-      name: string;
-      avatarUrl: string;
-      description: string | null;
-      url: string;
-      viewerCanAdminister: boolean;
-    }
-    let nodes: GitHubOrgNode[] = [];
+    let nodes: GithubViewerOrganization[] = [];
     try {
-      const { viewer } = await octokit.graphql<{
-        viewer: { organizations: { nodes: GitHubOrgNode[] } };
-      }>(`
-        {
-          viewer {
-            organizations(first: 100) {
-              nodes {
-                id
-                databaseId
-                login
-                name
-                avatarUrl
-                description
-                url
-                viewerCanAdminister
-              }
-            }
-          }
-        }
-      `);
-      nodes = viewer.organizations.nodes.filter(org => org.viewerCanAdminister);
+      const organizations = await readViewerOrganizations(octokit);
+      nodes = organizations.filter(org => org.viewerCanAdminister && org.databaseId != null);
     } catch (error: unknown) {
       console.error('Error fetching user orgs:', error instanceof Error ? error.message : error);
     }

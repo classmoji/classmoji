@@ -1,4 +1,4 @@
-import { redirect, useNavigate } from 'react-router';
+import { Link, redirect, useNavigate } from 'react-router';
 import { useState, useEffect } from 'react';
 import { Card, Steps, Button, Alert } from 'antd';
 
@@ -9,7 +9,13 @@ import { ActionTypes } from '~/constants';
 import StepUpload from './StepUpload';
 import StepSelectClassrooms from './StepSelectClassrooms';
 import StepReview from './StepReview';
-import { parseExportBundle, slugify, type ParsedBundle } from './utils';
+import {
+  importDestination,
+  importNeedsReading,
+  parseExportBundle,
+  slugify,
+  type ParsedBundle,
+} from './utils';
 import type { Route } from './+types/route';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 
@@ -25,9 +31,17 @@ interface ImportActionData {
   error?: string;
   success?: string;
   classroomSlug?: string;
-  results?: { classroomSlug: string }[];
+  results?: {
+    classroomSlug: string;
+    classroomName: string;
+    warnings?: string[];
+    existingAccountsNotEnrolled?: number;
+  }[];
   errors?: { classroomName: string; message: string }[];
 }
+
+/** Warnings shown per imported classroom; the rest are counted. */
+const MAX_SHOWN_WARNINGS = 8;
 
 const ImportClassroom = () => {
   const navigate = useNavigate();
@@ -88,14 +102,17 @@ const ImportClassroom = () => {
     });
   };
 
+  const refused = data?.errors ?? [];
+  const imported = data?.results ?? [];
+  // Something the importer should read before leaving: a classroom that was
+  // not imported, or people left out because they are already on Classmoji.
+  const needsReading = importNeedsReading(data);
+
   // Navigate on success: single import → its dashboard, multiple → landing.
+  // Stay on the page when there is something to read; it links onward.
   useEffect(() => {
-    if (!data) return;
-    if (data.classroomSlug) {
-      navigate(`/admin/${data.classroomSlug}/dashboard`);
-    } else if (data.results && data.results.length > 0) {
-      navigate('/');
-    }
+    const destination = importDestination(data);
+    if (destination) navigate(destination);
   }, [data, navigate]);
 
   return (
@@ -133,7 +150,67 @@ const ImportClassroom = () => {
           />
         )}
 
-        {data?.error && <Alert className="mt-4" type="error" showIcon title={data.error} />}
+        {data?.error && refused.length === 0 && (
+          <Alert className="mt-4" type="error" showIcon title={data.error} />
+        )}
+
+        {refused.length > 0 && (
+          <Alert
+            className="mt-4"
+            type="error"
+            showIcon
+            title={
+              refused.length === 1
+                ? 'One classroom was not imported'
+                : `${refused.length} classrooms were not imported`
+            }
+            description={
+              <ul className="list-disc ml-5 text-gray-700 dark:text-gray-300">
+                {refused.map((e, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{e.classroomName}</span>: {e.message}
+                  </li>
+                ))}
+              </ul>
+            }
+          />
+        )}
+
+        {needsReading && imported.length > 0 && (
+          <Alert
+            className="mt-4"
+            type={imported.some(r => r.warnings?.length) ? 'warning' : 'success'}
+            showIcon
+            title={data?.success}
+            description={
+              <ul className="ml-0 space-y-2 text-gray-700 dark:text-gray-300">
+                {imported.map(r => {
+                  const warnings = r.warnings ?? [];
+                  return (
+                    <li key={r.classroomSlug}>
+                      <Link
+                        to={`/admin/${r.classroomSlug}/dashboard`}
+                        className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        {r.classroomName}
+                      </Link>
+                      {warnings.length > 0 && (
+                        <ul className="list-disc ml-5 mt-1 text-sm">
+                          {warnings.slice(0, MAX_SHOWN_WARNINGS).map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                          {warnings.length > MAX_SHOWN_WARNINGS && (
+                            <li>{warnings.length - MAX_SHOWN_WARNINGS} more</li>
+                          )}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            }
+          />
+        )}
 
         <div className="flex justify-between mt-8">
           <div>
